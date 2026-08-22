@@ -5,7 +5,11 @@ const assert = require('node:assert/strict');
 const jwt = require('jsonwebtoken');
 
 const fare = require('../server');
-const { app, io, models, FARE_VEHICLE_CATEGORIES, DEFAULT_PER_KM_RATES } = fare;
+const {
+  app, io, models, FARE_VEHICLE_CATEGORIES, DEFAULT_PER_KM_RATES,
+  DEFAULT_RIDE_BROADCAST_RADIUS_KM, normalizeRideBroadcastSettings,
+  validateRideBroadcastSettings, findRideBroadcastDrivers, emitRideRequestToDrivers
+} = fare;
 
 const JWT_SECRET = 'ride-hailing-secret-fallback';
 const originalSettings = {
@@ -17,12 +21,18 @@ const originalRide = {
   find: models.Ride.find
 };
 const originalIoTo = io.to;
+const originalUserFind = models.User.find;
+const originalUserFindById = models.User.findById;
+const originalWalletFind = models.Wallet.find;
 
 afterEach(() => {
   models.Settings.findOne = originalSettings.findOne;
   models.Settings.findOneAndUpdate = originalSettings.findOneAndUpdate;
   models.Ride.create = originalRide.create;
   models.Ride.find = originalRide.find;
+  models.User.find = originalUserFind;
+  models.User.findById = originalUserFindById;
+  models.Wallet.find = originalWalletFind;
   io.to = originalIoTo;
 });
 
@@ -40,6 +50,10 @@ function adminToken() {
 
 function customerToken() {
   return jwt.sign({ id: 'customer-1', role: 'customer', name: 'Customer' }, JWT_SECRET);
+}
+
+function driverToken() {
+  return jwt.sign({ id: 'driver-1', role: 'driver', name: 'Driver' }, JWT_SECRET);
 }
 
 async function request(server, path, options = {}) {
@@ -162,4 +176,139 @@ test('refreshing a pending ride emits the new fare to its customer and normalize
   assert.deepEqual(emissions.map(item => item.room), ['drivers:Riksha', 'ride:ride-2']);
   assert.ok(emissions.every(item => item.event === 'ride:fare-updated'));
   assert.ok(emissions.every(item => item.payload.fare === 580));
+});
+
+test('ride broadcast settings default to 5 km and reject an invalid Admin radius', () => {
+  assert.deepEqual(normalizeRideBroadcastSettings(), { maximumRideBroadcastRadiusKm: DEFAULT_RIDE_BROADCAST_RADIUS_KM });
+  assert.deepEqual(normalizeRideBroadcastSettings({ maximumRideBroadcastRadiusKm: 8 }), { maximumRideBroadcastRadiusKm: 8 });
+  assert.match(validateRideBroadcastSettings({ maximumRideBroadcastRadiusKm: 0 }).errors.join(' '), /between/);
+  assert.match(validateRideBroadcastSettings({ maximumRideBroadcastRadiusKm: 100.001 }).errors.join(' '), /between/);
+  assert.equal(validateRideBroadcastSettings({ maximumRideBroadcastRadiusKm: 10 }).errors.length, 0);
+});
+
+test('Admin can persist a dynamic ride broadcast radius', async () => {
+  let stored;
+  models.Settings.findOne = () => ({ lean: async () => null });
+  models.Settings.findOneAndUpdate = async (_query, update) => {
+    stored = update.value;
+    return { value: stored };
+  };
+  const server = app.listen(0);
+  try {
+    const saved = await request(server, '/api/admin/ride-settings', {
+      method: 'PATCH',
+      headers: { authorization: `Bearer ${adminToken()}` },
+      body: JSON.stringify({ rideBroadcastSettings: { maximumRideBroadcastRadiusKm: 8.5 } })
+    });
+    assert.equal(saved.response.status, 200);
+    assert.deepEqual(stored, { maximumRideBroadcastRadiusKm: 8.5 });
+    assert.deepEqual(saved.body.settings, stored);
+
+    const rejected = await request(server, '/api/admin/ride-settings', {
+      method: 'PATCH',
+      headers: { authorization: `Bearer ${adminToken()}` },
+      body: JSON.stringify({ rideBroadcastSettings: { maximumRideBroadcastRadiusKm: -1 } })
+    });
+    assert.equal(rejected.response.status, 422);
+  } finally {
+    await new Promise(resolve => server.close(resolve));
+  }
+});
+
+test('shared broadcast matcher only selects fresh, wallet-eligible drivers inside the configured radius', async () => {
+  models.User.find = () => ({
+    select: () => ({
+      lean: async () => [
+        { _id: 'near-driver', currentLocation: { lat: 31.5204, lng: 74.3587 }, expoPushToken: 'ExponentPushToken[near]' },
+        { _id: 'far-driver', currentLocation: { lat: 32.5204, lng: 74.3587 }, expoPushToken: 'ExponentPushToken[far]' },
+        { _id: 'invalid-location', currentLocation: { lat: 0, lng: 0 }, expoPushToken: 'ExponentPushToken[invalid]' },
+      ]
+    })
+  });
+  models.Wallet.find = () => ({
+    select: () => ({
+      lean: async () => [{ user: 'near-driver' }, { user: 'far-driver' }, { user: 'invalid-location' }]
+    })
+  });
+
+  const result = await findRideBroadcastDrivers(
+    { lat: 31.5204, lng: 74.3587 },
+    'Car Mini',
+    { maximumRideBroadcastRadiusKm: 5 }
+  );
+  assert.equal(result.radiusKm, 5);
+  assert.deepEqual(result.drivers.map(driver => driver._id), ['near-driver']);
+
+  const emissions = [];
+  io.to = room => ({ emit: (event, payload) => emissions.push({ room, event, payload }) });
+  emitRideRequestToDrivers(result.drivers, { id: 'ride-nearby-only' });
+  assert.deepEqual(emissions, [{
+    room: 'user:near-driver',
+    event: 'ride:new',
+    payload: { id: 'ride-nearby-only' }
+  }]);
+});
+
+test('customer nearby-driver map uses the persisted Admin broadcast radius instead of a hardcoded distance', async () => {
+  models.Settings.findOne = ({ key }) => ({
+    lean: async () => key === 'ride_broadcast_settings'
+      ? { value: { maximumRideBroadcastRadiusKm: 8 } }
+      : null
+  });
+  models.User.find = () => ({
+    select: () => ({
+      lean: async () => [
+        { vehicleType: 'Car Mini', currentLocation: { lat: 31.5204, lng: 74.3587 } },
+        { vehicleType: 'Car Mini', currentLocation: { lat: 31.6100, lng: 74.3587 } },
+      ]
+    })
+  });
+  const server = app.listen(0);
+  try {
+    const result = await request(server, '/api/drivers/nearby?lat=31.5204&lng=74.3587', {
+      headers: { authorization: `Bearer ${customerToken()}` }
+    });
+    assert.equal(result.response.status, 200);
+    assert.equal(result.body.length, 1);
+    assert.deepEqual(result.body[0], { vehicleType: 'Car Mini', lat: 31.5204, lng: 74.3587 });
+  } finally {
+    await new Promise(resolve => server.close(resolve));
+  }
+});
+
+test('available-rides recovery uses the same radius so reconnecting drivers cannot receive distant requests', async () => {
+  models.Settings.findOne = ({ key }) => ({
+    lean: async () => key === 'ride_broadcast_settings'
+      ? { value: { maximumRideBroadcastRadiusKm: 5 } }
+      : null
+  });
+  models.User.findById = () => ({
+    select: () => ({
+      lean: async () => ({
+        vehicleType: 'Car Mini',
+        accountStatus: 'active',
+        isOnline: true,
+        lastOnlineHeartbeat: new Date(),
+        currentLocation: { lat: 31.5204, lng: 74.3587 }
+      })
+    })
+  });
+  models.Ride.find = () => ({
+    populate: () => ({
+      sort: async () => [
+        { _id: 'near-ride', pickupLocation: { lat: 31.5304, lng: 74.3587 } },
+        { _id: 'far-ride', pickupLocation: { lat: 32.5204, lng: 74.3587 } }
+      ]
+    })
+  });
+  const server = app.listen(0);
+  try {
+    const result = await request(server, '/api/rides/available', {
+      headers: { authorization: `Bearer ${driverToken()}` }
+    });
+    assert.equal(result.response.status, 200);
+    assert.deepEqual(result.body.map(ride => ride._id), ['near-ride']);
+  } finally {
+    await new Promise(resolve => server.close(resolve));
+  }
 });

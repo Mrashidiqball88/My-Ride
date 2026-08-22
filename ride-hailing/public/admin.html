@@ -274,6 +274,7 @@ input[type=date]:focus{border-color:#f5c518}
       <div class="sb-item"        onclick="showSection('live-rides')"   data-sec="live-rides">  <span class="sb-icon">🗺️</span> Live Rides</div>
       <div class="sb-item"        onclick="showSection('sos')"          data-sec="sos">         <span class="sb-icon">🆘</span> SOS Monitor <span class="sb-badge-count" id="sos-cnt" style="display:none">0</span></div>
       <div class="sb-item"        onclick="showSection('fee-compliance')" data-sec="fee-compliance"><span class="sb-icon">📋</span> Fee Compliance <span class="sb-badge-count" id="fee-cnt" style="display:none">0</span></div>
+       <div class="sb-item"        onclick="showSection('ride-settings')" data-sec="ride-settings"><span class="sb-icon">📡</span> Ride Settings</div>
        <div class="sb-item"        onclick="showSection('fare-settings')" data-sec="fare-settings"><span class="sb-icon">🧮</span> Daily Fare Settings</div>
       <div class="sb-item"        onclick="showSection('pay-settings')" data-sec="pay-settings"><span class="sb-icon">⚙️</span> Payment Settings</div>
       <div class="sb-item"        onclick="showSection('ratings')"      data-sec="ratings">      <span class="sb-icon">⭐</span> Ratings & Feedback</div>
@@ -649,7 +650,27 @@ input[type=date]:focus{border-color:#f5c518}
         <div id="ps-feedback" style="margin-top:.75rem;font-size:.8rem;min-height:1.2em"></div>
       </div>
 
-      <!-- ════ 11. DAILY FARE SETTINGS ════ -->
+      <!-- ════ 11. RIDE SETTINGS ════ -->
+      <div class="section-panel" id="sec-ride-settings">
+        <div class="sec-hdr">
+          <h2>📡 Ride Settings</h2>
+          <div class="sec-hdr-actions"><button class="btn-refresh" onclick="loadRideSettings()">↻ Reload</button></div>
+        </div>
+        <p style="font-size:.8rem;color:#475569;margin-bottom:1.1rem">
+          Control how far from a passenger pickup point drivers can receive a ride request. The same limit is used for the customer map, browser alerts, and native Driver notifications.
+        </p>
+        <div style="background:#0f0f1e;border:1px solid #1e1e2e;border-radius:14px;padding:1rem;max-width:520px">
+          <div class="field-item" style="max-width:300px">
+            <div class="field-label">Maximum Ride Broadcast Radius (km)</div>
+            <input class="modal-input" id="ride-broadcast-radius-km" type="number" min="0.5" max="100" step="0.1" inputmode="decimal" placeholder="5">
+          </div>
+          <p style="font-size:.72rem;color:#64748b;line-height:1.5;margin-top:.7rem">Drivers outside this straight-line distance from the pickup point will not receive the request. Allowed range: 0.5–100 km.</p>
+        </div>
+        <div id="ride-settings-feedback" style="min-height:1.25rem;font-size:.8rem;margin:.8rem 0"></div>
+        <button class="btn btn-primary" style="padding:.75rem 2rem;font-size:.9rem" onclick="saveRideSettings()">💾 Save Ride Settings</button>
+      </div>
+
+      <!-- ════ 12. DAILY FARE SETTINGS ════ -->
       <div class="section-panel" id="sec-fare-settings">
         <div class="sec-hdr">
           <h2>🧮 Daily Fare Settings</h2>
@@ -1158,7 +1179,7 @@ const SECTION_TITLES = {
   'temp-blocked':'Temporarily Blocked Drivers', 'blk-pass':'Blocked Passengers',
   'live-rides':'Live Rides & History', sos:'SOS Alert Monitor',
   'fee-compliance':'Daily Fee Compliance',
-  'fare-settings':'Daily Fare Settings', 'pay-settings':'Payment Settings', ratings:'Ratings & Feedback', support:'Support Tickets',
+  'ride-settings':'Ride Settings', 'fare-settings':'Daily Fare Settings', 'pay-settings':'Payment Settings', ratings:'Ratings & Feedback', support:'Support Tickets',
   'sub-admins':'Sub-Admin User Management'
 };
 function showSection(name) {
@@ -1176,7 +1197,7 @@ function showSection(name) {
     drivers: () => loadDrivers(currentDriverStatus), passengers: () => loadPassengers(currentPassStatus),
     'new-requests': loadNewRequests, 'temp-blocked': loadTempBlocked,
     'blk-pass': loadBlockedPass, 'live-rides': () => loadRides(currentRideStatus),
-    sos: () => loadSOS(currentSOSFilter), 'fare-settings': loadFareSettings, 'pay-settings': loadPaymentSettings,
+    sos: () => loadSOS(currentSOSFilter), 'ride-settings': loadRideSettings, 'fare-settings': loadFareSettings, 'pay-settings': loadPaymentSettings,
     'fee-compliance': loadFeeCompliance,
     ratings: loadRatings, support: () => loadSupportTickets(currentSupStatus),
     deletions: loadDeletionRequests,
@@ -2070,6 +2091,40 @@ async function grantFeeWaiver() {
     selectedDriverIds.clear();
     loadDrivers(currentDriverStatus);
   } catch (e) { showToast(e.message, 'error'); }
+}
+
+// ── Payment Settings ──────────────────────────────────────────────────────────
+async function loadRideSettings() {
+  const feedback = document.getElementById('ride-settings-feedback');
+  feedback.textContent = 'Loading…'; feedback.style.color = '#64748b';
+  try {
+    const settings = await api('/api/admin/ride-settings');
+    document.getElementById('ride-broadcast-radius-km').value = settings.maximumRideBroadcastRadiusKm ?? 5;
+    feedback.textContent = '';
+  } catch (e) {
+    feedback.textContent = `⚠ ${e.message}`;
+    feedback.style.color = '#ef4444';
+  }
+}
+
+async function saveRideSettings() {
+  const feedback = document.getElementById('ride-settings-feedback');
+  const radius = document.getElementById('ride-broadcast-radius-km').value;
+  feedback.textContent = 'Saving Ride Settings…'; feedback.style.color = '#64748b';
+  try {
+    const result = await api('/api/admin/ride-settings', 'PATCH', {
+      rideBroadcastSettings: { maximumRideBroadcastRadiusKm: radius }
+    });
+    document.getElementById('ride-broadcast-radius-km').value = result.settings.maximumRideBroadcastRadiusKm;
+    feedback.textContent = `✓ Ride broadcast radius saved: ${result.settings.maximumRideBroadcastRadiusKm} km.`;
+    feedback.style.color = '#22c55e';
+    showToast('Ride broadcast radius updated ✓', 'success');
+  } catch (e) {
+    const details = Array.isArray(e.errors) ? `: ${e.errors.join('; ')}` : '';
+    feedback.textContent = `✕ ${e.message || 'Could not save Ride Settings'}${details}`;
+    feedback.style.color = '#ef4444';
+    showToast(e.message || 'Could not save Ride Settings', 'error');
+  }
 }
 
 // ── Payment Settings ──────────────────────────────────────────────────────────

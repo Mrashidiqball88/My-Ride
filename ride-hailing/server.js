@@ -754,6 +754,9 @@ const PushSub  = mongoose.model('PushSub',  pushSubSchema);
 // absorbs OS/radio jitter while failing closed after a force-stop or prolonged
 // connectivity loss.
 const DRIVER_HEARTBEAT_MAX_AGE_MS = 90 * 1000;
+const DEFAULT_RIDE_BROADCAST_RADIUS_KM = 5;
+const MIN_RIDE_BROADCAST_RADIUS_KM = 0.5;
+const MAX_RIDE_BROADCAST_RADIUS_KM = 100;
 
 async function sendExpoPush(tokens, message) {
   const recipients = [...new Set(tokens.filter(token => /^ExponentPushToken\[.+\]$|^ExpoPushToken\[.+\]$/.test(String(token || ''))))];
@@ -767,6 +770,95 @@ async function sendExpoPush(tokens, message) {
     if (!response.ok) console.warn(`[expo-push] delivery request failed: ${response.status}`);
   } catch (err) {
     console.warn(`[expo-push] delivery request failed: ${err.message}`);
+  }
+}
+
+function haversineKm(lat1, lng1, lat2, lng2) {
+  const toRadians = degrees => degrees * Math.PI / 180;
+  const dLat = toRadians(lat2 - lat1);
+  const dLng = toRadians(lng2 - lng1);
+  const a = Math.sin(dLat / 2) ** 2
+    + Math.cos(toRadians(lat1)) * Math.cos(toRadians(lat2)) * Math.sin(dLng / 2) ** 2;
+  return 6371 * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+}
+
+function normalizeRideBroadcastSettings(value = {}) {
+  const rawRadius = typeof value === 'object' && value !== null
+    ? value.maximumRideBroadcastRadiusKm
+    : value;
+  const radius = Number(rawRadius);
+  if (!Number.isFinite(radius) || radius < MIN_RIDE_BROADCAST_RADIUS_KM || radius > MAX_RIDE_BROADCAST_RADIUS_KM) {
+    return { maximumRideBroadcastRadiusKm: DEFAULT_RIDE_BROADCAST_RADIUS_KM };
+  }
+  return { maximumRideBroadcastRadiusKm: Number(radius.toFixed(2)) };
+}
+
+function validateRideBroadcastSettings(value) {
+  const rawRadius = value?.maximumRideBroadcastRadiusKm;
+  const radius = Number(rawRadius);
+  const errors = [];
+  if (!Number.isFinite(radius)) errors.push('Maximum Ride Broadcast Radius must be a number');
+  else if (radius < MIN_RIDE_BROADCAST_RADIUS_KM || radius > MAX_RIDE_BROADCAST_RADIUS_KM) {
+    errors.push(`Maximum Ride Broadcast Radius must be between ${MIN_RIDE_BROADCAST_RADIUS_KM} and ${MAX_RIDE_BROADCAST_RADIUS_KM} km`);
+  } else if (Math.round(radius * 100) !== radius * 100) {
+    errors.push('Maximum Ride Broadcast Radius can have at most two decimal places');
+  }
+  return { settings: normalizeRideBroadcastSettings({ maximumRideBroadcastRadiusKm: radius }), errors };
+}
+
+async function getRideBroadcastSettings() {
+  const doc = await Settings.findOne({ key: 'ride_broadcast_settings' }).lean();
+  return normalizeRideBroadcastSettings(doc?.value);
+}
+
+function hasValidCoordinates(location) {
+  const lat = Number(location?.lat);
+  const lng = Number(location?.lng);
+  return Number.isFinite(lat) && lat >= -90 && lat <= 90
+    && Number.isFinite(lng) && lng >= -180 && lng <= 180
+    && !(lat === 0 && lng === 0);
+}
+
+async function findRideBroadcastDrivers(pickupLocation, vehicleType, settings = null) {
+  const rideSettings = settings || await getRideBroadcastSettings();
+  const radiusKm = rideSettings.maximumRideBroadcastRadiusKm;
+  if (!hasValidCoordinates(pickupLocation)) return { drivers: [], radiusKm };
+
+  const candidates = await User.find({
+    role: 'driver',
+    isOnline: true,
+    accountStatus: 'active',
+    vehicleType: { $in: storedVehicleTypesForFareCategory(vehicleType) },
+    lastOnlineHeartbeat: { $gte: new Date(Date.now() - DRIVER_HEARTBEAT_MAX_AGE_MS) },
+    'currentLocation.lat': { $ne: 0 },
+    'currentLocation.lng': { $ne: 0 }
+  }).select('_id currentLocation expoPushToken').lean();
+
+  if (!candidates.length) return { drivers: [], radiusKm };
+  const candidateIds = candidates.map(driver => driver._id);
+  const eligibleWallets = await Wallet.find({
+    user: { $in: candidateIds },
+    balance: { $gte: 0 }
+  }).select('user').lean();
+  const walletEligibleIds = new Set(eligibleWallets.map(wallet => String(wallet.user)));
+  const drivers = candidates
+    .filter(driver => walletEligibleIds.has(String(driver._id)) && hasValidCoordinates(driver.currentLocation))
+    .map(driver => ({
+      ...driver,
+      distanceFromPickupKm: haversineKm(
+        Number(pickupLocation.lat),
+        Number(pickupLocation.lng),
+        Number(driver.currentLocation.lat),
+        Number(driver.currentLocation.lng)
+      )
+    }))
+    .filter(driver => driver.distanceFromPickupKm <= radiusKm);
+  return { drivers, radiusKm };
+}
+
+function emitRideRequestToDrivers(drivers, payload) {
+  for (const driver of drivers) {
+    io.to(`user:${driver._id}`).emit('ride:new', payload);
   }
 }
 
@@ -1263,7 +1355,6 @@ app.post('/api/rides', authMiddleware, customerOnly, customerCanBook, async (req
       mobileAccount: mobileAccount || ''
     });
 
-    // Broadcast to matching-vehicle drivers only via Socket.io
     const ridePayload = {
       id:               ride._id,
       pickupLocation:   ride.pickupLocation,
@@ -1277,11 +1368,19 @@ app.post('/api/rides', authMiddleware, customerOnly, customerCanBook, async (req
       notes:            ride.notes,
       createdAt:        ride.createdAt
     };
-    const vehicleRoom = `drivers:${ride.vehicleType || 'Car Mini'}`;
-    io.to(vehicleRoom).emit('ride:new', ridePayload);
 
-    // Also push a Web Push notification to subscribed active drivers (handles closed tabs)
-    if (global._vapidPublicKey && dbConnected) {
+    // Every delivery channel receives the exact same eligible, geo-filtered
+    // driver set. This prevents a distant socket or push recipient from seeing
+    // an offer that is outside the Admin-configured broadcast radius.
+    const broadcast = dbConnected
+      ? await findRideBroadcastDrivers(ride.pickupLocation, ride.vehicleType)
+      : { drivers: [], radiusKm: DEFAULT_RIDE_BROADCAST_RADIUS_KM };
+    ridePayload.broadcastRadiusKm = broadcast.radiusKm;
+    emitRideRequestToDrivers(broadcast.drivers, ridePayload);
+
+    // Also push a Web Push notification to subscribed eligible drivers
+    // (handles closed browser tabs).
+    if (global._vapidPublicKey && broadcast.drivers.length) {
       const area         = ride.pickupLocation?.address || 'Nearby';
       const fareStr      = `Rs ${(ride.fare || 0).toLocaleString()}`;
       const distStr      = ride.distance ? ` · ${ride.distance.toFixed(1)} km` : '';
@@ -1297,57 +1396,31 @@ app.post('/api/rides', authMiddleware, customerOnly, customerCanBook, async (req
           { action: 'open',   title: '📱 Go to App'  }
         ]
       };
-      // Fire-and-forget — don't block the HTTP response.
-      // Only active drivers of the same vehicle category with non-negative wallet balance receive the push.
-      User.find({
-        role: 'driver',
-        accountStatus: 'active',
-        vehicleType: { $in: storedVehicleTypesForFareCategory(ride.vehicleType) }
-      }).select('_id').lean()
-        .then(async activeDrivers => {
-          const activeIds = activeDrivers.map(d => String(d._id));
-          // Filter out drivers with insufficient balance
-          const eligibleWallets = await Wallet.find(
-            { user: { $in: activeIds }, balance: { $gte: 0 } }
-          ).select('user').lean();
-          const eligibleSet = new Set(eligibleWallets.map(w => String(w.user)));
-          const eligibleIds = activeIds.filter(id => eligibleSet.has(id));
-          return PushSub.find({ user: { $in: eligibleIds } });
-        })
-        .then(subs => {
-          subs.forEach(sub => {
-            webpush.sendNotification(
-              { endpoint: sub.endpoint, keys: sub.keys },
-              JSON.stringify(pushData),
-              { urgency: 'high', TTL: 60 }
-            ).catch(err => {
-              // 410 Gone = subscription expired — clean it up
-              if (err.statusCode === 410) PushSub.deleteOne({ _id: sub._id }).catch(() => {});
-            });
-          });
-        })
-        .catch(() => {});
+      const subscriptions = await PushSub.find({
+        user: { $in: broadcast.drivers.map(driver => driver._id) }
+      }).lean().catch(() => []);
+      subscriptions.forEach(sub => {
+        webpush.sendNotification(
+          { endpoint: sub.endpoint, keys: sub.keys },
+          JSON.stringify(pushData),
+          { urgency: 'high', TTL: 60 }
+        ).catch(err => {
+          // 410 Gone = subscription expired — clean it up
+          if (err.statusCode === 410) PushSub.deleteOne({ _id: sub._id }).catch(() => {});
+        });
+      });
     }
 
     // Native Driver installs do not rely on a browser tab or service worker.
     // Send a high-priority platform notification too, so Android/iOS can wake
     // the driver with an actionable alert while the UI is backgrounded.
-    if (dbConnected) {
-      User.find({
-        role: 'driver',
-        isOnline: true,
-        accountStatus: 'active',
-        vehicleType: { $in: storedVehicleTypesForFareCategory(ride.vehicleType) },
-        lastOnlineHeartbeat: { $gte: new Date(Date.now() - DRIVER_HEARTBEAT_MAX_AGE_MS) },
-        expoPushToken: { $ne: '' }
-      }).select('expoPushToken').lean()
-        .then(drivers => sendExpoPush(drivers.map(driver => driver.expoPushToken), {
-          title: 'New ride request',
-          body: `${ride.pickupLocation?.address || 'Nearby pickup'} · Rs ${(ride.fare || 0).toLocaleString()}`,
-          data: { type: 'ride:new', ride: ridePayload, rideId: String(ride._id) },
-          categoryId: 'ride-request'
-        }))
-        .catch(() => {});
+    if (broadcast.drivers.length) {
+      void sendExpoPush(broadcast.drivers.map(driver => driver.expoPushToken), {
+        title: 'New ride request',
+        body: `${ride.pickupLocation?.address || 'Nearby pickup'} · Rs ${(ride.fare || 0).toLocaleString()}`,
+        data: { type: 'ride:new', ride: ridePayload, rideId: String(ride._id) },
+        categoryId: 'ride-request'
+      });
     }
 
     res.status(201).json(ride);
@@ -1358,19 +1431,26 @@ app.post('/api/rides', authMiddleware, customerOnly, customerCanBook, async (req
 
 app.get('/api/rides/available', authMiddleware, driverOnly, async (req, res) => {
   try {
-    const driver = await User.findById(req.user.id).select('vehicleType accountStatus isOnline lastOnlineHeartbeat').lean();
+    const driver = await User.findById(req.user.id).select('vehicleType accountStatus isOnline lastOnlineHeartbeat currentLocation').lean();
     const hasFreshHeartbeat = driver?.lastOnlineHeartbeat &&
       new Date(driver.lastOnlineHeartbeat).getTime() >= Date.now() - DRIVER_HEARTBEAT_MAX_AGE_MS;
-    if (!driver || driver.accountStatus !== 'active' || !driver.isOnline || !hasFreshHeartbeat) {
+    if (!driver || driver.accountStatus !== 'active' || !driver.isOnline || !hasFreshHeartbeat || !hasValidCoordinates(driver.currentLocation)) {
       return res.status(403).json({ error: 'You must be an approved online driver to receive rides' });
     }
+    const { maximumRideBroadcastRadiusKm: radiusKm } = await getRideBroadcastSettings();
     const rides = await Ride.find({
       status: 'requested',
       vehicleType: { $in: storedVehicleTypesForFareCategory(driver.vehicleType) }
     })
       .populate('passenger', 'name phone rating')
       .sort({ createdAt: -1 });
-    res.json(rides);
+    res.json(rides.filter(ride => hasValidCoordinates(ride.pickupLocation)
+      && haversineKm(
+        Number(driver.currentLocation.lat),
+        Number(driver.currentLocation.lng),
+        Number(ride.pickupLocation.lat),
+        Number(ride.pickupLocation.lng)
+      ) <= radiusKm));
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -2853,24 +2933,21 @@ app.post('/api/admin/daily-fee-compliance/remind', adminJwt, requirePerm('manage
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-// GET /api/drivers/nearby?lat=&lng= — online drivers within 5 km for customer map visualization
+// GET /api/drivers/nearby?lat=&lng= — online drivers within the current
+// Admin-configured broadcast radius for customer map visualization.
 app.get('/api/drivers/nearby', authMiddleware, async (req, res) => {
   try {
     const lat = parseFloat(req.query.lat);
     const lng = parseFloat(req.query.lng);
     if (isNaN(lat) || isNaN(lng)) return res.status(400).json({ error: 'lat and lng required' });
-    function haversineKm(la1, ln1, la2, ln2) {
-      const R = 6371, dLat = (la2-la1)*Math.PI/180, dLng = (ln2-ln1)*Math.PI/180;
-      const a = Math.sin(dLat/2)**2 + Math.cos(la1*Math.PI/180)*Math.cos(la2*Math.PI/180)*Math.sin(dLng/2)**2;
-      return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
-    }
+    const { maximumRideBroadcastRadiusKm: radiusKm } = await getRideBroadcastSettings();
     const drivers = await User.find({
       role: 'driver', isOnline: true, accountStatus: 'active',
       lastOnlineHeartbeat: { $gte: new Date(Date.now() - DRIVER_HEARTBEAT_MAX_AGE_MS) },
       'currentLocation.lat': { $ne: 0 }, 'currentLocation.lng': { $ne: 0 }
     }).select('vehicleType currentLocation').lean();
     const nearby = drivers
-      .filter(d => haversineKm(lat, lng, d.currentLocation.lat, d.currentLocation.lng) <= 5)
+      .filter(d => haversineKm(lat, lng, d.currentLocation.lat, d.currentLocation.lng) <= radiusKm)
       .map(d => ({ vehicleType: d.vehicleType, lat: d.currentLocation.lat, lng: d.currentLocation.lng }));
     res.json(nearby);
   } catch (err) { res.status(500).json({ error: err.message }); }
@@ -2909,6 +2986,10 @@ function publicDailyFeeSettings(value) {
   return normalizeDailyFeeSettings(value);
 }
 
+function publicRideBroadcastSettings(value) {
+  return normalizeRideBroadcastSettings(value);
+}
+
 // GET /api/settings/payment — public: drivers/customers read account details,
 // never gateway credentials or webhook secrets.
 app.get('/api/settings/payment', async (req, res) => {
@@ -2924,6 +3005,8 @@ app.get('/api/settings/payment', async (req, res) => {
       (await Settings.findOne({ key: 'per_km_rates' }).lean())?.value
     ), dailyFareSettings: publicFareSettings(
       (await Settings.findOne({ key: 'daily_fare_settings' }).lean())?.value
+    ), rideBroadcastSettings: publicRideBroadcastSettings(
+      (await Settings.findOne({ key: 'ride_broadcast_settings' }).lean())?.value
     ) });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
@@ -2943,7 +3026,32 @@ app.get('/api/admin/settings', adminJwt, async (req, res) => {
       (await Settings.findOne({ key: 'per_km_rates' }).lean())?.value
     ), dailyFareSettings: publicFareSettings(
       (await Settings.findOne({ key: 'daily_fare_settings' }).lean())?.value
+    ), rideBroadcastSettings: publicRideBroadcastSettings(
+      (await Settings.findOne({ key: 'ride_broadcast_settings' }).lean())?.value
     ) });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.get('/api/admin/ride-settings', adminJwt, async (req, res) => {
+  try {
+    res.json(await getRideBroadcastSettings());
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.patch('/api/admin/ride-settings', adminJwt, async (req, res) => {
+  try {
+    const validated = validateRideBroadcastSettings(req.body?.rideBroadcastSettings);
+    if (validated.errors.length) {
+      return res.status(422).json({ error: 'Invalid Ride Settings', errors: validated.errors });
+    }
+    await Settings.findOneAndUpdate(
+      { key: 'ride_broadcast_settings' },
+      { key: 'ride_broadcast_settings', value: validated.settings },
+      { upsert: true, new: true, setDefaultsOnInsert: true }
+    );
+    const payload = { settings: validated.settings, updatedAt: new Date().toISOString() };
+    io.emit('ride:broadcast-radius-updated', payload);
+    res.json({ success: true, ...payload });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
@@ -3593,10 +3701,16 @@ module.exports = {
   server,
   io,
   FARE_VEHICLE_CATEGORIES,
+  DEFAULT_RIDE_BROADCAST_RADIUS_KM,
   normalizeFareSettings,
   validateFareSettings,
   calculateFareFromSettings,
   normalizeFareVehicle,
+  normalizeRideBroadcastSettings,
+  validateRideBroadcastSettings,
+  haversineKm,
+  findRideBroadcastDrivers,
+  emitRideRequestToDrivers,
   refreshPendingRideFares,
   models: { User, Ride, Wallet, Settings }
 };
