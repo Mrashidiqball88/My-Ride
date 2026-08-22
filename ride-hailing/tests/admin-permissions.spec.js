@@ -136,4 +136,34 @@ test.describe('scoped Sub-Admin browser permissions', () => {
     await expect(page.locator('#pay-list a', { hasText: 'View Proof' })).toHaveCount(0);
     await expect(page.locator('#pay-list button', { hasText: 'Approve' })).toHaveCount(0);
   });
+
+  test('restricted deep links stay on an allowed screen without loading restricted data', async ({ page }) => {
+    const restrictedRequests = [];
+    await page.route('**/api/admin/**', async route => {
+      const path = new URL(route.request().url()).pathname;
+      if (path === '/api/admin/audit-logs' || path === '/api/admin/fare-settings') {
+        restrictedRequests.push(path);
+      }
+      await route.continue();
+    });
+    await stubAdminData(page);
+
+    await page.goto(`${baseURL}/admin#audit-logs`);
+    await page.getByRole('button', { name: 'Sub-Admin', exact: true }).click();
+    await page.locator('#sa-username').fill('ops-scope');
+    await page.locator('#sa-pass').fill(PASSWORD);
+    await page.getByRole('button', { name: 'Sign In as Sub-Admin' }).click();
+    await expect(page.locator('#admin-app')).toBeVisible();
+    await expect(page.locator('#sec-overview')).toHaveClass(/active/);
+    await expect(page.locator('#section-title')).toHaveText('Overview Dashboard');
+    await expect(page).toHaveURL(/\/admin$/);
+    await expect.poll(() => restrictedRequests).toEqual([]);
+
+    await page.goto(`${baseURL}/admin#fare-settings`);
+    await expect(page.locator('#admin-app')).toBeVisible();
+    await expect(page.locator('#sec-overview')).toHaveClass(/active/);
+    await expect(page.locator('#section-title')).toHaveText('Overview Dashboard');
+    await expect(page).toHaveURL(/\/admin$/);
+    await expect.poll(() => restrictedRequests).toEqual([]);
+  });
 });

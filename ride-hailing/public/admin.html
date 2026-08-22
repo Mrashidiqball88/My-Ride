@@ -1053,6 +1053,14 @@ const SECTION_PERMISSION = {
   'ride-settings': 'manageRideSettings', 'fare-settings': 'manageFareSettings',
   'pay-settings': 'managePaymentSettings'
 };
+function hasSectionAccess(name) {
+  if (SECTION_PERMISSION[name]) return hasPermission(SECTION_PERMISSION[name]);
+  if (name === 'app-settings') {
+    return ['manageRideSettings', 'manageFareSettings', 'managePaymentSettings'].some(hasPermission);
+  }
+  if (['sub-admins', 'deletions'].includes(name)) return isSuperAdmin;
+  return false;
+}
 
 function renderPermissionMatrix(prefix, values = {}) {
   const container = document.getElementById(`${prefix}-permission-matrix`);
@@ -1208,7 +1216,10 @@ async function bootAdmin() {
   document.getElementById('admin-email-lbl').textContent = adminEmail;
   applyPermissions();
   connectSocket();
-  if (hasPermission('viewOverview')) {
+  const requestedSection = window.location.hash.slice(1);
+  if (requestedSection && SECTION_TITLES[requestedSection]) {
+    showSection(requestedSection);
+  } else if (hasPermission('viewOverview')) {
     loadOverview();
     loadStats();
   } else {
@@ -1325,12 +1336,12 @@ const SECTION_TITLES = {
   'sub-admins':'Sub-Admin User Management'
 };
 function showSection(name) {
-  if (SECTION_PERMISSION[name] && !hasPermission(SECTION_PERMISSION[name])) {
+  if (!hasSectionAccess(name)) {
     showToast('You do not have access to this section.', 'error');
-    return;
-  }
-  if (['sub-admins', 'deletions'].includes(name) && !isSuperAdmin) {
-    showToast('This section is restricted to Super Admin.', 'error');
+    history.replaceState(null, '', window.location.pathname + window.location.search);
+    const fallback = [...document.querySelectorAll('.sb-item')]
+      .find(el => el.dataset.sec && hasSectionAccess(el.dataset.sec));
+    if (fallback?.dataset.sec && fallback.dataset.sec !== name) showSection(fallback.dataset.sec);
     return;
   }
   document.querySelectorAll('.sb-item').forEach(el => el.classList.toggle('active', el.dataset.sec === name));
@@ -1355,6 +1366,10 @@ function showSection(name) {
   };
   loaders[name]?.();
 }
+window.addEventListener('hashchange', () => {
+  const requestedSection = window.location.hash.slice(1);
+  if (requestedSection && SECTION_TITLES[requestedSection]) showSection(requestedSection);
+});
 function setFTab(el) {
   el.closest('.filter-tabs').querySelectorAll('.ftab').forEach(t => t.classList.remove('active'));
   el.classList.add('active');
