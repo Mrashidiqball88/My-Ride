@@ -975,17 +975,14 @@ app.post('/api/auth/register', async (req, res) => {
       return res.status(409).json({ error: 'This CNIC / NIC is already registered' });
     }
 
+    let identityVerified = false;
     if (resolvedRoleEarly === 'customer') {
-      let identityVerified = false;
       try {
         identityVerified = await verifyCustomerIdentityDocuments({
           name, nationalId: normalizedCustomerId, front: cnicFront, back: cnicBack
         });
       } catch (err) {
         console.warn(`[identity-verification] Unable to read submitted customer ID: ${err.message}`);
-      }
-      if (!identityVerified) {
-        return res.status(422).json({ error: 'Wrong Documents / Document Verification Failed' });
       }
     }
 
@@ -999,7 +996,7 @@ app.post('/api/auth/register', async (req, res) => {
       phone:         phone?.trim()  || '',
       password:      hash,
       role:          resolvedRole,
-      accountStatus: 'pending',
+      accountStatus: resolvedRole === 'driver' ? 'pending' : (identityVerified ? 'active' : 'pending'),
       vehicleType:   vehicleType    || '',
       vehicleModel:  vehicleModel   || '',
       vehiclePlate:  vehiclePlate   || '',
@@ -1014,7 +1011,7 @@ app.post('/api/auth/register', async (req, res) => {
       customerIdFront: customerFrontFile,
       customerIdBack: customerBackFile,
       identityVerifiedAt: resolvedRole === 'customer' ? new Date() : null,
-      identityVerificationStatus: resolvedRole === 'customer' ? 'pending' : null
+      identityVerificationStatus: resolvedRole === 'customer' ? (identityVerified ? 'approved' : 'rejected') : null
     });
     await Wallet.create({ user: user._id, balance: 0, transactions: [] });
 

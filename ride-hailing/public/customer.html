@@ -816,7 +816,10 @@ async function doRegister() {
     const res = await registerCustomerWithProgress({ name, phone, email, password: pass, role: 'customer', cnicNumber: cnic, cnicFront, cnicBack });
     setCustomerUploadProgress(100);
     document.getElementById('customer-upload-title').textContent = 'Documents uploaded successfully!';
-    document.getElementById('customer-upload-copy').textContent = 'Your account is pending verification.';
+    const automaticallyApproved = res.user?.accountStatus === 'active' && res.user?.identityVerificationStatus === 'approved';
+    document.getElementById('customer-upload-copy').textContent = automaticallyApproved
+      ? 'Your identity matched successfully. Your account is approved and ready to book rides.'
+      : 'Your account is pending Admin verification because the automated match needs review.';
     document.getElementById('customer-upload-close').style.display = 'block';
     window._pendingCustomerSession = res;
   } catch (e) {
