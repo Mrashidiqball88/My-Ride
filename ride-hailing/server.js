@@ -59,12 +59,14 @@ server.requestTimeout = parseInt(process.env.REQUEST_TIMEOUT_MS || '600000', 10)
 // Bind the port right after healthchecks so the OS accepts connections and
 // deployment probes succeed while DB connects asynchronously in the background.
 const PORT = parseInt(process.env.PORT || '8080', 10);
-server.listen(PORT, '0.0.0.0', () => {
-  console.log(`\n🚗 Ride-Hailing Server running on port ${PORT}`);
-  console.log(`   Customer App : /customer`);
-  console.log(`   Driver App   : /driver`);
-  console.log(`   DB Status    : Connecting…\n`);
-});
+if (require.main === module) {
+  server.listen(PORT, '0.0.0.0', () => {
+    console.log(`\n🚗 Ride-Hailing Server running on port ${PORT}`);
+    console.log(`   Customer App : /customer`);
+    console.log(`   Driver App   : /driver`);
+    console.log(`   DB Status    : Connecting…\n`);
+  });
+}
 
 // ── 5. MIDDLEWARES & STATIC FILES ─────────────────────────────────────────
 app.use(cors());
@@ -420,7 +422,7 @@ async function refreshPendingRideFares(settings) {
     ride.fareQuote = fareQuote;
     await ride.save();
     const payload = { id: ride._id, fare: ride.fare, fareQuote: ride.fareQuote };
-    io.to(`drivers:${ride.vehicleType || 'Car Mini'}`).emit('ride:fare-updated', payload);
+    io.to(`drivers:${normalizeFareVehicle(ride.vehicleType || 'Car Mini')}`).emit('ride:fare-updated', payload);
     io.to(`ride:${ride._id}`).emit('ride:fare-updated', payload);
   }
 }
@@ -1347,7 +1349,7 @@ app.patch('/api/rides/:id/update-fare', authMiddleware, async (req, res) => {
     await ride.save();
 
     // Re-broadcast updated fare only to drivers of the same vehicle category
-    io.to(`drivers:${ride.vehicleType || 'Car Mini'}`).emit('ride:fare-updated', {
+    io.to(`drivers:${normalizeFareVehicle(ride.vehicleType || 'Car Mini')}`).emit('ride:fare-updated', {
       id:   ride._id,
       fare: ride.fare,
       fareQuote: ride.fareQuote
@@ -2768,7 +2770,7 @@ io.on('connection', (socket) => {
       // Restore online rooms — only if DB says online and account is active
       if (driver?.isOnline && driver.accountStatus === 'active') {
         socket.join('drivers-online');
-        socket.join(`drivers:${driver.vehicleType || 'Car Mini'}`);
+        socket.join(`drivers:${normalizeFareVehicle(driver.vehicleType || 'Car Mini')}`);
       }
       // Re-join the active ride room so location updates reach the passenger
       if (activeRide) {
@@ -2927,7 +2929,9 @@ async function connectDatabase() {
 }
 
 // Start DB connection in background — never blocks the HTTP server
-connectDatabase().catch(err => console.error('connectDatabase error:', err));
+if (require.main === module) {
+  connectDatabase().catch(err => console.error('connectDatabase error:', err));
+}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Daily Subscription Deduction (runs at UTC midnight every day)
@@ -3019,7 +3023,7 @@ async function runDailyDeduction() {
   } catch (err) { console.error('Daily deduction error:', err.message); }
 }
 
-(function scheduleMidnightDeduction() {
+if (require.main === module) (function scheduleMidnightDeduction() {
   function msUntilMidnight() {
     const now = new Date();
     const midnight = new Date(now);
@@ -3035,3 +3039,16 @@ async function runDailyDeduction() {
   scheduleNext();
   console.log(`⏰ Daily deduction scheduled (next run at UTC midnight)`);
 })();
+
+module.exports = {
+  app,
+  server,
+  io,
+  FARE_VEHICLE_CATEGORIES,
+  normalizeFareSettings,
+  validateFareSettings,
+  calculateFareFromSettings,
+  normalizeFareVehicle,
+  refreshPendingRideFares,
+  models: { User, Ride, Wallet, Settings }
+};
