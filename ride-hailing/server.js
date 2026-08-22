@@ -28,6 +28,7 @@ const path     = require('path');
 const webpush  = require('web-push');
 const crypto   = require('crypto');
 const Tesseract = require('tesseract.js');
+const sharp    = require('sharp');
 
 // ── 2. APP & SERVER INITIALIZATION ───────────────────────────────────────
 const app    = express();
@@ -113,21 +114,32 @@ function parseImageDataUrl(dataUrl) {
 
 // Save a base64 data-URL to disk; return the public path.  If the value is
 // already a file path (not a data: URL) it is returned unchanged.
-function saveDocToDisk(dataUrl, fieldName) {
+async function compressImage(bytes) {
+  return sharp(bytes)
+    .rotate()
+    .resize({ width: 1800, height: 1800, fit: 'inside', withoutEnlargement: true })
+    .jpeg({ quality: 78, mozjpeg: true })
+    .toBuffer();
+}
+
+async function saveDocToDisk(dataUrl, fieldName) {
   if (!dataUrl || !dataUrl.startsWith('data:')) return dataUrl || '';
   const m = dataUrl.match(/^data:image\/(jpeg|jpg|png|webp);base64,(.+)$/s);
   if (!m) return dataUrl;
-  const ext   = m[1] === 'jpeg' ? 'jpg' : m[1];
-  const fname = `${fieldName}_${Date.now()}_${Math.random().toString(36).slice(2)}.${ext}`;
-  try { fs.writeFileSync(path.join(UPLOADS_DIR, fname), Buffer.from(m[2], 'base64')); }
+  const fname = `${fieldName}_${Date.now()}_${crypto.randomBytes(10).toString('hex')}.jpg`;
+  try {
+    const compressed = await compressImage(Buffer.from(m[2], 'base64'));
+    fs.writeFileSync(path.join(UPLOADS_DIR, fname), compressed, { mode: 0o640 });
+  }
   catch { return dataUrl; } // fallback — keep base64 if disk write fails
   return `/uploads/driver_docs/${fname}`;
 }
 
-function savePrivateIdentityDocument(dataUrl, label) {
+async function savePrivateIdentityDocument(dataUrl, label) {
   const { ext, bytes } = parseImageDataUrl(dataUrl);
-  const filename = `${label}_${Date.now()}_${crypto.randomBytes(12).toString('hex')}.${ext}`;
-  fs.writeFileSync(path.join(CUSTOMER_ID_UPLOADS_DIR, filename), bytes, { mode: 0o600 });
+  const filename = `${label}_${Date.now()}_${crypto.randomBytes(12).toString('hex')}.jpg`;
+  const compressed = await compressImage(bytes);
+  fs.writeFileSync(path.join(CUSTOMER_ID_UPLOADS_DIR, filename), compressed, { mode: 0o600 });
   return filename;
 }
 
@@ -956,8 +968,8 @@ app.post('/api/auth/register', async (req, res) => {
 
     const hash = await bcrypt.hash(password, 12);
     const resolvedRole = role || 'customer';
-    const customerFrontFile = resolvedRole === 'customer' ? savePrivateIdentityDocument(cnicFront, 'customer_id_front') : '';
-    const customerBackFile = resolvedRole === 'customer' ? savePrivateIdentityDocument(cnicBack, 'customer_id_back') : '';
+    const customerFrontFile = resolvedRole === 'customer' ? await savePrivateIdentityDocument(cnicFront, 'customer_id_front') : '';
+    const customerBackFile = resolvedRole === 'customer' ? await savePrivateIdentityDocument(cnicBack, 'customer_id_back') : '';
     const user = await User.create({
       name,
       email:         resolvedEmail  || undefined,
@@ -968,10 +980,10 @@ app.post('/api/auth/register', async (req, res) => {
       vehicleType:   vehicleType    || '',
       vehicleModel:  vehicleModel   || '',
       vehiclePlate:  vehiclePlate   || '',
-      profilePhoto:  saveDocToDisk(profilePhoto, 'profile'),
-      licensePhoto:  saveDocToDisk(licensePhoto, 'license'),
-      cnicFront:     resolvedRole === 'driver' ? saveDocToDisk(cnicFront, 'cnicFront') : '',
-      cnicBack:      resolvedRole === 'driver' ? saveDocToDisk(cnicBack, 'cnicBack') : '',
+      profilePhoto:  await saveDocToDisk(profilePhoto, 'profile'),
+      licensePhoto:  await saveDocToDisk(licensePhoto, 'license'),
+      cnicFront:     resolvedRole === 'driver' ? await saveDocToDisk(cnicFront, 'cnicFront') : '',
+      cnicBack:      resolvedRole === 'driver' ? await saveDocToDisk(cnicBack, 'cnicBack') : '',
       cnicNumber:    resolvedRole === 'driver' ? (cnicNumber || '') : '',
       nationalIdHash,
       nationalIdLast4: resolvedRole === 'customer' ? normalizedCustomerId.slice(-4) : '',
