@@ -71,27 +71,40 @@ sound/vibration, radio recovery, or force-stop behavior.
 
 ## Verification record
 
-The physical-device pass could not be executed in this workspace: no Android or
-iOS phone, installed native build, or device-level notification/location
-telemetry is attached. The entries below are therefore explicitly marked
-**Not run**, not passed. The supporting implementation and automated contract
-evidence is included to make the remaining hands-on work reproducible.
+The physical-device pass could not be executed in this workspace. No Android or
+iOS phone, installed native development/production build, customer/driver test
+accounts, or device-level notification/location telemetry is attached. The
+entries below are therefore marked **Blocked — no device evidence**, not
+passed. This is a production-gate rejection, not an assertion that the native
+behaviour works. The supporting implementation and automated contract evidence
+make the remaining hands-on work reproducible.
 
 **Recorded:** 2026-08-22
+**Validation attempt:** 2026-08-22T15:31:49Z
 **Tester:** Replit workspace (physical-device access unavailable)
+**Available device inventory:** Expo reported zero attached devices
+(`artifacts/myride-driver-mobile/.expo/devices.json`).
+**Automated evidence:** driver app typecheck passed; Android and iOS Expo
+bundles/manifests built successfully from SDK 54; resolved config includes
+Android background location/foreground service permissions and iOS location
+usage descriptions; the 20 native availability/location/fare contract tests
+passed. This build output is an Expo Go/static bundle, not an approved native
+device build, and cannot satisfy the scenarios below.
 
 | Scenario | Device / OS / build | Evidence (timestamp, ride ID, screenshot/log) | Pass/Fail | Tester |
 | --- | --- | --- | --- | --- |
-| Android locked location | Not available | Not run; physical Android lock-screen movement, foreground-service notification, and timestamped location update require hardware. Supporting configuration: `app.json` enables Android background location and foreground service; `background-location.ts` uses 25 m / 15 s updates. | Not run | Replit workspace |
-| iOS locked location | Not available | Not run; physical iOS lock-screen movement, system location indicator, Settings permission state, and timestamped location update require hardware. Supporting configuration: `app.json` declares When In Use and Always location usage descriptions; `background-location.ts` enables the background indicator. | Not run | Replit workspace |
-| Alert and matching offer | Not available | Not run; audible/vibration output and lock-screen tap-through require hardware. Supporting implementation uses an Android MAX channel, default sound, vibration pattern, ride-request category, and preserves the ride payload/ID when the alert opens. | Not run | Replit workspace |
-| Network interruption | Not available | Not run; Wi-Fi/mobile-data switching and duplicate-visible-offer behavior require hardware. Supporting implementation enables infinite Socket.io reconnection, refreshes available rides on reconnect, and ignores a repeated offer with the same ride ID. | Not run | Replit workspace |
-| Force-stop / permission revoke | Not available | Not run; Android force-stop/iOS termination, permission revocation, and the >90-second wait require hardware. Supporting server contract coverage verifies heartbeat persistence; the server eligibility window is 90 seconds and background location fails closed on 401/403. | Not run | Replit workspace |
+| Android locked location | No approved Android device or native build available | **Blocked — no device evidence** (2026-08-22T15:31:49Z); no lock-screen movement, foreground-service notification screenshot, ride ID, or timestamped GPS update can be recorded in this workspace. Supporting config enables Android background location and foreground service; background updates request 25 m / 15 s intervals. | Blocked | Replit workspace |
+| iOS locked location | No approved iOS device or native build available | **Blocked — no device evidence** (2026-08-22T15:31:49Z); no lock-screen movement, system location indicator, Settings permission screenshot, ride ID, or timestamped GPS update can be recorded in this workspace. Supporting config declares When In Use and Always usage descriptions and enables the background indicator. | Blocked | Replit workspace |
+| Alert and matching offer | No approved Android/iOS device or native build available | **Blocked — no device evidence** (2026-08-22T15:31:49Z); sound, vibration, lock-screen tap-through, ride ID, pickup/drop-off, and fare cannot be observed or captured. Supporting implementation schedules a default-sound ride-request notification and retains the ride payload when opened. | Blocked | Replit workspace |
+| Network interruption | No approved Android/iOS device or native build available | **Blocked — no device evidence** (2026-08-22T15:31:49Z); Wi-Fi/mobile-data switching, reconnect timing, duplicate visible offers, and an accepted ride ID cannot be observed or logged. Supporting implementation enables Socket.io reconnection and refreshes available rides after reconnect. | Blocked | Replit workspace |
+| Force-stop / permission revoke | No approved Android/iOS device or native build available | **Blocked — no device evidence** (2026-08-22T15:31:49Z); force-stop/termination, permission revocation, the >90-second wait, and absence of a new offer cannot be observed or captured. Supporting server contracts verify heartbeat persistence; background GPS fails closed on 401/403. | Blocked | Replit workspace |
 
 ## Sign-off status
 
 **Not approved for production reliance on locked-screen tracking or push
-alerts.** A tester must replace each “Not available”/“Not run” entry with the
-device model, OS, native build, timestamp, ride ID, and screenshot or log after
-completing the acceptance steps above. The automated server contract checks
-remain regression coverage only; they do not close this physical-device gate.
+alerts.** A tester must replace each **Blocked** entry with the device model,
+OS, native build, timestamp, ride ID, and screenshot or log after completing
+the acceptance steps above. The automated server contract checks remain
+regression coverage only; they do not close this physical-device gate. Task
+completion is blocked until approved Android and iOS phones and a qualified
+native build are available.
