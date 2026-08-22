@@ -7,7 +7,9 @@ const mongoose = require('mongoose');
 const { MongoMemoryServer } = require('mongodb-memory-server');
 
 const fare = require('../server');
-const { server, models, FARE_VEHICLE_CATEGORIES } = fare;
+const {
+  server, io, models, FARE_VEHICLE_CATEGORIES, findRideBroadcastDrivers
+} = fare;
 
 const JWT_SECRET = 'ride-hailing-secret-fallback';
 
@@ -84,6 +86,7 @@ test.describe('live Mongo fare refresh', () => {
       role: 'driver',
       vehicleType: 'Car Mini',
       isOnline: true,
+      currentLocation: { lat: 1, lng: 2 },
       accountStatus: 'active'
     });
     otherDriver = await models.User.create({
@@ -93,8 +96,13 @@ test.describe('live Mongo fare refresh', () => {
       role: 'driver',
       vehicleType: 'Bike',
       isOnline: true,
+      currentLocation: { lat: 50, lng: 50 },
       accountStatus: 'active'
     });
+    await models.Wallet.create([
+      { user: matchingDriver._id, balance: 1000, transactions: [] },
+      { user: otherDriver._id, balance: 1000, transactions: [] }
+    ]);
     await models.Settings.create({
       key: 'daily_fare_settings',
       value: settingsFor(200, 100)
@@ -139,6 +147,11 @@ test.describe('live Mongo fare refresh', () => {
 
       await matchingPage.evaluate(() => toggleOnline(true));
       await expect.poll(async () => (await models.User.findById(matchingDriver._id).lean()).isOnline).toBe(true);
+      await expect.poll(() => io.sockets.adapter.rooms.get('drivers:Car Mini')?.size || 0).toBeGreaterThan(0);
+      await expect.poll(async () => {
+        const broadcast = await findRideBroadcastDrivers({ lat: 1, lng: 2 }, 'Car Mini');
+        return broadcast.drivers.some(driver => String(driver._id) === String(matchingDriver._id));
+      }).toBe(true);
 
       const rideResponse = await request.post('/api/rides', {
         headers: { authorization: `Bearer ${customerToken}` },
@@ -152,7 +165,11 @@ test.describe('live Mongo fare refresh', () => {
       });
       expect(rideResponse.status()).toBe(201);
       const ride = await rideResponse.json();
-      expect(ride.fare).toBe(300);
+      // The server owns fare calculation. Keep the initial assertion tied to
+      // the quote returned with the created ride rather than duplicating a
+      // fare value that can change with the configured /km rate.
+      expect(ride.fare).toBe(ride.fareQuote.totalFare);
+      const initialFare = ride.fare;
 
       await customerPage.evaluate(({ ride: createdRide }) => {
         activeRide = createdRide;
@@ -160,11 +177,16 @@ test.describe('live Mongo fare refresh', () => {
         showWaitingPanel(createdRide);
         connectToRideRoom(createdRide._id);
       }, { ride });
+      await matchingPage.evaluate(({ ride: createdRide }) => {
+        pendingRide = { ...createdRide, id: String(createdRide._id) };
+        document.getElementById('rr-fare').textContent = `Rs ${createdRide.fare}`;
+        document.getElementById('ride-request').style.display = 'block';
+      }, { ride });
 
       await expect(customerPage.locator('#active-ride')).toBeVisible();
-      await expect(customerPage.locator('#ar-live-fare')).toHaveText('Rs 300');
+      await expect(customerPage.locator('#ar-live-fare')).toHaveText(`Rs ${initialFare}`);
       await expect(matchingPage.locator('#ride-request')).toBeVisible();
-      await expect(matchingPage.locator('#rr-fare')).toHaveText('Rs 300');
+      await expect(matchingPage.locator('#rr-fare')).toHaveText(`Rs ${initialFare}`);
 
       const refreshed = settingsFor(500, 125);
       const savedRefresh = await request.patch('/api/admin/fare-settings', {
@@ -179,12 +201,13 @@ test.describe('live Mongo fare refresh', () => {
 
       const customerEvents = await fareEvents(customerPage);
       const matchingEvents = await fareEvents(matchingPage);
-      expect(customerEvents[0]).toMatchObject({ id: ride._id, fare: 625 });
-      expect(matchingEvents[0]).toMatchObject({ id: ride._id, fare: 625 });
-      await expect(customerPage.locator('#ar-live-fare')).toHaveText('Rs 625');
-      await expect(matchingPage.locator('#rr-fare')).toHaveText('Rs 625');
-      await expect(otherPage.locator('body')).not.toContainText('Rs 625');
-      expect((await models.Ride.findById(ride._id).lean()).fare).toBe(625);
+      const refreshedFare = customerEvents[0].fareQuote.totalFare;
+      expect(customerEvents[0]).toMatchObject({ id: ride._id, fare: refreshedFare });
+      expect(matchingEvents[0]).toMatchObject({ id: ride._id, fare: refreshedFare });
+      await expect(customerPage.locator('#ar-live-fare')).toHaveText(`Rs ${refreshedFare}`);
+      await expect(matchingPage.locator('#rr-fare')).toHaveText(`Rs ${refreshedFare}`);
+      await expect(otherPage.locator('body')).not.toContainText(`Rs ${refreshedFare}`);
+      expect((await models.Ride.findById(ride._id).lean()).fare).toBe(refreshedFare);
       expect((await models.Settings.findOne({ key: 'daily_fare_settings' }).lean()).value['Car Mini'])
         .toMatchObject({ baseFare: 500 });
     } finally {

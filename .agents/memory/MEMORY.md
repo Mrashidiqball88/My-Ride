@@ -2,3 +2,4 @@
 - [Live fare UI tests](live-fare-ui-tests.md) — exercise the authenticated customer and driver pages so fare assertions cover rendered UI, not only socket payloads.
 - [Admin permission refresh](admin-permission-refresh.md) — refresh the server-side Sub-Admin session before applying client visibility rules.
 - [Admin deep-link guards](admin-deep-link-guards.md) — protect both initial hash loads and later hash changes, with fallback before restricted loaders run.
+- [Live fare fixture eligibility](live-fare-fixture-eligibility.md) — live fare tests must model nearby location, wallet eligibility, and the server's current fare quote shape.

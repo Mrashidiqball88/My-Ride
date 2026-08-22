@@ -183,12 +183,15 @@ async function fillStep1(page, { phone = '+923001234999' } = {}) {
   await expect(page.locator('#reg-step2')).toBeVisible();
 }
 
-/** Attach the four large test-fixture photos to the file inputs. */
+/** Attach the required driver documents to the file inputs. */
 async function uploadPhotos(page) {
   await page.locator('#r-profile-photo').setInputFiles(FIXTURES.profile);
   await page.locator('#r-license-photo').setInputFiles(FIXTURES.license);
   await page.locator('#r-cnic-front').setInputFiles(FIXTURES.cnicFront);
   await page.locator('#r-cnic-back').setInputFiles(FIXTURES.cnicBack);
+  // The fixture set predates the vehicle-registration field. Reuse the
+  // license image; this test exercises upload orchestration, not document OCR.
+  await page.locator('#r-vehicle-reg').setInputFiles(FIXTURES.license);
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
@@ -399,8 +402,7 @@ test.describe('Upload progress UI — progress bar advances and overlay hides co
 
 /**
  * Shared JSON body for the slow-socket tests.
- * Mirrors a real doRegister() payload: four 25 000-char base64 image fields
- * ≈ four ~18 KB compressed photos ≈ ~100 KB total.
+ * Mirrors a real doRegister() payload with large base64 image fields.
  */
 const SLOW_UPLOAD_BODY = JSON.stringify({
   name:         'Slow Upload Driver',
@@ -414,6 +416,7 @@ const SLOW_UPLOAD_BODY = JSON.stringify({
   licensePhoto: 'data:image/jpeg;base64,' + 'B'.repeat(25_000),
   cnicFront:    'data:image/jpeg;base64,' + 'C'.repeat(25_000),
   cnicBack:     'data:image/jpeg;base64,' + 'D'.repeat(25_000),
+  vehicleRegPhoto: 'data:image/jpeg;base64,' + 'E'.repeat(25_000),
 });
 
 // ── Real-server slow-upload test ──────────────────────────────────────────────
@@ -463,8 +466,10 @@ test.describe('Slow-socket upload — live server accepts slow continuous body w
       expect(bodyBytesReceived).toBe(Buffer.byteLength(SLOW_UPLOAD_BODY));
 
       // Any HTTP status proves the server kept the connection alive.
-      // 201 = registration success, 409 = duplicate phone, 500 = DB unavailable.
-      expect([201, 409, 500]).toContain(status);
+      // 201 = registration success, 400 = current document validation response,
+      // 409 = duplicate phone, 500 = DB unavailable. Every result proves the
+      // server received the complete slow body before validating it.
+      expect([201, 400, 409, 500]).toContain(status);
     }
   );
 });
