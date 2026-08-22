@@ -582,6 +582,7 @@ textarea.support-input{resize:vertical;min-height:85px}
             <div class="pay-type-btn active" data-type="jazzcash" onclick="selectPayType(this)">📱 JazzCash</div>
             <div class="pay-type-btn" data-type="easypaisa" onclick="selectPayType(this)">💚 EasyPaisa</div>
             <div class="pay-type-btn" data-type="bank" onclick="selectPayType(this)">🏦 Bank</div>
+             <div class="pay-type-btn" data-type="sadapay" onclick="selectPayType(this)">💳 SadaPay</div>
           </div>
         </div>
         <input class="trx-input" id="trx-id-input" type="text" placeholder="TRX / Reference ID (e.g. T20240801ABCD…)">
@@ -592,7 +593,7 @@ textarea.support-input{resize:vertical;min-height:85px}
         </div>
         <button class="btn-submit-trx" id="submit-trx-btn" onclick="submitTrxPayment()">Submit Payment</button>
       </div>
-      <div style="font-size:.72rem;color:#555;margin-top:.5rem">One submission allowed per day. Wait for admin approval.</div>
+        <div style="font-size:.72rem;color:#555;margin-top:.5rem">Your submission remains pending until the gateway sends a verified payment callback.</div>
     </div>
 
     <!-- Payment History -->
@@ -1215,6 +1216,22 @@ function connectSocket() {
     showToast(msg, 'success');
   });
 
+  // The payment gateway verified a pending TRX. This is the only payment event
+  // that unlocks ride acceptance; submitting a TRX alone does not.
+  socket.on('payment:approved', async ({ paidUntilDate, amount }) => {
+    if (paidUntilDate) user.paidUntilDate = paidUntilDate;
+    localStorage.setItem('rh_user', JSON.stringify(user));
+    unlockAcceptButton();
+    showToast(`✅ Payment of Rs ${Number(amount || 0).toLocaleString()} verified. Ride acceptance is now active.`, 'success');
+    await loadPayments();
+    updateDailyFeeBanner();
+  });
+
+  socket.on('payment:rejected', async ({ reason }) => {
+    showToast(reason || 'Your payment could not be verified and remains pending.', 'error');
+    await loadPayments();
+  });
+
   // Account suspended / balance too low
   socket.on('account:suspended', ({ reason }) => {
     showToast(reason, 'error');
@@ -1724,6 +1741,17 @@ async function loadAdminPaymentAccounts() {
         <button class="btn-copy" onclick="copyNum(this,'${accts.bank.iban}')">📋 Copy</button>
       </div>`);
     }
+    if (accts.sadapay?.number) {
+      cards.push(`<div class="pay-account-card">
+        <div class="pay-account-icon">💳</div>
+        <div class="pay-account-info">
+          <div class="pay-account-name">SadaPay</div>
+          ${accts.sadapay.title ? `<div class="pay-account-title">${accts.sadapay.title}</div>` : ''}
+          <div class="pay-account-number">${accts.sadapay.number}</div>
+        </div>
+        <button class="btn-copy" onclick="copyNum(this,'${accts.sadapay.number}')">📋 Copy</button>
+      </div>`);
+    }
 
     el.innerHTML = cards.length
       ? cards.join('')
@@ -1921,13 +1949,7 @@ async function submitTrxPayment() {
       amount:      Number(amount),
       paymentType: selectedPayType || 'jazzcash'
     });
-    // Optimistic local unlock — treat as paid for the rest of today
-    const _until = new Date();
-    _until.setUTCHours(23, 59, 59, 999);
-    user.paidUntilDate = _until.toISOString();
-    localStorage.setItem('rh_user', JSON.stringify(user));
-    unlockAcceptButton();
-    showToast('✅ Payment submitted! Ride acceptance is now active.', 'success');
+    showToast('⏳ Payment submitted and is pending gateway verification.', 'info');
     document.getElementById('trx-id-input').value     = '';
     document.getElementById('trx-amount-input').value = '';
     const ss = document.getElementById('trx-screenshot');

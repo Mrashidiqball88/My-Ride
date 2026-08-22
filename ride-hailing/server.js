@@ -163,6 +163,11 @@ const PAYMENT_GATEWAY_DEFAULTS = {
 };
 const PAYMENT_SUCCESS_STATUSES = new Set(['paid', 'approved', 'success', 'successful', 'completed', 'complete']);
 
+function isSuccessfulWebhookStatus(value) {
+  const status = String(value ?? '').trim().toLowerCase();
+  return PAYMENT_SUCCESS_STATUSES.has(status) || status === '000' || status === '0';
+}
+
 function normalizeGateway(value) {
   const gateway = String(value || '').toLowerCase().trim();
   return gateway === 'bank-transfer' ? 'bank' : gateway;
@@ -180,6 +185,10 @@ function verifyWebhookSignature(req, secret) {
     req.get('x-webhook-signature') ||
     req.get('x-signature') ||
     req.get('x-signature-sha256') ||
+    req.get('x-jazzcash-signature') ||
+    req.get('x-easypaisa-signature') ||
+    req.get('x-sadapay-signature') ||
+    req.get('x-bank-signature') ||
     req.get('x-hmac-signature') || ''
   ).replace(/^sha256=/i, '').trim();
   if (!provided) return false;
@@ -1248,28 +1257,10 @@ app.post('/api/payments/submit', authMiddleware, async (req, res) => {
   }
 });
 
-// POST /api/payments/verify — internal/manual verification probe. This never
-// approves a payment from client-supplied fields; it only reports the current
-// persisted state. Approval can happen only through a valid signed webhook.
-app.post('/api/payments/verify', authMiddleware, async (req, res) => {
-  try {
-    const trxId = String(req.body?.trxId || '').trim();
-    if (!trxId) return res.status(400).json({ error: 'TRX ID is required' });
-    const payment = await Payment.findOne({ trxId }).lean();
-    if (!payment) return res.status(404).json({ error: 'Payment not found' });
-    if (String(payment.driver) !== String(req.user.id) && req.user.role !== 'admin') {
-      return res.status(403).json({ error: 'You can only verify your own payment' });
-    }
-    res.json({ success: true, status: payment.status, payment });
-  } catch (err) { res.status(500).json({ error: err.message }); }
-});
-
-// Gateway callback endpoint. Configure each provider with:
-// POST /api/v1/payments/webhook/:gateway
-// Signature: HMAC-SHA256(raw request body, stored webhook secret), sent in
-// x-webhook-signature (sha256=... is also accepted).
-app.post('/api/v1/payments/webhook/:gateway', async (req, res) => {
-  const gateway = normalizeGateway(req.params.gateway);
+// Shared signed callback processor used by the generic verification endpoint
+// and each provider-specific webhook URL.
+async function processGatewayWebhook(req, res, requestedGateway) {
+  const gateway = normalizeGateway(requestedGateway);
   if (!PAYMENT_GATEWAYS.includes(gateway)) {
     return res.status(404).json({ error: 'Unsupported payment gateway' });
   }
@@ -1294,7 +1285,7 @@ app.post('/api/v1/payments/webhook/:gateway', async (req, res) => {
     }
 
     const payment = await Payment.findOne({ trxId, paymentType: gateway });
-    if (!payment || payment.status !== 'pending' || Number(payment.amount) !== amount || !PAYMENT_SUCCESS_STATUSES.has(gatewayStatus)) {
+    if (!payment || payment.status !== 'pending' || Number(payment.amount) !== amount || !isSuccessfulWebhookStatus(gatewayStatus)) {
       return res.status(202).json({ received: true, verified: false, reason: 'Payment did not match a pending transaction' });
     }
 
@@ -1328,7 +1319,22 @@ app.post('/api/v1/payments/webhook/:gateway', async (req, res) => {
     console.error('[payment webhook] processing failed:', err.message);
     return res.status(500).json({ error: 'Webhook processing failed; payment remains pending' });
   }
-});
+}
+
+// POST /api/payments/verify supports gateways that only allow one callback URL.
+// Send x-payment-gateway: jazzcash|easypaisa|sadapay|bank with the signed body.
+app.post('/api/payments/verify', async (req, res) =>
+  processGatewayWebhook(req, res, req.get('x-payment-gateway') || req.body?.gateway)
+);
+
+// Provider-specific callback URL. Configure gateway callbacks as:
+// POST /api/v1/payments/webhook/jazzcash
+// POST /api/v1/payments/webhook/easypaisa
+// POST /api/v1/payments/webhook/sadapay
+// POST /api/v1/payments/webhook/bank
+app.post('/api/v1/payments/webhook/:gateway', async (req, res) =>
+  processGatewayWebhook(req, res, req.params.gateway)
+);
 
 // GET /api/payments/my — driver's own payment history
 app.get('/api/payments/my', authMiddleware, driverOnly, async (req, res) => {

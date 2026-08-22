@@ -447,7 +447,7 @@ input[type=date]:focus{border-color:#f5c518}
           </div>
         </div>
         <p style="font-size:.8rem;color:#475569;margin-bottom:1.25rem">
-          These account details are shown to drivers in the Recharge Wallet screen. Keep them up to date.
+          Configure driver-facing payment accounts and gateway verification. Credentials are encrypted on the server and never shown again after saving.
         </p>
 
         <!-- JazzCash -->
@@ -466,6 +466,16 @@ input[type=date]:focus{border-color:#f5c518}
               <input class="modal-input" id="jc-number" type="text" placeholder="e.g. 03001234567">
             </div>
           </div>
+          <div class="field-row">
+            <div class="field-item"><div class="field-label">API Key</div><input class="modal-input" id="jc-api-key" type="password" autocomplete="new-password" placeholder="Paste to set; leave blank to keep current"></div>
+            <div class="field-item"><div class="field-label">Access Token</div><input class="modal-input" id="jc-access-token" type="password" autocomplete="new-password" placeholder="Paste to set; leave blank to keep current"></div>
+          </div>
+          <div class="field-row">
+            <div class="field-item"><div class="field-label">Merchant ID</div><input class="modal-input" id="jc-merchant-id" type="password" autocomplete="new-password" placeholder="Merchant identifier"></div>
+            <div class="field-item"><div class="field-label">Secret Key</div><input class="modal-input" id="jc-secret-key" type="password" autocomplete="new-password" placeholder="Gateway secret key"></div>
+          </div>
+          <div class="field-row"><div class="field-item"><div class="field-label">Webhook Secret</div><input class="modal-input" id="jc-webhook-secret" type="password" autocomplete="new-password" placeholder="HMAC secret for signed callbacks"></div></div></div>
+          <div class="gateway-status" id="jc-gateway-status" style="font-size:.72rem;color:#64748b"></div>
         </div>
 
         <!-- EasyPaisa -->
@@ -484,6 +494,16 @@ input[type=date]:focus{border-color:#f5c518}
               <input class="modal-input" id="ep-number" type="text" placeholder="e.g. 03011234567">
             </div>
           </div>
+          <div class="field-row">
+            <div class="field-item"><div class="field-label">API Key</div><input class="modal-input" id="ep-api-key" type="password" autocomplete="new-password" placeholder="Paste to set; leave blank to keep current"></div>
+            <div class="field-item"><div class="field-label">Access Token</div><input class="modal-input" id="ep-access-token" type="password" autocomplete="new-password" placeholder="Paste to set; leave blank to keep current"></div>
+          </div>
+          <div class="field-row">
+            <div class="field-item"><div class="field-label">Merchant ID</div><input class="modal-input" id="ep-merchant-id" type="password" autocomplete="new-password" placeholder="Merchant identifier"></div>
+            <div class="field-item"><div class="field-label">Secret Key</div><input class="modal-input" id="ep-secret-key" type="password" autocomplete="new-password" placeholder="Gateway secret key"></div>
+          </div>
+          <div class="field-row"><div class="field-item"><div class="field-label">Webhook Secret</div><input class="modal-input" id="ep-webhook-secret" type="password" autocomplete="new-password" placeholder="HMAC secret for signed callbacks"></div></div></div>
+          <div class="gateway-status" id="ep-gateway-status" style="font-size:.72rem;color:#64748b"></div>
         </div>
 
         <!-- Bank Account -->
@@ -508,6 +528,37 @@ input[type=date]:focus{border-color:#f5c518}
               <input class="modal-input" id="bk-iban" type="text" placeholder="e.g. PK36SCBL0000001123456702" style="font-family:monospace;letter-spacing:.04em">
             </div>
           </div>
+          <div class="field-row">
+            <div class="field-item"><div class="field-label">API Key</div><input class="modal-input" id="bk-api-key" type="password" autocomplete="new-password" placeholder="Bank API key"></div>
+            <div class="field-item"><div class="field-label">Access Token</div><input class="modal-input" id="bk-access-token" type="password" autocomplete="new-password" placeholder="Bank access token"></div>
+          </div>
+          <div class="field-row">
+            <div class="field-item"><div class="field-label">Merchant ID</div><input class="modal-input" id="bk-merchant-id" type="password" autocomplete="new-password" placeholder="Merchant / client ID"></div>
+            <div class="field-item"><div class="field-label">Secret Key</div><input class="modal-input" id="bk-secret-key" type="password" autocomplete="new-password" placeholder="Bank secret key"></div>
+          </div>
+          <div class="field-row"><div class="field-item"><div class="field-label">Webhook Secret</div><input class="modal-input" id="bk-webhook-secret" type="password" autocomplete="new-password" placeholder="HMAC secret for signed callbacks"></div></div></div>
+          <div class="gateway-status" id="bk-gateway-status" style="font-size:.72rem;color:#64748b"></div>
+        </div>
+
+        <!-- SadaPay -->
+        <div style="background:#0f0f1e;border:1px solid #1e1e2e;border-radius:14px;padding:1.2rem;margin-bottom:1.5rem">
+          <div style="display:flex;align-items:center;gap:.5rem;margin-bottom:.9rem">
+            <span style="font-size:1.2rem">💳</span><span style="font-size:.9rem;font-weight:700;color:#e2e8f0">SadaPay</span>
+          </div>
+          <div class="field-row">
+            <div class="field-item"><div class="field-label">Account Title</div><input class="modal-input" id="sp-title" type="text" placeholder="e.g. Ali Khan"></div>
+            <div class="field-item"><div class="field-label">Account Number / IBAN</div><input class="modal-input" id="sp-number" type="text" placeholder="SadaPay account or IBAN"></div>
+          </div>
+          <div class="field-row">
+            <div class="field-item"><div class="field-label">API Key</div><input class="modal-input" id="sp-api-key" type="password" autocomplete="new-password" placeholder="Paste to set; leave blank to keep current"></div>
+            <div class="field-item"><div class="field-label">Access Token</div><input class="modal-input" id="sp-access-token" type="password" autocomplete="new-password" placeholder="Paste to set; leave blank to keep current"></div>
+          </div>
+          <div class="field-row">
+            <div class="field-item"><div class="field-label">Merchant ID</div><input class="modal-input" id="sp-merchant-id" type="password" autocomplete="new-password" placeholder="Merchant identifier"></div>
+            <div class="field-item"><div class="field-label">Secret Key</div><input class="modal-input" id="sp-secret-key" type="password" autocomplete="new-password" placeholder="Gateway secret key"></div>
+          </div>
+          <div class="field-row"><div class="field-item"><div class="field-label">Webhook Secret</div><input class="modal-input" id="sp-webhook-secret" type="password" autocomplete="new-password" placeholder="HMAC secret for signed callbacks"></div></div></div>
+          <div class="gateway-status" id="sp-gateway-status" style="font-size:.72rem;color:#64748b"></div>
         </div>
 
         <button class="btn btn-primary" style="padding:.75rem 2rem;font-size:.9rem" onclick="savePaymentSettings()">
@@ -920,6 +971,12 @@ function connectSocket() {
   });
 
   socket.on('ride:new', () => { loadStats(); });
+  socket.on('payment:approved', (payment) => {
+    showToast(`✓ ${payment.paymentType || 'Gateway'} payment verified: Rs ${Number(payment.amount || 0).toLocaleString()}`, 'success');
+    loadStats();
+    const paymentsPanel = document.getElementById('sec-payments');
+    if (paymentsPanel?.classList.contains('active')) loadPayments(currentPayStatus);
+  });
 }
 
 // ── Toast ─────────────────────────────────────────────────────────────────────
@@ -1049,31 +1106,10 @@ async function loadPayments(status = 'pending') {
           ${p.adminNote ? `<div class="pay-meta" style="color:#64748b;margin-top:.2rem">💬 ${p.adminNote}</div>` : ''}
         </div>
         <div class="pay-amount">Rs ${(p.amount||0).toLocaleString()}</div>
-        ${isPending && (isSuperAdmin || adminPerms.manageWallets) ? `<div class="pay-actions">
-          <button class="btn btn-green" onclick="approvePayment('${p._id}')">✓ Approve</button>
-          <button class="btn btn-red"   onclick="rejectPayment('${p._id}')">✕ Reject</button>
-        </div>` : ''}
+        ${isPending ? `<div class="pay-actions"><span class="badge badge-pending">Waiting for verified gateway webhook</span></div>` : ''}
       </div>`;
     }).join('');
   } catch (e) { el.innerHTML = `<div class="empty-state">Error: ${e.message}</div>`; }
-}
-
-async function approvePayment(id) {
-  if (!confirm('Approve this payment?')) return;
-  try {
-    await api(`/api/admin/payments/${id}/approve`, 'PATCH');
-    showToast('Payment approved ✓', 'success');
-    loadPayments(currentPayStatus); loadStats();
-  } catch (e) { showToast(e.message, 'error'); }
-}
-
-async function rejectPayment(id) {
-  const reason = prompt('Reason for rejection (optional):') || '';
-  try {
-    await api(`/api/admin/payments/${id}/reject`, 'PATCH', { reason });
-    showToast('Payment rejected', 'error');
-    loadPayments(currentPayStatus);
-  } catch (e) { showToast(e.message, 'error'); }
 }
 
 // ── 3. DRIVERS ────────────────────────────────────────────────────────────────
@@ -1859,11 +1895,43 @@ async function loadPaymentSettings() {
     document.getElementById('bk-name').value   = s.bank?.name  || '';
     document.getElementById('bk-title').value  = s.bank?.title || '';
     document.getElementById('bk-iban').value   = s.bank?.iban  || '';
+    document.getElementById('sp-title').value  = s.sadapay?.title || '';
+    document.getElementById('sp-number').value = s.sadapay?.number || '';
+    setGatewayStatus('jc', s.gatewayStatus?.jazzcash);
+    setGatewayStatus('ep', s.gatewayStatus?.easypaisa);
+    setGatewayStatus('bk', s.gatewayStatus?.bank);
+    setGatewayStatus('sp', s.gatewayStatus?.sadapay);
     document.getElementById('ps-feedback').textContent = '';
   } catch (e) {
     document.getElementById('ps-feedback').textContent = '⚠ ' + e.message;
     document.getElementById('ps-feedback').style.color = '#ef4444';
   }
+}
+
+function setGatewayStatus(prefix, status = {}) {
+  const el = document.getElementById(`${prefix}-gateway-status`);
+  if (!el) return;
+  const configured = [
+    status.apiKeyConfigured && 'API key',
+    status.accessTokenConfigured && 'access token',
+    status.merchantIdConfigured && 'merchant ID',
+    status.secretKeyConfigured && 'secret key',
+    status.webhookSecretConfigured && 'webhook secret'
+  ].filter(Boolean);
+  el.textContent = configured.length
+    ? `✓ Securely saved: ${configured.join(', ')}`
+    : 'No gateway credentials saved yet. Paste values above and save.';
+  el.style.color = configured.length ? '#22c55e' : '#64748b';
+}
+
+function gatewayConfig(prefix) {
+  return {
+    apiKey:        document.getElementById(`${prefix}-api-key`).value.trim(),
+    accessToken:   document.getElementById(`${prefix}-access-token`).value.trim(),
+    merchantId:    document.getElementById(`${prefix}-merchant-id`).value.trim(),
+    secretKey:     document.getElementById(`${prefix}-secret-key`).value.trim(),
+    webhookSecret: document.getElementById(`${prefix}-webhook-secret`).value.trim()
+  };
 }
 
 async function savePaymentSettings() {
@@ -1873,9 +1941,21 @@ async function savePaymentSettings() {
     await api('/api/admin/settings', 'PATCH', {
       jazzcash:  { title: document.getElementById('jc-title').value.trim(),  number: document.getElementById('jc-number').value.trim() },
       easypaisa: { title: document.getElementById('ep-title').value.trim(),  number: document.getElementById('ep-number').value.trim() },
-      bank:      { name:  document.getElementById('bk-name').value.trim(),   title:  document.getElementById('bk-title').value.trim(), iban: document.getElementById('bk-iban').value.trim() }
+      bank:      { name:  document.getElementById('bk-name').value.trim(),   title:  document.getElementById('bk-title').value.trim(), iban: document.getElementById('bk-iban').value.trim() },
+      sadapay:   { title: document.getElementById('sp-title').value.trim(),  number: document.getElementById('sp-number').value.trim() },
+      gatewayConfigs: {
+        jazzcash:  gatewayConfig('jc'),
+        easypaisa: gatewayConfig('ep'),
+        bank:      gatewayConfig('bk'),
+        sadapay:   gatewayConfig('sp')
+      }
     });
-    fb.textContent = '✓ Settings saved successfully! Drivers will see the updated accounts immediately.';
+    ['jc','ep','bk','sp'].forEach(prefix => {
+      document.querySelectorAll(`[id^="${prefix}-"]`).forEach(input => {
+        if (input.type === 'password') input.value = '';
+      });
+    });
+    fb.textContent = '✓ Settings saved. Gateway credentials are encrypted and webhook verification is ready.';
     fb.style.color = '#22c55e';
     showToast('Payment settings saved ✓', 'success');
   } catch (e) {

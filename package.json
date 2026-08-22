@@ -10,7 +10,17 @@
   },
   "private": true,
   "dependencies": {
-    "@replit/connectors-sdk": "^0.4.1"
+    "@replit/connectors-sdk": "^0.4.1",
+    "bcryptjs": "2.4.3",
+    "cors": "2.8.5",
+    "dotenv": "16.4.5",
+    "esbuild": "0.27.3",
+    "express": "4.19.2",
+    "jsonwebtoken": "9.0.2",
+    "mongoose": "^9.9.3",
+    "socket.io": "4.7.5",
+    "vite": "7.3.2",
+    "web-push": "3.6.7"
   },
   "devDependencies": {
     "prettier": "^3.9.6",
