@@ -253,6 +253,45 @@ function storedVehicleTypesForFareCategory(category) {
   ])];
 }
 
+function emptyDailyFeeSettings() {
+  return Object.fromEntries(FARE_VEHICLE_CATEGORIES.map(category => [category, null]));
+}
+
+function normalizeDailyFeeSettings(value = {}) {
+  const result = emptyDailyFeeSettings();
+  for (const category of FARE_VEHICLE_CATEGORIES) {
+    const source = value?.[category] ?? value?.[Object.keys(FARE_VEHICLE_ALIASES).find(alias => FARE_VEHICLE_ALIASES[alias] === category)];
+    const amount = source && typeof source === 'object' ? source.amount : source;
+    result[category] = amount === null || amount === undefined || amount === '' ? null : Number(amount);
+  }
+  return result;
+}
+
+function validateDailyFeeSettings(value) {
+  const settings = normalizeDailyFeeSettings(value);
+  const errors = [];
+  for (const category of FARE_VEHICLE_CATEGORIES) {
+    const amount = settings[category];
+    if (!Number.isFinite(amount) || amount <= 0) {
+      errors.push(`${category}: Daily Fee must be greater than zero`);
+    }
+    if (Number.isFinite(amount) && Math.round(amount * 100) !== amount * 100) {
+      errors.push(`${category}: Daily Fee can have at most two decimal places`);
+    }
+  }
+  return { settings, errors };
+}
+
+async function getDailyFeeSettings() {
+  const doc = await Settings.findOne({ key: 'daily_fee_settings' }).lean();
+  return normalizeDailyFeeSettings(doc?.value);
+}
+
+async function getDailyFeeForVehicle(vehicleType, settings = null) {
+  const current = settings || await getDailyFeeSettings();
+  return current[normalizeFareVehicle(vehicleType)] ?? null;
+}
+
 function emptyFareSettings() {
   return Object.fromEntries(FARE_VEHICLE_CATEGORIES.map(category => [category, {
     baseFare: null,
@@ -441,7 +480,7 @@ const userSchema = new mongoose.Schema({
   activeSessionToken: { type: String, default: null },   // single-device login enforcement
   // Daily platform fee tracking
   lastDailyFeePaidAt: { type: Date,   default: null },
-  dailyFeeAmount:     { type: Number, default: 200  },
+  dailyFeeAmount:     { type: Number, default: null },
   paidUntilDate:      { type: Date,    default: null },   // set when daily fee paid or admin grants waiver
   isFreeTrial:        { type: Boolean, default: false },  // true when paidUntilDate was set by admin trial grant
   trialStartDate:     { type: Date,    default: null },   // when the free trial started
@@ -753,8 +792,8 @@ app.post('/api/auth/register', async (req, res) => {
               role: user.role, accountStatus: user.accountStatus,
               vehicleType: user.vehicleType,
               vehicleModel: user.vehicleModel, vehiclePlate: user.vehiclePlate,
-              lastDailyFeePaidAt: null, dailyFeeAmount: 200,
-              paidUntilDate: null, dailyFeeRate: DAILY_FEE_RATES[user.vehicleType] || 220 }
+               lastDailyFeePaidAt: null, dailyFeeAmount: await getDailyFeeForVehicle(user.vehicleType),
+               paidUntilDate: null, dailyFeeRate: await getDailyFeeForVehicle(user.vehicleType) }
     });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -802,9 +841,9 @@ app.post('/api/auth/login', async (req, res) => {
               vehicleType: user.vehicleType,
               vehicleModel: user.vehicleModel, vehiclePlate: user.vehiclePlate, rating: user.rating,
               lastDailyFeePaidAt: user.lastDailyFeePaidAt || null,
-              dailyFeeAmount: user.dailyFeeAmount || 200,
+               dailyFeeAmount: await getDailyFeeForVehicle(user.vehicleType),
               paidUntilDate:  user.paidUntilDate  || null,
-              dailyFeeRate:   DAILY_FEE_RATES[user.vehicleType] || 220,
+               dailyFeeRate:   await getDailyFeeForVehicle(user.vehicleType),
               isFreeTrial:    user.isFreeTrial    || false,
               trialStartDate: user.trialStartDate || null }
     });
@@ -1399,9 +1438,6 @@ app.post('/api/wallet/add-funds', authMiddleware, async (req, res) => {
 
 // Daily earnings targets per vehicle category (PKR)
 const DAILY_TARGETS   = { 'Bike': 2500, 'Rickshaw': 4000, 'Car Mini': 5500, 'Car AC': 6500 };
-// Vehicle-based daily platform fee rates (24-hour cycle)
-const DAILY_FEE_RATES = { 'Bike': 70,   'Rickshaw': 130,  'Car Mini': 220,  'Car AC': 270  };
-
 // Helper: today's date string in UTC (YYYY-MM-DD)
 function todayUTC() {
   return new Date().toISOString().slice(0, 10);
@@ -1437,6 +1473,13 @@ app.post('/api/payments/submit', authMiddleware, async (req, res) => {
 
     const driver = await User.findById(req.user.id).select('vehicleType');
     if (!driver) return res.status(404).json({ error: 'Driver not found' });
+    const configuredFee = await getDailyFeeForVehicle(driver.vehicleType);
+    if (!Number.isFinite(configuredFee) || configuredFee <= 0) {
+      return res.status(422).json({ error: 'Daily Fee is not configured for your vehicle category. Please contact Admin.' });
+    }
+    if (Math.abs(Number(amount) - configuredFee) > 0.001) {
+      return res.status(422).json({ error: `Payment amount must equal the current Daily Fee of Rs ${configuredFee.toLocaleString()}.` });
+    }
 
     // ── Global TRX ID uniqueness (prevents reuse across drivers) ───────────
     const trxDuplicate = await Payment.findOne({ trxId: cleanTrx });
@@ -1455,7 +1498,7 @@ app.post('/api/payments/submit', authMiddleware, async (req, res) => {
     const payment = await Payment.create({
       driver:          req.user.id,
       trxId:           cleanTrx,
-      amount:          Number(amount),
+      amount:          configuredFee,
       paymentType:     validTypes.includes(paymentType) ? paymentType : 'jazzcash',
       vehicleCategory: driver.vehicleType || 'Car Mini',
       submittedDate:   dateStr
@@ -2379,6 +2422,10 @@ function publicFareSettings(value) {
   return normalizeFareSettings(value);
 }
 
+function publicDailyFeeSettings(value) {
+  return normalizeDailyFeeSettings(value);
+}
+
 // GET /api/settings/payment — public: drivers/customers read account details,
 // never gateway credentials or webhook secrets.
 app.get('/api/settings/payment', async (req, res) => {
@@ -2388,7 +2435,9 @@ app.get('/api/settings/payment', async (req, res) => {
     const gatewayDoc = await Settings.findOne({ key: 'payment_gateway_configs' }).lean();
     const gatewayStatus = {};
     for (const gateway of PAYMENT_GATEWAYS) gatewayStatus[gateway] = publicGatewayConfig(gatewayDoc?.value?.[gateway]);
-    res.json({ ...accounts, gatewayStatus, dailyFareSettings: publicFareSettings(
+    res.json({ ...accounts, gatewayStatus, dailyFeeSettings: publicDailyFeeSettings(
+      (await Settings.findOne({ key: 'daily_fee_settings' }).lean())?.value
+    ), dailyFareSettings: publicFareSettings(
       (await Settings.findOne({ key: 'daily_fare_settings' }).lean())?.value
     ) });
   } catch (err) { res.status(500).json({ error: err.message }); }
@@ -2403,7 +2452,9 @@ app.get('/api/admin/settings', adminJwt, async (req, res) => {
     const gatewayDoc = await Settings.findOne({ key: 'payment_gateway_configs' }).lean();
     const gatewayStatus = {};
     for (const gateway of PAYMENT_GATEWAYS) gatewayStatus[gateway] = publicGatewayConfig(gatewayDoc?.value?.[gateway]);
-    res.json({ ...accounts, gatewayStatus, dailyFareSettings: publicFareSettings(
+    res.json({ ...accounts, gatewayStatus, dailyFeeSettings: publicDailyFeeSettings(
+      (await Settings.findOne({ key: 'daily_fee_settings' }).lean())?.value
+    ), dailyFareSettings: publicFareSettings(
       (await Settings.findOne({ key: 'daily_fare_settings' }).lean())?.value
     ) });
   } catch (err) { res.status(500).json({ error: err.message }); }
@@ -2413,6 +2464,37 @@ app.get('/api/admin/fare-settings', adminJwt, async (req, res) => {
   try {
     const doc = await Settings.findOne({ key: 'daily_fare_settings' }).lean();
     res.json(publicFareSettings(doc?.value));
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.get('/api/daily-fee-settings', async (req, res) => {
+  try {
+    const doc = await Settings.findOne({ key: 'daily_fee_settings' }).lean();
+    res.json(publicDailyFeeSettings(doc?.value));
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.get('/api/admin/daily-fee-settings', adminJwt, async (req, res) => {
+  try {
+    const doc = await Settings.findOne({ key: 'daily_fee_settings' }).lean();
+    res.json(publicDailyFeeSettings(doc?.value));
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.patch('/api/admin/daily-fee-settings', adminJwt, async (req, res) => {
+  try {
+    const validated = validateDailyFeeSettings(req.body?.dailyFeeSettings);
+    if (validated.errors.length) {
+      return res.status(422).json({ error: 'Invalid Daily Fee Settings', errors: validated.errors });
+    }
+    await Settings.findOneAndUpdate(
+      { key: 'daily_fee_settings' },
+      { key: 'daily_fee_settings', value: validated.settings },
+      { upsert: true, new: true, setDefaultsOnInsert: true }
+    );
+    const payload = { settings: validated.settings, updatedAt: new Date().toISOString() };
+    io.emit('daily-fee:updated', payload);
+    res.json({ success: true, ...payload });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
