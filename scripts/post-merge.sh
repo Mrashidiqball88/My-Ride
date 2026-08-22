@@ -1,4 +1,8 @@
 #!/bin/bash
 set -e
-pnpm install --frozen-lockfile
-pnpm --filter db push
+
+# Install pnpm workspace dependencies (api-server, mockup-sandbox, libs, etc.)
+pnpm install
+
+# Install ride-hailing npm dependencies (not part of the pnpm workspace)
+cd ride-hailing && npm install --prefer-offline

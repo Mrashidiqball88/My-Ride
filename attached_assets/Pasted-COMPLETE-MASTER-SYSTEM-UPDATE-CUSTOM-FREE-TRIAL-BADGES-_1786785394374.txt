@@ -1,0 +1,82 @@
+COMPLETE MASTER SYSTEM UPDATE: CUSTOM FREE TRIAL BADGES, NEARBY DRIVERS MAP, SINGLE DEVICE AUTO-LOGOUT, VEHICLE DAILY FEES, SUB-ADMIN CONTROL, & ALL RIDE FEATURES.
+
+Please apply the following complete set of updates to the `ride-hailing/` codebase in a single comprehensive build:
+
+----------------------------------------------------------------------
+1. CUSTOM DAYS FREE TRIAL & ADMIN/DRIVER STATUS BADGES (STRICT FORMAT)
+----------------------------------------------------------------------
+- Admin Toolbar: Rename "Grant 1-Month Trial" button to "Grant Free Trial".
+- Custom Input Modal: Clicking "Grant Free Trial" for selected driver(s) opens a modal asking for "Number of Trial Days" (numeric input, e.g., 1, 2, 3, 5, 15, 30 days).
+- Backend Calculations: Calculate `trialStartDate = currentDate` and `paidUntilDate = currentDate + N days`. Set `isFreeTrial = true`.
+- Admin Directory Table Badges (DAILY FEE / STATUS Column):
+  * Active Free Trial: Show exact gold/green badge: "🎁 Free Trial Active (Until DD MMM)" (e.g., "🎁 Free Trial Active (Until 30 Aug)").
+  * Advance Fee Paid: Show exact green badge: "✅ Fee Paid (Until DD MMM)" (e.g., "✅ Fee Paid (Until 30 Aug)").
+  * Unpaid Fee: Show exact warning badge: "⚠️ Unpaid (Rs [DailyFee]/day)" (e.g., "⚠️ Unpaid (Rs 220/day)").
+- Driver App Dashboard & Profile: Show exact banner history: "Free Trial Granted: [Start Date] to [End Date]" (e.g., "Free Trial Granted: 1 Aug 2026 to 30 Aug 2026").
+
+----------------------------------------------------------------------
+2. LIVE "NEARBY DRIVERS" VISUALIZATION ON CUSTOMER MAP
+----------------------------------------------------------------------
+- Backend: Provide a live polling/WebSocket endpoint (`/api/drivers/nearby`) returning locations of all online drivers within a 5km radius.
+- Customer App: On opening the main dashboard map (before booking), display live markers for nearby active drivers (e.g. in Shalimar, Daroghawala) to assure customers drivers are nearby.
+
+----------------------------------------------------------------------
+3. ALLOW NEW DEVICE LOGIN & AUTO FORCE-LOGOUT OLD DEVICES
+----------------------------------------------------------------------
+- DO NOT BLOCK login on new devices.
+- On new successful login: Update `sessionToken` / increment `tokenVersion` in DB.
+- Automatically invalidate previous session tokens. When an old device makes an API request using an expired token, respond with HTTP 401 Unauthorized, instantly redirecting the old device to the Login Screen.
+
+----------------------------------------------------------------------
+4. VEHICLE CATEGORY DAILY PLATFORM FEE & ACCEPT BUTTON LOCKOUT
+----------------------------------------------------------------------
+- Completely remove the full-screen daily fee popup blocker. Allow drivers to log in and view active routes.
+- Set Daily Fee based on Vehicle Type:
+  * Bike: 70 PKR/day
+  * Rickshaw: 130 PKR/day
+  * Car Mini / Non-AC: 220 PKR/day
+  * Car AC: 270 PKR/day
+- Driver App Display: Prominently show registered Vehicle Type and required fee (e.g., "Vehicle: Car AC | Daily Fee: Rs. 270").
+- Logic: If current date > `paidUntilDate` (and not in free trial):
+  * Keep the "Accept Ride" button GREYED OUT / DISABLED with text "Pay Rs [Fee] Daily Fee to Accept".
+  * Upon fee payment or admin trial grant, automatically highlight and enable the "Accept Ride" button.
+
+----------------------------------------------------------------------
+5. SUB-ADMIN USER SYSTEM (50 USER LIMIT, EDIT PASSWORD & BLOCK OPTION)
+----------------------------------------------------------------------
+- Allow Super Admin to create up to 50 Sub-Admin users with custom permissions (Approve Drivers, Block Drivers, Block Customers, Manage Wallets, View Rides).
+- "Edit Sub-Admin" Modal:
+  * Add Password Input Field (with show/hide eye toggle) to view/change password.
+  * Add "Block this Sub-Admin Account" checkbox/toggle to disable account access.
+- Blocked sub-admins must be denied access on login attempt.
+
+----------------------------------------------------------------------
+6. RIDE VERIFICATION 4-DIGIT PIN CODE
+----------------------------------------------------------------------
+- Generate a random 4-digit PIN code for every ride request, displayed on the Customer App.
+- Require Driver to enter this 4-digit PIN in Driver App before starting the ride (`Arrived` -> `In-Progress`).
+
+----------------------------------------------------------------------
+7. DRIVER VOICE ALERTS (TEXT-TO-SPEECH)
+----------------------------------------------------------------------
+- Use Web Speech API (`window.speechSynthesis`) to vocally announce new ride requests on Driver App: "New Ride Request! Pickup from [Pickup] to [Dropoff]".
+
+----------------------------------------------------------------------
+8. TWO-WAY RATING & REVIEW SYSTEM
+----------------------------------------------------------------------
+- Prompt both Customer and Driver with a 1-to-5 Star rating modal upon ride completion, saving feedback in MongoDB.
+
+----------------------------------------------------------------------
+9. CUSTOMER UI BUGS FIX (LOCATION AUTOCOMPLETE & ADD STOP)
+----------------------------------------------------------------------
+- Fix autocomplete location search dropdown flashing/disappearing when typing (e.g., typing "s" for Sabzazar, Salamatpura, Shalimar). Keep the dropdown list persistently visible, scrollable, and selectable until explicitly clicked.
+- Fix "Add Stop" selection and map markers binding in Customer App.
+
+----------------------------------------------------------------------
+10. UPLOAD PROGRESS SCREEN (%100) & SEPARATE BONUS WALLET
+----------------------------------------------------------------------
+- Show dynamic 0% to 100% progress bar during document uploads on Driver Registration.
+- Maintain a separate `bonusWallet` field in MongoDB to prevent promotional funds from mixing with real cash earnings.
+
+----------------------------------------------------------------------
+Verify full implementation locally and confirm when complete.

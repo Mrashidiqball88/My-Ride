@@ -1,0 +1,40 @@
+IMPLEMENT 4 ESSENTIAL DRIVER & SYSTEM FEATURES (UPLOAD PROGRESS, DAILY FEE LOCKOUT, BONUS LEDGER, & PROFILE SECURITY):
+
+Please update both frontend and backend code in `ride-hailing/` to implement the following 4 features strictly:
+
+----------------------------------------------------------------------
+1. REGISTRATION DOCUMENT UPLOAD PROGRESS SCREEN (DRIVER APP)
+----------------------------------------------------------------------
+- On pressing "Create Driver Account" (Step 2 Uploads), immediately navigate the driver to a dedicated "Uploading Documents" progress screen.
+- Show a dynamic percentage progress bar (0% to 100%) and a "Please wait while your files are uploading..." status message.
+- Track real upload status from the API request. Once upload hits 100% and receives server confirmation, automatically redirect the driver to the main dashboard / waiting-for-approval screen.
+
+----------------------------------------------------------------------
+2. MANDATORY DAILY FEE ENFORCEMENT & DYNAMIC ACCEPT BUTTON LOCKOUT
+----------------------------------------------------------------------
+- In Driver Model, track `lastDailyFeePaidAt: Date` and `dailyFeeAmount` (e.g., 200/day).
+- On driver login/online toggle: If 24 hours have passed without paying the daily fee, show a non-dismissable prompt: "Daily Platform Fee Due (Rs. 200). Please pay to activate ride acceptance."
+- Ride Dispatching / Acceptance Logic:
+  * When a ride request arrives for an unpaid driver, show the ride details, but keep the "Accept Ride" button GREYED OUT / DISABLED with text "Pay Daily Fee to Accept".
+  * Once payment is submitted/confirmed, automatically mark daily fee as paid and HIGHLIGHT/ENABLE the "Accept Ride" button instantly.
+
+----------------------------------------------------------------------
+3. SEPARATE BONUS LEDGER VS REAL CASH BALANCE IN BACKEND
+----------------------------------------------------------------------
+- In Driver MongoDB Schema, separate balances into two distinct fields:
+  * `realCashWallet: { type: Number, default: 0 }` (Driver deposits & ride earnings)
+  * `bonusWallet: { type: Number, default: 0 }` (System/Server promotional bonuses)
+- Ensure all promotional/bonus allocations go EXCLUSIVELY into `bonusWallet`.
+- Do NOT merge bonus funds into `realCashWallet` so cash accounting and payouts remain 100% accurate.
+
+----------------------------------------------------------------------
+4. PROFILE SECURITY & VEHICLE UPDATES IN 3-DOTS MENU (PASSCODE VERIFICATION)
+----------------------------------------------------------------------
+- Add Profile Update Modals to the 3-Dots Settings Menu in both apps:
+  * Driver App 3-Dots Menu: "Change Phone Number", "Change Password", and "Change Vehicle/Bike Number".
+  * Customer App 3-Dots Menu: "Change Phone Number" and "Change Password".
+- Security Requirement: Every update modal MUST require inputting the "Current Password".
+- Backend API (`POST /api/user/update-profile`): Verify current password using `bcrypt` before allowing phone number, vehicle number, or password changes in MongoDB.
+
+----------------------------------------------------------------------
+Verify all 4 implementations locally and confirm when ready.

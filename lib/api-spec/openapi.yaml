@@ -10,6 +10,10 @@ servers:
 tags:
   - name: health
     description: Health operations
+  - name: auth
+    description: Authentication operations
+  - name: rides
+    description: Ride request and driver operations
 paths:
   /healthz:
     get:
@@ -24,7 +28,124 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/HealthStatus"
+  /auth/signup:
+    post:
+      operationId: signUp
+      tags: [auth]
+      summary: Create a user account
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AuthCredentials"
+      responses:
+        "201":
+          description: Account created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AuthResponse"
+        "400":
+          description: Invalid input
+        "409":
+          description: Email already registered
+  /auth/login:
+    post:
+      operationId: logIn
+      tags: [auth]
+      summary: Log in to an existing account
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AuthCredentials"
+      responses:
+        "200":
+          description: Login successful
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AuthResponse"
+        "400":
+          description: Invalid input
+        "401":
+          description: Invalid email or password
+  /auth/me:
+    get:
+      operationId: getCurrentUser
+      tags: [auth]
+      summary: Get the authenticated user
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Current user
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/UserResponse"
+        "401":
+          description: Missing or invalid token
+  /rides:
+    post:
+      operationId: createRide
+      tags: [rides]
+      summary: Create a ride request
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateRideRequest"
+      responses:
+        "201":
+          description: Ride request created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RideResponse"
+        "400":
+          description: Invalid ride details
+        "401":
+          description: Missing or invalid token
+  /rides/{rideId}/accept:
+    patch:
+      operationId: acceptRide
+      tags: [rides]
+      summary: Accept a ride request as a driver
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: rideId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Ride accepted
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RideResponse"
+        "400":
+          description: Invalid ride ID
+        "401":
+          description: Missing or invalid token
+        "404":
+          description: Ride not found
+        "409":
+          description: Ride is no longer available
 components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
   schemas:
     HealthStatus:
       type: object
@@ -33,4 +154,132 @@ components:
           type: string
       required:
         - status
+    AuthCredentials:
+      type: object
+      properties:
+        email:
+          type: string
+          format: email
+        password:
+          type: string
+          minLength: 8
+      required:
+        - email
+        - password
+    User:
+      type: object
+      properties:
+        id:
+          type: string
+        email:
+          type: string
+          format: email
+        createdAt:
+          type: string
+          format: date-time
+      required:
+        - id
+        - email
+        - createdAt
+    UserResponse:
+      type: object
+      properties:
+        user:
+          $ref: "#/components/schemas/User"
+      required:
+        - user
+    AuthResponse:
+      type: object
+      properties:
+        token:
+          type: string
+        user:
+          $ref: "#/components/schemas/User"
+      required:
+        - token
+        - user
+    Location:
+      type: object
+      properties:
+        latitude:
+          type: number
+          minimum: -90
+          maximum: 90
+        longitude:
+          type: number
+          minimum: -180
+          maximum: 180
+      required:
+        - latitude
+        - longitude
+    CreateRideRequest:
+      type: object
+      properties:
+        pickupLocation:
+          $ref: "#/components/schemas/Location"
+        dropoffLocation:
+          $ref: "#/components/schemas/Location"
+        fare:
+          type: number
+          minimum: 0
+      required:
+        - pickupLocation
+        - dropoffLocation
+        - fare
+    Ride:
+      type: object
+      properties:
+        id:
+          type: string
+        pickupLocation:
+          $ref: "#/components/schemas/Location"
+        dropoffLocation:
+          $ref: "#/components/schemas/Location"
+        fare:
+          type: number
+        status:
+          type: string
+          enum: [requested, accepted, arrived, in-progress, completed]
+        passengerId:
+          type: string
+        driverId:
+          type:
+            - string
+            - "null"
+        driverLocation:
+          anyOf:
+            - $ref: "#/components/schemas/Location"
+            - type: "null"
+        locationUpdatedAt:
+          type:
+            - string
+            - "null"
+          format: date-time
+        createdAt:
+          type: string
+          format: date-time
+        acceptedAt:
+          type:
+            - string
+            - "null"
+          format: date-time
+      required:
+        - id
+        - pickupLocation
+        - dropoffLocation
+        - fare
+        - status
+        - passengerId
+        - driverId
+        - driverLocation
+        - locationUpdatedAt
+        - createdAt
+        - acceptedAt
+    RideResponse:
+      type: object
+      properties:
+        ride:
+          $ref: "#/components/schemas/Ride"
+      required:
+        - ride
 

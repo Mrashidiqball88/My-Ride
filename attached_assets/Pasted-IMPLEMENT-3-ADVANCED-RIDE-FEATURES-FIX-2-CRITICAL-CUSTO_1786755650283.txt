@@ -1,0 +1,38 @@
+IMPLEMENT 3 ADVANCED RIDE FEATURES & FIX 2 CRITICAL CUSTOMER APP BUGS:
+
+Please update the frontend and backend in `ride-hailing/` to implement the following 5 points strictly:
+
+----------------------------------------------------------------------
+1. RIDE VERIFICATION PIN SYSTEM
+----------------------------------------------------------------------
+- When a driver accepts a ride request, backend generates a random 4-digit PIN code attached to the Ride object.
+- Display this 4-digit PIN prominently on Customer App active ride UI ("Share this PIN with your driver").
+- On Driver App: Require driver to enter this 4-digit PIN before starting the ride (`Arrived` -> `In-Progress`). Do NOT allow ride start unless the correct PIN is provided.
+
+----------------------------------------------------------------------
+2. DRIVER VOICE ALERTS (TEXT-TO-SPEECH)
+----------------------------------------------------------------------
+- When a new incoming ride notification hits the Driver App, trigger Web Speech Synthesis API (`window.speechSynthesis`).
+- Announce vocally in Urdu/English: "New Ride Request! Pickup from [Pickup Location] to [Dropoff Location]".
+
+----------------------------------------------------------------------
+3. TWO-WAY RATING & REVIEW SYSTEM
+----------------------------------------------------------------------
+- Upon ride completion, automatically display a modal on both Customer and Driver screens to rate each other from 1 to 5 Stars with an optional text comment.
+- Save ratings in MongoDB (`Ride`, `Customer`, and `Driver` schemas) and calculate/update average rating on profile screens.
+
+----------------------------------------------------------------------
+4. FIX "ADD STOP" SELECTION & MAP BINDING (CUSTOMER APP)
+----------------------------------------------------------------------
+- Fix intermediate "Add Stop" input fields and map pin selections in Customer UI.
+- Ensure adding stops correctly updates the route, displays stop markers on Leaflet/Google Map, and correctly factors extra distance into fare calculation.
+
+----------------------------------------------------------------------
+5. FIX LOCATION SEARCH AUTOCOMPLETE DROPDOWN DISAPPEARING (CUSTOMER APP)
+----------------------------------------------------------------------
+- Fix the location search dropdown UI issue where location suggestions flash and disappear immediately upon typing (e.g. typing "s").
+- Ensure autocomplete suggestions list (showing matching areas like Sabzazar, Salamatpura, Shalimar) remains persistently visible, scrollable, and clickable until the user explicitly selects a location.
+- Fix any `blur` event handlers or state re-renders causing premature hiding of the dropdown menu.
+
+----------------------------------------------------------------------
+Verify all 5 implementations locally and confirm when complete.

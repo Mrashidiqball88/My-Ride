@@ -1,0 +1,54 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>MyRide — 24/7 Ride-Hailing</title>
+<style>
+  *{margin:0;padding:0;box-sizing:border-box}
+  body{font-family:'Segoe UI',sans-serif;background:#0a0a0f;color:#fff;min-height:100vh;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:2rem}
+  .logo{font-size:2.5rem;font-weight:800;letter-spacing:-1px;margin-bottom:.5rem}
+  .logo span{color:#f5c518}
+  .tagline{color:#888;font-size:1rem;margin-bottom:3rem;text-align:center}
+  .cards{display:flex;gap:1.5rem;flex-wrap:wrap;justify-content:center;width:100%;max-width:700px}
+  .card{background:#13131a;border:1px solid #222;border-radius:20px;padding:2rem;flex:1;min-width:260px;max-width:320px;text-align:center;cursor:pointer;text-decoration:none;color:#fff;transition:transform .2s,border-color .2s}
+  .card:hover{transform:translateY(-4px);border-color:#f5c518}
+  .card-icon{font-size:3rem;margin-bottom:1rem}
+  .card-title{font-size:1.4rem;font-weight:700;margin-bottom:.5rem}
+  .card-desc{color:#777;font-size:.9rem;line-height:1.5;margin-bottom:1.5rem}
+  .card-btn{background:#f5c518;color:#0a0a0f;border:none;border-radius:10px;padding:.75rem 1.5rem;font-size:1rem;font-weight:700;cursor:pointer;width:100%;transition:opacity .2s}
+  .card-btn:hover{opacity:.9}
+  .driver-btn{background:#1e3a5f}
+  .driver-btn:hover{background:#2a4f7f}
+  .footer{margin-top:3rem;color:#444;font-size:.85rem;text-align:center}
+  .status{display:inline-flex;align-items:center;gap:.4rem;background:#1a2a1a;border:1px solid #2d5a2d;border-radius:100px;padding:.3rem .8rem;font-size:.8rem;color:#4caf50;margin-bottom:2rem}
+  .dot{width:7px;height:7px;background:#4caf50;border-radius:50%;animation:pulse 2s infinite}
+  @keyframes pulse{0%,100%{opacity:1}50%{opacity:.4}}
+</style>
+</head>
+<body>
+  <div class="status"><span class="dot"></span> Live — Available 24/7</div>
+  <div class="logo">My<span>Ride</span></div>
+  <p class="tagline">Fast, safe, and affordable rides — anytime, anywhere</p>
+
+  <div class="cards">
+    <a href="/customer" class="card">
+      <div class="card-icon">🧑‍💼</div>
+      <div class="card-title">Customer App</div>
+      <div class="card-desc">Book rides, track your driver in real-time, manage wallet, and stay safe with SOS.</div>
+      <div class="card-btn">Open MyRide Customer</div>
+    </a>
+    <a href="/driver" class="card">
+      <div class="card-icon">🚗</div>
+      <div class="card-title">Driver App</div>
+      <div class="card-desc">Accept ride requests, navigate to passengers, and manage your earnings on the go.</div>
+      <div class="card-btn driver-btn">Open MyRide Driver</div>
+    </a>
+  </div>
+
+  <div class="footer">
+    <p>Powered by Express · MongoDB Atlas · Socket.io · Leaflet OSM</p>
+    <p style="margin-top:.4rem">API: <a href="/api/health" style="color:#f5c518;text-decoration:none">/api/health</a></p>
+  </div>
+</body>
+</html>

@@ -1,0 +1,2108 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>MyRide Admin Panel</title>
+<script src="/socket.io/socket.io.js"></script>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{font-family:'Segoe UI',system-ui,sans-serif;background:#06060e;color:#e2e8f0;height:100vh;overflow:hidden;display:flex}
+
+/* ── Auth Overlay ── */
+#auth-overlay{position:fixed;inset:0;z-index:1000;background:#06060e;display:flex;align-items:center;justify-content:center}
+.auth-box{background:#0f0f1e;border:1px solid #1e1e3a;border-radius:20px;padding:2.5rem;width:100%;max-width:380px;text-align:center}
+.auth-logo{font-size:1.8rem;font-weight:900;margin-bottom:.25rem}.auth-logo span{color:#f5c518}
+.auth-subtitle{color:#475569;font-size:.85rem;margin-bottom:2rem}
+.auth-box .form-group{margin-bottom:1rem;text-align:left}
+.auth-box label{display:block;font-size:.75rem;color:#64748b;margin-bottom:.35rem;font-weight:600;text-transform:uppercase;letter-spacing:.05em}
+.auth-box input{width:100%;background:#06060e;border:1px solid #1e1e3a;border-radius:10px;padding:.75rem 1rem;color:#e2e8f0;font-size:.95rem;outline:none;transition:border-color .2s}
+.auth-box input:focus{border-color:#f5c518}
+.btn-admin-login{width:100%;background:#f5c518;color:#06060e;border:none;border-radius:12px;padding:.85rem;font-size:1rem;font-weight:800;cursor:pointer;margin-top:.5rem;transition:opacity .2s}
+.btn-admin-login:hover{opacity:.9}
+.auth-err{color:#ef4444;font-size:.8rem;margin-top:.6rem;min-height:1.2em}
+
+/* ── Layout ── */
+#admin-app{display:none;width:100vw;height:100vh;overflow:hidden;flex-direction:row}
+#sidebar{width:230px;min-width:230px;background:#08080f;border-right:1px solid #12122a;display:flex;flex-direction:column;overflow-y:auto;flex-shrink:0}
+#main{flex:1;display:flex;flex-direction:column;overflow:hidden}
+
+/* ── Sidebar ── */
+.sb-logo{padding:1.2rem 1.2rem .8rem;border-bottom:1px solid #12122a}
+.sb-logo-text{font-size:1.1rem;font-weight:900}.sb-logo-text span{color:#f5c518}
+.sb-badge{font-size:.58rem;background:#1a1a0a;color:#f5c518;border:1px solid #2a2a10;border-radius:4px;padding:.1rem .35rem;font-weight:700;margin-left:.3rem;vertical-align:middle}
+.sb-nav{flex:1;padding:.6rem 0}
+.sb-item{display:flex;align-items:center;gap:.65rem;padding:.6rem 1.1rem;cursor:pointer;transition:all .15s;border-left:3px solid transparent;color:#64748b;font-size:.82rem;font-weight:500;position:relative}
+.sb-item:hover{color:#cbd5e1;background:#0f0f1e}
+.sb-item.active{color:#f5c518;background:#0f0f18;border-left-color:#f5c518}
+.sb-icon{font-size:1rem;width:18px;text-align:center;flex-shrink:0}
+.sb-badge-count{margin-left:auto;background:#ef4444;color:#fff;border-radius:100px;font-size:.62rem;font-weight:800;padding:.1rem .4rem;min-width:18px;text-align:center}
+.sb-footer{padding:.8rem 1.1rem;border-top:1px solid #12122a;font-size:.72rem;color:#334155}
+.btn-signout{background:none;border:1px solid #1e1e3a;color:#64748b;border-radius:8px;padding:.3rem .7rem;font-size:.72rem;cursor:pointer;transition:all .15s;margin-top:.4rem;width:100%}
+.btn-signout:hover{border-color:#ef4444;color:#ef4444}
+
+/* ── Header ── */
+#top-header{background:#0a0a16;border-bottom:1px solid #12122a;padding:.75rem 1.5rem;display:flex;align-items:center;gap:1rem;flex-shrink:0}
+#section-title{font-size:1rem;font-weight:700;color:#e2e8f0}
+.header-badges{display:flex;gap:.5rem;margin-left:auto;align-items:center}
+.hbadge{font-size:.7rem;padding:.2rem .6rem;border-radius:100px;font-weight:700}
+.hbadge.green{background:#052010;color:#22c55e;border:1px solid #0a3018}
+.hbadge.yellow{background:#1a1500;color:#f5c518;border:1px solid #2a2500}
+#admin-email-lbl{font-size:.72rem;color:#475569}
+
+/* ── Main Content ── */
+#content-area{flex:1;overflow-y:auto;padding:1.5rem}
+
+/* ── Section Panels ── */
+.section-panel{display:none}.section-panel.active{display:block}
+
+/* ── Stats Cards ── */
+.stats-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:.9rem;margin-bottom:1.5rem}
+.stat-card{background:#0f0f1e;border:1px solid #1e1e2e;border-radius:14px;padding:1rem 1.1rem}
+.stat-label{font-size:.68rem;color:#475569;text-transform:uppercase;letter-spacing:.06em;font-weight:600;margin-bottom:.3rem}
+.stat-val{font-size:1.6rem;font-weight:800;color:#e2e8f0;line-height:1}
+.stat-sub{font-size:.7rem;color:#334155;margin-top:.25rem}
+.stat-card.yellow{border-color:#2a2500}.stat-card.yellow .stat-val{color:#f5c518}
+.stat-card.green{border-color:#052a10}.stat-card.green .stat-val{color:#22c55e}
+.stat-card.red{border-color:#2a0505}.stat-card.red .stat-val{color:#ef4444}
+.stat-card.blue{border-color:#050528}.stat-card.blue .stat-val{color:#818cf8}
+
+/* ── Section header ── */
+.sec-hdr{display:flex;align-items:center;gap:.75rem;margin-bottom:1rem;flex-wrap:wrap}
+.sec-hdr h2{font-size:.95rem;font-weight:700;color:#e2e8f0}
+.sec-hdr-actions{display:flex;gap:.5rem;margin-left:auto;flex-wrap:wrap;align-items:center}
+
+/* ── Filter tabs ── */
+.filter-tabs{display:flex;gap:.35rem;flex-wrap:wrap}
+.ftab{background:#0f0f1e;border:1px solid #1e1e2e;color:#64748b;border-radius:8px;padding:.3rem .75rem;font-size:.75rem;cursor:pointer;transition:all .15s;font-weight:600}
+.ftab.active{background:#1a1500;border-color:#f5c518;color:#f5c518}
+.ftab:hover:not(.active){border-color:#334155;color:#cbd5e1}
+
+/* ── Buttons ── */
+.btn{border:none;border-radius:8px;padding:.35rem .75rem;font-size:.75rem;font-weight:700;cursor:pointer;transition:all .15s;display:inline-flex;align-items:center;gap:.3rem;white-space:nowrap}
+.btn:hover{opacity:.85}.btn:active{transform:scale(.96)}
+.btn-green{background:#052a10;color:#22c55e;border:1px solid #0a3a18}
+.btn-green:hover{background:#0a3a18}
+.btn-red{background:#2a0508;color:#ef4444;border:1px solid #3a0810}
+.btn-red:hover{background:#3a0810}
+.btn-yellow{background:#1a1500;color:#f5c518;border:1px solid #2a2200}
+.btn-yellow:hover{background:#2a2200}
+.btn-blue{background:#05051e;color:#818cf8;border:1px solid #0a0a2a}
+.btn-blue:hover{background:#0a0a2a}
+.btn-gray{background:#0f0f1e;color:#64748b;border:1px solid #1e1e2e}
+.btn-gray:hover{border-color:#334155;color:#94a3b8}
+.btn-primary{background:#f5c518;color:#06060e;border:none}
+.btn-primary:hover{opacity:.9}
+
+/* ── Table ── */
+.data-table{width:100%;border-collapse:collapse;font-size:.8rem}
+.data-table th{background:#0a0a16;color:#475569;font-size:.67rem;text-transform:uppercase;letter-spacing:.06em;padding:.6rem .85rem;text-align:left;font-weight:700;border-bottom:1px solid #1e1e2e}
+.data-table td{padding:.65rem .85rem;border-bottom:1px solid #0f0f18;vertical-align:middle;color:#cbd5e1}
+.data-table tr:hover td{background:#0a0a14}
+.table-wrap{background:#0f0f1e;border:1px solid #1e1e2e;border-radius:14px;overflow:hidden}
+
+/* ── Status badges ── */
+.badge{display:inline-flex;align-items:center;gap:.25rem;font-size:.65rem;font-weight:700;padding:.2rem .55rem;border-radius:100px;white-space:nowrap}
+.badge-active{background:#052a10;color:#22c55e;border:1px solid #0a3a18}
+.badge-pending{background:#1a1000;color:#f59e0b;border:1px solid #2a1800}
+.badge-suspended{background:#1a0800;color:#f97316;border:1px solid #2a1000}
+.badge-blocked{background:#2a0505;color:#ef4444;border:1px solid #3a0808}
+.badge-approved{background:#052a10;color:#22c55e;border:1px solid #0a3a18}
+.badge-rejected{background:#2a0505;color:#ef4444;border:1px solid #3a0808}
+.badge-live{background:#0a0a2a;color:#818cf8;border:1px solid #1a1a3a;animation:pulse-badge 2s infinite}
+@keyframes pulse-badge{0%,100%{opacity:1}50%{opacity:.6}}
+
+/* ── SOS Monitor ── */
+#sos-flash{position:fixed;inset:0;background:rgba(239,68,68,.15);pointer-events:none;z-index:900;opacity:0;transition:opacity .3s}
+#sos-flash.active{opacity:1;animation:sos-flash 1.2s ease-out forwards}
+@keyframes sos-flash{0%{opacity:1}100%{opacity:0}}
+.sos-card{background:#1a0505;border:1px solid #3a0808;border-radius:14px;padding:1rem 1.2rem;margin-bottom:.75rem;position:relative;animation:slide-in .3s ease}
+.sos-card.unresolved{border-color:#ef4444;box-shadow:0 0 12px rgba(239,68,68,.2)}
+.sos-card-header{display:flex;align-items:center;gap:.6rem;margin-bottom:.55rem}
+.sos-pulse{width:10px;height:10px;border-radius:50%;background:#ef4444;animation:pulse-dot 1.5s infinite;flex-shrink:0}
+@keyframes pulse-dot{0%,100%{opacity:1;transform:scale(1)}50%{opacity:.4;transform:scale(.75)}}
+.sos-title{font-size:.85rem;font-weight:700;color:#ef4444}
+.sos-ts{font-size:.68rem;color:#475569;margin-left:auto}
+.sos-meta{display:grid;grid-template-columns:1fr 1fr;gap:.35rem .75rem;font-size:.75rem;color:#94a3b8}
+.sos-meta strong{color:#cbd5e1}
+.sos-msg{font-size:.75rem;color:#94a3b8;margin-top:.5rem;background:#0f0508;border-radius:6px;padding:.4rem .6rem;word-break:break-word}
+.sos-actions{margin-top:.6rem;display:flex;gap:.4rem}
+.sos-coords a{color:#818cf8;text-decoration:none;font-size:.72rem}
+.sos-coords a:hover{text-decoration:underline}
+
+/* ── Ride cards ── */
+.ride-row-live{border-left:3px solid #818cf8}
+@keyframes slide-in{from{opacity:0;transform:translateY(-8px)}to{opacity:1;transform:none}}
+
+/* ── Payment card ── */
+.pay-card{background:#0f0f1e;border:1px solid #1e1e2e;border-radius:12px;padding:.9rem 1.1rem;margin-bottom:.6rem;display:flex;align-items:center;gap:1rem;flex-wrap:wrap}
+.pay-info{flex:1;min-width:200px}
+.pay-name{font-size:.85rem;font-weight:700;color:#e2e8f0}
+.pay-meta{font-size:.72rem;color:#64748b;margin-top:.2rem}
+.pay-amount{font-size:1.1rem;font-weight:800;color:#f5c518;white-space:nowrap}
+.pay-actions{display:flex;gap:.4rem;flex-shrink:0}
+.new-notif{background:#f5c518;color:#06060e;border-radius:100px;font-size:.6rem;font-weight:900;padding:.08rem .35rem;vertical-align:middle;margin-left:.3rem;animation:bounce-in .4s ease}
+@keyframes bounce-in{0%{transform:scale(0)}70%{transform:scale(1.3)}100%{transform:scale(1)}}
+
+/* ── Income table ── */
+.income-day{background:#0f0f1e;border:1px solid #1e1e2e;border-radius:10px;padding:.75rem 1rem;margin-bottom:.5rem;display:flex;align-items:center;gap:1rem}
+.income-date{font-size:.8rem;font-weight:700;color:#94a3b8;min-width:100px}
+.income-bar{flex:1;background:#1e1e2e;border-radius:100px;height:8px;overflow:hidden}
+.income-bar-fill{height:100%;background:#f5c518;border-radius:100px;transition:width .5s ease}
+.income-total{font-size:.85rem;font-weight:800;color:#f5c518;min-width:80px;text-align:right}
+
+/* ── Doc viewer ── */
+.doc-grid{display:grid;grid-template-columns:1fr 1fr;gap:.75rem;margin-top:.75rem}
+.doc-item{background:#06060e;border:1px solid #1e1e2e;border-radius:10px;overflow:hidden;cursor:pointer;transition:border-color .2s}
+.doc-item:hover{border-color:#f5c518}
+.doc-item img{width:100%;height:120px;object-fit:cover;background:#0f0f1e}
+.doc-label{font-size:.65rem;color:#475569;padding:.3rem .5rem;font-weight:700;text-transform:uppercase;letter-spacing:.05em}
+.doc-item.no-doc{display:flex;flex-direction:column;align-items:center;justify-content:center;height:120px;color:#334155;font-size:.75rem;gap:.3rem;background:#0a0a14}
+
+/* ── Modal ── */
+.modal-backdrop{position:fixed;inset:0;z-index:500;background:rgba(0,0,0,.75);display:flex;align-items:center;justify-content:center;padding:1.5rem;opacity:0;pointer-events:none;transition:opacity .2s}
+.modal-backdrop.open{opacity:1;pointer-events:all}
+.modal-box{background:#0f0f1e;border:1px solid #1e1e2e;border-radius:20px;width:100%;max-width:520px;max-height:85vh;overflow-y:auto;transform:translateY(16px);transition:transform .2s}
+.modal-backdrop.open .modal-box{transform:none}
+.modal-header{padding:1.2rem 1.5rem;border-bottom:1px solid #1e1e2e;display:flex;align-items:center;justify-content:space-between}
+.modal-title{font-size:.95rem;font-weight:700;color:#e2e8f0}
+.btn-close{background:none;border:none;color:#475569;font-size:1.2rem;cursor:pointer;padding:.2rem;line-height:1}
+.btn-close:hover{color:#e2e8f0}
+.modal-body{padding:1.2rem 1.5rem}
+.modal-footer{padding:.9rem 1.5rem;border-top:1px solid #1e1e2e;display:flex;gap:.5rem;justify-content:flex-end}
+.field-row{display:flex;gap:1rem;margin-bottom:.65rem;flex-wrap:wrap}
+.field-item{flex:1;min-width:140px}
+.field-label{font-size:.67rem;color:#475569;text-transform:uppercase;letter-spacing:.05em;font-weight:700;margin-bottom:.2rem}
+.field-val{font-size:.85rem;color:#cbd5e1;font-weight:600}
+.modal-input{width:100%;background:#06060e;border:1px solid #1e1e2e;border-radius:8px;padding:.55rem .75rem;color:#e2e8f0;font-size:.85rem;outline:none;margin-top:.3rem}
+.modal-input:focus{border-color:#f5c518}
+textarea.modal-input{resize:vertical;min-height:70px}
+
+/* ── Empty / Loading states ── */
+.empty-state{text-align:center;padding:2.5rem;color:#334155;font-size:.85rem}
+.empty-icon{font-size:2rem;margin-bottom:.5rem;display:block}
+.loading-row{text-align:center;padding:1.5rem;color:#334155;font-size:.8rem;animation:pulse-text 1.5s infinite}
+@keyframes pulse-text{0%,100%{opacity:.4}50%{opacity:1}}
+
+/* ── Refresh button ── */
+.btn-refresh{background:none;border:1px solid #1e1e2e;color:#475569;border-radius:8px;padding:.3rem .65rem;font-size:.72rem;cursor:pointer;transition:all .15s}
+.btn-refresh:hover{border-color:#f5c518;color:#f5c518}
+
+/* ── Input date ── */
+input[type=date]{background:#06060e;border:1px solid #1e1e2e;border-radius:8px;padding:.35rem .65rem;color:#94a3b8;font-size:.78rem;outline:none;cursor:pointer}
+input[type=date]:focus{border-color:#f5c518}
+
+/* ── Scrollbar ── */
+::-webkit-scrollbar{width:5px;height:5px}
+::-webkit-scrollbar-track{background:#06060e}
+::-webkit-scrollbar-thumb{background:#1e1e2e;border-radius:3px}
+::-webkit-scrollbar-thumb:hover{background:#334155}
+
+/* ── Auth login type tabs ── */
+.auth-tabs{display:flex;border:1px solid #1e1e3a;border-radius:12px;overflow:hidden;margin-bottom:1.5rem}
+.auth-tab{flex:1;padding:.5rem;font-size:.78rem;font-weight:700;cursor:pointer;background:transparent;border:none;color:#475569;transition:all .15s;text-align:center}
+.auth-tab.active{background:#f5c518;color:#06060e}
+
+/* ── Sub-Admin section ── */
+.sa-counter{font-size:.78rem;color:#475569;background:#0a0a14;border:1px solid #1e1e2e;border-radius:8px;padding:.3rem .75rem;margin-left:auto}
+.sa-counter span{color:#f5c518;font-weight:800}
+.sa-table th,.sa-table td{padding:.6rem .85rem}
+.perm-chip{display:inline-flex;align-items:center;gap:.2rem;font-size:.65rem;font-weight:700;padding:.18rem .5rem;border-radius:100px;margin:.1rem;white-space:nowrap}
+.perm-on{background:#052a10;color:#22c55e;border:1px solid #0a3a18}
+.perm-off{background:#0f0f18;color:#334155;border:1px solid #1e1e2e}
+
+/* ── Permission checkbox grid ── */
+.perm-grid{display:grid;grid-template-columns:1fr 1fr;gap:.5rem;margin-top:.75rem}
+.perm-row{display:flex;align-items:center;gap:.5rem;background:#06060e;border:1px solid #1e1e2e;border-radius:8px;padding:.5rem .7rem;cursor:pointer;transition:border-color .15s}
+.perm-row:hover{border-color:#334155}
+.perm-row input[type=checkbox]{width:15px;height:15px;accent-color:#f5c518;cursor:pointer}
+.perm-row label{font-size:.78rem;color:#94a3b8;cursor:pointer;user-select:none}
+</style>
+</head>
+<body>
+
+<!-- ── Auth Overlay ── -->
+<div id="auth-overlay">
+  <div class="auth-box">
+    <div class="auth-logo">My<span>Ride</span></div>
+    <p class="auth-subtitle">Admin Control Panel</p>
+    <div class="auth-tabs">
+      <button class="auth-tab active" id="tab-superadmin" onclick="switchAuthTab('superadmin')">Super Admin</button>
+      <button class="auth-tab"        id="tab-subadmin"   onclick="switchAuthTab('subadmin')">Sub-Admin</button>
+    </div>
+    <!-- Super-admin form -->
+    <div id="auth-form-superadmin">
+      <div class="form-group"><label>Admin Email</label><input type="email" id="a-email" placeholder="admin@myride.com" value="admin@myride.com"></div>
+      <div class="form-group"><label>Password</label><input type="password" id="a-pass" placeholder="••••••••" value="admin1234"></div>
+      <button class="btn-admin-login" onclick="adminLogin()">Sign In as Super Admin</button>
+    </div>
+    <!-- Sub-admin form -->
+    <div id="auth-form-subadmin" style="display:none">
+      <div class="form-group"><label>Username</label><input type="text" id="sa-username" placeholder="sub_admin_1"></div>
+      <div class="form-group"><label>Password</label><input type="password" id="sa-pass" placeholder="••••••••"></div>
+      <button class="btn-admin-login" onclick="subAdminLogin()">Sign In as Sub-Admin</button>
+    </div>
+    <div class="auth-err" id="a-err"></div>
+  </div>
+</div>
+
+<!-- ── Admin App ── -->
+<div id="admin-app">
+
+  <!-- Sidebar -->
+  <nav id="sidebar">
+    <div class="sb-logo">
+      <div class="sb-logo-text">My<span>Ride</span><span class="sb-badge">ADMIN</span></div>
+    </div>
+    <div class="sb-nav">
+      <div class="sb-item active" onclick="showSection('overview')"     data-sec="overview">    <span class="sb-icon">📊</span> Overview</div>
+      <div class="sb-item"        onclick="showSection('payments')"     data-sec="payments">    <span class="sb-icon">💰</span> Payments <span class="sb-badge-count" id="pay-cnt" style="display:none">0</span></div>
+      <div class="sb-item"        onclick="showSection('drivers')"      data-sec="drivers">     <span class="sb-icon">🚗</span> Drivers</div>
+      <div class="sb-item"        onclick="showSection('passengers')"   data-sec="passengers">  <span class="sb-icon">👥</span> Passengers</div>
+      <div class="sb-item"        onclick="showSection('new-requests')" data-sec="new-requests"><span class="sb-icon">🆕</span> New Requests <span class="sb-badge-count" id="req-cnt" style="display:none">0</span></div>
+      <div class="sb-item"        onclick="showSection('temp-blocked')" data-sec="temp-blocked"><span class="sb-icon">⏸️</span> Temp Blocked</div>
+      <div class="sb-item"        onclick="showSection('blk-pass')"     data-sec="blk-pass">    <span class="sb-icon">🚫</span> Blocked Users</div>
+      <div class="sb-item"        onclick="showSection('live-rides')"   data-sec="live-rides">  <span class="sb-icon">🗺️</span> Live Rides</div>
+      <div class="sb-item"        onclick="showSection('sos')"          data-sec="sos">         <span class="sb-icon">🆘</span> SOS Monitor <span class="sb-badge-count" id="sos-cnt" style="display:none">0</span></div>
+      <div class="sb-item"        onclick="showSection('fee-compliance')" data-sec="fee-compliance"><span class="sb-icon">📋</span> Fee Compliance <span class="sb-badge-count" id="fee-cnt" style="display:none">0</span></div>
+      <div class="sb-item"        onclick="showSection('pay-settings')" data-sec="pay-settings"><span class="sb-icon">⚙️</span> Payment Settings</div>
+      <div class="sb-item"        onclick="showSection('ratings')"      data-sec="ratings">      <span class="sb-icon">⭐</span> Ratings & Feedback</div>
+      <div class="sb-item"        onclick="showSection('support')"      data-sec="support">      <span class="sb-icon">🎫</span> Support Tickets <span class="sb-badge-count" id="sup-cnt" style="display:none">0</span></div>
+      <div class="sb-item" onclick="showSection('deletions')" data-sec="deletions"><span class="sb-icon">🗑️</span> Deletion Requests <span class="sb-badge-count" id="del-cnt" style="display:none">0</span></div>
+      <div class="sb-item" id="sb-sub-admins" onclick="showSection('sub-admins')" data-sec="sub-admins"><span class="sb-icon">👤</span> Sub-Admin Users</div>
+    </div>
+    <div class="sb-footer">
+      <div id="admin-email-lbl">—</div>
+      <button class="btn-signout" onclick="adminLogout()">🚪 Sign Out</button>
+    </div>
+  </nav>
+
+  <!-- Main Area -->
+  <div id="main">
+    <div id="top-header">
+      <div id="section-title">Overview</div>
+      <div class="header-badges">
+        <span class="hbadge green" id="hb-rides">● 0 active</span>
+        <span class="hbadge yellow" id="hb-pending">⏳ 0 pending</span>
+      </div>
+    </div>
+    <div id="content-area">
+
+      <!-- ════ 1. OVERVIEW ════ -->
+      <div class="section-panel active" id="sec-overview">
+        <div class="stats-grid" id="stats-grid">
+          <div class="stat-card yellow"><div class="stat-label">Today's Earnings</div><div class="stat-val" id="s-earn">—</div><div class="stat-sub">Approved payments</div></div>
+          <div class="stat-card red"><div class="stat-label">Pending Approvals</div><div class="stat-val" id="s-pend">—</div><div class="stat-sub">Payments + requests</div></div>
+          <div class="stat-card blue"><div class="stat-label">Active Rides</div><div class="stat-val" id="s-rides">—</div><div class="stat-sub">Right now</div></div>
+          <div class="stat-card"><div class="stat-label">Total Drivers</div><div class="stat-val" id="s-drivers">—</div><div class="stat-sub" id="s-drivers-sub">— pending</div></div>
+          <div class="stat-card"><div class="stat-label">Passengers</div><div class="stat-val" id="s-pass">—</div><div class="stat-sub" id="s-pass-sub">— blocked</div></div>
+          <div class="stat-card red"><div class="stat-label">Unresolved SOS</div><div class="stat-val" id="s-sos">—</div><div class="stat-sub">Emergency alerts</div></div>
+        </div>
+        <!-- Daily income strip -->
+        <div class="sec-hdr"><h2>💰 Last 7 Days Income</h2><button class="btn-refresh" onclick="loadOverview()">↻ Refresh</button></div>
+        <div id="income-strip"><div class="loading-row">Loading…</div></div>
+      </div>
+
+      <!-- ════ 2. PAYMENTS ════ -->
+      <div class="section-panel" id="sec-payments">
+        <div class="sec-hdr">
+          <h2>💰 Payments Management</h2>
+          <div class="sec-hdr-actions">
+            <div class="filter-tabs">
+              <div class="ftab active" onclick="loadPayments('pending');setFTab(this)">Pending</div>
+              <div class="ftab" onclick="loadPayments('approved');setFTab(this)">Approved</div>
+              <div class="ftab" onclick="loadPayments('rejected');setFTab(this)">Rejected</div>
+            </div>
+            <button class="btn-refresh" onclick="loadPayments(currentPayStatus)">↻</button>
+          </div>
+        </div>
+        <div id="pay-list"><div class="loading-row">Loading…</div></div>
+      </div>
+
+      <!-- ════ 3. DRIVERS ════ -->
+      <div class="section-panel" id="sec-drivers">
+        <div class="sec-hdr">
+          <h2>🚗 Drivers Directory</h2>
+          <div class="sec-hdr-actions">
+            <div class="filter-tabs">
+              <div class="ftab active" onclick="loadDrivers('all');setFTab(this)">All</div>
+              <div class="ftab" onclick="loadDrivers('active');setFTab(this)">Active</div>
+              <div class="ftab" onclick="loadDrivers('pending');setFTab(this)">Pending</div>
+              <div class="ftab" onclick="loadDrivers('suspended');setFTab(this)">Suspended</div>
+              <div class="ftab" onclick="loadDrivers('blocked');setFTab(this)">Blocked</div>
+            </div>
+            <button id="bulk-trial-btn" class="btn btn-yellow" onclick="grantBulkTrial()" disabled>🎁 Grant Free Trial</button>
+            <input type="date" id="waiver-date-input" title="Grant Fee Paid Until this date" style="background:#06060e;border:1px solid #1e1e2e;border-radius:8px;padding:.35rem .65rem;color:#94a3b8;font-size:.78rem;outline:none;cursor:pointer">
+            <button id="waiver-btn" class="btn btn-green" onclick="grantFeeWaiver()" disabled>📅 Grant Fee Paid Until</button>
+            <button class="btn-refresh" onclick="loadDrivers(currentDriverStatus)">↻</button>
+          </div>
+        </div>
+        <div class="table-wrap"><table class="data-table">
+          <thead><tr>
+            <th style="width:32px"><input type="checkbox" id="select-all-chk" onchange="toggleSelectAll(this.checked)" style="cursor:pointer"></th>
+            <th>Driver</th><th>Phone</th><th>Vehicle</th><th>Daily Fee</th><th>Rating</th><th>Status</th><th>Joined</th><th>Actions</th>
+          </tr></thead>
+          <tbody id="drivers-tbody"><tr><td colspan="9" class="loading-row">Loading…</td></tr></tbody>
+        </table></div>
+      </div>
+
+      <!-- ════ 4. PASSENGERS ════ -->
+      <div class="section-panel" id="sec-passengers">
+        <div class="sec-hdr">
+          <h2>👥 Passengers Directory</h2>
+          <div class="sec-hdr-actions">
+            <div class="filter-tabs">
+              <div class="ftab active" onclick="loadPassengers('all');setFTab(this)">All</div>
+              <div class="ftab" onclick="loadPassengers('active');setFTab(this)">Active</div>
+              <div class="ftab" onclick="loadPassengers('blocked');setFTab(this)">Blocked</div>
+            </div>
+            <button class="btn-refresh" onclick="loadPassengers(currentPassStatus)">↻</button>
+          </div>
+        </div>
+        <div class="table-wrap"><table class="data-table">
+          <thead><tr><th>Passenger</th><th>Phone</th><th>CNIC</th><th>Rides</th><th>Status</th><th>Joined</th><th>Actions</th></tr></thead>
+          <tbody id="pass-tbody"><tr><td colspan="7" class="loading-row">Loading…</td></tr></tbody>
+        </table></div>
+      </div>
+
+      <!-- ════ 5. NEW REQUESTS ════ -->
+      <div class="section-panel" id="sec-new-requests">
+        <div class="sec-hdr">
+          <h2>🆕 New Driver Requests</h2>
+          <button class="btn-refresh" onclick="loadNewRequests()">↻ Refresh</button>
+        </div>
+        <div class="table-wrap"><table class="data-table">
+          <thead><tr><th>Driver</th><th>Phone</th><th>Vehicle</th><th>Joined</th><th>Documents</th><th>Actions</th></tr></thead>
+          <tbody id="req-tbody"><tr><td colspan="6" class="loading-row">Loading…</td></tr></tbody>
+        </table></div>
+      </div>
+
+      <!-- ════ 6. TEMP BLOCKED ════ -->
+      <div class="section-panel" id="sec-temp-blocked">
+        <div class="sec-hdr">
+          <h2>⏸️ Temporarily Blocked Drivers</h2>
+          <button class="btn-refresh" onclick="loadTempBlocked()">↻ Refresh</button>
+        </div>
+        <div class="table-wrap"><table class="data-table">
+          <thead><tr><th>Driver</th><th>Phone</th><th>Vehicle</th><th>Reason</th><th>Suspended At</th><th>Actions</th></tr></thead>
+          <tbody id="tblk-tbody"><tr><td colspan="6" class="loading-row">Loading…</td></tr></tbody>
+        </table></div>
+      </div>
+
+      <!-- ════ 7. BLOCKED PASSENGERS ════ -->
+      <div class="section-panel" id="sec-blk-pass">
+        <div class="sec-hdr">
+          <h2>🚫 Blocked Passengers</h2>
+          <button class="btn-refresh" onclick="loadBlockedPass()">↻ Refresh</button>
+        </div>
+        <div class="table-wrap"><table class="data-table">
+          <thead><tr><th>Passenger</th><th>Phone</th><th>Reason</th><th>Blocked At</th><th>Actions</th></tr></thead>
+          <tbody id="bpass-tbody"><tr><td colspan="5" class="loading-row">Loading…</td></tr></tbody>
+        </table></div>
+      </div>
+
+      <!-- ════ 8. LIVE RIDES ════ -->
+      <div class="section-panel" id="sec-live-rides">
+        <div class="sec-hdr">
+          <h2>🗺️ Rides</h2>
+          <div class="sec-hdr-actions">
+            <div class="filter-tabs">
+              <div class="ftab active" onclick="loadRides('active');setFTab(this)">Live</div>
+              <div class="ftab" onclick="loadRides('completed');setFTab(this)">Completed</div>
+              <div class="ftab" onclick="loadRides('cancelled');setFTab(this)">Cancelled</div>
+              <div class="ftab" onclick="loadRides('all');setFTab(this)">All</div>
+            </div>
+            <input type="date" id="ride-date-filter" onchange="loadRides(currentRideStatus)">
+            <button class="btn-refresh" onclick="loadRides(currentRideStatus)">↻</button>
+          </div>
+        </div>
+        <div class="table-wrap"><table class="data-table">
+          <thead><tr><th>Passenger</th><th>Driver</th><th>Route</th><th>Fare</th><th>Dist</th><th>Status</th><th>Date</th></tr></thead>
+          <tbody id="rides-tbody"><tr><td colspan="7" class="loading-row">Loading…</td></tr></tbody>
+        </table></div>
+      </div>
+
+      <!-- ════ 9. SOS MONITOR ════ -->
+      <div class="section-panel" id="sec-sos">
+        <div class="sec-hdr">
+          <h2>🆘 Emergency / SOS Alert Monitor</h2>
+          <div class="sec-hdr-actions">
+            <div class="filter-tabs">
+              <div class="ftab active" onclick="loadSOS('false');setFTab(this)">Unresolved</div>
+              <div class="ftab" onclick="loadSOS('true');setFTab(this)">Resolved</div>
+              <div class="ftab" onclick="loadSOS('all');setFTab(this)">All</div>
+            </div>
+            <button class="btn-refresh" onclick="loadSOS(currentSOSFilter)">↻</button>
+          </div>
+        </div>
+        <div id="sos-list"><div class="loading-row">Loading…</div></div>
+      </div>
+
+      <!-- ════ 10. PAYMENT SETTINGS ════ -->
+      <div class="section-panel" id="sec-pay-settings">
+        <div class="sec-hdr">
+          <h2>⚙️ Payment Settings</h2>
+          <div class="sec-hdr-actions">
+            <button class="btn-refresh" onclick="loadPaymentSettings()">↻ Reload</button>
+          </div>
+        </div>
+        <p style="font-size:.8rem;color:#475569;margin-bottom:1.25rem">
+          These account details are shown to drivers in the Recharge Wallet screen. Keep them up to date.
+        </p>
+
+        <!-- JazzCash -->
+        <div style="background:#0f0f1e;border:1px solid #1e1e2e;border-radius:14px;padding:1.2rem;margin-bottom:1rem">
+          <div style="display:flex;align-items:center;gap:.5rem;margin-bottom:.9rem">
+            <span style="font-size:1.2rem">📱</span>
+            <span style="font-size:.9rem;font-weight:700;color:#e2e8f0">JazzCash</span>
+          </div>
+          <div class="field-row">
+            <div class="field-item">
+              <div class="field-label">Account Title</div>
+              <input class="modal-input" id="jc-title" type="text" placeholder="e.g. Ali Khan">
+            </div>
+            <div class="field-item">
+              <div class="field-label">Account Number (Mobile)</div>
+              <input class="modal-input" id="jc-number" type="text" placeholder="e.g. 03001234567">
+            </div>
+          </div>
+        </div>
+
+        <!-- EasyPaisa -->
+        <div style="background:#0f0f1e;border:1px solid #1e1e2e;border-radius:14px;padding:1.2rem;margin-bottom:1rem">
+          <div style="display:flex;align-items:center;gap:.5rem;margin-bottom:.9rem">
+            <span style="font-size:1.2rem">💚</span>
+            <span style="font-size:.9rem;font-weight:700;color:#e2e8f0">EasyPaisa</span>
+          </div>
+          <div class="field-row">
+            <div class="field-item">
+              <div class="field-label">Account Title</div>
+              <input class="modal-input" id="ep-title" type="text" placeholder="e.g. Ali Khan">
+            </div>
+            <div class="field-item">
+              <div class="field-label">Account Number (Mobile)</div>
+              <input class="modal-input" id="ep-number" type="text" placeholder="e.g. 03011234567">
+            </div>
+          </div>
+        </div>
+
+        <!-- Bank Account -->
+        <div style="background:#0f0f1e;border:1px solid #1e1e2e;border-radius:14px;padding:1.2rem;margin-bottom:1.5rem">
+          <div style="display:flex;align-items:center;gap:.5rem;margin-bottom:.9rem">
+            <span style="font-size:1.2rem">🏦</span>
+            <span style="font-size:.9rem;font-weight:700;color:#e2e8f0">Bank Transfer</span>
+          </div>
+          <div class="field-row">
+            <div class="field-item">
+              <div class="field-label">Bank Name</div>
+              <input class="modal-input" id="bk-name" type="text" placeholder="e.g. HBL / UBL / Meezan">
+            </div>
+            <div class="field-item">
+              <div class="field-label">Account Title</div>
+              <input class="modal-input" id="bk-title" type="text" placeholder="e.g. Ali Khan">
+            </div>
+          </div>
+          <div class="field-row">
+            <div class="field-item" style="flex:1">
+              <div class="field-label">IBAN Number</div>
+              <input class="modal-input" id="bk-iban" type="text" placeholder="e.g. PK36SCBL0000001123456702" style="font-family:monospace;letter-spacing:.04em">
+            </div>
+          </div>
+        </div>
+
+        <button class="btn btn-primary" style="padding:.75rem 2rem;font-size:.9rem" onclick="savePaymentSettings()">
+          💾 Save Payment Settings
+        </button>
+        <div id="ps-feedback" style="margin-top:.75rem;font-size:.8rem;min-height:1.2em"></div>
+      </div>
+
+      <!-- ════ 11. RATINGS & FEEDBACK ════ -->
+      <div class="section-panel" id="sec-ratings">
+        <div class="sec-hdr">
+          <h2>⭐ Ratings & Feedback</h2>
+          <div class="sec-hdr-actions">
+            <button class="btn-refresh" onclick="loadRatings()">↻ Refresh</button>
+          </div>
+        </div>
+        <p style="font-size:.78rem;color:#475569;margin-bottom:1rem">Drivers with avg rating below ⭐3.0 are highlighted in red.</p>
+        <div class="table-wrap"><table class="data-table">
+          <thead><tr><th>Passenger</th><th>Driver</th><th>Stars</th><th>Review</th><th>Fare</th><th>Date</th></tr></thead>
+          <tbody id="ratings-tbody"><tr><td colspan="6" class="loading-row">Loading…</td></tr></tbody>
+        </table></div>
+      </div>
+
+      <!-- ════ 12. SUPPORT TICKETS ════ -->
+      <div class="section-panel" id="sec-support">
+        <div class="sec-hdr">
+          <h2>🎫 Support Tickets</h2>
+          <div class="sec-hdr-actions">
+            <div class="filter-tabs">
+              <div class="ftab active" onclick="loadSupportTickets('open');setFTab(this)">Open</div>
+              <div class="ftab" onclick="loadSupportTickets('resolved');setFTab(this)">Resolved</div>
+              <div class="ftab" onclick="loadSupportTickets('all');setFTab(this)">All</div>
+            </div>
+            <button class="btn-refresh" onclick="loadSupportTickets(currentSupStatus)">↻</button>
+          </div>
+        </div>
+        <div id="support-list"><div class="loading-row">Loading…</div></div>
+      </div>
+
+      <!-- ════ 13. DAILY FEE COMPLIANCE ════ -->
+      <div class="section-panel" id="sec-fee-compliance">
+        <div class="sec-hdr">
+          <h2>📋 Daily Fee Compliance</h2>
+          <div class="sec-hdr-actions">
+            <button class="btn btn-yellow" id="remind-btn" onclick="sendFeeReminder()">🔔 Send Reminder to Unpaid</button>
+            <button class="btn-refresh" onclick="loadFeeCompliance()">↻ Refresh</button>
+          </div>
+        </div>
+        <p style="font-size:.78rem;color:#475569;margin-bottom:1rem">Drivers who have paid today's platform fee vs those who haven't. Click a driver to view their TRX history.</p>
+
+        <!-- Summary badges -->
+        <div id="fee-summary" style="display:flex;gap:.75rem;margin-bottom:1.25rem;flex-wrap:wrap"></div>
+
+        <!-- Unpaid group -->
+        <div style="margin-bottom:1.5rem">
+          <div style="font-size:.78rem;font-weight:700;color:#f59e0b;text-transform:uppercase;letter-spacing:.06em;margin-bottom:.6rem">
+            ⚠ Unpaid Today <span id="unpaid-count" style="font-size:.75rem;color:#64748b;font-weight:400"></span>
+          </div>
+          <div class="table-wrap"><table class="data-table">
+            <thead><tr><th>Driver</th><th>Phone</th><th>Vehicle</th><th>Last Paid</th><th>Status</th><th>Action</th></tr></thead>
+            <tbody id="unpaid-tbody"><tr><td colspan="6" class="loading-row">Loading…</td></tr></tbody>
+          </table></div>
+        </div>
+
+        <!-- Paid group -->
+        <div>
+          <div style="font-size:.78rem;font-weight:700;color:#22c55e;text-transform:uppercase;letter-spacing:.06em;margin-bottom:.6rem">
+            ✓ Paid Today <span id="paid-count" style="font-size:.75rem;color:#64748b;font-weight:400"></span>
+          </div>
+          <div class="table-wrap"><table class="data-table">
+            <thead><tr><th>Driver</th><th>Phone</th><th>Vehicle</th><th>Paid Until</th><th>Status</th><th>Action</th></tr></thead>
+            <tbody id="paid-tbody"><tr><td colspan="6" class="loading-row">Loading…</td></tr></tbody>
+          </table></div>
+        </div>
+      </div>
+
+      <!-- ════ 14. DELETION REQUESTS ════ -->
+      <div class="section-panel" id="sec-deletions">
+        <div class="sec-hdr">
+          <h2>🗑️ Account Deletion Requests</h2>
+          <button class="btn-refresh" onclick="loadDeletionRequests()">↻</button>
+        </div>
+        <p style="font-size:.78rem;color:#475569;margin-bottom:1rem">Users who have requested account deletion from the app. Approve to permanently purge their data, or reject to restore their account.</p>
+        <div class="table-wrap"><table class="data-table">
+          <thead><tr>
+            <th>Name</th><th>Phone</th><th>Role</th><th>Requested</th><th>Actions</th>
+          </tr></thead>
+          <tbody id="del-tbody"><tr><td colspan="5" class="loading-row">Loading…</td></tr></tbody>
+        </table></div>
+      </div>
+
+      <!-- ════ 15. SUB-ADMIN USERS ════ -->
+      <div class="section-panel" id="sec-sub-admins">
+        <div class="sec-hdr">
+          <h2>👤 Sub-Admin User Management</h2>
+          <div class="sec-hdr-actions">
+            <span class="sa-counter">Active: <span id="sa-count">0</span> / 50</span>
+            <button class="btn btn-primary" onclick="openCreateSubAdmin()">+ Create Sub-Admin</button>
+            <button class="btn-refresh" onclick="loadSubAdmins()">↻</button>
+          </div>
+        </div>
+        <p style="font-size:.78rem;color:#475569;margin-bottom:1rem">
+          Sub-admins can log in with a username &amp; password and can only perform actions their permissions allow. Up to 50 accounts can exist.
+        </p>
+        <div class="table-wrap">
+          <table class="data-table sa-table">
+            <thead><tr><th>Username</th><th>Approve Drivers</th><th>Block Drivers</th><th>Block Customers</th><th>Manage Wallets</th><th>View Rides</th><th>Created</th><th>Actions</th></tr></thead>
+            <tbody id="sa-tbody"><tr><td colspan="8" class="loading-row">Loading…</td></tr></tbody>
+          </table>
+        </div>
+      </div>
+
+    </div><!-- /content-area -->
+  </div><!-- /main -->
+</div><!-- /admin-app -->
+
+<!-- ── Driver Fee History Modal ── -->
+<div class="modal-backdrop" id="fee-hist-modal">
+  <div class="modal-box" style="max-width:680px;width:95vw">
+    <div class="modal-header">
+      <div class="modal-title" id="fee-hist-title">📋 Fee History</div>
+      <button class="btn-close" onclick="closeModal('fee-hist-modal')">✕</button>
+    </div>
+    <div class="modal-body" id="fee-hist-body" style="max-height:70vh;overflow-y:auto">
+      <div class="loading-row">Loading…</div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-gray" onclick="closeModal('fee-hist-modal')">Close</button>
+    </div>
+  </div>
+</div>
+
+<!-- ── SOS Flash Overlay ── -->
+<div id="sos-flash"></div>
+
+<!-- ── Create Sub-Admin Modal ── -->
+<div class="modal-backdrop" id="sa-create-modal">
+  <div class="modal-box">
+    <div class="modal-header">
+      <div class="modal-title">👤 Create Sub-Admin</div>
+      <button class="btn-close" onclick="closeModal('sa-create-modal')">✕</button>
+    </div>
+    <div class="modal-body">
+      <div class="field-row">
+        <div class="field-item"><div class="field-label">Username</div><input class="modal-input" id="sa-new-username" type="text" placeholder="e.g. support_1"></div>
+        <div class="field-item"><div class="field-label">Password</div><input class="modal-input" id="sa-new-password" type="password" placeholder="••••••••"></div>
+      </div>
+      <div style="font-size:.78rem;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.05em;margin:.75rem 0 .4rem">Permissions</div>
+      <div class="perm-grid">
+        <label class="perm-row"><input type="checkbox" id="pn-approveDrivers"><label for="pn-approveDrivers">Approve Drivers</label></label>
+        <label class="perm-row"><input type="checkbox" id="pn-blockDrivers"><label for="pn-blockDrivers">Block Drivers</label></label>
+        <label class="perm-row"><input type="checkbox" id="pn-blockCustomers"><label for="pn-blockCustomers">Block Customers</label></label>
+        <label class="perm-row"><input type="checkbox" id="pn-manageWallets"><label for="pn-manageWallets">Manage Wallets</label></label>
+        <label class="perm-row"><input type="checkbox" id="pn-viewRides" checked><label for="pn-viewRides">View Rides</label></label>
+      </div>
+      <div id="sa-create-err" style="color:#ef4444;font-size:.78rem;margin-top:.6rem;min-height:1em"></div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-gray" onclick="closeModal('sa-create-modal')">Cancel</button>
+      <button class="btn btn-primary" onclick="createSubAdmin()">Create Sub-Admin</button>
+    </div>
+  </div>
+</div>
+
+<!-- ── Edit Sub-Admin Modal ── -->
+<div class="modal-backdrop" id="sa-edit-modal">
+  <div class="modal-box">
+    <div class="modal-header">
+      <div class="modal-title" id="sa-edit-title">✏️ Edit Sub-Admin</div>
+      <button class="btn-close" onclick="closeModal('sa-edit-modal')">✕</button>
+    </div>
+    <div class="modal-body">
+      <input type="hidden" id="sa-edit-id">
+
+      <!-- Password section -->
+      <div style="font-size:.78rem;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.05em;margin-bottom:.4rem">New Password</div>
+      <div style="position:relative;margin-bottom:1.1rem">
+        <input class="modal-input" id="pe-password" type="password" placeholder="Leave blank to keep current password" style="padding-right:2.6rem">
+        <button type="button" id="pe-pw-toggle" onclick="togglePwVisibility()"
+          style="position:absolute;right:.65rem;top:50%;transform:translateY(-50%);background:none;border:none;color:#475569;cursor:pointer;font-size:1rem;padding:.2rem;line-height:1"
+          title="Show / hide password">👁</button>
+      </div>
+
+      <!-- Account Status section -->
+      <div style="font-size:.78rem;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.05em;margin-bottom:.4rem">Account Status</div>
+      <label class="perm-row" style="margin-bottom:1.1rem;border-color:#3a0808" id="pe-block-row">
+        <input type="checkbox" id="pe-isBlocked">
+        <label for="pe-isBlocked" style="color:#ef4444;font-weight:600">Block this Sub-Admin Account</label>
+      </label>
+
+      <!-- Permissions section -->
+      <div style="font-size:.78rem;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.05em;margin-bottom:.4rem">Permissions</div>
+      <div class="perm-grid">
+        <label class="perm-row"><input type="checkbox" id="pe-approveDrivers"><label for="pe-approveDrivers">Approve Drivers</label></label>
+        <label class="perm-row"><input type="checkbox" id="pe-blockDrivers"><label for="pe-blockDrivers">Block Drivers</label></label>
+        <label class="perm-row"><input type="checkbox" id="pe-blockCustomers"><label for="pe-blockCustomers">Block Customers</label></label>
+        <label class="perm-row"><input type="checkbox" id="pe-manageWallets"><label for="pe-manageWallets">Manage Wallets</label></label>
+        <label class="perm-row"><input type="checkbox" id="pe-viewRides"><label for="pe-viewRides">View Rides</label></label>
+      </div>
+      <div id="sa-edit-err" style="color:#ef4444;font-size:.78rem;margin-top:.6rem;min-height:1em"></div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-gray" onclick="closeModal('sa-edit-modal')">Cancel</button>
+      <button class="btn btn-primary" onclick="saveSubAdminPerms()">💾 Save Changes</button>
+    </div>
+  </div>
+</div>
+
+<!-- ── User Detail / Action Modal ── -->
+<div class="modal-backdrop" id="user-modal">
+  <div class="modal-box">
+    <div class="modal-header">
+      <div class="modal-title" id="um-title">User Details</div>
+      <button class="btn-close" onclick="closeModal('user-modal')">✕</button>
+    </div>
+    <div class="modal-body" id="um-body"></div>
+    <div class="modal-footer" id="um-footer"></div>
+  </div>
+</div>
+
+<!-- ── Confirm Action Modal ── -->
+<div class="modal-backdrop" id="action-modal">
+  <div class="modal-box" style="max-width:380px">
+    <div class="modal-header">
+      <div class="modal-title" id="am-title">Confirm Action</div>
+      <button class="btn-close" onclick="closeModal('action-modal')">✕</button>
+    </div>
+    <div class="modal-body">
+      <p id="am-msg" style="font-size:.85rem;color:#94a3b8;margin-bottom:.9rem"></p>
+      <label style="font-size:.72rem;color:#475569;font-weight:700;display:block;margin-bottom:.3rem">Reason (optional)</label>
+      <textarea class="modal-input" id="am-reason" placeholder="Enter reason…"></textarea>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-gray" onclick="closeModal('action-modal')">Cancel</button>
+      <button class="btn" id="am-confirm-btn" onclick="confirmAction()">Confirm</button>
+    </div>
+  </div>
+</div>
+
+<!-- ── Document Viewer Modal ── -->
+<div class="modal-backdrop" id="doc-modal">
+  <div class="modal-box" style="max-width:600px">
+    <div class="modal-header">
+      <div class="modal-title">📄 Documents</div>
+      <button class="btn-close" onclick="closeModal('doc-modal')">✕</button>
+    </div>
+    <div class="modal-body">
+      <div id="doc-driver-info" style="margin-bottom:1rem"></div>
+      <div class="doc-grid" id="doc-grid"></div>
+    </div>
+    <div class="modal-footer" id="doc-footer"></div>
+  </div>
+</div>
+
+<script>
+// ── Constants / State ─────────────────────────────────────────────────────────
+const API = '';
+let adminToken = localStorage.getItem('admin_token');
+let adminEmail = localStorage.getItem('admin_email') || '';
+let socket = null;
+let pendingAction = null; // { userId, action, onConfirm }
+let currentPayStatus    = 'pending';
+let currentDriverStatus = 'all';
+let currentPassStatus   = 'all';
+let currentRideStatus   = 'active';
+let currentSOSFilter    = 'false';
+let currentSupStatus    = 'open';
+let maxIncome = 0;
+let selectedDriverIds   = new Set();
+let isSuperAdmin = true;   // false when a sub-admin is logged in
+let adminPerms   = {};     // permission flags from JWT payload
+
+// ── API Helper ────────────────────────────────────────────────────────────────
+async function api(path, method = 'GET', body = null) {
+  const opts = {
+    method,
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${adminToken}` }
+  };
+  if (body) opts.body = JSON.stringify(body);
+  const r = await fetch(API + path, opts);
+  const data = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(data.error || `HTTP ${r.status}`);
+  return data;
+}
+
+// ── Auth ──────────────────────────────────────────────────────────────────────
+async function adminLogin() {
+  const email = document.getElementById('a-email').value.trim();
+  const pass  = document.getElementById('a-pass').value;
+  try {
+    const res = await fetch('/api/admin/login', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email, password: pass })
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error);
+    adminToken   = data.token;
+    adminEmail   = data.admin.email;
+    isSuperAdmin = true;
+    adminPerms   = {};
+    localStorage.setItem('admin_token', adminToken);
+    localStorage.setItem('admin_email', adminEmail);
+    bootAdmin();
+  } catch (e) { document.getElementById('a-err').textContent = e.message; }
+}
+
+function adminLogout() {
+  // Disconnect live socket
+  if (socket) { socket.disconnect(); socket = null; }
+
+  // Wipe all auth state from memory and storage
+  localStorage.clear();
+  sessionStorage.clear();
+  adminToken   = null;
+  isSuperAdmin = true;
+  adminPerms   = {};
+
+  // Clear every login form field so no credentials linger
+  ['a-email', 'a-pass', 'sa-username', 'sa-pass'].forEach(id => {
+    const el = document.getElementById(id);
+    if (el) el.value = '';
+  });
+  document.getElementById('a-err').textContent = '';
+  switchAuthTab('superadmin');
+
+  // Show auth overlay, hide app
+  document.getElementById('admin-app').style.display = 'none';
+  document.getElementById('auth-overlay').style.display = 'flex';
+
+  // Replace history so Back button cannot return to the admin panel
+  history.replaceState(null, '', location.pathname);
+}
+
+function switchAuthTab(type) {
+  document.getElementById('tab-superadmin').classList.toggle('active', type === 'superadmin');
+  document.getElementById('tab-subadmin').classList.toggle('active', type === 'subadmin');
+  document.getElementById('auth-form-superadmin').style.display = type === 'superadmin' ? '' : 'none';
+  document.getElementById('auth-form-subadmin').style.display   = type === 'subadmin'   ? '' : 'none';
+  document.getElementById('a-err').textContent = '';
+}
+
+async function subAdminLogin() {
+  const username = document.getElementById('sa-username').value.trim();
+  const pass     = document.getElementById('sa-pass').value;
+  document.getElementById('a-err').textContent = '';
+  try {
+    const res = await fetch('/api/admin/sub-user/login', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ username, password: pass })
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error);
+    adminToken   = data.token;
+    adminEmail   = data.subAdmin.username;
+    isSuperAdmin = false;
+    adminPerms   = data.subAdmin.permissions || {};
+    localStorage.setItem('admin_token', adminToken);
+    localStorage.setItem('admin_email', adminEmail);
+    bootAdmin();
+  } catch (e) { document.getElementById('a-err').textContent = e.message; }
+}
+
+// ── Boot ──────────────────────────────────────────────────────────────────────
+function bootAdmin() {
+  document.getElementById('auth-overlay').style.display = 'none';
+  document.getElementById('admin-app').style.display    = 'flex';
+  document.getElementById('admin-email-lbl').textContent = adminEmail;
+  applyPermissions();
+  connectSocket();
+  loadOverview();
+  loadStats();
+  // Populate deletion requests badge on startup
+  api('/api/admin/account-deletion-requests').then(users => {
+    const el = document.getElementById('del-cnt');
+    if (el && users.length) { el.textContent = users.length; el.style.display = 'inline-flex'; }
+  }).catch(() => {});
+}
+
+// ── Socket.io ─────────────────────────────────────────────────────────────────
+function connectSocket() {
+  if (socket) return;
+  socket = io({ auth: { token: adminToken } });
+  socket.on('connect_error', e => console.warn('Admin socket error:', e.message));
+
+  socket.on('sos:alert', (alert) => {
+    // Flash overlay
+    const flash = document.getElementById('sos-flash');
+    flash.className = ''; void flash.offsetWidth;
+    flash.className = 'active';
+
+    // Update SOS counter badge
+    const cnt = document.getElementById('sos-cnt');
+    const n = parseInt(cnt.textContent || '0') + 1;
+    cnt.textContent = n; cnt.style.display = 'inline';
+
+    // If SOS panel is active, prepend card
+    if (document.getElementById('sec-sos').classList.contains('active')) {
+      const list = document.getElementById('sos-list');
+      const card = renderSOSCard(alert, true);
+      if (list.firstChild?.className === 'loading-row' || list.querySelector('.empty-state'))
+        list.innerHTML = card;
+      else
+        list.insertAdjacentHTML('afterbegin', card);
+    }
+
+    // Toast notification
+    showToast(`🆘 SOS from ${alert.userName}!`, 'sos');
+  });
+
+  socket.on('ride:new', () => { loadStats(); });
+}
+
+// ── Toast ─────────────────────────────────────────────────────────────────────
+function showToast(msg, type = 'info') {
+  let t = document.getElementById('admin-toast');
+  if (!t) {
+    t = document.createElement('div');
+    t.id = 'admin-toast';
+    t.style.cssText = 'position:fixed;bottom:1.5rem;right:1.5rem;z-index:9999;padding:.75rem 1.25rem;border-radius:12px;font-size:.82rem;font-weight:700;max-width:320px;transition:opacity .3s;box-shadow:0 8px 24px rgba(0,0,0,.5)';
+    document.body.appendChild(t);
+  }
+  const colors = { info:'#0f0f1e;border:1px solid #1e1e2e;color:#e2e8f0', sos:'#1a0505;border:1px solid #ef4444;color:#ef4444', success:'#052a10;border:1px solid #0a3a18;color:#22c55e', error:'#2a0505;border:1px solid #3a0808;color:#ef4444' };
+  t.style.cssText += `;background:${colors[type]||colors.info}`;
+  t.textContent = msg;
+  t.style.opacity = '1';
+  clearTimeout(t._timer);
+  t._timer = setTimeout(() => { t.style.opacity = '0'; }, 4000);
+}
+
+// ── Section Navigation ────────────────────────────────────────────────────────
+const SECTION_TITLES = {
+  overview:'Overview Dashboard', payments:'Payments Management', drivers:'Drivers Directory',
+  passengers:'Passengers Directory', 'new-requests':'New Driver Requests',
+  'temp-blocked':'Temporarily Blocked Drivers', 'blk-pass':'Blocked Passengers',
+  'live-rides':'Live Rides & History', sos:'SOS Alert Monitor',
+  'fee-compliance':'Daily Fee Compliance',
+  'pay-settings':'Payment Settings', ratings:'Ratings & Feedback', support:'Support Tickets',
+  'sub-admins':'Sub-Admin User Management'
+};
+function showSection(name) {
+  document.querySelectorAll('.sb-item').forEach(el => el.classList.toggle('active', el.dataset.sec === name));
+  document.querySelectorAll('.section-panel').forEach(el => el.classList.remove('active'));
+  document.getElementById(`sec-${name}`)?.classList.add('active');
+  document.getElementById('section-title').textContent = SECTION_TITLES[name] || name;
+
+  // Reset SOS badge when opening monitor
+  if (name === 'sos') { document.getElementById('sos-cnt').style.display = 'none'; document.getElementById('sos-cnt').textContent = '0'; }
+
+  // Lazy-load section data
+  const loaders = {
+    overview: loadOverview, payments: () => loadPayments(currentPayStatus),
+    drivers: () => loadDrivers(currentDriverStatus), passengers: () => loadPassengers(currentPassStatus),
+    'new-requests': loadNewRequests, 'temp-blocked': loadTempBlocked,
+    'blk-pass': loadBlockedPass, 'live-rides': () => loadRides(currentRideStatus),
+    sos: () => loadSOS(currentSOSFilter), 'pay-settings': loadPaymentSettings,
+    'fee-compliance': loadFeeCompliance,
+    ratings: loadRatings, support: () => loadSupportTickets(currentSupStatus),
+    deletions: loadDeletionRequests,
+    'sub-admins': loadSubAdmins
+  };
+  loaders[name]?.();
+}
+function setFTab(el) {
+  el.closest('.filter-tabs').querySelectorAll('.ftab').forEach(t => t.classList.remove('active'));
+  el.classList.add('active');
+}
+
+// ── Stats (header badges + card refresh) ──────────────────────────────────────
+async function loadStats() {
+  try {
+    const s = await api('/api/admin/stats');
+    document.getElementById('s-earn').textContent       = `Rs ${(s.todayEarnings||0).toLocaleString()}`;
+    document.getElementById('s-pend').textContent       = (s.pendingPayments||0) + (s.pendingDrivers||0);
+    document.getElementById('s-rides').textContent      = s.activeRides || 0;
+    document.getElementById('s-drivers').textContent    = s.totalDrivers || 0;
+    document.getElementById('s-drivers-sub').textContent= `${s.pendingDrivers||0} pending · ${s.suspendedDrivers||0} suspended`;
+    document.getElementById('s-pass').textContent       = s.totalPassengers || 0;
+    document.getElementById('s-pass-sub').textContent   = `${s.blockedPassengers||0} blocked`;
+    document.getElementById('s-sos').textContent        = s.unresolvedSOS || 0;
+    // Header badges
+    document.getElementById('hb-rides').textContent   = `● ${s.activeRides||0} active`;
+    document.getElementById('hb-pending').textContent  = `⏳ ${(s.pendingPayments||0)+(s.pendingDrivers||0)} pending`;
+    // Sidebar badges
+    const pc = s.pendingPayments||0;
+    const el = document.getElementById('pay-cnt');
+    el.textContent = pc; el.style.display = pc ? 'inline' : 'none';
+    const rc = s.pendingDrivers||0;
+    const re = document.getElementById('req-cnt');
+    re.textContent = rc; re.style.display = rc ? 'inline' : 'none';
+    // Support ticket badge
+    try {
+      const tickets = await api('/api/admin/support?status=open');
+      const sc = tickets.length;
+      const se = document.getElementById('sup-cnt');
+      se.textContent = sc; se.style.display = sc ? 'inline' : 'none';
+    } catch {}
+  } catch {}
+}
+
+// ── 1. OVERVIEW ──────────────────────────────────────────────────────────────
+async function loadOverview() {
+  await loadStats();
+  try {
+    const income = await api('/api/admin/daily-income');
+    const last7  = income.slice(0, 7);
+    maxIncome = Math.max(...last7.map(d => d.total), 1);
+    const strip = document.getElementById('income-strip');
+    if (!last7.length) { strip.innerHTML = '<div class="empty-state"><span class="empty-icon">📭</span>No approved payments in last 30 days</div>'; return; }
+    strip.innerHTML = last7.map(d => {
+      const pct = Math.round((d.total / maxIncome) * 100);
+      return `<div class="income-day">
+        <div class="income-date">📅 ${d.date}</div>
+        <div class="income-bar"><div class="income-bar-fill" style="width:${pct}%"></div></div>
+        <div class="income-total">Rs ${d.total.toLocaleString()}</div>
+        <div style="font-size:.68rem;color:#334155;min-width:50px">${d.count} pay${d.count!==1?'s':''}</div>
+      </div>`;
+    }).join('');
+  } catch {}
+}
+
+// ── 2. PAYMENTS ───────────────────────────────────────────────────────────────
+async function loadPayments(status = 'pending') {
+  currentPayStatus = status;
+  const el = document.getElementById('pay-list');
+  el.innerHTML = '<div class="loading-row">Loading…</div>';
+  try {
+    const pays = await api(`/api/admin/payments?status=${status}`);
+    if (!pays.length) { el.innerHTML = '<div class="empty-state"><span class="empty-icon">💳</span>No payments found</div>'; return; }
+    el.innerHTML = pays.map(p => {
+      const drv = p.driver || {};
+      const isPending = p.status === 'pending';
+      return `<div class="pay-card" id="pay-${p._id}">
+        <div class="pay-info">
+          <div class="pay-name">🧑 ${drv.name||'Unknown Driver'}${isPending?'<span class="new-notif">NEW</span>':''}</div>
+          <div class="pay-meta">📱 ${drv.phone||'—'} · 🚗 ${drv.vehicleType||'—'} · TRX: <code style="color:#818cf8">${p.trxId}</code></div>
+          <div class="pay-meta">📅 ${p.submittedDate} · ${badgeHtml(p.status)}</div>
+          ${p.adminNote ? `<div class="pay-meta" style="color:#64748b;margin-top:.2rem">💬 ${p.adminNote}</div>` : ''}
+        </div>
+        <div class="pay-amount">Rs ${(p.amount||0).toLocaleString()}</div>
+        ${isPending && (isSuperAdmin || adminPerms.manageWallets) ? `<div class="pay-actions">
+          <button class="btn btn-green" onclick="approvePayment('${p._id}')">✓ Approve</button>
+          <button class="btn btn-red"   onclick="rejectPayment('${p._id}')">✕ Reject</button>
+        </div>` : ''}
+      </div>`;
+    }).join('');
+  } catch (e) { el.innerHTML = `<div class="empty-state">Error: ${e.message}</div>`; }
+}
+
+async function approvePayment(id) {
+  if (!confirm('Approve this payment?')) return;
+  try {
+    await api(`/api/admin/payments/${id}/approve`, 'PATCH');
+    showToast('Payment approved ✓', 'success');
+    loadPayments(currentPayStatus); loadStats();
+  } catch (e) { showToast(e.message, 'error'); }
+}
+
+async function rejectPayment(id) {
+  const reason = prompt('Reason for rejection (optional):') || '';
+  try {
+    await api(`/api/admin/payments/${id}/reject`, 'PATCH', { reason });
+    showToast('Payment rejected', 'error');
+    loadPayments(currentPayStatus);
+  } catch (e) { showToast(e.message, 'error'); }
+}
+
+// ── 3. DRIVERS ────────────────────────────────────────────────────────────────
+async function loadDrivers(status = 'all') {
+  currentDriverStatus = status;
+  const tbody = document.getElementById('drivers-tbody');
+  tbody.innerHTML = '<tr><td colspan="9" class="loading-row">Loading…</td></tr>';
+  try {
+    const drivers = await api(`/api/admin/drivers?status=${status}`);
+    if (!drivers.length) { tbody.innerHTML = '<tr><td colspan="9" class="empty-state"><span class="empty-icon">🚗</span>No drivers found</td></tr>'; return; }
+    document.getElementById('select-all-chk').checked = false;
+    selectedDriverIds.clear(); updateBulkGrantBtn();
+    const FEE_RATES = { 'Bike': 70, 'Rickshaw': 130, 'Car Mini': 220, 'Car AC': 270 };
+    tbody.innerHTML = drivers.map(d => {
+      const lowRating  = (d.rating||5) < 3;
+      const hasPhoto   = d.profilePhoto && d.profilePhoto.startsWith('data:');
+      const avatarHtml = hasPhoto
+        ? `<img src="${d.profilePhoto}" style="width:30px;height:30px;border-radius:50%;object-fit:cover;border:1px solid #2a2a38;vertical-align:middle;margin-right:.4rem">`
+        : `<span style="display:inline-flex;align-items:center;justify-content:center;width:30px;height:30px;border-radius:50%;background:#1a1a28;color:#f5c518;font-size:.75rem;font-weight:700;vertical-align:middle;margin-right:.4rem">${(d.name||'D')[0].toUpperCase()}</span>`;
+      const dailyRate  = FEE_RATES[d.vehicleType] || 220;
+      const paidUntil  = d.paidUntilDate ? new Date(d.paidUntilDate) : null;
+      const feePaid    = paidUntil && paidUntil > new Date();
+      const ds         = feePaid ? paidUntil.toLocaleDateString('en-PK', { day:'2-digit', month:'short' }) : '';
+      let feeCell;
+      if (feePaid && d.isFreeTrial) {
+        feeCell = `<div style="font-size:.73rem"><span style="color:#f5c518;font-weight:700">🎁 Free Trial Active</span><br><span style="color:#64748b;font-size:.65rem">(Until ${ds})</span></div>`;
+      } else if (feePaid) {
+        feeCell = `<div style="font-size:.73rem"><span style="color:#22c55e;font-weight:700">✅ Fee Paid</span><br><span style="color:#64748b;font-size:.65rem">(Until ${ds})</span></div>`;
+      } else {
+        feeCell = `<div style="font-size:.73rem"><span style="color:#f59e0b;font-weight:700">⚠️ Unpaid</span><br><span style="color:#64748b;font-size:.65rem">(Rs ${dailyRate}/day)</span></div>`;
+      }
+      return `<tr>
+        <td><input type="checkbox" class="driver-chk" value="${d._id}" style="cursor:pointer" onchange="toggleDriverSelect('${d._id}',this.checked)"></td>
+        <td><div style="display:flex;align-items:center">${avatarHtml}<div><div style="font-weight:700;color:#e2e8f0">${d.name}</div></div></div></td>
+        <td>${d.phone||'—'}</td>
+        <td><div style="font-size:.75rem">${d.vehicleType||'—'}<br><span style="color:#475569">${d.vehicleModel||''} ${d.vehiclePlate||''}</span></div></td>
+        <td>${feeCell}</td>
+        <td style="${lowRating?'color:#ef4444':''};font-weight:${lowRating?'700':'400'}">⭐ ${(d.rating||5).toFixed(1)}</td>
+        <td>${badgeHtml(d.accountStatus||'active')}</td>
+        <td style="font-size:.72rem;color:#475569">${fmtDate(d.createdAt)}</td>
+        <td><div style="display:flex;gap:.3rem;flex-wrap:wrap">
+          <button class="btn btn-blue"   onclick="viewUser('${d._id}','driver')">👁</button>
+          <button class="btn btn-gray"   onclick="viewDocs('${d._id}')">📄</button>
+          ${(isSuperAdmin||adminPerms.manageWallets) ? `<button class="btn btn-yellow" onclick="grantTrial('${d._id}')" title="Grant Free Trial">🎁</button>` : ''}
+          ${d.accountStatus==='pending'   && (isSuperAdmin||adminPerms.approveDrivers) ? `<button class="btn btn-green"  onclick="userAction('${d._id}','approve','driver')">✓</button>` : ''}
+          ${d.accountStatus==='active'    && (isSuperAdmin||adminPerms.blockDrivers)   ? `<button class="btn btn-yellow" onclick="userAction('${d._id}','suspend','driver')">⏸</button>
+            <button class="btn btn-red"   onclick="userAction('${d._id}','block','driver')">⛔</button>` : ''}
+          ${d.accountStatus==='suspended' && (isSuperAdmin||adminPerms.blockDrivers)   ? `<button class="btn btn-green"  onclick="userAction('${d._id}','unblock','driver')">▶</button>
+            <button class="btn btn-red"   onclick="userAction('${d._id}','block','driver')">⛔</button>` : ''}
+          ${d.accountStatus==='blocked'   && (isSuperAdmin||adminPerms.blockDrivers)   ? `<button class="btn btn-green"  onclick="userAction('${d._id}','unblock','driver')">▶</button>` : ''}
+          ${isSuperAdmin ? `<button class="btn btn-red" onclick="openDeleteModal('${d._id}','${d.name.replace(/'/g,"\\'")}','driver')" title="Delete Account">🗑</button>` : ''}
+        </div></td>
+      </tr>`;
+    }).join('');
+  } catch (e) { tbody.innerHTML = `<tr><td colspan="9" style="text-align:center;color:#ef4444;padding:1rem">${e.message}</td></tr>`; }
+}
+
+// ── 4. PASSENGERS ─────────────────────────────────────────────────────────────
+async function loadPassengers(status = 'all') {
+  currentPassStatus = status;
+  const tbody = document.getElementById('pass-tbody');
+  tbody.innerHTML = '<tr><td colspan="6" class="loading-row">Loading…</td></tr>';
+  try {
+    const passengers = await api(`/api/admin/passengers?status=${status}`);
+    if (!passengers.length) { tbody.innerHTML = '<tr><td colspan="7" class="empty-state"><span class="empty-icon">👥</span>No passengers found</td></tr>'; return; }
+    tbody.innerHTML = passengers.map(p => `<tr>
+      <td><div style="font-weight:700;color:#e2e8f0">${p.name}</div></td>
+      <td>${p.phone||p.email||'—'}</td>
+      <td style="font-size:.75rem;color:#94a3b8;font-family:monospace">${p.cnicNumber||'—'}</td>
+      <td>${p.rideCount||p.totalRides||0} rides</td>
+      <td>${badgeHtml(p.accountStatus||'active')}</td>
+      <td style="font-size:.72rem;color:#475569">${fmtDate(p.createdAt)}</td>
+      <td><div style="display:flex;gap:.3rem">
+        <button class="btn btn-blue" onclick="viewUser('${p._id}','customer')">👁</button>
+        ${(isSuperAdmin||adminPerms.blockCustomers) ? ((p.accountStatus==='blocked')
+          ? `<button class="btn btn-green" onclick="userAction('${p._id}','unblock','customer')">▶ Unblock</button>`
+          : `<button class="btn btn-red"   onclick="userAction('${p._id}','block','customer')">⛔ Block</button>`) : ''}
+        ${isSuperAdmin ? `<button class="btn btn-red" onclick="openDeleteModal('${p._id}','${p.name.replace(/'/g,"\\'")}','customer')" title="Delete Account">🗑</button>` : ''}
+      </div></td>
+    </tr>`).join('');
+  } catch (e) { tbody.innerHTML = `<tr><td colspan="6" style="text-align:center;color:#ef4444;padding:1rem">${e.message}</td></tr>`; }
+}
+
+// ── 5. NEW REQUESTS ───────────────────────────────────────────────────────────
+async function loadNewRequests() {
+  const tbody = document.getElementById('req-tbody');
+  tbody.innerHTML = '<tr><td colspan="6" class="loading-row">Loading…</td></tr>';
+  try {
+    const drivers = await api('/api/admin/drivers?status=pending');
+    if (!drivers.length) { tbody.innerHTML = '<tr><td colspan="6"><div class="empty-state"><span class="empty-icon">✅</span>No pending requests</div></td></tr>'; return; }
+    tbody.innerHTML = drivers.map(d => `<tr>
+      <td><div style="font-weight:700;color:#e2e8f0">${d.name}</div></td>
+      <td>${d.phone||'—'}</td>
+      <td>${d.vehicleType||'—'} — ${d.vehicleModel||''} ${d.vehiclePlate||''}</td>
+      <td style="font-size:.72rem;color:#475569">${fmtDate(d.createdAt)}</td>
+      <td><button class="btn btn-blue" onclick="viewDocs('${d._id}','${encodeURIComponent(JSON.stringify({name:d.name,phone:d.phone||'',vehicleType:d.vehicleType||'',vehicleModel:d.vehicleModel||'',vehiclePlate:d.vehiclePlate||''}))}')">📄 View Docs</button></td>
+      <td><div style="display:flex;gap:.3rem">
+        ${(isSuperAdmin||adminPerms.approveDrivers) ? `<button class="btn btn-green" onclick="userAction('${d._id}','approve','driver')">✓ Approve</button>` : ''}
+        ${(isSuperAdmin||adminPerms.blockDrivers)   ? `<button class="btn btn-red"   onclick="userAction('${d._id}','block','driver')">✕ Reject</button>` : ''}
+      </div></td>
+    </tr>`).join('');
+  } catch (e) { tbody.innerHTML = `<tr><td colspan="6" style="text-align:center;color:#ef4444;padding:1rem">${e.message}</td></tr>`; }
+}
+
+// ── 6. TEMP BLOCKED ───────────────────────────────────────────────────────────
+async function loadTempBlocked() {
+  const tbody = document.getElementById('tblk-tbody');
+  tbody.innerHTML = '<tr><td colspan="6" class="loading-row">Loading…</td></tr>';
+  try {
+    const drivers = await api('/api/admin/drivers?status=suspended');
+    if (!drivers.length) { tbody.innerHTML = '<tr><td colspan="6"><div class="empty-state"><span class="empty-icon">✅</span>No suspended drivers</div></td></tr>'; return; }
+    tbody.innerHTML = drivers.map(d => `<tr>
+      <td><div style="font-weight:700;color:#e2e8f0">${d.name}</div></td>
+      <td>${d.phone||'—'}</td>
+      <td>${d.vehicleType||'—'} ${d.vehiclePlate||''}</td>
+      <td style="color:#f97316;font-size:.78rem">${d.suspendReason||'No reason given'}</td>
+      <td style="font-size:.72rem;color:#475569">${d.suspendedAt ? fmtDate(d.suspendedAt) : '—'}</td>
+      <td><button class="btn btn-green" onclick="userAction('${d._id}','unblock','driver')">▶ Activate</button></td>
+    </tr>`).join('');
+  } catch (e) { tbody.innerHTML = `<tr><td colspan="6" style="text-align:center;color:#ef4444;padding:1rem">${e.message}</td></tr>`; }
+}
+
+// ── 7. BLOCKED PASSENGERS ─────────────────────────────────────────────────────
+async function loadBlockedPass() {
+  const tbody = document.getElementById('bpass-tbody');
+  tbody.innerHTML = '<tr><td colspan="5" class="loading-row">Loading…</td></tr>';
+  try {
+    const passengers = await api('/api/admin/passengers?status=blocked');
+    if (!passengers.length) { tbody.innerHTML = '<tr><td colspan="5"><div class="empty-state"><span class="empty-icon">✅</span>No blocked passengers</div></td></tr>'; return; }
+    tbody.innerHTML = passengers.map(p => `<tr>
+      <td><div style="font-weight:700;color:#e2e8f0">${p.name}</div></td>
+      <td>${p.phone||p.email||'—'}</td>
+      <td style="color:#ef4444;font-size:.78rem">${p.suspendReason||'No reason given'}</td>
+      <td style="font-size:.72rem;color:#475569">${p.suspendedAt ? fmtDate(p.suspendedAt) : '—'}</td>
+      <td><button class="btn btn-green" onclick="userAction('${p._id}','unblock','customer')">▶ Unblock</button></td>
+    </tr>`).join('');
+  } catch (e) { tbody.innerHTML = `<tr><td colspan="5" style="text-align:center;color:#ef4444;padding:1rem">${e.message}</td></tr>`; }
+}
+
+// ── 8. LIVE RIDES ─────────────────────────────────────────────────────────────
+async function loadRides(status = 'active') {
+  currentRideStatus = status;
+  const tbody = document.getElementById('rides-tbody');
+  tbody.innerHTML = '<tr><td colspan="7" class="loading-row">Loading…</td></tr>';
+  try {
+    const date = document.getElementById('ride-date-filter').value;
+    let url = `/api/admin/rides?status=${status}`;
+    if (date) url += `&date=${date}`;
+    const rides = await api(url);
+    if (!rides.length) { tbody.innerHTML = '<tr><td colspan="7"><div class="empty-state"><span class="empty-icon">🗺️</span>No rides found</div></td></tr>'; return; }
+    const isLive = status === 'active';
+    tbody.innerHTML = rides.map(r => {
+      const pass = r.passenger || {};
+      const drv  = r.driver    || {};
+      const stops = r.dropoffLocations?.length > 1 ? `${r.dropoffLocations.length} stops` : (r.dropoffLocation?.address||'—');
+      return `<tr class="${isLive?'ride-row-live':''}">
+        <td><div style="font-weight:600">${pass.name||'—'}</div><div style="font-size:.7rem;color:#475569">${pass.phone||'—'}</div></td>
+        <td><div>${drv.name||'—'}</div><div style="font-size:.7rem;color:#475569">${drv.vehiclePlate||drv.vehicleModel||'—'}</div></td>
+        <td style="font-size:.75rem;max-width:180px"><div style="color:#94a3b8">${r.pickupLocation?.address||'—'}</div><div>→ ${stops}</div></td>
+        <td style="color:#f5c518;font-weight:700">Rs ${(r.fare||0).toLocaleString()}</td>
+        <td>${r.distance ? r.distance.toFixed(1)+' km' : '—'}</td>
+        <td>${rideBadge(r.status)}</td>
+        <td style="font-size:.72rem;color:#475569">${fmtDate(r.createdAt)}</td>
+      </tr>`;
+    }).join('');
+  } catch (e) { tbody.innerHTML = `<tr><td colspan="7" style="text-align:center;color:#ef4444;padding:1rem">${e.message}</td></tr>`; }
+}
+
+function rideBadge(status) {
+  const map = {
+    requested:'badge-pending', accepted:'badge-live', arrived:'badge-live',
+    'in-progress':'badge-live', completed:'badge-active', cancelled:'badge-blocked'
+  };
+  return `<span class="badge ${map[status]||'badge-pending'}">${status}</span>`;
+}
+
+// ── 9. SOS MONITOR ────────────────────────────────────────────────────────────
+async function loadSOS(resolved = 'false') {
+  currentSOSFilter = resolved;
+  const el = document.getElementById('sos-list');
+  el.innerHTML = '<div class="loading-row">Loading…</div>';
+  try {
+    const url = resolved === 'all' ? '/api/admin/sos' : `/api/admin/sos?resolved=${resolved}`;
+    const alerts = await api(url);
+    if (!alerts.length) { el.innerHTML = '<div class="empty-state"><span class="empty-icon">✅</span>No alerts found</div>'; return; }
+    el.innerHTML = alerts.map(a => renderSOSCard(a, !a.resolved)).join('');
+  } catch (e) { el.innerHTML = `<div class="empty-state" style="color:#ef4444">${e.message}</div>`; }
+}
+
+function renderSOSCard(a, isLive = true) {
+  const user = a.user || {};
+  const loc  = a.location || {};
+  const drv  = a.driverInfo || {};
+  const ec   = a.emergencyContacts || [];
+  const mapsUrl = loc.lat ? `https://maps.google.com/?q=${loc.lat},${loc.lng}` : null;
+  const id   = a._id || a.sosId || '';
+  return `<div class="sos-card ${isLive?'unresolved':''}" id="sos-${id}">
+    <div class="sos-card-header">
+      ${isLive ? '<div class="sos-pulse"></div>' : ''}
+      <div class="sos-title">🆘 ${isLive?'LIVE SOS ALERT':'Resolved Alert'}</div>
+      <div class="sos-ts">${fmtDate(a.createdAt||a.ts)}</div>
+    </div>
+    <div class="sos-meta">
+      <div><div class="field-label">Triggered By</div><strong>${a.userName||user.name||'Unknown'}</strong></div>
+      <div><div class="field-label">Phone</div><strong>${a.userPhone||user.phone||'—'}</strong></div>
+      ${drv.name ? `<div><div class="field-label">Driver</div><strong>${drv.name}</strong></div>
+      <div><div class="field-label">Vehicle</div><strong>${drv.vehiclePlate||drv.vehicleModel||'—'}</strong></div>` : ''}
+      ${mapsUrl ? `<div class="sos-coords"><div class="field-label">Location</div><a href="${mapsUrl}" target="_blank">📍 Open in Maps</a></div>` : ''}
+      ${ec.length ? `<div><div class="field-label">Emergency Contacts</div><strong>${ec.map(c=>c.name||c.phone).join(', ')}</strong></div>` : ''}
+    </div>
+    ${a.message ? `<div class="sos-msg">${a.message}</div>` : ''}
+    ${isLive && id ? `<div class="sos-actions">
+      <button class="btn btn-green" onclick="resolveSOS('${id}')">✓ Mark Resolved</button>
+    </div>` : ''}
+  </div>`;
+}
+
+async function resolveSOS(id) {
+  try {
+    await api(`/api/admin/sos/${id}/resolve`, 'PATCH');
+    const card = document.getElementById(`sos-${id}`);
+    if (card) { card.classList.remove('unresolved'); card.querySelector('.sos-pulse')?.remove(); card.querySelector('.sos-actions')?.remove(); }
+    showToast('SOS marked resolved', 'success');
+    loadStats();
+  } catch (e) { showToast(e.message, 'error'); }
+}
+
+// ── User Actions ──────────────────────────────────────────────────────────────
+function userAction(userId, action, role) {
+  const labels = { approve:'Approve Driver', suspend:'Temporarily Suspend', block:'Permanently Block', unblock:'Unblock / Activate' };
+  const colors = { approve:'btn-green', suspend:'btn-yellow', block:'btn-red', unblock:'btn-green' };
+  document.getElementById('am-title').textContent = labels[action] || action;
+  document.getElementById('am-msg').textContent   =
+    action === 'approve'  ? `Grant this ${role} active access to the platform?` :
+    action === 'suspend'  ? `Temporarily suspend this ${role}? They will be forced offline immediately.` :
+    action === 'block'    ? `Permanently block this ${role}? They will lose all access.` :
+    action === 'unblock'  ? `Restore full platform access to this ${role}?` : '';
+  document.getElementById('am-reason').value = '';
+  const btn = document.getElementById('am-confirm-btn');
+  btn.className = `btn ${colors[action]}`;
+  btn.textContent = labels[action];
+  pendingAction = { userId, action, role };
+  openModal('action-modal');
+}
+
+async function confirmAction() {
+  if (!pendingAction) return;
+  const { userId, action, role } = pendingAction;
+  const reason = document.getElementById('am-reason').value.trim();
+  try {
+    await api(`/api/admin/users/${userId}/status`, 'PATCH', { action, reason });
+    closeModal('action-modal');
+    showToast(`Action '${action}' applied successfully`, 'success');
+    // Refresh relevant section
+    if (role === 'driver') {
+      loadDrivers(currentDriverStatus); loadNewRequests(); loadTempBlocked();
+    } else {
+      loadPassengers(currentPassStatus); loadBlockedPass();
+    }
+    loadStats();
+  } catch (e) { showToast(e.message, 'error'); }
+  pendingAction = null;
+}
+
+// ── User Detail Modal ─────────────────────────────────────────────────────────
+async function viewUser(userId, role) {
+  openModal('user-modal');
+  const body   = document.getElementById('um-body');
+  const footer = document.getElementById('um-footer');
+  body.innerHTML   = '<div class="loading-row">Loading…</div>';
+  footer.innerHTML = '';
+  try {
+    const users = role === 'driver'
+      ? await api('/api/admin/drivers?status=all')
+      : await api('/api/admin/passengers?status=all');
+    const u = users.find(x => x._id === userId);
+    if (!u) { body.innerHTML = '<div class="empty-state">User not found</div>'; return; }
+    document.getElementById('um-title').textContent = `${role==='driver'?'🚗':'👤'} ${u.name}`;
+    body.innerHTML = `
+      <div class="field-row">
+        <div class="field-item"><div class="field-label">Name</div><div class="field-val">${u.name}</div></div>
+        <div class="field-item"><div class="field-label">Status</div><div class="field-val">${badgeHtml(u.accountStatus||'active')}</div></div>
+      </div>
+      <div class="field-row">
+        <div class="field-item"><div class="field-label">Phone</div><div class="field-val">${u.phone||'—'}</div></div>
+        <div class="field-item"><div class="field-label">Email</div><div class="field-val">${u.email||'—'}</div></div>
+      </div>
+      ${role==='driver' ? `<div class="field-row">
+        <div class="field-item"><div class="field-label">Vehicle</div><div class="field-val">${u.vehicleType||'—'}</div></div>
+        <div class="field-item"><div class="field-label">Model / Plate</div><div class="field-val">${u.vehicleModel||'—'} ${u.vehiclePlate||''}</div></div>
+      </div>
+      <div class="field-row">
+        <div class="field-item"><div class="field-label">Rating</div><div class="field-val">⭐ ${(u.rating||5).toFixed(1)}</div></div>
+        <div class="field-item"><div class="field-label">Total Rides</div><div class="field-val">${u.totalRides||0}</div></div>
+      </div>` : `<div class="field-row">
+        <div class="field-item"><div class="field-label">Total Rides</div><div class="field-val">${u.rideCount||u.totalRides||0}</div></div>
+      </div>`}
+      <div class="field-row">
+        <div class="field-item"><div class="field-label">Joined</div><div class="field-val">${fmtDate(u.createdAt)}</div></div>
+        <div class="field-item"><div class="field-label">Online Now</div><div class="field-val">${u.isOnline?'🟢 Yes':'⚫ No'}</div></div>
+      </div>
+      ${u.suspendReason ? `<div class="field-row"><div class="field-item" style="flex:1"><div class="field-label">Suspend Reason</div><div class="field-val" style="color:#f97316">${u.suspendReason}</div></div></div>` : ''}`;
+
+    // Footer action buttons
+    const btns = [];
+    const canApprove = isSuperAdmin || adminPerms.approveDrivers;
+    const canActDrv  = isSuperAdmin || adminPerms.blockDrivers;
+    const canActCust = isSuperAdmin || adminPerms.blockCustomers;
+    const canAct     = role === 'driver' ? canActDrv : canActCust;
+    if (u.accountStatus === 'pending'   && canApprove) btns.push(`<button class="btn btn-green"  onclick="closeModal('user-modal');userAction('${u._id}','approve','${role}')">✓ Approve</button>`);
+    if (u.accountStatus === 'active'    && canAct)     btns.push(`<button class="btn btn-yellow" onclick="closeModal('user-modal');userAction('${u._id}','suspend','${role}')">⏸ Suspend</button><button class="btn btn-red" onclick="closeModal('user-modal');userAction('${u._id}','block','${role}')">⛔ Block</button>`);
+    if (u.accountStatus === 'suspended' && canAct)     btns.push(`<button class="btn btn-green"  onclick="closeModal('user-modal');userAction('${u._id}','unblock','${role}')">▶ Activate</button>`);
+    if (u.accountStatus === 'blocked'   && canAct)     btns.push(`<button class="btn btn-green"  onclick="closeModal('user-modal');userAction('${u._id}','unblock','${role}')">▶ Unblock</button>`);
+    if (role === 'driver')               btns.push(`<button class="btn btn-blue" onclick="closeModal('user-modal');viewDocs('${u._id}')">📄 View Docs</button>`);
+    footer.innerHTML = `<button class="btn btn-gray" onclick="closeModal('user-modal')">Close</button>${btns.join('')}`;
+  } catch (e) { body.innerHTML = `<div class="empty-state" style="color:#ef4444">${e.message}</div>`; }
+}
+
+// ── Document Viewer ───────────────────────────────────────────────────────────
+async function viewDocs(userId, infoJson = null) {
+  openModal('doc-modal');
+  const grid   = document.getElementById('doc-grid');
+  const info   = document.getElementById('doc-driver-info');
+  const footer = document.getElementById('doc-footer');
+  grid.innerHTML = '<div class="loading-row">Loading…</div>';
+
+  try {
+    const drivers = await api('/api/admin/drivers?status=all');
+    const d = drivers.find(x => x._id === userId);
+    if (!d) { grid.innerHTML = '<div class="empty-state">Driver not found</div>'; return; }
+
+    info.innerHTML = `<div class="field-row">
+      <div class="field-item"><div class="field-label">Name</div><div class="field-val">${d.name}</div></div>
+      <div class="field-item"><div class="field-label">Vehicle</div><div class="field-val">${d.vehicleType||'—'} · ${d.vehiclePlate||'—'}</div></div>
+      <div class="field-item"><div class="field-label">Status</div><div class="field-val">${badgeHtml(d.accountStatus||'pending')}</div></div>
+    </div>`;
+
+    const docs = [
+      { key: 'profilePhoto',    label: 'Profile Photo',   url: d.profilePhoto },
+      { key: 'cnicFront',       label: 'CNIC Front',      url: d.cnicFront },
+      { key: 'cnicBack',        label: 'CNIC Back',       url: d.cnicBack  },
+      { key: 'licensePhoto',    label: 'Driving License', url: d.licensePhoto }
+    ];
+    grid.innerHTML = docs.map(doc =>
+      doc.url
+        ? `<div class="doc-item" onclick="window.open('${doc.url}','_blank')">
+             <img src="${doc.url}" alt="${doc.label}" onerror="this.style.display='none';this.nextElementSibling.style.display='flex'">
+             <div class="doc-label">📄 ${doc.label}</div>
+           </div>`
+        : `<div class="doc-item no-doc">📷<span>${doc.label}</span><span style="font-size:.62rem;color:#1e1e2e">Not uploaded</span></div>`
+    ).join('');
+
+    footer.innerHTML = d.accountStatus === 'pending'
+      ? `<button class="btn btn-gray" onclick="closeModal('doc-modal')">Close</button>
+         <button class="btn btn-green" onclick="closeModal('doc-modal');userAction('${d._id}','approve','driver')">✓ Approve Driver</button>
+         <button class="btn btn-red"   onclick="closeModal('doc-modal');userAction('${d._id}','block','driver')">✕ Reject</button>`
+      : `<button class="btn btn-gray" onclick="closeModal('doc-modal')">Close</button>`;
+  } catch (e) { grid.innerHTML = `<div class="empty-state" style="color:#ef4444">${e.message}</div>`; }
+}
+
+// ── Modal Helpers ─────────────────────────────────────────────────────────────
+function openModal(id)  { document.getElementById(id).classList.add('open'); }
+function closeModal(id) { document.getElementById(id).classList.remove('open'); }
+document.querySelectorAll('.modal-backdrop').forEach(el =>
+  el.addEventListener('click', e => { if (e.target === el) el.classList.remove('open'); })
+);
+
+// ── Utility ───────────────────────────────────────────────────────────────────
+function fmtDate(str) {
+  if (!str) return '—';
+  const d = new Date(str);
+  return isNaN(d) ? str : d.toLocaleDateString('en-PK', { day:'numeric', month:'short', year:'2-digit', hour:'2-digit', minute:'2-digit' });
+}
+function badgeHtml(status) {
+  const map = { active:'badge-active', pending:'badge-pending', suspended:'badge-suspended', blocked:'badge-blocked', approved:'badge-approved', rejected:'badge-rejected' };
+  const labels = { active:'✓ Active', pending:'⏳ Pending', suspended:'⏸ Suspended', blocked:'⛔ Blocked', approved:'✓ Approved', rejected:'✕ Rejected' };
+  return `<span class="badge ${map[status]||'badge-pending'}">${labels[status]||status}</span>`;
+}
+
+// ── Daily Fee Compliance ──────────────────────────────────────────────────────
+const FEE_RATES_COMP = { 'Bike': 70, 'Rickshaw': 130, 'Car Mini': 220, 'Car AC': 270 };
+
+// Escape user-controlled strings before inserting into innerHTML
+function escHtml(str) {
+  if (str == null) return '';
+  return String(str)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#x27;');
+}
+
+// Build a compliance table row safely; bind the History button via data-fid (no inline onclick)
+function feeRow(d, dateCell) {
+  const rate = FEE_RATES_COMP[d.vehicleType] || 220;
+  const tr = document.createElement('tr');
+  tr.innerHTML = `
+    <td><span style="font-weight:600;color:#e2e8f0">${escHtml(d.name)}</span></td>
+    <td style="font-size:.78rem;color:#94a3b8">${escHtml(d.phone) || '—'}</td>
+    <td><span style="font-size:.75rem;color:#818cf8">${escHtml(d.vehicleType) || '—'}</span><br><span style="font-size:.68rem;color:#f59e0b">Rs ${rate}/day</span></td>
+    <td style="font-size:.75rem;color:#64748b">${dateCell}</td>
+    <td>${badgeHtml(d.accountStatus)}</td>
+    <td><button class="btn btn-gray" data-fid="${escHtml(d._id)}" style="font-size:.72rem;padding:.25rem .6rem">📋 History</button></td>`;
+  // Bind click handler safely — no user data in JS strings
+  tr.querySelector('[data-fid]').addEventListener('click', function () {
+    viewDriverFeeHistory(this.dataset.fid, d.name);
+  });
+  return tr;
+}
+
+async function loadFeeCompliance() {
+  const unpaidTbody = document.getElementById('unpaid-tbody');
+  const paidTbody   = document.getElementById('paid-tbody');
+  unpaidTbody.innerHTML = '<tr><td colspan="6" class="loading-row">Loading…</td></tr>';
+  paidTbody.innerHTML   = '<tr><td colspan="6" class="loading-row">Loading…</td></tr>';
+  try {
+    const data = await api('/api/admin/daily-fee-compliance');
+    const { paid, unpaid } = data;
+
+    // Update summary badges (counts are integers — safe to interpolate)
+    const summary = document.getElementById('fee-summary');
+    const totalDrivers = paid.length + unpaid.length;
+    const pctPaid = totalDrivers ? Math.round((paid.length / totalDrivers) * 100) : 0;
+    summary.innerHTML = `
+      <div style="background:#052a10;border:1px solid #16a34a;border-radius:10px;padding:.55rem 1rem;font-size:.82rem;font-weight:700;color:#22c55e">✓ Paid: ${paid.length}</div>
+      <div style="background:#1c0d00;border:1px solid #b45309;border-radius:10px;padding:.55rem 1rem;font-size:.82rem;font-weight:700;color:#f59e0b">⚠ Unpaid: ${unpaid.length}</div>
+      <div style="background:#0f0f1e;border:1px solid #1e1e2e;border-radius:10px;padding:.55rem 1rem;font-size:.82rem;font-weight:700;color:#94a3b8">Total: ${totalDrivers} · ${pctPaid}% compliant</div>
+    `;
+
+    // Sidebar badge
+    const feeEl = document.getElementById('fee-cnt');
+    feeEl.textContent = unpaid.length;
+    feeEl.style.display = unpaid.length ? 'inline' : 'none';
+
+    // Count labels
+    document.getElementById('unpaid-count').textContent = `(${unpaid.length})`;
+    document.getElementById('paid-count').textContent   = `(${paid.length})`;
+
+    // Render unpaid rows
+    unpaidTbody.innerHTML = '';
+    if (!unpaid.length) {
+      unpaidTbody.innerHTML = '<tr><td colspan="6"><div class="empty-state"><span class="empty-icon">🎉</span>All active drivers have paid today!</div></td></tr>';
+    } else {
+      unpaid.forEach(d => {
+        const dateCell = d.lastDailyFeePaidAt
+          ? escHtml(fmtDate(d.lastDailyFeePaidAt))
+          : '<span style="color:#ef4444">Never</span>';
+        unpaidTbody.appendChild(feeRow(d, dateCell));
+      });
+    }
+
+    // Render paid rows
+    paidTbody.innerHTML = '';
+    if (!paid.length) {
+      paidTbody.innerHTML = '<tr><td colspan="6"><div class="empty-state"><span class="empty-icon">💳</span>No active drivers have paid today yet</div></td></tr>';
+    } else {
+      paid.forEach(d => {
+        const dateCell = d.paidUntilDate
+          ? `<span style="color:#22c55e">${escHtml(fmtDate(d.paidUntilDate))}</span>`
+          : '—';
+        paidTbody.appendChild(feeRow(d, dateCell));
+      });
+    }
+  } catch (e) {
+    unpaidTbody.innerHTML = '<tr><td colspan="6" style="text-align:center;color:#ef4444;padding:1rem">Failed to load compliance data</td></tr>';
+    paidTbody.innerHTML   = '';
+  }
+}
+
+async function sendFeeReminder() {
+  const btn = document.getElementById('remind-btn');
+  if (!confirm('Send a push notification reminder to all unpaid active drivers?')) return;
+  btn.disabled = true; btn.textContent = '⏳ Sending…';
+  try {
+    const r = await api('/api/admin/daily-fee-compliance/remind', 'POST');
+    if (r.sent === 0) {
+      showToast(r.message || 'No push subscriptions found for unpaid drivers', 'info');
+    } else {
+      showToast(`✓ Reminder sent to ${r.sent} device${r.sent !== 1 ? 's' : ''} (${r.drivers} unpaid drivers)`, 'success');
+    }
+  } catch (e) { showToast(e.message, 'error'); }
+  finally { btn.disabled = false; btn.textContent = '🔔 Send Reminder to Unpaid'; }
+}
+
+async function viewDriverFeeHistory(driverId, driverName) {
+  // Set title safely via textContent — never innerHTML with user data
+  document.getElementById('fee-hist-title').textContent = `📋 ${driverName} — Fee History`;
+  const body = document.getElementById('fee-hist-body');
+  body.innerHTML = '<div class="loading-row">Loading…</div>';
+  openModal('fee-hist-modal');
+  try {
+    const { driver, payments } = await api(`/api/admin/daily-fee-compliance/driver/${encodeURIComponent(driverId)}`);
+    const rate   = FEE_RATES_COMP[driver.vehicleType] || 220;
+    const now    = new Date();
+    const isPaid = driver.paidUntilDate && new Date(driver.paidUntilDate) >= now;
+
+    // Build the summary card using DOM manipulation for user-controlled fields
+    const card = document.createElement('div');
+    card.style.cssText = 'background:#0f0f1e;border:1px solid #1e1e2e;border-radius:10px;padding:1rem;margin-bottom:1.2rem;display:flex;gap:1.25rem;flex-wrap:wrap';
+    [
+      ['Vehicle',      escHtml(driver.vehicleType) || '—',               '#818cf8'],
+      ['Daily Rate',   `Rs ${rate}`,                                      '#f5c518'],
+      ["Today's Status", isPaid ? '✓ Paid' : '⚠ Unpaid',                isPaid ? '#22c55e' : '#f59e0b'],
+      ['Last Paid At', driver.lastDailyFeePaidAt ? escHtml(fmtDate(driver.lastDailyFeePaidAt)) : '<span style="color:#ef4444">Never</span>', '#94a3b8'],
+      ['Paid Until',   driver.paidUntilDate ? escHtml(fmtDate(driver.paidUntilDate)) : '—', '#94a3b8'],
+    ].forEach(([label, val, color]) => {
+      card.innerHTML += `<div><div style="font-size:.68rem;color:#475569;text-transform:uppercase">${label}</div><div style="font-weight:700;color:${color};font-size:.8rem">${val}</div></div>`;
+    });
+
+    body.innerHTML = '';
+    body.appendChild(card);
+
+    const hdr = document.createElement('div');
+    hdr.style.cssText = 'font-size:.78rem;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.05em;margin-bottom:.6rem';
+    hdr.textContent = 'TRX Submissions (last 30)';
+    body.appendChild(hdr);
+
+    if (!payments.length) {
+      body.innerHTML += '<div class="empty-state"><span class="empty-icon">📭</span>No TRX submissions yet</div>';
+    } else {
+      const wrap = document.createElement('div');
+      wrap.className = 'table-wrap';
+      const rows = payments.map(p => `<tr>
+        <td style="font-size:.72rem;color:#64748b">${escHtml(p.submittedDate)}</td>
+        <td><code style="color:#818cf8;font-size:.75rem">${escHtml(p.trxId)}</code></td>
+        <td style="font-weight:700;color:#f5c518">Rs ${Number(p.amount||0).toLocaleString()}</td>
+        <td style="font-size:.75rem;color:#94a3b8">${escHtml(p.paymentType) || '—'}</td>
+        <td>${badgeHtml(p.status)}</td>
+        <td style="font-size:.72rem;color:#64748b">${escHtml(p.adminNote) || '—'}</td>
+      </tr>`).join('');
+      wrap.innerHTML = `<table class="data-table">
+        <thead><tr><th>Date</th><th>TRX ID</th><th>Amount</th><th>Method</th><th>Status</th><th>Note</th></tr></thead>
+        <tbody>${rows}</tbody>
+      </table>`;
+      body.appendChild(wrap);
+    }
+  } catch (e) {
+    body.innerHTML = '<div style="color:#ef4444;text-align:center;padding:1rem">Failed to load driver history</div>';
+  }
+}
+
+// ── Ratings & Feedback ────────────────────────────────────────────────────────
+async function loadRatings() {
+  const tbody = document.getElementById('ratings-tbody');
+  tbody.innerHTML = '<tr><td colspan="6" class="loading-row">Loading…</td></tr>';
+  try {
+    const rides = await api('/api/admin/ratings');
+    if (!rides.length) { tbody.innerHTML = '<tr><td colspan="6"><div class="empty-state"><span class="empty-icon">⭐</span>No reviews yet</div></td></tr>'; return; }
+    tbody.innerHTML = rides.map(r => {
+      const pass = r.passenger || {};
+      const drv  = r.driver    || {};
+      const stars = '★'.repeat(r.driverRating||0) + '☆'.repeat(5-(r.driverRating||0));
+      const lowRating = (drv.rating||5) < 3;
+      return `<tr>
+        <td>${pass.name||'—'}<br><span style="font-size:.68rem;color:#475569">${pass.phone||'—'}</span></td>
+        <td style="${lowRating?'color:#ef4444;font-weight:700':''}">${drv.name||'—'}<br>
+          <span style="font-size:.68rem;color:#475569">avg ⭐${(drv.rating||5).toFixed(1)}</span></td>
+        <td><span style="color:#f5c518;font-size:.95rem;letter-spacing:.05em">${stars}</span><br>
+          <span style="font-size:.68rem;color:#475569">${r.driverRating}/5</span></td>
+        <td style="font-size:.78rem;color:#94a3b8;max-width:180px">${r.driverReview||'<span style="color:#334155">No comment</span>'}</td>
+        <td style="color:#f5c518;font-weight:700">Rs ${(r.fare||0).toLocaleString()}</td>
+        <td style="font-size:.72rem;color:#475569">${fmtDate(r.createdAt)}</td>
+      </tr>`;
+    }).join('');
+  } catch (e) { tbody.innerHTML = `<tr><td colspan="6" style="text-align:center;color:#ef4444;padding:1rem">${e.message}</td></tr>`; }
+}
+
+// ── Support Tickets ───────────────────────────────────────────────────────────
+async function loadSupportTickets(status = 'open') {
+  currentSupStatus = status;
+  const el = document.getElementById('support-list');
+  el.innerHTML = '<div class="loading-row">Loading…</div>';
+  try {
+    const tickets = await api(`/api/admin/support?status=${status}`);
+    if (!tickets.length) { el.innerHTML = '<div class="empty-state"><span class="empty-icon">✅</span>No tickets found</div>'; return; }
+    el.innerHTML = tickets.map(t => {
+      const u = t.user || {};
+      const isOpen = t.status === 'open';
+      return `<div class="pay-card" id="ticket-${t._id}" style="${isOpen?'border-left:3px solid #f5c518':'border-left:3px solid #22c55e'}">
+        <div class="pay-info">
+          <div class="pay-name">${isOpen?'🟡':'✅'} ${t.subject}${isOpen?'<span class="new-notif">OPEN</span>':''}</div>
+          <div class="pay-meta">👤 ${u.name||'—'} · 📱 ${u.phone||u.email||'—'} · ${u.role||'customer'}</div>
+          <div class="pay-meta" style="color:#94a3b8;margin-top:.3rem">${t.message}</div>
+          ${t.adminReply ? `<div class="pay-meta" style="color:#22c55e;margin-top:.3rem">✉ Admin reply: ${t.adminReply}</div>` : ''}
+          <div class="pay-meta" style="margin-top:.25rem">${fmtDate(t.createdAt)}</div>
+        </div>
+        ${isOpen ? `<div class="pay-actions">
+          <button class="btn btn-green" onclick="resolveTicket('${t._id}')">✓ Resolve</button>
+        </div>` : ''}
+      </div>`;
+    }).join('');
+  } catch (e) { el.innerHTML = `<div class="empty-state" style="color:#ef4444">${e.message}</div>`; }
+}
+
+async function resolveTicket(id) {
+  const reply = prompt('Enter your reply to the user (required to notify them):');
+  if (reply === null) return; // cancelled
+  try {
+    await api(`/api/admin/support/${id}/resolve`, 'PATCH', { adminReply: reply.trim() });
+    showToast(reply.trim() ? 'Ticket resolved & user notified ✓' : 'Ticket resolved ✓', 'success');
+    loadSupportTickets(currentSupStatus); loadStats();
+  } catch (e) { showToast(e.message, 'error'); }
+}
+
+// ── Bulk Free Trial ───────────────────────────────────────────────────────────
+function toggleSelectAll(checked) {
+  document.querySelectorAll('.driver-chk').forEach(cb => {
+    cb.checked = checked;
+    if (checked) selectedDriverIds.add(cb.value);
+    else selectedDriverIds.delete(cb.value);
+  });
+  updateBulkGrantBtn();
+}
+
+function toggleDriverSelect(id, checked) {
+  if (checked) selectedDriverIds.add(id);
+  else selectedDriverIds.delete(id);
+  const allCbs = document.querySelectorAll('.driver-chk');
+  document.getElementById('select-all-chk').checked = [...allCbs].every(c => c.checked);
+  updateBulkGrantBtn();
+}
+
+function updateBulkGrantBtn() {
+  const n = selectedDriverIds.size;
+  const btn = document.getElementById('bulk-trial-btn');
+  if (btn) {
+    btn.textContent = n ? `🎁 Grant Free Trial (${n} selected)` : '🎁 Grant Free Trial';
+    btn.disabled = n === 0;
+  }
+  const wBtn = document.getElementById('waiver-btn');
+  if (wBtn) {
+    wBtn.textContent = n ? `📅 Grant Fee Paid Until (${n} selected)` : '📅 Grant Fee Paid Until';
+    wBtn.disabled = n === 0;
+  }
+}
+
+let _trialDriverIds = [];
+
+function openTrialModal(driverIds) {
+  _trialDriverIds = driverIds;
+  const desc = document.getElementById('trial-modal-desc');
+  if (desc) desc.textContent = driverIds.length === 1
+    ? 'Grant a free trial to 1 selected driver.'
+    : `Grant a free trial to ${driverIds.length} selected drivers.`;
+  const inp = document.getElementById('trial-days-input');
+  if (inp) inp.value = '30';
+  document.getElementById('trial-modal-err').textContent = '';
+  const btn = document.getElementById('trial-confirm-btn');
+  if (btn) { btn.disabled = false; btn.textContent = 'Grant Trial'; }
+  document.getElementById('trial-modal').style.display = 'flex';
+}
+function closeTrialModal() {
+  document.getElementById('trial-modal').style.display = 'none';
+  _trialDriverIds = [];
+}
+async function submitTrialGrant() {
+  const days  = parseInt(document.getElementById('trial-days-input').value);
+  const errEl = document.getElementById('trial-modal-err');
+  if (!days || days < 1 || days > 365) { errEl.textContent = 'Enter a valid number of days (1–365)'; return; }
+  errEl.textContent = '';
+  const btn = document.getElementById('trial-confirm-btn');
+  btn.disabled = true; btn.textContent = 'Granting…';
+  try {
+    const res = await api('/api/admin/drivers/grant-trial', 'POST', { driverIds: _trialDriverIds, days });
+    showToast(`✓ ${res.credited} driver(s) granted ${days}-day free trial`, 'success');
+    closeTrialModal();
+    selectedDriverIds.clear();
+    loadDrivers(currentDriverStatus);
+  } catch (e) {
+    errEl.textContent = e.message;
+    btn.disabled = false; btn.textContent = 'Grant Trial';
+  }
+}
+
+// ── Account Deletion Management ───────────────────────────────────────────
+async function loadDeletionRequests() {
+  const tbody = document.getElementById('del-tbody');
+  tbody.innerHTML = '<tr><td colspan="5" class="loading-row">Loading…</td></tr>';
+  try {
+    const users = await api('/api/admin/account-deletion-requests');
+    const delCnt = document.getElementById('del-cnt');
+    if (delCnt) {
+      delCnt.textContent = users.length;
+      delCnt.style.display = users.length ? 'inline-flex' : 'none';
+    }
+    if (!users.length) {
+      tbody.innerHTML = '<tr><td colspan="5" class="empty-state"><span class="empty-icon">✅</span>No pending deletion requests</td></tr>';
+      return;
+    }
+    tbody.innerHTML = users.map(u => `<tr>
+      <td><div style="font-weight:700;color:#e2e8f0">${u.name}</div></td>
+      <td>${u.phone || u.email || '—'}</td>
+      <td><span class="status-badge" style="background:#1e3a5f;color:#93c5fd">${u.role}</span></td>
+      <td style="font-size:.72rem;color:#475569">${fmtDate(u.updatedAt)}</td>
+      <td><div style="display:flex;gap:.4rem">
+        <button class="btn btn-red"   onclick="approveDeletion('${u._id}','${u.name.replace(/'/g,"\\'")}')">🗑 Approve & Delete</button>
+        <button class="btn btn-green" onclick="rejectDeletion('${u._id}','${u.name.replace(/'/g,"\\'")}')">↩ Reject Request</button>
+      </div></td>
+    </tr>`).join('');
+  } catch (e) { tbody.innerHTML = `<tr><td colspan="5" style="text-align:center;color:#ef4444;padding:1rem">${e.message}</td></tr>`; }
+}
+
+async function approveDeletion(userId, name) {
+  openDeleteModal(userId, name, null, true);
+}
+
+async function rejectDeletion(userId, name) {
+  if (!confirm(`Reject deletion request for ${name}? Their account will be restored to active.`)) return;
+  try {
+    await api(`/api/admin/users/${userId}/status`, 'PATCH', { action: 'reject-deletion' });
+    showToast(`✓ ${name}'s deletion request rejected — account restored`, 'success');
+    loadDeletionRequests();
+  } catch (e) { showToast(e.message, 'error'); }
+}
+
+let _deleteUserId = null, _deleteUserName = '', _deletionRequestMode = false;
+function openDeleteModal(userId, name, role, fromDeletionList = false) {
+  _deleteUserId = userId;
+  _deleteUserName = name;
+  _deletionRequestMode = fromDeletionList;
+  document.getElementById('delete-modal-name').textContent = name;
+  document.getElementById('delete-modal-err').textContent = '';
+  const btn = document.getElementById('delete-confirm-btn');
+  btn.disabled = false; btn.textContent = 'Yes, Delete';
+  document.getElementById('delete-modal').style.display = 'flex';
+}
+function closeDeleteModal() {
+  document.getElementById('delete-modal').style.display = 'none';
+  _deleteUserId = null;
+}
+async function confirmDeleteUser() {
+  if (!_deleteUserId) return;
+  const btn = document.getElementById('delete-confirm-btn');
+  btn.disabled = true; btn.textContent = 'Deleting…';
+  document.getElementById('delete-modal-err').textContent = '';
+  try {
+    await api(`/api/admin/users/${_deleteUserId}`, 'DELETE');
+    showToast(`✓ ${_deleteUserName}'s account permanently deleted`, 'success');
+    closeDeleteModal();
+    if (_deletionRequestMode) { loadDeletionRequests(); }
+    else { loadDrivers(currentDriverStatus); loadPassengers(currentPassStatus); }
+  } catch (e) {
+    document.getElementById('delete-modal-err').textContent = e.message;
+    btn.disabled = false; btn.textContent = 'Yes, Delete';
+  }
+}
+
+function grantBulkTrial() {
+  if (!selectedDriverIds.size) return showToast('Select at least one driver', 'error');
+  openTrialModal([...selectedDriverIds]);
+}
+
+function grantTrial(driverId) {
+  openTrialModal([driverId]);
+}
+
+async function grantFeeWaiver() {
+  if (!selectedDriverIds.size) return showToast('Select at least one driver', 'error');
+  const dateInput = document.getElementById('waiver-date-input');
+  if (!dateInput?.value) return showToast('Pick a date first using the date picker', 'error');
+  const n = selectedDriverIds.size;
+  if (!confirm(`Mark daily fee as paid until ${dateInput.value} for ${n} driver(s)?`)) return;
+  try {
+    const res = await api('/api/admin/drivers/grant-fee-waiver', 'POST', {
+      driverIds:    [...selectedDriverIds],
+      paidUntilDate: dateInput.value
+    });
+    showToast(`✓ Fee waiver granted to ${res.count} driver(s) until ${dateInput.value}`, 'success');
+    selectedDriverIds.clear();
+    loadDrivers(currentDriverStatus);
+  } catch (e) { showToast(e.message, 'error'); }
+}
+
+// ── Payment Settings ──────────────────────────────────────────────────────────
+async function loadPaymentSettings() {
+  try {
+    const s = await api('/api/admin/settings');
+    document.getElementById('jc-title').value  = s.jazzcash?.title  || '';
+    document.getElementById('jc-number').value = s.jazzcash?.number || '';
+    document.getElementById('ep-title').value  = s.easypaisa?.title  || '';
+    document.getElementById('ep-number').value = s.easypaisa?.number || '';
+    document.getElementById('bk-name').value   = s.bank?.name  || '';
+    document.getElementById('bk-title').value  = s.bank?.title || '';
+    document.getElementById('bk-iban').value   = s.bank?.iban  || '';
+    document.getElementById('ps-feedback').textContent = '';
+  } catch (e) {
+    document.getElementById('ps-feedback').textContent = '⚠ ' + e.message;
+    document.getElementById('ps-feedback').style.color = '#ef4444';
+  }
+}
+
+async function savePaymentSettings() {
+  const fb = document.getElementById('ps-feedback');
+  fb.textContent = 'Saving…'; fb.style.color = '#475569';
+  try {
+    await api('/api/admin/settings', 'PATCH', {
+      jazzcash:  { title: document.getElementById('jc-title').value.trim(),  number: document.getElementById('jc-number').value.trim() },
+      easypaisa: { title: document.getElementById('ep-title').value.trim(),  number: document.getElementById('ep-number').value.trim() },
+      bank:      { name:  document.getElementById('bk-name').value.trim(),   title:  document.getElementById('bk-title').value.trim(), iban: document.getElementById('bk-iban').value.trim() }
+    });
+    fb.textContent = '✓ Settings saved successfully! Drivers will see the updated accounts immediately.';
+    fb.style.color = '#22c55e';
+    showToast('Payment settings saved ✓', 'success');
+  } catch (e) {
+    fb.textContent = '✕ ' + e.message;
+    fb.style.color = '#ef4444';
+    showToast(e.message, 'error');
+  }
+}
+
+// ── Permission Enforcement ────────────────────────────────────────────────────
+function applyPermissions() {
+  const sa = isSuperAdmin;
+  const p  = adminPerms;
+
+  // Sub-admin users tab — super-admin only
+  const sbSA = document.getElementById('sb-sub-admins');
+  if (sbSA) sbSA.style.display = sa ? '' : 'none';
+
+  // Payment settings tab — super-admin only
+  const sbPS = document.querySelector('[data-sec="pay-settings"]');
+  if (sbPS) sbPS.style.display = sa ? '' : 'none';
+
+  // Payments tab — needs manageWallets
+  const sbPay = document.querySelector('[data-sec="payments"]');
+  if (sbPay) sbPay.style.display = (sa || p.manageWallets) ? '' : 'none';
+
+  // Fee Compliance tab — needs manageWallets (shows driver contact + TRX data and sends push reminders)
+  const sbFee = document.querySelector('[data-sec="fee-compliance"]');
+  if (sbFee) sbFee.style.display = (sa || p.manageWallets) ? '' : 'none';
+
+  // Live rides tab — needs viewRides
+  const sbRides = document.querySelector('[data-sec="live-rides"]');
+  if (sbRides) sbRides.style.display = (sa || p.viewRides) ? '' : 'none';
+
+  // New Requests / Temp Blocked tabs — needs approveDrivers or blockDrivers
+  const sbNR = document.querySelector('[data-sec="new-requests"]');
+  if (sbNR) sbNR.style.display = (sa || p.approveDrivers || p.blockDrivers) ? '' : 'none';
+  const sbTB = document.querySelector('[data-sec="temp-blocked"]');
+  if (sbTB) sbTB.style.display = (sa || p.blockDrivers) ? '' : 'none';
+  const sbBP = document.querySelector('[data-sec="blk-pass"]');
+  if (sbBP) sbBP.style.display = (sa || p.blockCustomers) ? '' : 'none';
+
+  // Bulk trial grant button inside drivers panel
+  const bulkBtn = document.getElementById('bulk-trial-btn');
+  if (bulkBtn) bulkBtn.style.display = (sa || p.manageWallets) ? '' : 'none';
+
+  // Show a banner when logged in as sub-admin
+  const lbl = document.getElementById('admin-email-lbl');
+  if (!sa) lbl.textContent = `👤 ${adminEmail} (sub-admin)`;
+}
+
+// ── Sub-Admin Management ──────────────────────────────────────────────────────
+async function loadSubAdmins() {
+  const tbody = document.getElementById('sa-tbody');
+  tbody.innerHTML = '<tr><td colspan="8" class="loading-row">Loading…</td></tr>';
+  try {
+    const subs = await api('/api/admin/sub-users/list');
+    document.getElementById('sa-count').textContent = subs.length;
+    if (!subs.length) {
+      tbody.innerHTML = '<tr><td colspan="8"><div class="empty-state"><span class="empty-icon">👤</span>No sub-admin accounts yet. Create one to get started.</div></td></tr>';
+      return;
+    }
+    const chip = (on) => `<span class="perm-chip ${on ? 'perm-on' : 'perm-off'}">${on ? '✓' : '—'}</span>`;
+    tbody.innerHTML = subs.map(s => {
+      const pr = s.permissions || {};
+      const permsJson  = JSON.stringify(pr).replace(/"/g, '&quot;');
+      const isBlocked  = !!s.isBlocked;
+      return `<tr style="${isBlocked ? 'opacity:.6' : ''}">
+        <td>
+          <strong style="color:#e2e8f0">${s.username}</strong>
+          ${isBlocked ? '<span class="badge badge-blocked" style="margin-left:.4rem;font-size:.6rem">BLOCKED</span>' : ''}
+        </td>
+        <td style="text-align:center">${chip(pr.approveDrivers)}</td>
+        <td style="text-align:center">${chip(pr.blockDrivers)}</td>
+        <td style="text-align:center">${chip(pr.blockCustomers)}</td>
+        <td style="text-align:center">${chip(pr.manageWallets)}</td>
+        <td style="text-align:center">${chip(pr.viewRides)}</td>
+        <td style="font-size:.72rem;color:#475569">${fmtDate(s.createdAt)}</td>
+        <td><div style="display:flex;gap:.3rem">
+          <button class="btn btn-blue" onclick="editSubAdmin('${s._id}','${s.username}','${permsJson}',${isBlocked})">✏️ Edit</button>
+          <button class="btn btn-red"  onclick="deleteSubAdmin('${s._id}','${s.username}')">🗑</button>
+        </div></td>
+      </tr>`;
+    }).join('');
+  } catch (e) { tbody.innerHTML = `<tr><td colspan="8" style="text-align:center;color:#ef4444;padding:1rem">${e.message}</td></tr>`; }
+}
+
+function openCreateSubAdmin() {
+  ['pn-approveDrivers','pn-blockDrivers','pn-blockCustomers','pn-manageWallets'].forEach(id => { document.getElementById(id).checked = false; });
+  document.getElementById('pn-viewRides').checked = true;
+  document.getElementById('sa-new-username').value = '';
+  document.getElementById('sa-new-password').value = '';
+  document.getElementById('sa-create-err').textContent = '';
+  openModal('sa-create-modal');
+}
+
+async function createSubAdmin() {
+  const username = document.getElementById('sa-new-username').value.trim();
+  const password = document.getElementById('sa-new-password').value;
+  const errEl    = document.getElementById('sa-create-err');
+  errEl.textContent = '';
+  if (!username || !password) { errEl.textContent = 'Username and password are required.'; return; }
+  const permissions = {
+    approveDrivers: document.getElementById('pn-approveDrivers').checked,
+    blockDrivers:   document.getElementById('pn-blockDrivers').checked,
+    blockCustomers: document.getElementById('pn-blockCustomers').checked,
+    manageWallets:  document.getElementById('pn-manageWallets').checked,
+    viewRides:      document.getElementById('pn-viewRides').checked
+  };
+  try {
+    await api('/api/admin/sub-users/create', 'POST', { username, password, permissions });
+    closeModal('sa-create-modal');
+    showToast(`Sub-admin '${username}' created ✓`, 'success');
+    loadSubAdmins();
+  } catch (e) { errEl.textContent = e.message; }
+}
+
+function editSubAdmin(id, username, permsRaw, isBlocked) {
+  const pr = (typeof permsRaw === 'string') ? JSON.parse(permsRaw.replace(/&quot;/g, '"')) : permsRaw;
+  document.getElementById('sa-edit-id').value          = id;
+  document.getElementById('sa-edit-title').textContent = `✏️ Edit: ${username}`;
+  // Password — always clear so blank means "no change"
+  const pwField = document.getElementById('pe-password');
+  pwField.value = '';
+  pwField.type  = 'password';
+  // Block status
+  const blocked = isBlocked === true || isBlocked === 'true';
+  document.getElementById('pe-isBlocked').checked      = blocked;
+  document.getElementById('pe-block-row').style.borderColor = blocked ? '#ef4444' : '#3a0808';
+  // Permissions
+  document.getElementById('pe-approveDrivers').checked = !!pr.approveDrivers;
+  document.getElementById('pe-blockDrivers').checked   = !!pr.blockDrivers;
+  document.getElementById('pe-blockCustomers').checked = !!pr.blockCustomers;
+  document.getElementById('pe-manageWallets').checked  = !!pr.manageWallets;
+  document.getElementById('pe-viewRides').checked      = pr.viewRides !== false;
+  document.getElementById('sa-edit-err').textContent   = '';
+  openModal('sa-edit-modal');
+}
+
+function togglePwVisibility() {
+  const f = document.getElementById('pe-password');
+  const b = document.getElementById('pe-pw-toggle');
+  if (f.type === 'password') { f.type = 'text';     b.textContent = '🙈'; }
+  else                       { f.type = 'password'; b.textContent = '👁'; }
+}
+
+async function saveSubAdminPerms() {
+  const id        = document.getElementById('sa-edit-id').value;
+  const password  = document.getElementById('pe-password').value.trim();
+  const isBlocked = document.getElementById('pe-isBlocked').checked;
+  const permissions = {
+    approveDrivers: document.getElementById('pe-approveDrivers').checked,
+    blockDrivers:   document.getElementById('pe-blockDrivers').checked,
+    blockCustomers: document.getElementById('pe-blockCustomers').checked,
+    manageWallets:  document.getElementById('pe-manageWallets').checked,
+    viewRides:      document.getElementById('pe-viewRides').checked
+  };
+  const payload = { id, permissions, isBlocked };
+  if (password) payload.password = password;   // only send if non-empty
+  try {
+    await api('/api/admin/sub-users/update', 'PUT', payload);
+    closeModal('sa-edit-modal');
+    showToast('Sub-admin updated ✓', 'success');
+    loadSubAdmins();
+  } catch (e) { document.getElementById('sa-edit-err').textContent = e.message; }
+}
+
+async function deleteSubAdmin(id, username) {
+  if (!confirm(`Delete sub-admin '${username}'? This cannot be undone.`)) return;
+  try {
+    await api(`/api/admin/sub-users/delete/${id}`, 'DELETE');
+    showToast(`'${username}' deleted`, 'error');
+    loadSubAdmins();
+  } catch (e) { showToast(e.message, 'error'); }
+}
+
+// ── Keyboard shortcuts ────────────────────────────────────────────────────────
+document.addEventListener('keydown', e => {
+  if (e.key === 'Escape') document.querySelectorAll('.modal-backdrop.open').forEach(m => m.classList.remove('open'));
+  if (e.key === 'Enter' && document.getElementById('auth-overlay').style.display !== 'none') adminLogin();
+});
+
+// ── Init ──────────────────────────────────────────────────────────────────────
+if (adminToken) {
+  // Decode stored JWT to restore isSuperAdmin + adminPerms
+  try {
+    const parts = adminToken.split('.');
+    const payload = JSON.parse(atob(parts[1].replace(/-/g,'+').replace(/_/g,'/')));
+    if (payload.isSubAdmin) {
+      isSuperAdmin = false;
+      adminPerms   = payload.permissions || {};
+    } else {
+      isSuperAdmin = true;
+      adminPerms   = {};
+    }
+  } catch { /* invalid token; bootAdmin will fail and show auth */ }
+  bootAdmin();
+} else document.getElementById('auth-overlay').style.display = 'flex';
+</script>
+<!-- ── Permanent Delete Confirm Modal ─────────────────────────────────────── -->
+<div id="delete-modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.8);z-index:3200;align-items:center;justify-content:center">
+  <div style="background:#0d0d1e;border:1px solid #4a1a1a;border-radius:14px;padding:1.5rem;max-width:360px;width:90%;margin:auto">
+    <h3 style="color:#ef4444;margin:0 0 .75rem;font-size:1rem">⚠️ Delete Account Permanently</h3>
+    <p style="color:#cbd5e1;font-size:.85rem;margin:0 0 .3rem">Are you sure you want to permanently delete <strong id="delete-modal-name" style="color:#fff"></strong>'s account?</p>
+    <p style="color:#ef4444;font-size:.78rem;margin:0 0 1rem;font-weight:600">This action cannot be undone. All data will be purged from the database.</p>
+    <p id="delete-modal-err" style="color:#ef4444;font-size:.77rem;min-height:1em;margin-bottom:.65rem"></p>
+    <div style="display:flex;gap:.5rem">
+      <button onclick="closeDeleteModal()" style="flex:1;padding:.7rem;border-radius:8px;border:1px solid #2a2a4a;background:#0d0d1e;color:#94a3b8;cursor:pointer;font-size:.85rem">Cancel</button>
+      <button id="delete-confirm-btn" onclick="confirmDeleteUser()" style="flex:1;padding:.7rem;border-radius:8px;border:none;background:#ef4444;color:#fff;font-weight:700;cursor:pointer;font-size:.85rem">Yes, Delete</button>
+    </div>
+  </div>
+</div>
+
+<!-- ── Grant Free Trial Modal ─────────────────────────────────────────────── -->
+<div id="trial-modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.75);z-index:3100;align-items:center;justify-content:center">
+  <div style="background:#0d0d1e;border:1px solid #2a2a4a;border-radius:14px;padding:1.5rem;max-width:340px;width:90%;margin:auto">
+    <h3 style="color:#f5c518;margin:0 0 .6rem;font-size:1rem">🎁 Grant Free Trial</h3>
+    <p id="trial-modal-desc" style="color:#94a3b8;font-size:.82rem;margin:0 0 1rem"></p>
+    <label style="color:#64748b;font-size:.72rem;font-weight:600;display:block;margin-bottom:.35rem">NUMBER OF TRIAL DAYS</label>
+    <input type="number" id="trial-days-input" min="1" max="365" value="30" placeholder="e.g. 30"
+      style="width:100%;padding:.7rem;border-radius:8px;border:1px solid #2a2a4a;background:#06060e;color:#fff;font-size:.95rem;box-sizing:border-box;margin-bottom:.4rem">
+    <p id="trial-modal-err" style="color:#ef4444;font-size:.77rem;min-height:1em;margin-bottom:.65rem"></p>
+    <div style="display:flex;gap:.5rem">
+      <button onclick="closeTrialModal()" style="flex:1;padding:.7rem;border-radius:8px;border:1px solid #2a2a4a;background:#0d0d1e;color:#94a3b8;cursor:pointer;font-size:.85rem">Cancel</button>
+      <button id="trial-confirm-btn" onclick="submitTrialGrant()" style="flex:1;padding:.7rem;border-radius:8px;border:none;background:#f5c518;color:#000;font-weight:700;cursor:pointer;font-size:.85rem">Grant Trial</button>
+    </div>
+  </div>
+</div>
+</body>
+</html>

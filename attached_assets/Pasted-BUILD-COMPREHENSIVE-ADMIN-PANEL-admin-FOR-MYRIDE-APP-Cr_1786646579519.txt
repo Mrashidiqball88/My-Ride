@@ -1,0 +1,55 @@
+BUILD COMPREHENSIVE ADMIN PANEL (/admin) FOR MYRIDE APP:
+
+Create a secure Admin Dashboard at route `/admin` with an authenticated login (Admin Credentials). Implement a sidebar/tab navigation with the following 9 detailed sections:
+
+1. PERSONAL / PAYMENTS MANAGEMENT (پرسنل / پیمنٹس)
+- Daily Income Ledger: Show daily total commission received from drivers.
+- Pending Submissions: List driver wallet top-up requests (TRX ID, driver name, submitted amount, screenshot/proof).
+- Action Buttons: "Approve & Mark Received" (adds amount to driver wallet and moves record to Received history) and "Reject Submission".
+- Real-time Notifications: Highlight new payment submissions waiting for approval.
+
+2. DRIVERS DIRECTORY (ڈرائیورز)
+- Display complete list of registered drivers with filters for status (Active, Pending, Suspended).
+- Information Cards/Table showing:
+  * Joining Date & Time
+  * Driver Name & Profile Picture
+  * Phone Number & Vehicle Details
+  * CNIC Photos (Front & Back)
+  * Driving License Photo
+  * Current Status Badge (Approved / Pending / Temporarily Blocked)
+- Quick Action Buttons: "Edit Profile", "Suspend (Temporary Stop)", "Activate (Play)", "Block Permanently".
+
+3. PASSENGERS / CUSTOMERS DIRECTORY (پیسنجرز)
+- Full list of registered customers/passengers.
+- Fields: Passenger Name, Profile Photo, Phone Number, CNIC Number/Photo, Account Registration Date, Total Rides Taken.
+- Status Badge: Active / Blocked.
+- Quick Actions: "Block Passenger", "Unblock Passenger", "View Ride History".
+
+4. NEW DRIVER REQUESTS (نیو ریکویسٹ)
+- Dedicated queue for new driver signups awaiting verification.
+- Document Inspector Modal: Allows Admin to zoom in and verify uploaded CNIC, License, and Vehicle registration pictures.
+- Buttons: "Approve Driver" (instantly changes status to Approved & grants login/online access) and "Reject Request" (with optional reason).
+
+5. TEMPORARILY BLOCKED DRIVERS LIST (ٹمپریری بلاک ڈرائیورز)
+- Isolated tab showing all drivers currently under temporary suspension/stop.
+- Displays reason for suspension and date suspended.
+- Action Button: "Unblock / Activate (Play)" to immediately restore their full driving privileges.
+
+6. BLOCKED PASSENGERS LIST (بلاک پیسنجرز)
+- Isolated tab showing all blocked/suspended customer accounts.
+- Action Button: "Unblock / Restore Account" to allow them back on the platform.
+
+7. LIVE RIDES & TRIP HISTORY (لائیو رائڈز اور ہسٹری - EXTRA FEATURE)
+- Real-time tracker for currently ongoing rides (Passenger, Driver, Route, Agreed Fare).
+- Complete historical record of all Completed and Cancelled rides with filters by date.
+
+8. EMERGENCY / SOS ALERT MONITOR (ایمرجنسی الرٹ - EXTRA FEATURE)
+- Real-time alert panel that flashes whenever a driver or passenger triggers the SOS button during an active ride.
+- Shows live coordinates, vehicle info, driver name, passenger name, and emergency contacts.
+
+9. OVERVIEW DASHBOARD CARDS (مجموعی جائزہ - EXTRA FEATURE)
+- Top summary widgets showing:
+  * Today's Total Earnings (Rs)
+  * Pending Approvals Count
+  * Active Rides Right Now
+  * Total Approved Drivers vs Total Passengers

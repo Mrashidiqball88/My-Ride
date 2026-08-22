@@ -1,0 +1,32 @@
+FIX ACCOUNT DELETION MANAGEMENT IN ADMIN PANEL AND LOCATION INPUT MAP RESET BUG IN CUSTOMER APP:
+
+Please update the frontend and backend in `ride-hailing/` to strictly implement the following 3 points:
+
+----------------------------------------------------------------------
+1. ADMIN PANEL: PENDING ACCOUNT DELETION REQUESTS SECTION
+----------------------------------------------------------------------
+- Backend: Create/update API `GET /api/admin/account-deletion-requests` to fetch all drivers and customers whose status is `pending_deletion`.
+- Admin Panel UI: Add a prominent tab/filter titled "Deletion Requests" in Admin Dashboard.
+- Display a list/table of users requesting deletion with two action buttons:
+  * "Approve & Delete": Permanently purges user data from DB and returns success notification.
+  * "Reject Request": Resets `accountStatus` back to `active` and notifies user.
+
+----------------------------------------------------------------------
+2. ADMIN PANEL: DIRECT DELETE ACCOUNT BUTTON WITH CONFIRMATION MODAL
+----------------------------------------------------------------------
+- Add a direct "Delete Account" (trash icon) button in every row of both Drivers and Customers tables in Admin Panel.
+- Modal Action: Clicking "Delete Account" MUST open a modal dialog asking: "Are you sure you want to permanently delete [User Name]'s account? This action cannot be undone."
+- On clicking "Yes, Delete", execute backend deletion API, remove user row from UI, and show success notification.
+
+----------------------------------------------------------------------
+3. CUSTOMER APP: LOCATION INPUT CLEAR ("X") BUTTON & AUTOMATIC MAP MARKER/ROUTE RESET
+----------------------------------------------------------------------
+- In Customer App location inputs (Pickup, Dropoff, and Add Stop fields), add a clear ("X") button inside/next to the input box.
+- Clearing Action Handler:
+  * Clicking "X" clears text inside the respective input field.
+  * Dynamically remove the corresponding marker/pin layer from the Leaflet/Google Map object (`map.removeLayer(marker)`).
+  * Clear the current route polyline from the map and reset fare calculation state.
+  * Ensure the map updates instantly without requiring app restart or page refresh.
+
+----------------------------------------------------------------------
+Verify all changes locally and confirm when complete.

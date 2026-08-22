@@ -1,0 +1,47 @@
+IMPLEMENT SUB-ADMIN MANAGEMENT SYSTEM WITH ROLE-BASED ACCESS CONTROL (RBAC) IN ADMIN PANEL:
+
+Please create a complete Sub-Admin / Secondary Admin User system in `ride-hailing/` backend and frontend with granular permission control and a 50-user limit.
+
+----------------------------------------------------------------------
+1. BACKEND: SUB-ADMIN SCHEMA & PERMISSIONS MATRIX
+----------------------------------------------------------------------
+- Create `SubAdmin` Model in MongoDB with fields:
+  * `username`: String (Unique, required)
+  * `password`: String (Hashed using bcrypt)
+  * `permissions`: Object with Boolean flags:
+      - `approveDrivers`: Boolean (default: false)
+      - `blockDrivers`: Boolean (default: false)
+      - `blockCustomers`: Boolean (default: false)
+      - `manageWallets`: Boolean (default: false)
+      - `viewRides`: Boolean (default: true)
+  * `createdAt`: Date
+
+----------------------------------------------------------------------
+2. BACKEND: 50-USER LIMIT & CRUD APIS WITH PERMISSION MIDDLEWARE
+----------------------------------------------------------------------
+- Create Sub-Admin Management APIs (Super-Admin access only):
+  * `POST /api/admin/sub-users/create`: Check if total count < 50. If count >= 50, reject with "Maximum limit of 50 sub-admin users reached." Hash password and save permissions.
+  * `GET /api/admin/sub-users/list`: Fetch all active sub-admin accounts.
+  * `PUT /api/admin/sub-users/update-permissions`: Update permission flags for a specific sub-user.
+  * `DELETE /api/admin/sub-users/delete/:id`: Remove a sub-user.
+  * `POST /api/admin/sub-user/login`: Separate or unified login for sub-admins returning JWT/session token containing their permissions.
+- API Permission Middleware: Protect every admin action API (e.g., driver approval, customer blocking) by validating if the requesting sub-admin's token has the specific permission required.
+
+----------------------------------------------------------------------
+3. FRONTEND: ADMIN PANEL "USER MANAGEMENT" TAB & DYNAMIC UI
+----------------------------------------------------------------------
+- In Admin Panel UI (`/admin`), add a new tab titled "Sub-Admin Users (User Management)".
+- Add "Create New Sub-Admin" Form/Modal with fields:
+  * Username Input
+  * Password Input
+  * Permission Checkboxes:
+    [ ] Approve Drivers
+    [ ] Block / Unblock Drivers
+    [ ] Block / Unblock Customers
+    [ ] Manage Wallet & Fees
+- Display a Sub-Admins Table showing: Username, Active Permissions (as badges/chips), and Action Buttons (Edit Permissions, Delete).
+- Show counter at top: "Active Sub-Admins: X / 50".
+- Dynamic UI Hiding: When a sub-admin logs into the admin panel, dynamically show ONLY the UI tabs, columns, and action buttons allowed by their specific permissions (e.g., if `approveDrivers` is false, hide the Approve button entirely).
+
+----------------------------------------------------------------------
+Verify implementation locally and confirm when ready.

@@ -1,0 +1,42 @@
+REPLACE POPUP BLOCKER WITH VEHICLE-BASED DAILY FEE ACCEPT BUTTON LOCKOUT & ADMIN CALENDAR WAIVERS:
+
+Please update both frontend and backend code in `ride-hailing/` to strictly implement the following rules:
+
+----------------------------------------------------------------------
+1. REMOVE FULL-SCREEN DAILY FEE POPUP MODAL ENTIRELY
+----------------------------------------------------------------------
+- Delete / Disable the modal overlay popup shown on login/dashboard that blocks the driver from using the app.
+- Allow drivers to log in, navigate the app, go online, and receive ride notifications freely regardless of payment status.
+
+----------------------------------------------------------------------
+2. VEHICLE CATEGORY DAILY PLATFORM FEE RATES (24-HOUR CYCLE)
+----------------------------------------------------------------------
+- Set daily fee rates in code/schema based on registered vehicle type:
+  * Bike: 70 PKR / day
+  * Rickshaw: 130 PKR / day
+  * Car Mini / Non-AC: 220 PKR / day
+  * Car AC: 270 PKR / day
+- Store vehicle type and applicable daily fee rate on the Driver model.
+
+----------------------------------------------------------------------
+3. RIDE ACCEPTANCE BUTTON LOCKOUT & PROFILE DISPLAY
+----------------------------------------------------------------------
+- Driver App Dashboard & Profile: Display registered Vehicle Type and required Daily Platform Fee prominently (e.g., "Vehicle: Car AC | Daily Fee: Rs. 270").
+- Incoming Ride Screen: Show all incoming ride details (pickup, dropoff, fare).
+- Logic: If driver has NOT paid today's fee AND `paidUntilDate` is less than current date:
+  * Keep the "Accept Ride" button GREYED OUT / DISABLED.
+  * Button label text: "Pay Rs. [Fee] Daily Fee to Accept".
+- When payment is confirmed or granted by admin, instantly enable/highlight the "Accept Ride" button.
+
+----------------------------------------------------------------------
+4. ADMIN PANEL DRIVER DETAILS & CALENDAR ADVANCE/WAIVER TOOL
+----------------------------------------------------------------------
+- Admin Drivers Table: Show Vehicle Type and Daily Fee Rate for each driver.
+- Admin Fee Waiver / Advance Pay Tool:
+  * Add multi-select checkboxes for drivers in Admin Panel.
+  * Add a Date/Calendar Selector labeled "Grant Fee Paid Until".
+  * Admin can select 1 or multiple drivers, pick a date (e.g., 2 days or 5 days ahead), and click "Approve / Mark Paid".
+  * Backend sets `driver.paidUntilDate = selectedDate`, waiving fee enforcement and highlighting their "Accept Ride" buttons until that date expires.
+
+----------------------------------------------------------------------
+Verify implementation locally and confirm when complete.

@@ -1,0 +1,60 @@
+IMPLEMENT ULTIMATE ALL-IN-ONE MASTER UPDATE (MAP FIX, PAYMENT SETTINGS, CAMERA UPLOADS, CALL BUTTONS, ADMIN DOCUMENT INSPECTION, DAILY SUBSCRIPTION DEDUCTION, BULK 1-MONTH FREE TRIAL, SOS ALERTS, FARE ESTIMATOR, REVENUE DASHBOARD & SUPPORT TICKETS):
+
+1. DIRECT CALL BUTTONS (DRIVER & PASSENGER):
+- Driver App: Add a prominent "Call Passenger" button (`href="tel:PASSENGER_PHONE"`) on active ride screens.
+- Customer App: Display Driver's Name, Vehicle Info, Rating, Profile Photo, and a "Call Driver" button (`href="tel:DRIVER_PHONE"`) once a ride is accepted.
+
+2. DRIVER CAMERA CAPTURE & PHOTO UPLOADS:
+- On Driver Signup/Profile editing (`/driver`), enable mobile camera capture & file selection for:
+  * Driver Live Profile Photo
+  * Driving License Photo (Front & Back)
+  * CNIC Photos (Front & Back)
+- Make Profile Photo and Driving License compulsory fields during driver registration.
+- Display driver's profile picture prominently on their Driver App Dashboard.
+
+3. ADMIN PANEL DOCUMENT INSPECTION (`/admin`):
+- In "New Requests" and "Drivers Directory" tabs, display high-resolution image cards for Profile Photo, Driving License, and CNIC.
+- Add a modal/zoom feature so Admin can click and inspect driver documents in full size clearly before clicking "Approve Driver" or "Reject".
+
+4. MAP RENDER & CSS FIX:
+- Fix Leaflet map sizing so it takes 100% height/width and executes `map.invalidateSize()` on load to ensure smooth tile rendering without grey boxes or graphical glitches.
+
+5. PAYMENT SETTINGS & AUTOMATED DAILY DEDUCTION:
+- Admin Panel (`/admin`): Add "Payment Settings" tab where Admin can save and edit JazzCash, EasyPaisa, and Bank details.
+- Driver App (`/driver`): Display Admin's payment accounts with "Copy Number" buttons in the Recharge Wallet section.
+- Automatic Daily Deduction (Midnight Cron Job): Deduct fixed daily subscription fee from active driver wallets based on vehicle category (Bike: Rs. 67/day, Rickshaw: Rs. 100/day, Small Car: Rs. 150/day, Big AC Car: Rs. 217/day).
+- Automatically restrict drivers with negative balance from going Online.
+
+6. BULK 1-MONTH FREE TRIAL / BONUS CREDIT TRANSFER:
+- In Admin Panel (`/admin -> Drivers Directory`), add a "Select All" checkbox and a "Grant 1-Month Free Credit" bulk action button.
+- Logic on Button Click:
+  * Automatically identify each selected driver's vehicle category.
+  * Instantly add the 1-month equivalent subscription amount into their wallet ledger:
+    - Bike Drivers: +Rs. 2,000
+    - Rickshaw Drivers: +Rs. 3,000
+    - Small Car Drivers: +Rs. 4,500
+    - Big AC Car Drivers: +Rs. 6,500
+  * Mark the transaction entry as "1-Month Promotional Bonus Credit".
+  * Provide a single individual "Grant 1 Month Free" button on each driver's detail row as well.
+
+7. EMERGENCY SOS BUTTON (SAFETY):
+- Add an "SOS / Emergency" button on active ride screens in Customer App.
+- On click, trigger an immediate loud Alert notification in the Admin Panel (`/admin`) displaying customer info and live GPS location.
+
+8. RATINGS & REVIEWS (QUALITY CONTROL):
+- Prompt customer to rate driver (1-5 stars) and add a short review after ride completion.
+- Admin Panel (`/admin`): Add "Ratings & Feedback" tab. Highlight low-rated drivers (< 3.0 stars) in RED color for admin action.
+
+9. FARE ESTIMATOR:
+- In Customer App, display calculated estimated fare before booking based on estimated distance and base rates.
+
+10. ADMIN REVENUE & ANALYTICS DASHBOARD:
+- In `/admin`, create a visual Analytics dashboard displaying:
+  * Total Today's Rides (Count)
+  * Today's Total Commission/Subscription Revenue Earned
+  * Online Active Drivers (Count)
+  * Pending Support Tickets
+
+11. HELP & SUPPORT TICKET SYSTEM:
+- Add "Help / Contact Support" form in both Driver and Customer apps.
+- Route all submissions to a dedicated "Support Tickets" tab in Admin Panel (`/admin`) with "Mark Resolved" functionality.

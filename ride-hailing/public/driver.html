@@ -1,0 +1,2442 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<!-- PWA -->
+<meta name="theme-color" content="#000000">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="MyRide Driver">
+<link rel="manifest" href="/driver-manifest.json">
+<link rel="apple-touch-icon" href="/apple-touch-icon.png">
+<link rel="icon" type="image/png" sizes="192x192" href="/icon-192.png">
+<title>MyRide — Driver</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script src="/socket.io/socket.io.js"></script>
+<style>
+*{margin:0;padding:0;box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+body{font-family:'Segoe UI',sans-serif;background:#0a0a0f;color:#fff;height:100dvh;overflow:hidden;display:flex;flex-direction:column}
+
+/* ── Auth ── */
+#auth-screen{position:fixed;inset:0;z-index:1000;background:#0a0a0f;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:1.5rem}
+.auth-logo{font-size:2rem;font-weight:800;margin-bottom:.25rem}.auth-logo span{color:#f5c518}
+.auth-subtitle{color:#555;font-size:.85rem;margin-bottom:2rem}
+.auth-card{background:#13131a;border:1px solid #222;border-radius:20px;padding:1.5rem;width:100%;max-width:360px}
+.auth-tabs{display:flex;gap:.5rem;margin-bottom:1.5rem;background:#0a0a0f;border-radius:10px;padding:.25rem}
+.auth-tab{flex:1;padding:.6rem;border:none;background:transparent;color:#666;border-radius:8px;font-size:.9rem;cursor:pointer;transition:all .2s}
+.auth-tab.active{background:#1e3a5f;color:#fff;font-weight:700}
+.form-group{margin-bottom:1rem}
+.form-group label{display:block;font-size:.8rem;color:#888;margin-bottom:.4rem}
+.form-group input,.form-group select{width:100%;background:#0a0a0f;border:1px solid #333;border-radius:10px;padding:.75rem 1rem;color:#fff;font-size:.95rem;outline:none;transition:border-color .2s}
+.form-group input:focus,.form-group select:focus{border-color:#1e6fb4}
+.form-group select option{background:#13131a}
+.btn-primary{width:100%;background:#1e3a5f;color:#fff;border:none;border-radius:12px;padding:.85rem;font-size:1rem;font-weight:700;cursor:pointer;margin-top:.5rem;transition:background .2s}
+.btn-primary:hover{background:#2a4f7f}
+.auth-error{color:#ff5555;font-size:.85rem;text-align:center;margin-top:.75rem;min-height:1.2em}
+
+/* ── App Layout ── */
+#app{display:none;flex-direction:column;height:100dvh}
+#map{flex:1;z-index:1;width:100%;min-height:0;position:relative;overflow:hidden}
+
+/* ── Header ── */
+.header{background:#0d1117;border-bottom:1px solid #1e3a5f;padding:.6rem 1rem;display:flex;align-items:center;justify-content:space-between;z-index:10;flex-shrink:0}
+.header-logo{font-size:1.1rem;font-weight:800}.header-logo span{color:#f5c518}
+.header-right{display:flex;align-items:center;gap:.75rem}
+.earnings-badge{background:#1a2a0a;border:1px solid #2d5a2d;border-radius:100px;padding:.3rem .75rem;font-size:.8rem;color:#4caf50;font-weight:600}
+.btn-logout{background:none;border:1px solid #333;color:#888;border-radius:8px;padding:.3rem .6rem;font-size:.7rem;cursor:pointer}
+
+/* ── Online Toggle ── */
+.online-bar{background:#0d1117;border-bottom:1px solid #1a1a2a;padding:.75rem 1rem;display:flex;align-items:center;justify-content:space-between;flex-shrink:0}
+.online-info{display:flex;flex-direction:column}
+.online-status-text{font-size:.95rem;font-weight:600}
+.online-sub{font-size:.75rem;color:#555;margin-top:.1rem}
+.toggle-wrap{position:relative;width:60px;height:30px}
+.toggle-input{opacity:0;width:0;height:0;position:absolute}
+.toggle-label{position:absolute;inset:0;background:#333;border-radius:30px;cursor:pointer;transition:background .3s}
+.toggle-label::after{content:'';position:absolute;width:22px;height:22px;left:4px;top:4px;background:#fff;border-radius:50%;transition:transform .3s}
+.toggle-input:checked+.toggle-label{background:#4caf50}
+.toggle-input:checked+.toggle-label::after{transform:translateX(30px)}
+
+/* ── Bottom Info Panel ── */
+#info-panel{background:#0d1117;border-top:1px solid #1e3a5f;padding:1rem;flex-shrink:0;max-height:45vh;overflow-y:auto}
+.idle-msg{text-align:center;color:#444;padding:1.5rem;font-size:.9rem}
+.idle-msg .idle-icon{font-size:2.5rem;margin-bottom:.5rem}
+.idle-refresh-btn{display:inline-block;background:#1a3a1a;color:#4caf50;border:1.5px solid #4caf50;border-radius:100px;padding:.45rem 1.2rem;font-size:.82rem;font-weight:700;cursor:pointer;letter-spacing:.02em;transition:background .18s,color .18s}
+.idle-refresh-btn:hover{background:#4caf50;color:#0a0a0f}
+.idle-refresh-btn:disabled{opacity:.5;cursor:default}
+
+/* ── Incoming Ride Popup ── */
+#ride-request{display:none;position:fixed;bottom:0;left:0;right:0;z-index:100;background:#0d1117;border-top:2px solid #f5c518;padding:1rem;animation:slide-up .3s ease}
+@keyframes slide-up{from{transform:translateY(100%)}to{transform:translateY(0)}}
+.rr-header{display:flex;justify-content:space-between;align-items:center;margin-bottom:.75rem}
+.rr-title{font-size:1rem;font-weight:700;color:#f5c518}
+.rr-timer{background:#2a1a0a;border:1px solid #cc6622;border-radius:100px;padding:.2rem .6rem;font-size:.8rem;color:#ff9933;font-weight:600}
+.rr-route{background:#0a0a0f;border-radius:12px;padding:.75rem;margin-bottom:.75rem}
+.rr-point{display:flex;align-items:flex-start;gap:.6rem;padding:.3rem 0}
+.rr-point-icon{font-size:1rem;width:20px;text-align:center;flex-shrink:0;margin-top:.1rem}
+.rr-point-text{font-size:.85rem;color:#ccc;line-height:1.3}
+.rr-divider{border-left:1px dashed #333;height:12px;margin-left:9px}
+.rr-meta{display:flex;gap:.75rem;margin-bottom.75rem;margin-bottom:.75rem}
+.rr-meta-item{flex:1;background:#0a0a0f;border-radius:10px;padding:.6rem;text-align:center}
+.rr-meta-label{font-size:.7rem;color:#666;margin-bottom:.2rem}
+.rr-meta-val{font-size:1rem;font-weight:700;color:#f5c518}
+.rr-counter-wrap{background:#0a0a0f;border:1px solid #1e1e2e;border-radius:10px;padding:.55rem .75rem;margin-bottom:.65rem}
+.rr-counter-label{font-size:.7rem;color:#666;text-transform:uppercase;letter-spacing:.04em;margin-bottom:.35rem;font-weight:600}
+.rr-counter-row{display:flex;align-items:center;gap:.45rem}
+.rr-counter-input{flex:1;background:#13131a;border:1px solid #333;border-radius:8px;padding:.5rem .75rem;color:#fff;font-size:.9rem;outline:none;transition:border-color .2s}
+.rr-counter-input:focus{border-color:#66aaff}
+.rr-counter-input::placeholder{color:#333}
+.rr-actions{display:flex;gap:.5rem}
+.btn-reject{flex:1;background:#2a0a0a;border:1px solid #cc3333;color:#ff6666;border-radius:12px;padding:.7rem;font-size:.88rem;font-weight:600;cursor:pointer}
+.btn-counter{flex:1;background:#0d1a2a;border:1px solid #336699;color:#66aaff;border-radius:12px;padding:.7rem;font-size:.88rem;font-weight:700;cursor:pointer;transition:background .2s}
+.btn-counter:hover{background:#152a3a}
+.btn-accept{flex:1;background:#1e3a5f;border:1px solid #4488cc;color:#fff;border-radius:12px;padding:.7rem;font-size:.88rem;font-weight:700;cursor:pointer;transition:background .2s}
+.btn-accept:hover{background:#2a4f7f}
+.rr-offer-sent{display:none;background:#0d1a0d;border:1px solid #2d5a2d;border-radius:12px;padding:.75rem;text-align:center;color:#4caf50;font-size:.88rem;font-weight:600;margin-bottom:.5rem}
+
+/* ── Active Ride Panel ── */
+#active-panel{display:none;background:#0d1117;border-top:1px solid #1e3a5f;padding:1rem;flex-shrink:0}
+.ap-status{display:flex;align-items:center;gap:.5rem;margin-bottom:.75rem}
+.ap-status-dot{width:8px;height:8px;background:#4caf50;border-radius:50%;animation:pulse 1.5s infinite}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.3}}
+.ap-status-text{font-size:.9rem;font-weight:600;color:#4caf50}
+.ap-passenger{background:#0a0a0f;border-radius:12px;padding:.75rem;margin-bottom:.75rem}
+.ap-passenger-name{font-size:1rem;font-weight:600;margin-bottom:.2rem}
+.ap-passenger-sub{font-size:.8rem;color:#666}
+.ap-route{background:#0a0a0f;border-radius:12px;padding:.75rem;margin-bottom:.75rem}
+.ap-route-row{display:flex;align-items:center;gap:.5rem;font-size:.85rem;padding:.25rem 0;color:#ccc}
+.ap-status-btns{display:grid;grid-template-columns:1fr 1fr;gap:.5rem}
+.ap-btn{border:none;border-radius:10px;padding:.7rem;font-size:.85rem;font-weight:600;cursor:pointer;transition:all .2s}
+.ap-btn.arrived{background:#1a2a3a;color:#66aaff;border:1px solid #336699}
+.ap-btn.start{background:#1a3a1a;color:#4caf50;border:1px solid #2d5a2d}
+.ap-btn.complete{background:#1a3a0a;color:#66cc44;border:1px solid #3d7a1a;grid-column:1/-1}
+.ap-btn.cancel{background:#2a0a0a;color:#ff6666;border:1px solid #cc3333;grid-column:1/-1}
+
+/* ── Stats strip ── */
+.stats-strip{display:grid;grid-template-columns:repeat(3,1fr);gap:.5rem;padding:.75rem 1rem;background:#0d1117;border-top:1px solid #1a1a2a;flex-shrink:0}
+.stat-item{text-align:center}
+.stat-val{font-size:1rem;font-weight:700;color:#f5c518}
+.stat-label{font-size:.65rem;color:#555;margin-top:.15rem}
+
+/* ── Bottom Tabs ── */
+.bottom-tabs{display:flex;background:#0a0a0f;border-top:1px solid #1a1a2a;border-bottom:1px solid #1a1a2a;flex-shrink:0}
+.bottom-tab{flex:1;padding:.55rem;border:none;background:transparent;color:#555;font-size:.75rem;cursor:pointer;display:flex;flex-direction:column;align-items:center;gap:.1rem;transition:color .2s}
+.bottom-tab.active{color:#f5c518;border-bottom:2px solid #f5c518}
+.bottom-tab-icon{font-size:1rem}
+
+/* ── 3-dot menu ── */
+.dots-menu-wrap{position:relative}
+.btn-dots{background:none;border:1px solid #333;color:#aaa;border-radius:8px;width:32px;height:32px;font-size:1.2rem;cursor:pointer;display:flex;align-items:center;justify-content:center;transition:border-color .2s;position:relative}
+.btn-dots:hover{border-color:#f5c518;color:#f5c518}
+.dots-unread-dot{position:absolute;top:-3px;right:-3px;width:8px;height:8px;background:#ef4444;border-radius:50%;border:1px solid #0a0a0f}
+.dots-dropdown{position:absolute;right:0;top:calc(100% + 6px);background:#1a1a2a;border:1px solid #2a2a4a;border-radius:12px;min-width:180px;box-shadow:0 8px 24px rgba(0,0,0,.6);z-index:300;overflow:hidden}
+.dots-item{padding:.7rem 1rem;font-size:.875rem;cursor:pointer;transition:background .15s;display:flex;align-items:center;gap:.6rem;color:#cbd5e1}
+.dots-item:hover{background:#252535}
+.dots-item.danger{color:#ff5555}
+.dots-item.danger:hover{background:rgba(255,60,60,.1)}
+.ticket-badge{background:#ef4444;color:#fff;border-radius:100px;font-size:.6rem;font-weight:800;padding:.1rem .4rem;min-width:16px;text-align:center;margin-left:auto}
+
+/* ── Payments Panel ── */
+#payments-panel{display:none;background:#0d1117;flex:1;overflow-y:auto;padding:1rem;flex-shrink:0;max-height:45vh}
+
+/* ── Daily Fee Banner ── */
+#daily-fee-banner{background:#2a1800;border:2px solid #f5c518;border-radius:12px;padding:.85rem 1rem;margin-bottom:.9rem;display:none;align-items:flex-start;gap:.6rem}
+.dfb-icon{font-size:1.2rem;flex-shrink:0;line-height:1}
+.dfb-body{flex:1}
+.dfb-title{font-size:.88rem;font-weight:700;color:#f5c518;margin-bottom:.2rem}
+.dfb-msg{font-size:.8rem;color:#aaa;line-height:1.4}
+
+/* ── Wallet & Subscription Summary ── */
+.wallet-summary-wrap{background:linear-gradient(135deg,#0a0f1a,#06060e);border:1px solid #1a2a3a;border-radius:14px;padding:.85rem;margin-bottom:1rem}
+.wsum-hdr{font-size:.7rem;color:#475569;font-weight:700;text-transform:uppercase;letter-spacing:.06em;margin-bottom:.65rem}
+.wsum-cards{display:grid;grid-template-columns:repeat(3,1fr);gap:.45rem;margin-bottom:.85rem}
+.wsum-card{background:#06060e;border-radius:10px;padding:.65rem .3rem;text-align:center}
+.wsum-card.balance-card{border:1px solid #1e4a2a}
+.wsum-card.sub-card{border:1px solid #1a1a4a}
+.wsum-card.bonus-card{border:1px solid #3a280a}
+.wsum-icon{font-size:1rem;margin-bottom:.2rem}
+.wsum-val{font-size:.95rem;font-weight:700;letter-spacing:.02em}
+.wsum-card.balance-card .wsum-val{color:#4caf50}
+.wsum-card.sub-card .wsum-val{color:#66aaff}
+.wsum-card.bonus-card .wsum-val{color:#f5c518}
+.wsum-lbl{font-size:.58rem;color:#475569;margin-top:.15rem;line-height:1.25}
+.wsum-breakdown{background:#06060e;border:1px solid #1a2a1a;border-radius:10px;padding:.6rem .75rem;margin-bottom:.7rem}
+.wsum-breakdown-row{display:flex;align-items:center;justify-content:space-between;padding:.3rem 0;border-bottom:1px solid #0f1520}
+.wsum-breakdown-row:last-child{border-bottom:none}
+.wsum-breakdown-lbl{font-size:.8rem;color:#94a3b8}
+.wsum-breakdown-val{font-size:.88rem;font-weight:700}
+.wsum-breakdown-val.real-cash{color:#4caf50}
+.wsum-breakdown-val.bonus-credit{color:#f5c518}
+.wsum-ledger-hdr{font-size:.68rem;color:#334155;font-weight:700;text-transform:uppercase;letter-spacing:.05em;margin-bottom:.4rem;padding-top:.1rem;border-top:1px solid #0f1520}
+.ledger-empty{font-size:.78rem;color:#334155;text-align:center;padding:.5rem}
+.ledger-item{display:flex;align-items:center;gap:.4rem;padding:.4rem 0;border-bottom:1px solid #0f1520;font-size:.78rem}
+.ledger-item:last-child{border-bottom:none}
+.ledger-desc{color:#64748b;flex:1;font-size:.73rem}
+.ledger-amt{font-weight:700;min-width:62px;text-align:right}
+.ledger-amt.credit{color:#4caf50}
+.ledger-amt.debit{color:#ef4444}
+.ledger-date{font-size:.62rem;color:#334155;min-width:48px;text-align:right}
+
+.trx-form{background:#0a0a0f;border:1px solid #222;border-radius:12px;padding:.85rem;margin-bottom:1rem}
+.trx-form-title{font-size:.8rem;color:#888;margin-bottom:.75rem;font-weight:600}
+.trx-inputs{display:flex;flex-direction:column;gap:.6rem}
+.trx-input{width:100%;background:#13131a;border:1px solid #333;border-radius:8px;padding:.65rem .85rem;color:#fff;font-size:.9rem;outline:none;transition:border-color .2s}
+.trx-input:focus{border-color:#f5c518}
+.trx-input::placeholder{color:#444}
+.btn-submit-trx{width:100%;background:#1e3a5f;color:#fff;border:none;border-radius:10px;padding:.75rem;font-size:.9rem;font-weight:700;cursor:pointer;margin-top:.5rem;transition:background .2s}
+.btn-submit-trx:hover{background:#2a4f7f}
+.btn-submit-trx:disabled{opacity:.5;cursor:not-allowed}
+
+.pay-history-title{font-size:.75rem;color:#666;margin-bottom:.6rem;text-transform:uppercase;letter-spacing:.05em}
+.pay-item{background:#0a0a0f;border-radius:10px;padding:.7rem .85rem;margin-bottom:.5rem;border-left:3px solid #333}
+.pay-item.pending{border-left-color:#f5c518}
+.pay-item.approved{border-left-color:#4caf50}
+.pay-item.rejected{border-left-color:#ff5555}
+.pay-item-row{display:flex;justify-content:space-between;align-items:center;margin-bottom:.2rem}
+.pay-trx{font-size:.85rem;color:#ccc;font-family:monospace}
+.pay-amount{font-size:.9rem;font-weight:700;color:#f5c518}
+.pay-meta{font-size:.7rem;color:#555}
+.pay-status-pill{font-size:.65rem;font-weight:700;padding:.15rem .5rem;border-radius:100px;text-transform:uppercase}
+.pay-status-pill.pending{background:#2a2a1a;color:#f5c518}
+.pay-status-pill.approved{background:#1a3a1a;color:#4caf50}
+.pay-status-pill.rejected{background:#3a1a1a;color:#ff5555}
+.pay-note{font-size:.7rem;color:#888;margin-top:.25rem;font-style:italic}
+
+/* ── Toast ── */
+.toast{position:fixed;top:1rem;left:50%;transform:translateX(-50%);background:#222;border-radius:10px;padding:.6rem 1.2rem;font-size:.85rem;z-index:9999;pointer-events:none;opacity:0;transition:opacity .3s;white-space:nowrap}
+.toast.show{opacity:1}
+.toast.success{border-left:3px solid #4caf50}
+.toast.error{border-left:3px solid #ff5555}
+.toast.info{border-left:3px solid #f5c518}
+
+.leaflet-container{background:#1a1a2a}
+.pickup-icon{background:#2266cc;border:3px solid #fff;width:16px;height:16px;border-radius:50%}
+.dropoff-icon{background:#cc6622;border:3px solid #fff;width:16px;height:16px;border-radius:50%}
+
+/* ── Payment Accounts ── */
+.pay-accounts-section{background:#0a0a0f;border:1px solid #222;border-radius:12px;padding:.85rem;margin-bottom:.75rem}
+.pay-accounts-title{font-size:.78rem;color:#f5c518;font-weight:700;margin-bottom:.65rem;display:flex;align-items:center;gap:.4rem}
+.pay-account-card{background:#13131a;border:1px solid #2a2a38;border-radius:10px;padding:.7rem .85rem;margin-bottom:.5rem;display:flex;align-items:center;gap:.75rem}
+.pay-account-card:last-child{margin-bottom:0}
+.pay-account-icon{font-size:1.3rem;flex-shrink:0;width:32px;text-align:center}
+.pay-account-info{flex:1;min-width:0}
+.pay-account-name{font-size:.82rem;font-weight:700;color:#e2e8f0;margin-bottom:.15rem}
+.pay-account-title{font-size:.72rem;color:#888;margin-bottom:.2rem}
+.pay-account-number{font-size:.85rem;color:#f5c518;font-family:monospace;font-weight:600;word-break:break-all}
+.pay-account-iban{font-size:.75rem;color:#aaa;font-family:monospace;word-break:break-all}
+.btn-copy{background:#1a1a28;border:1px solid #333;color:#aaa;border-radius:8px;padding:.35rem .6rem;font-size:.68rem;cursor:pointer;transition:all .2s;white-space:nowrap;flex-shrink:0}
+.btn-copy:hover{border-color:#f5c518;color:#f5c518}
+.btn-copy.copied{background:#1a3a1a;border-color:#4caf50;color:#4caf50}
+.pay-accounts-empty{font-size:.78rem;color:#555;text-align:center;padding:.5rem}
+.pay-type-selector{display:flex;gap:.5rem;margin-bottom:.6rem;flex-wrap:wrap}
+.pay-type-btn{flex:1;min-width:90px;background:#13131a;border:1px solid #2a2a38;border-radius:8px;padding:.5rem .4rem;font-size:.78rem;font-weight:600;color:#666;cursor:pointer;text-align:center;transition:all .2s}
+.pay-type-btn.active{background:#1a1500;border-color:#f5c518;color:#f5c518}
+.pay-type-btn:hover:not(.active){border-color:#444;color:#aaa}
+.trx-screenshot-label{font-size:.72rem;color:#666;margin-bottom:.3rem;display:block}
+.trx-screenshot-input{width:100%;background:#13131a;border:1px dashed #333;border-radius:8px;padding:.55rem;color:#888;font-size:.8rem;cursor:pointer}
+.trx-screenshot-input::-webkit-file-upload-button{background:#1e3a5f;color:#fff;border:none;border-radius:6px;padding:.25rem .6rem;font-size:.75rem;cursor:pointer}
+
+/* ── Driver Avatar ── */
+.driver-avatar{width:34px;height:34px;border-radius:50%;object-fit:cover;border:2px solid #f5c518;vertical-align:middle;flex-shrink:0}
+.driver-avatar-init{width:34px;height:34px;border-radius:50%;background:#1e1e2a;border:2px solid #f5c518;display:inline-flex;align-items:center;justify-content:center;font-size:.85rem;font-weight:700;color:#f5c518;flex-shrink:0}
+/* ── Photo Upload ── */
+.photo-upload-group{margin-bottom:.65rem}
+.photo-upload-lbl{font-size:.72rem;color:#888;font-weight:600;display:block;margin-bottom:.3rem}
+.photo-upload-lbl .req{color:#f5c518;margin-left:.2rem}
+.photo-preview-img{width:68px;height:68px;border-radius:8px;object-fit:cover;border:2px solid #333;display:block;margin-bottom:.3rem}
+.photo-file-input{width:100%;background:#13131a;border:1px dashed #333;border-radius:8px;padding:.45rem .6rem;color:#888;font-size:.78rem;cursor:pointer}
+.photo-file-input::-webkit-file-upload-button{background:#1e3a5f;color:#fff;border:none;border-radius:6px;padding:.2rem .5rem;font-size:.72rem;cursor:pointer}
+/* ── Call Passenger ── */
+.ap-dual-btns{display:flex;gap:.45rem;margin-bottom:.5rem}
+.btn-call-pass,.btn-wa-pass{flex:1;border-radius:10px;padding:.65rem;font-size:.85rem;font-weight:700;text-align:center;text-decoration:none;display:flex;align-items:center;justify-content:center;gap:.3rem}
+.btn-call-pass{background:#052a10;border:1px solid #4caf50;color:#4caf50}
+.btn-call-pass:hover{background:#0a3a18}
+.btn-wa-pass{background:#0d2b1a;border:1px solid #25d366;color:#25d366}
+.btn-wa-pass:hover{background:#113520}
+/* ── Support FAB ── */
+.support-fab{position:fixed;bottom:78px;right:10px;background:#13131a;border:1px solid #333;border-radius:50%;width:40px;height:40px;display:flex;align-items:center;justify-content:center;font-size:1rem;cursor:pointer;z-index:200;box-shadow:0 2px 8px rgba(0,0,0,.5)}
+.support-fab:hover{border-color:#f5c518}
+.support-overlay{position:fixed;inset:0;background:rgba(0,0,0,.8);z-index:800;display:none;align-items:center;justify-content:center;padding:1rem}
+.support-overlay.open{display:flex}
+.support-modal{background:#0f0f18;border:1px solid #2a2a38;border-radius:16px;width:100%;max-width:380px;padding:1.25rem}
+.support-modal h3{font-size:.95rem;font-weight:700;margin-bottom:.9rem;color:#e2e8f0}
+.support-input{width:100%;background:#06060e;border:1px solid #2a2a38;border-radius:8px;padding:.6rem .8rem;color:#e2e8f0;font-size:.85rem;outline:none;margin-bottom:.55rem}
+.support-input:focus{border-color:#f5c518}
+textarea.support-input{resize:vertical;min-height:85px}
+.support-modal-btns{display:flex;gap:.5rem;margin-top:.4rem}
+.btn-sup-cancel{flex:1;padding:.6rem;border-radius:8px;font-size:.85rem;font-weight:700;cursor:pointer;background:#1a1a28;color:#888;border:1px solid #333}
+.btn-sup-submit{flex:1;padding:.6rem;border-radius:8px;font-size:.85rem;font-weight:700;cursor:pointer;background:#f5c518;color:#06060e;border:none}
+/* ── Password eye toggle ── */
+.pw-wrap{position:relative;display:block}
+.pw-wrap input{padding-right:2.8rem!important;width:100%}
+.pw-eye{position:absolute;right:.75rem;top:50%;transform:translateY(-50%);background:none;border:none;color:#555;cursor:pointer;font-size:1rem;padding:.15rem;display:flex;align-items:center;justify-content:center;line-height:1;transition:color .2s}
+.pw-eye:hover{color:#f5c518}
+/* ── Step indicator ── */
+.step-bar{display:flex;align-items:center;justify-content:center;gap:0;margin-bottom:1rem}
+.step-circle{width:28px;height:28px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:.75rem;font-weight:700;flex-shrink:0}
+.step-circle.active{background:#1e3a5f;border:2px solid #66aaff;color:#fff}
+.step-circle.done{background:#0a3a1a;border:2px solid #4caf50;color:#4caf50}
+.step-circle.inactive{background:#13131a;border:2px solid #333;color:#555}
+.step-connector{flex:0 0 50px;height:2px;background:#333}
+.step-connector.done{background:#4caf50}
+/* ── Pending Approval Card ── */
+.pending-card{background:#1a1500;border:2px solid #f5c518;border-radius:14px;padding:1.2rem 1rem;margin:.75rem 1rem;text-align:center}
+.pending-card-icon{font-size:2rem;margin-bottom:.4rem}
+.pending-card-title{font-size:.95rem;font-weight:700;color:#f5c518;margin-bottom:.5rem}
+.pending-card-msg{font-size:.78rem;color:#999;line-height:1.55}
+/* ── Forgot Password ── */
+.fp-otp-box{background:#0a0f1a;border:2px solid #f5c518;border-radius:12px;padding:1rem;text-align:center;margin:.75rem 0}
+.fp-otp-code{font-size:2rem;font-weight:800;letter-spacing:.25em;color:#f5c518}
+.fp-otp-note{font-size:.7rem;color:#888;margin-top:.35rem}
+.btn-text-link{background:none;border:none;color:#f5c518;font-size:.8rem;cursor:pointer;text-decoration:underline;margin-top:.4rem;display:inline-block;padding:0}
+</style>
+</head>
+<body>
+
+<!-- ── AUTH ── -->
+<div id="auth-screen">
+  <div class="auth-logo">My<span>Ride</span></div>
+  <p class="auth-subtitle">Driver Portal</p>
+  <div class="auth-card">
+    <div class="auth-tabs">
+      <button class="auth-tab active" onclick="switchTab('login')">Sign In</button>
+      <button class="auth-tab" onclick="switchTab('register')">Register</button>
+    </div>
+
+    <!-- Sign In -->
+    <div id="login-form">
+      <div class="form-group"><label>Phone or Email</label><input type="text" id="l-email" placeholder="03001234567 or email" inputmode="tel" autocomplete="username"></div>
+      <div class="form-group">
+        <label>Password</label>
+        <div class="pw-wrap">
+          <input type="password" id="l-pass" placeholder="••••••••" autocomplete="current-password">
+          <button type="button" class="pw-eye" onclick="togglePw('l-pass')" tabindex="-1">👁</button>
+        </div>
+      </div>
+      <button class="btn-primary" onclick="doLogin()">Sign In</button>
+      <div style="text-align:center;margin-top:.6rem">
+        <button class="btn-text-link" onclick="switchTab('forgot')">Forgot Password?</button>
+      </div>
+    </div>
+
+    <!-- Register — 2-step -->
+    <div id="register-form" style="display:none">
+      <!-- Step 1: Basic Info -->
+      <div id="reg-step1">
+        <div class="step-bar">
+          <div class="step-circle active">1</div>
+          <div class="step-connector"></div>
+          <div class="step-circle inactive">2</div>
+        </div>
+        <p style="text-align:center;font-size:.73rem;color:#555;margin-bottom:.9rem">Step 1 of 2 — Basic Information</p>
+        <div class="form-group"><label>Full Name <span style="color:#f5c518">*</span></label><input type="text" id="r-name" placeholder="Driver name"></div>
+        <div class="form-group"><label>Phone Number <span style="color:#f5c518">*</span></label><input type="tel" id="r-phone" placeholder="+92 300 0000000" inputmode="tel"></div>
+        <div class="form-group">
+          <label>Password <span style="color:#f5c518">*</span></label>
+          <div class="pw-wrap">
+            <input type="password" id="r-pass" placeholder="min 6 characters">
+            <button type="button" class="pw-eye" onclick="togglePw('r-pass')" tabindex="-1">👁</button>
+          </div>
+        </div>
+        <div class="form-group">
+          <label>Vehicle Type <span style="color:#f5c518">*</span></label>
+          <select id="r-vehicle">
+            <option value="Bike">🛵 Bike</option>
+            <option value="Rickshaw">🛺 Rickshaw</option>
+            <option value="Car Mini" selected>🚙 Car Mini</option>
+            <option value="Car AC">🚗 Car AC (with AC)</option>
+          </select>
+        </div>
+        <div class="form-group"><label>Vehicle Model <span style="color:#f5c518">*</span></label><input type="text" id="r-vehicle-model" placeholder="e.g. Suzuki Cultus 2020"></div>
+        <div class="form-group"><label>Number Plate <span style="color:#f5c518">*</span></label><input type="text" id="r-plate" placeholder="e.g. LHR-1234" style="text-transform:uppercase"></div>
+        <button class="btn-primary" onclick="nextRegStep()">Continue → Upload Documents</button>
+      </div>
+
+      <!-- Step 2: Documents (all required) -->
+      <div id="reg-step2" style="display:none">
+        <div class="step-bar">
+          <div class="step-circle done">✓</div>
+          <div class="step-connector done"></div>
+          <div class="step-circle active">2</div>
+        </div>
+        <p style="text-align:center;font-size:.73rem;color:#555;margin-bottom:.9rem">Step 2 of 2 — Required Documents</p>
+        <div class="photo-upload-group">
+          <span class="photo-upload-lbl">Profile Photo <span class="req">*</span></span>
+          <img id="prev-profile" class="photo-preview-img" style="display:none" src="">
+          <input class="photo-file-input" type="file" id="r-profile-photo" accept="image/*" capture="user" onchange="previewPhoto(this,'prev-profile')">
+        </div>
+        <div class="photo-upload-group">
+          <span class="photo-upload-lbl">Driving License (Front) <span class="req">*</span></span>
+          <img id="prev-license" class="photo-preview-img" style="display:none" src="">
+          <input class="photo-file-input" type="file" id="r-license-photo" accept="image/*" capture="environment" onchange="previewPhoto(this,'prev-license')">
+        </div>
+        <div class="photo-upload-group">
+          <span class="photo-upload-lbl">CNIC Front <span class="req">*</span></span>
+          <img id="prev-cnic-f" class="photo-preview-img" style="display:none" src="">
+          <input class="photo-file-input" type="file" id="r-cnic-front" accept="image/*" capture="environment" onchange="previewPhoto(this,'prev-cnic-f')">
+        </div>
+        <div class="photo-upload-group">
+          <span class="photo-upload-lbl">CNIC Back <span class="req">*</span></span>
+          <img id="prev-cnic-b" class="photo-preview-img" style="display:none" src="">
+          <input class="photo-file-input" type="file" id="r-cnic-back" accept="image/*" capture="environment" onchange="previewPhoto(this,'prev-cnic-b')">
+        </div>
+        <div style="display:flex;gap:.5rem;margin-top:.5rem">
+          <button class="btn-primary" style="flex:.4;background:#1a1a28;color:#888;border:1px solid #333;margin-top:0" onclick="prevRegStep()">← Back</button>
+          <button class="btn-primary" id="reg-submit-btn" style="flex:1;margin-top:0" onclick="doRegister()">Create Driver Account</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Forgot Password -->
+    <div id="forgot-form" style="display:none">
+      <div id="dfp-step1">
+        <div class="form-group"><label>Registered Phone Number</label><input type="tel" id="dfp-phone" placeholder="+92 300 0000000" inputmode="tel"></div>
+        <button class="btn-primary" onclick="driverForgotSendOtp()">Send OTP</button>
+        <div style="text-align:center;margin-top:.5rem"><button class="btn-text-link" onclick="switchTab('login')">← Back to Sign In</button></div>
+      </div>
+      <div id="dfp-step2" style="display:none">
+        <p style="font-size:.82rem;color:#888;margin-bottom:.6rem">Enter the 4-digit code sent to your phone.</p>
+        <div class="fp-otp-box" id="dfp-otp-box" style="display:none">
+          <div class="fp-otp-code" id="dfp-otp-code"></div>
+          <div class="fp-otp-note">Demo mode — SMS in production</div>
+        </div>
+        <div class="form-group"><label>OTP Code</label><input type="text" id="dfp-otp" placeholder="4-digit code" maxlength="4" inputmode="numeric" style="letter-spacing:.3em;font-size:1.2rem;text-align:center"></div>
+        <button class="btn-primary" onclick="driverForgotVerifyOtp()">Verify OTP</button>
+        <div style="text-align:center;margin-top:.5rem"><button class="btn-text-link" onclick="driverForgotSendOtp()">Resend OTP</button></div>
+      </div>
+      <div id="dfp-step3" style="display:none">
+        <p style="font-size:.82rem;color:#66bb66;margin-bottom:.75rem">✓ OTP verified! Set your new password.</p>
+        <div class="form-group">
+          <label>New Password</label>
+          <div class="pw-wrap">
+            <input type="password" id="dfp-newpass" placeholder="min 6 characters">
+            <button type="button" class="pw-eye" onclick="togglePw('dfp-newpass')" tabindex="-1">👁</button>
+          </div>
+        </div>
+        <button class="btn-primary" onclick="driverForgotResetPassword()">Reset Password</button>
+      </div>
+    </div>
+
+    <div class="auth-error" id="auth-error"></div>
+  </div>
+</div>
+
+<!-- ── APP ── -->
+<div id="app">
+  <div class="header">
+    <div class="header-logo" style="display:flex;align-items:center;gap:.5rem">
+      <div id="driver-avatar-header" class="driver-avatar-init">D</div>
+      <span>My<span style="color:#f5c518">Ride</span> <span style="font-size:.7rem;color:#555;font-weight:400">Driver</span></span>
+    </div>
+    <div class="header-right">
+      <div class="earnings-badge">💰 Rs <span id="earnings-val">0</span></div>
+      <div class="dots-menu-wrap">
+        <button class="btn-dots" id="driver-dots-btn" onclick="toggleDriverMenu(event)" aria-label="Menu">⋮
+          <span class="dots-unread-dot" id="driver-unread-dot" style="display:none"></span>
+        </button>
+        <div class="dots-dropdown" id="driver-dots-dropdown" style="display:none">
+          <div class="dots-item" onclick="openSupportModal();closeDriverMenu()">🎫 Contact Support</div>
+          <div class="dots-item" onclick="openMyTickets();closeDriverMenu()">📋 My Tickets <span id="driver-ticket-badge" class="ticket-badge" style="display:none">0</span></div>
+          <div class="dots-item" onclick="openChangePhoneModal();closeDriverMenu()">📱 Change Phone Number</div>
+          <div class="dots-item" onclick="openChangePasswordModal();closeDriverMenu()">🔑 Change Password</div>
+          <div class="dots-item" onclick="openChangeVehicleModal();closeDriverMenu()">🚗 Change Vehicle Info</div>
+          <div class="dots-item danger" onclick="openDeleteAccountModal();closeDriverMenu()">🗑 Delete Account</div>
+          <div class="dots-item danger" onclick="doLogout()">🚪 Logout</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Online Toggle -->
+  <div class="online-bar">
+    <div class="online-info">
+      <div class="online-status-text" id="status-text">You are Offline</div>
+      <div class="online-sub" id="status-sub">Toggle to go online and receive ride requests</div>
+    </div>
+    <div class="toggle-wrap">
+      <input type="checkbox" id="online-toggle" class="toggle-input" onchange="toggleOnline(this.checked)">
+      <label for="online-toggle" class="toggle-label"></label>
+    </div>
+  </div>
+
+  <!-- Daily Fee Info Bar -->
+  <div id="fee-info-bar" style="display:none;background:#0d0d1a;border-bottom:1px solid #1e1a0a;padding:.4rem 1rem;font-size:.75rem;color:#888;flex-wrap:wrap;align-items:center;gap:.6rem">
+    <span>🚗</span>
+    <span id="fee-vehicle-text" style="color:#cbd5e1;font-weight:600">—</span>
+    <span style="color:#2a2a3a">|</span>
+    <span id="fee-rate-text" style="color:#94a3b8">—</span>
+    <span style="color:#2a2a3a">|</span>
+    <span id="fee-status-text">—</span>
+  </div>
+  <!-- Free Trial History Banner -->
+  <div id="trial-history-banner" style="display:none;background:#1a1200;border-bottom:1px solid #2a2000;padding:.35rem 1rem;font-size:.72rem;color:#f5c518;align-items:center;gap:.4rem">
+    <span>🎁</span><span></span>
+  </div>
+
+  <!-- Pending Approval Card (shown when accountStatus === 'pending') -->
+  <div id="pending-card" class="pending-card" style="display:none">
+    <div class="pending-card-icon">⏳</div>
+    <div class="pending-card-title">Documents Under Admin Review</div>
+    <div class="pending-card-msg">Your registration documents have been submitted and are under Admin review. You will be notified once your account is approved and you can start accepting rides.</div>
+  </div>
+
+  <div id="map"></div>
+
+  <!-- Stats strip -->
+  <div class="stats-strip">
+    <div class="stat-item"><div class="stat-val" id="stat-rides">0</div><div class="stat-label">Today's Rides</div></div>
+    <div class="stat-item"><div class="stat-val" id="stat-earning">Rs 0</div><div class="stat-label">Earnings</div></div>
+    <div class="stat-item"><div class="stat-val" id="stat-rating">5.0 ⭐</div><div class="stat-label">Rating</div></div>
+  </div>
+
+  <!-- Bottom Tabs -->
+  <div class="bottom-tabs">
+    <button class="bottom-tab active" id="tab-home-btn" onclick="switchBottomTab('home')">
+      <span class="bottom-tab-icon">🏠</span>Home
+    </button>
+    <button class="bottom-tab" id="tab-payments-btn" onclick="switchBottomTab('payments')">
+      <span class="bottom-tab-icon">💳</span>Payments
+    </button>
+  </div>
+
+  <!-- Info Panel (idle) -->
+  <div id="info-panel">
+    <div class="idle-msg" id="idle-msg">
+      <div class="idle-icon">🛑</div>
+      <div>Toggle <strong>Online</strong> above to start receiving ride requests</div>
+    </div>
+  </div>
+
+  <!-- Active Ride Panel -->
+  <div id="active-panel">
+    <div class="ap-status"><span class="ap-status-dot"></span><span class="ap-status-text" id="ap-status-text">Ride Accepted</span></div>
+    <div class="ap-passenger">
+      <div class="ap-passenger-name" id="ap-passenger-name">Passenger</div>
+      <div class="ap-passenger-sub">📍 Pickup → 🎯 Dropoff</div>
+    </div>
+    <div id="ap-call-passenger"></div>
+    <div class="ap-route">
+      <div class="ap-route-row">📍 <span id="ap-pickup">—</span></div>
+      <div class="ap-route-row">🎯 <span id="ap-dropoff">—</span></div>
+    </div>
+    <div class="ap-status-btns" id="ap-btns"></div>
+  </div>
+
+  <!-- Payments Panel -->
+  <div id="payments-panel">
+    <!-- Daily Fee Due Banner -->
+    <div id="daily-fee-banner">
+      <span class="dfb-icon">⚠️</span>
+      <div class="dfb-body">
+        <div class="dfb-title">Daily Fee Unpaid — Accept Button Locked</div>
+        <div class="dfb-msg">Pay <strong id="daily-fee-banner-amount" style="color:#f5c518">Rs 220</strong> to unlock the Accept button. Enter your TRX ID in the form below.</div>
+      </div>
+    </div>
+    <!-- Wallet & Subscription Summary -->
+    <div class="wallet-summary-wrap" id="wallet-summary-card">
+      <div class="wsum-hdr">💳 Wallet Summary</div>
+      <div class="wsum-cards">
+        <div class="wsum-card balance-card">
+          <div class="wsum-icon">💰</div>
+          <div class="wsum-val" id="wsum-balance">—</div>
+          <div class="wsum-lbl">Total Balance (Rs)</div>
+        </div>
+        <div class="wsum-card bonus-card">
+          <div class="wsum-icon">🎁</div>
+          <div class="wsum-val" id="wsum-bonus">0</div>
+          <div class="wsum-lbl">Bonus Credits (Rs)</div>
+        </div>
+      </div>
+      <!-- Balance breakdown: real cash vs bonus credit -->
+      <div class="wsum-breakdown">
+        <div class="wsum-breakdown-row">
+          <span class="wsum-breakdown-lbl">💵 Real Cash</span>
+          <span class="wsum-breakdown-val real-cash" id="wsum-real-cash">Rs —</span>
+        </div>
+        <div class="wsum-breakdown-row">
+          <span class="wsum-breakdown-lbl">🎁 Bonus Credit</span>
+          <span class="wsum-breakdown-val bonus-credit" id="wsum-bonus-credit">Rs —</span>
+        </div>
+      </div>
+      <div class="wsum-ledger-hdr">Recent Transactions</div>
+      <div id="wsum-ledger"><div class="ledger-empty">Loading…</div></div>
+    </div>
+
+    <!-- Admin Payment Accounts (loaded dynamically) -->
+    <div class="pay-accounts-section" id="pay-accounts-section">
+      <div class="pay-accounts-title">📋 Send Payment To</div>
+      <div id="pay-accounts-list"><div class="pay-accounts-empty">Loading accounts…</div></div>
+    </div>
+
+    <!-- TRX Submission Form -->
+    <div class="trx-form" id="trx-form-section">
+      <div class="trx-form-title">📤 Submit Today's Payment</div>
+      <div class="trx-inputs">
+        <!-- Payment Type Selector -->
+        <div>
+          <div style="font-size:.72rem;color:#666;margin-bottom:.4rem;font-weight:600">PAYMENT METHOD</div>
+          <div class="pay-type-selector" id="pay-type-selector">
+            <div class="pay-type-btn active" data-type="jazzcash" onclick="selectPayType(this)">📱 JazzCash</div>
+            <div class="pay-type-btn" data-type="easypaisa" onclick="selectPayType(this)">💚 EasyPaisa</div>
+            <div class="pay-type-btn" data-type="bank" onclick="selectPayType(this)">🏦 Bank</div>
+          </div>
+        </div>
+        <input class="trx-input" id="trx-id-input" type="text" placeholder="TRX / Reference ID (e.g. T20240801ABCD…)">
+        <input class="trx-input" id="trx-amount-input" type="number" min="1" placeholder="Amount paid (PKR)">
+        <div>
+          <span class="trx-screenshot-label">📸 Screenshot (optional)</span>
+          <input class="trx-screenshot-input" id="trx-screenshot" type="file" accept="image/*">
+        </div>
+        <button class="btn-submit-trx" id="submit-trx-btn" onclick="submitTrxPayment()">Submit Payment</button>
+      </div>
+      <div style="font-size:.72rem;color:#555;margin-top:.5rem">One submission allowed per day. Wait for admin approval.</div>
+    </div>
+
+    <!-- Payment History -->
+    <div class="pay-history-title">Payment History</div>
+    <div id="payment-history-list"><div class="idle-msg" style="padding:1rem">Loading…</div></div>
+  </div>
+</div>
+
+<!-- Incoming Ride Request Popup -->
+<div id="ride-request">
+  <div class="rr-header">
+    <span class="rr-title">🚗 New Ride Request</span>
+    <span class="rr-timer" id="rr-timer">25s</span>
+  </div>
+  <div class="rr-route" id="rr-route">
+    <div class="rr-point"><span class="rr-point-icon">📍</span><span class="rr-point-text" id="rr-pickup">—</span></div>
+    <!-- stop rows injected dynamically by showRideRequest -->
+    <div id="rr-stops-container"></div>
+  </div>
+  <div class="rr-meta">
+    <div class="rr-meta-item" style="background:#1a1a0a;border:1px solid #2a2a10"><div class="rr-meta-label">Customer's Offer</div><div class="rr-meta-val" id="rr-fare" style="color:#f5c518">—</div></div>
+    <div class="rr-meta-item"><div class="rr-meta-label">Distance</div><div class="rr-meta-val" id="rr-dist">—</div></div>
+    <div class="rr-meta-item"><div class="rr-meta-label">Vehicle</div><div class="rr-meta-val" id="rr-vehicle">—</div></div>
+  </div>
+  <div id="rr-payment-row" style="background:#0a0a0f;border-radius:8px;padding:.4rem .75rem;margin-bottom:.6rem;font-size:.8rem;color:#888;display:flex;align-items:center;gap:.4rem">
+    <span id="rr-pay-icon">💵</span><span id="rr-pay-label">Cash payment</span>
+  </div>
+
+  <!-- Counter-offer input -->
+  <div class="rr-counter-wrap">
+    <div class="rr-counter-label">Counter Offer (optional — leave blank to accept as-is)</div>
+    <div class="rr-counter-row">
+      <span style="color:#666;font-size:.85rem;font-weight:600">Rs</span>
+      <input type="number" id="rr-counter-input" class="rr-counter-input" placeholder="Your price…" min="1"
+             onfocus="pauseRideTimer()" oninput="pauseRideTimer()">
+    </div>
+  </div>
+
+  <!-- Offer sent confirmation (shown after sending) -->
+  <div class="rr-offer-sent" id="rr-offer-sent">✓ Offer sent — waiting for customer to choose…</div>
+
+  <div class="rr-actions" id="rr-actions">
+    <button class="btn-reject" onclick="rejectRide()">✗ Reject</button>
+    <button class="btn-counter" onclick="sendCounter()">⇄ Counter</button>
+    <button class="btn-accept" onclick="acceptRide()">✓ Accept</button>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+// ── State ──────────────────────────────────────────────────────────────────
+let token        = localStorage.getItem('rh_token');
+let sessionToken = localStorage.getItem('rh_session') || null;
+let user         = JSON.parse(localStorage.getItem('rh_user') || 'null');
+let socket = null;
+let map, pickupMarker, dropoffMarker, routeLine, myMarker;
+let isOnline      = false;
+let pendingRide   = null;   // current popup ride
+let sentOffer     = null;   // { rideId } after driver sends an offer, before customer chooses
+let activeRide    = null;   // accepted ride
+let requestTimer  = null;
+let locationWatch = null;
+let todayRides    = 0;
+let todayEarnings = 0;
+let alertAudioCtx = null;   // Web Audio context for ride alert
+let alertInterval = null;   // repeating beep interval
+let dailyFeeDue   = false;  // true when driver hasn't submitted today's platform fee
+
+// ── Toast ──────────────────────────────────────────────────────────────────
+function showToast(msg, type = 'info') {
+  const el = document.getElementById('toast');
+  el.textContent = msg; el.className = `toast ${type} show`;
+  setTimeout(() => el.className = 'toast', 3000);
+}
+
+// ── Auth ───────────────────────────────────────────────────────────────────
+function switchTab(t) {
+  document.getElementById('login-form').style.display    = t === 'login'    ? 'block' : 'none';
+  document.getElementById('register-form').style.display = t === 'register' ? 'block' : 'none';
+  document.getElementById('forgot-form').style.display   = t === 'forgot'   ? 'block' : 'none';
+  // Reset forgot steps whenever we open it
+  if (t === 'forgot') {
+    ['dfp-step1','dfp-step2','dfp-step3'].forEach((id, i) => {
+      const el = document.getElementById(id); if (el) el.style.display = i === 0 ? 'block' : 'none';
+    });
+  }
+  document.querySelectorAll('.auth-tab').forEach((b, i) => b.classList.toggle('active', (i === 0) === (t === 'login') || (i === 1) === (t === 'register')));
+  document.getElementById('auth-error').textContent = '';
+}
+
+async function apiCall(path, method = 'GET', body = null) {
+  const headers = { 'Content-Type': 'application/json' };
+  if (token)        headers['Authorization']   = `Bearer ${token}`;
+  if (sessionToken) headers['X-Session-Token'] = sessionToken;
+  const opts = { method, headers };
+  if (body) opts.body = JSON.stringify(body);
+  let r;
+  try { r = await fetch(path, opts); }
+  catch (e) { throw new Error('Network error — check your connection'); }
+  const d = await r.json().catch(() => ({}));
+  if (!r.ok) {
+    if (r.status === 401 && d.error === 'LOGGED_IN_ELSEWHERE') {
+      doLogout();
+      alert('⚠️ Your account was signed in on another device. You have been signed out here.');
+      throw new Error('Logged in on another device');
+    }
+    throw new Error(d.error || d.message || `Server error (${r.status})`);
+  }
+  return d;
+}
+
+async function doLogin() {
+  const identifier = document.getElementById('l-email').value.trim();
+  const pass = document.getElementById('l-pass').value;
+  const errEl = document.getElementById('auth-error');
+  if (!identifier) return (errEl.textContent = 'Enter your phone number or email');
+  if (!pass) return (errEl.textContent = 'Enter your password');
+  try {
+    const res = await apiCall('/api/auth/login', 'POST', { identifier, password: pass });
+    if (res.user.role !== 'driver') throw new Error('This account is registered as a customer. Please use the Driver App.');
+    saveSession(res);
+  } catch (e) { errEl.textContent = e.message; }
+}
+
+// ── Password visibility toggle ──────────────────────────────────────────────
+function togglePw(id) {
+  const inp = document.getElementById(id);
+  const btn = inp?.nextElementSibling;
+  if (!inp) return;
+  inp.type = inp.type === 'password' ? 'text' : 'password';
+  if (btn) btn.textContent = inp.type === 'password' ? '👁' : '🙈';
+}
+
+// ── Registration step navigation ────────────────────────────────────────────
+function nextRegStep() {
+  const errEl = document.getElementById('auth-error');
+  const name  = document.getElementById('r-name').value.trim();
+  const phone = document.getElementById('r-phone').value.trim();
+  const pass  = document.getElementById('r-pass').value;
+  const model = document.getElementById('r-vehicle-model').value.trim();
+  const plate = document.getElementById('r-plate').value.trim();
+  if (!name)  return (errEl.textContent = 'Full name is required');
+  if (!phone) return (errEl.textContent = 'Phone number is required');
+  if (pass.length < 6) return (errEl.textContent = 'Password must be at least 6 characters');
+  if (!model) return (errEl.textContent = 'Vehicle model is required');
+  if (!plate) return (errEl.textContent = 'Number plate is required');
+  errEl.textContent = '';
+  document.getElementById('reg-step1').style.display = 'none';
+  document.getElementById('reg-step2').style.display = 'block';
+}
+
+function prevRegStep() {
+  document.getElementById('reg-step2').style.display = 'none';
+  document.getElementById('reg-step1').style.display = 'block';
+  document.getElementById('auth-error').textContent = '';
+}
+
+// ── Eager image compression ────────────────────────────────────────────────
+// Compressed base64 strings are stored here as soon as a file is picked,
+// so doRegister() never has to wait and always sends small payloads.
+const _photos = {};   // { inputId: base64DataUrl }
+
+/**
+ * Compress a File using an off-screen canvas.
+ * Max dimension 800 px, JPEG quality 0.7 → ~150-250 KB from a 5 MB photo.
+ */
+function compressImage(file, maxWidth = 800, quality = 0.7) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onerror = () => reject(new Error('Could not read the selected file'));
+    reader.onload = ev => {
+      const img = new Image();
+      img.onerror = () => reject(new Error('Could not decode image'));
+      img.onload = () => {
+        // Scale down so the longest side ≤ maxWidth; never upscale
+        const scale   = Math.min(1, maxWidth / Math.max(img.width, img.height));
+        const canvas  = document.createElement('canvas');
+        canvas.width  = Math.round(img.width  * scale);
+        canvas.height = Math.round(img.height * scale);
+        canvas.getContext('2d').drawImage(img, 0, 0, canvas.width, canvas.height);
+        const dataUrl = canvas.toDataURL('image/jpeg', quality);
+        // Sanity-check: warn in console if still large after compression
+        const kb = Math.round(dataUrl.length * 0.75 / 1024);
+        if (kb > 500) console.warn(`compressImage: ${file.name} still ${kb} KB after compression`);
+        resolve(dataUrl);
+      };
+      img.src = ev.target.result;
+    };
+    reader.readAsDataURL(file);
+  });
+}
+
+/**
+ * Called by each file input's onchange.
+ * Compresses immediately, caches the result, and shows the preview image.
+ */
+async function previewPhoto(input, previewId) {
+  const file    = input.files[0];
+  const preview = document.getElementById(previewId);
+  if (!file) return;
+  // Show a loading state on the preview element
+  if (preview) { preview.style.opacity = '0.4'; preview.style.display = 'block'; }
+  try {
+    const compressed = await compressImage(file);
+    _photos[input.id]  = compressed;           // cache for doRegister()
+    if (preview) { preview.src = compressed; preview.style.opacity = '1'; }
+  } catch (e) {
+    document.getElementById('auth-error').textContent = e.message;
+    if (preview) preview.style.opacity = '1';
+  }
+}
+
+async function doRegister() {
+  const name         = document.getElementById('r-name').value.trim();
+  const phone        = document.getElementById('r-phone').value.trim();
+  const vehicle      = document.getElementById('r-vehicle').value;
+  const vehicleModel = document.getElementById('r-vehicle-model').value.trim();
+  const vehiclePlate = document.getElementById('r-plate').value.trim().toUpperCase();
+  const pass         = document.getElementById('r-pass').value;
+
+  const errEl     = document.getElementById('auth-error');
+  const submitBtn = document.getElementById('reg-submit-btn');
+  const resetBtn  = () => { if (submitBtn) { submitBtn.disabled = false; submitBtn.textContent = 'Create Driver Account'; } };
+
+  const getPhoto = async (inputId, label) => {
+    if (_photos[inputId]) return _photos[inputId];
+    const file = document.getElementById(inputId)?.files[0];
+    if (!file) throw new Error(`${label} is required`);
+    const compressed = await compressImage(file);
+    _photos[inputId] = compressed;
+    return compressed;
+  };
+
+  errEl.textContent = '';
+  if (submitBtn) { submitBtn.disabled = true; submitBtn.textContent = '⏳ Preparing…'; }
+
+  // Phase 1: compress photos client-side (before showing progress screen)
+  let profilePhoto, licensePhoto, cnicFront, cnicBack;
+  try {
+    [profilePhoto, licensePhoto, cnicFront, cnicBack] = await Promise.all([
+      getPhoto('r-profile-photo', 'Profile photo'),
+      getPhoto('r-license-photo', 'Driving license photo'),
+      getPhoto('r-cnic-front',    'CNIC Front photo'),
+      getPhoto('r-cnic-back',     'CNIC Back photo'),
+    ]);
+  } catch (e) { errEl.textContent = e.message; resetBtn(); return; }
+
+  if (!name)  { errEl.textContent = 'Full name is required';    resetBtn(); return; }
+  if (!phone) { errEl.textContent = 'Phone number is required'; resetBtn(); return; }
+  if (pass.length < 6) { errEl.textContent = 'Password must be at least 6 characters'; resetBtn(); return; }
+
+  // Phase 2: navigate to upload progress screen and send via XHR (has upload.progress events)
+  showUploadProgress();
+  setUploadProgress(0);
+
+  const xhr = new XMLHttpRequest();
+  xhr.open('POST', '/api/auth/register');
+  xhr.setRequestHeader('Content-Type', 'application/json');
+  if (token)        xhr.setRequestHeader('Authorization',   `Bearer ${token}`);
+  if (sessionToken) xhr.setRequestHeader('X-Session-Token', sessionToken);
+
+  xhr.upload.addEventListener('progress', e => {
+    if (e.lengthComputable) setUploadProgress(Math.min(95, Math.round(e.loaded / e.total * 100)));
+  });
+  xhr.upload.addEventListener('load', () => setUploadProgress(98));
+
+  xhr.onload = () => {
+    let res = {};
+    try { res = JSON.parse(xhr.responseText); } catch {}
+    if (xhr.status >= 200 && xhr.status < 300) {
+      setUploadProgress(100);
+      setTimeout(() => { hideUploadProgress(); saveSession(res); }, 600);
+    } else {
+      hideUploadProgress();
+      errEl.textContent = res.error || `Upload failed (${xhr.status})`;
+      resetBtn();
+    }
+  };
+  xhr.onerror = () => {
+    hideUploadProgress();
+    errEl.textContent = 'Network error — check your connection';
+    resetBtn();
+  };
+
+  xhr.send(JSON.stringify({
+    name, phone, password: pass, role: 'driver', vehicleType: vehicle,
+    vehicleModel, vehiclePlate, profilePhoto, licensePhoto, cnicFront, cnicBack
+  }));
+}
+
+// ── Driver Forgot Password ──────────────────────────────────────────────────
+let _dfpPhone = '';
+
+async function driverForgotSendOtp() {
+  const phone = document.getElementById('dfp-phone').value.trim();
+  const errEl = document.getElementById('auth-error');
+  if (!phone) return (errEl.textContent = 'Enter your registered phone number');
+  errEl.textContent = '';
+  try {
+    const res = await apiCall('/api/auth/forgot-password', 'POST', { phone });
+    _dfpPhone = phone;
+    if (res.otp) {
+      document.getElementById('dfp-otp-code').textContent = res.otp;
+      document.getElementById('dfp-otp-box').style.display = 'block';
+    }
+    document.getElementById('dfp-step1').style.display = 'none';
+    document.getElementById('dfp-step2').style.display = 'block';
+  } catch (e) { errEl.textContent = e.message; }
+}
+
+async function driverForgotVerifyOtp() {
+  const otp = document.getElementById('dfp-otp').value.trim();
+  const errEl = document.getElementById('auth-error');
+  if (otp.length !== 4) return (errEl.textContent = 'Enter the 4-digit OTP');
+  errEl.textContent = '';
+  document.getElementById('dfp-step2').style.display = 'none';
+  document.getElementById('dfp-step3').style.display = 'block';
+}
+
+async function driverForgotResetPassword() {
+  const otp     = document.getElementById('dfp-otp').value.trim();
+  const newPass = document.getElementById('dfp-newpass').value;
+  const errEl   = document.getElementById('auth-error');
+  if (newPass.length < 6) return (errEl.textContent = 'Password must be at least 6 characters');
+  try {
+    await apiCall('/api/auth/reset-password', 'POST', { phone: _dfpPhone, otp, newPassword: newPass });
+    errEl.textContent = '';
+    switchTab('login');
+    document.getElementById('l-email').value = _dfpPhone;
+    _dfpPhone = '';
+    showToast('Password reset! Please sign in.', 'success');
+  } catch (e) { errEl.textContent = e.message; }
+}
+
+function saveSession(res) {
+  token = res.token;
+  if (res.sessionToken) {
+    sessionToken = res.sessionToken;
+    localStorage.setItem('rh_session', sessionToken);
+  }
+  user  = { ...res.user, accountStatus: res.user.accountStatus || 'active' };
+  localStorage.setItem('rh_token', token);
+  localStorage.setItem('rh_user', JSON.stringify(user));
+  bootApp();
+}
+
+function doLogout() {
+  // 1. Go offline and disconnect before clearing state
+  if (socket) { socket.emit('driver:status', { isOnline: false }); socket.disconnect(); socket = null; }
+  if (locationWatch) { navigator.geolocation.clearWatch(locationWatch); locationWatch = null; }
+
+  // 2. Wipe all auth state from memory and storage
+  localStorage.clear();
+  sessionStorage.clear();
+  token = null; sessionToken = null; user = null;
+
+  // 3. Clear every login / register field so nothing persists visually
+  ['l-email', 'l-pass',
+   'r-phone', 'r-pass',
+   'dfp-phone', 'dfp-otp', 'dfp-newpass'
+  ].forEach(id => { const el = document.getElementById(id); if (el) el.value = ''; });
+  document.getElementById('auth-error').textContent = '';
+
+  // 4. Show auth screen on the login tab
+  switchTab('login');
+  document.getElementById('auth-screen').style.display = 'flex';
+  document.getElementById('app').style.display = 'none';
+
+  // 5. Replace history entry so the Back button cannot return to the app
+  history.replaceState(null, '', location.pathname);
+}
+
+// ── Boot ───────────────────────────────────────────────────────────────────
+function bootApp() {
+  document.getElementById('auth-screen').style.display = 'none';
+  document.getElementById('app').style.display = 'flex';
+  // Show driver avatar in header
+  const avatarEl = document.getElementById('driver-avatar-header');
+  if (avatarEl && user) {
+    if (user.profilePhoto) {
+      avatarEl.outerHTML = `<img id="driver-avatar-header" class="driver-avatar" src="${user.profilePhoto}" alt="${user.name}">`;
+    } else {
+      avatarEl.textContent = (user.name || 'D')[0].toUpperCase();
+    }
+  }
+  connectSocket();
+  loadStats();
+  checkUnreadDriverTickets();
+  checkDailyFee();
+  // Request notification permission then register Web Push subscription
+  if ('Notification' in window && Notification.permission === 'default') {
+    Notification.requestPermission().then(perm => {
+      if (perm === 'granted') registerPushSubscription();
+    });
+  } else if ('Notification' in window && Notification.permission === 'granted') {
+    registerPushSubscription();
+  }
+  // Double rAF ensures the browser has fully painted the flex layout before
+  // Leaflet measures #map — fixes the 0×0 container race condition.
+  requestAnimationFrame(() => requestAnimationFrame(() => {
+    initMap();
+    setTimeout(() => map?.invalidateSize(), 300);
+    setTimeout(() => map?.invalidateSize(), 700);
+  }));
+  // Show pending approval card if not yet approved
+  const pendingCard = document.getElementById('pending-card');
+  const onlineBar   = document.querySelector('.online-bar');
+  if (user?.accountStatus === 'pending') {
+    if (pendingCard) pendingCard.style.display = 'block';
+    if (onlineBar)   onlineBar.style.display   = 'none';
+  } else {
+    if (pendingCard) pendingCard.style.display = 'none';
+    if (onlineBar)   onlineBar.style.display   = '';
+  }
+}
+
+// ── Web Push Subscription Registration ────────────────────────────────────
+async function registerPushSubscription() {
+  try {
+    if (!('serviceWorker' in navigator) || !('PushManager' in window)) return;
+    const reg = await navigator.serviceWorker.ready;
+    if (!reg.pushManager) return;
+
+    // Fetch the server's VAPID public key
+    const resp = await fetch('/api/push/vapid-key');
+    if (!resp.ok) return;   // Push not configured on server yet
+    const { publicKey } = await resp.json();
+    if (!publicKey) return;
+
+    // Convert Base64 URL-safe key to Uint8Array
+    const applicationServerKey = urlBase64ToUint8Array(publicKey);
+
+    // Check for an existing subscription — re-use if the key matches
+    let sub = await reg.pushManager.getSubscription();
+    if (sub) {
+      // If server key changed, unsubscribe and re-subscribe
+      const existingKey = sub.options?.applicationServerKey;
+      if (existingKey) {
+        const existingB64 = btoa(String.fromCharCode(...new Uint8Array(existingKey)));
+        const newB64      = publicKey.replace(/-/g, '+').replace(/_/g, '/');
+        if (existingB64 !== newB64) { await sub.unsubscribe(); sub = null; }
+      }
+    }
+    if (!sub) {
+      sub = await reg.pushManager.subscribe({
+        userVisibleOnly:      true,
+        applicationServerKey
+      });
+    }
+
+    // Send the subscription to the server
+    const subJson = sub.toJSON();
+    await fetch('/api/push/subscribe', {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+      body:    JSON.stringify({ endpoint: subJson.endpoint, keys: subJson.keys })
+    });
+  } catch (err) {
+    console.warn('Push subscription failed:', err.message || err);
+  }
+}
+
+/** Convert a Base64URL string to a Uint8Array (required by PushManager.subscribe) */
+function urlBase64ToUint8Array(base64String) {
+  const padding  = '='.repeat((4 - base64String.length % 4) % 4);
+  const base64   = (base64String + padding).replace(/-/g, '+').replace(/_/g, '/');
+  const raw      = atob(base64);
+  const output   = new Uint8Array(raw.length);
+  for (let i = 0; i < raw.length; ++i) output[i] = raw.charCodeAt(i);
+  return output;
+}
+
+// ── Map ────────────────────────────────────────────────────────────────────
+function initMap() {
+  if (map) return;
+  map = L.map('map', { zoomControl: false, preferCanvas: true }).setView([31.5204, 74.3587], 16);
+  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+    attribution : '© <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
+    maxNativeZoom: 19,
+    maxZoom      : 20,
+    subdomains   : 'abc',
+    detectRetina : true,
+    crossOrigin  : true
+  }).addTo(map);
+  L.control.zoom({ position: 'topright' }).addTo(map);
+
+  // Staggered invalidations catch every rendering phase (especially iOS Safari)
+  requestAnimationFrame(() => map.invalidateSize());
+  setTimeout(() => map.invalidateSize(), 150);
+  setTimeout(() => map.invalidateSize(), 500);
+  window.addEventListener('resize', () => map.invalidateSize());
+  // Re-fire when the page becomes visible again (e.g. switching tabs/apps)
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible') map?.invalidateSize();
+  });
+
+  // Watch driver's own location
+  if (navigator.geolocation) {
+    locationWatch = navigator.geolocation.watchPosition(pos => {
+      const { latitude: lat, longitude: lng } = pos.coords;
+      map.setView([lat, lng], map.getZoom());
+      if (myMarker) myMarker.setLatLng([lat, lng]);
+      else myMarker = L.marker([lat, lng], {
+        icon: L.divIcon({ html: '📍', className: '', iconSize: [28, 28], iconAnchor: [14, 28] })
+      }).addTo(map);
+
+      if (socket && isOnline) {
+        socket.emit('driver:location', { lat, lng, rideId: activeRide?._id });
+      }
+    }, () => {}, { enableHighAccuracy: true, maximumAge: 3000 });
+
+    navigator.geolocation.getCurrentPosition(pos => {
+      map.setView([pos.coords.latitude, pos.coords.longitude], 15);
+    }, () => {});
+  }
+}
+
+function showRideOnMap(ride) {
+  if (pickupMarker)  pickupMarker.remove();
+  if (dropoffMarker) dropoffMarker.remove();
+  if (routeLine)     routeLine.remove();
+
+  const p = ride.pickupLocation;
+  pickupMarker = L.marker([p.lat, p.lng], { icon: L.divIcon({ className: 'pickup-icon', iconSize: [16, 16], iconAnchor: [8, 8] }) }).addTo(map);
+
+  // Build waypoint list: pickup + all stops
+  const stops = (ride.dropoffLocations && ride.dropoffLocations.length)
+    ? ride.dropoffLocations
+    : (ride.dropoffLocation ? [ride.dropoffLocation] : []);
+
+  const allPts = [p, ...stops];
+  const latLngs = allPts.map(pt => [pt.lat, pt.lng]);
+
+  // Mark each stop
+  stops.forEach((s, i) => {
+    const cls = i === 0 ? 'dropoff-icon' : 'dropoff-icon';
+    const m = L.marker([s.lat, s.lng], { icon: L.divIcon({ className: cls, iconSize: [16, 16], iconAnchor: [8, 8] }) }).addTo(map);
+    if (i === 0) dropoffMarker = m;
+  });
+
+  routeLine = L.polyline(latLngs, { color: '#f5c518', weight: 3, dashArray: '8,8' }).addTo(map);
+  if (latLngs.length >= 2) map.fitBounds(L.latLngBounds(latLngs), { padding: [60, 60] });
+}
+
+function clearRideMap() {
+  if (pickupMarker)  { pickupMarker.remove();  pickupMarker  = null; }
+  if (dropoffMarker) { dropoffMarker.remove(); dropoffMarker = null; }
+  if (routeLine)     { routeLine.remove();     routeLine     = null; }
+}
+
+// ── Online Toggle ──────────────────────────────────────────────────────────
+function toggleOnline(online) {
+  if (online && user?.accountStatus === 'pending') {
+    showToast('Account pending Admin approval — cannot go online yet', 'error');
+    const toggle = document.getElementById('online-toggle');
+    if (toggle) toggle.checked = false;
+    return;
+  }
+  isOnline = online;
+  socket?.emit('driver:status', { isOnline: online });
+  document.getElementById('status-text').textContent = online ? 'You are Online ✓' : 'You are Offline';
+  document.getElementById('status-sub').textContent  = online
+    ? 'Waiting for ride requests…'
+    : 'Toggle to go online and receive ride requests';
+  document.getElementById('idle-msg').innerHTML = online
+    ? '<button class="idle-refresh-btn" onclick="refreshDashboard()">🔄 Tap to Refresh Dashboard</button><div style="font-size:.72rem;color:#555;margin-top:.3rem">Waiting for ride requests near you…</div>'
+    : '<div class="idle-icon">🛑</div><div>Toggle <strong>Online</strong> above to start receiving ride requests</div>';
+  showToast(online ? 'You are now Online' : 'You went Offline', online ? 'success' : 'info');
+}
+
+// ── Socket.io ─────────────────────────────────────────────────────────────
+function connectSocket() {
+  if (socket) return;
+  socket = io({ auth: { token } });
+  socket.on('connect_error', e => console.warn('Socket error:', e.message));
+
+  // Fired on both initial connection AND every successful reconnect.
+  // Re-declare online status so the server restores the drivers-online room,
+  // and re-join the active ride room so location updates keep flowing.
+  socket.on('connect', () => {
+    if (isOnline) {
+      socket.emit('driver:status', { isOnline: true });
+    }
+    if (activeRide) {
+      socket.emit('ride:join', activeRide._id);
+    }
+  });
+
+  // Admin replied to a support ticket
+  socket.on('support:replied', ({ subject, reply }) => {
+    showToast(`📋 Admin replied to: "${subject}"`, 'info');
+    document.getElementById('driver-unread-dot').style.display   = 'inline-block';
+    const badge = document.getElementById('driver-ticket-badge');
+    badge.style.display = 'inline';
+    badge.textContent   = String((parseInt(badge.textContent) || 0) + 1);
+  });
+
+  // Account approved by Admin (was pending)
+  socket.on('account:activated', () => {
+    user.accountStatus = 'active';
+    localStorage.setItem('rh_user', JSON.stringify(user));
+    const pendingCard = document.getElementById('pending-card');
+    const onlineBar   = document.querySelector('.online-bar');
+    if (pendingCard) pendingCard.style.display = 'none';
+    if (onlineBar)   onlineBar.style.display   = '';
+    showToast('🎉 Your account has been approved! You can now go online.', 'success');
+  });
+
+  // Admin granted a fee waiver or free trial — instantly unlock Accept button
+  socket.on('fee:waived', ({ paidUntilDate, isFreeTrial, trialStartDate }) => {
+    if (paidUntilDate)             user.paidUntilDate  = paidUntilDate;
+    if (isFreeTrial !== undefined)  user.isFreeTrial    = isFreeTrial;
+    if (trialStartDate)            user.trialStartDate = trialStartDate;
+    localStorage.setItem('rh_user', JSON.stringify(user));
+    unlockAcceptButton();
+    const msg = isFreeTrial
+      ? '🎁 Free trial granted by admin — ride acceptance is now active!'
+      : '✅ Daily fee waived by admin — ride acceptance is now active!';
+    showToast(msg, 'success');
+  });
+
+  // Account suspended / balance too low
+  socket.on('account:suspended', ({ reason }) => {
+    showToast(reason, 'error');
+    const toggle = document.getElementById('online-toggle');
+    if (toggle) { toggle.checked = false; isOnline = false; }
+    document.getElementById('status-text').textContent = '⚠ Cannot Go Online';
+    document.getElementById('status-sub').textContent  = reason;
+    document.getElementById('idle-msg').innerHTML =
+      `<div class="idle-icon">⚠️</div><div style="color:#ff5555;font-size:.82rem">${reason}</div>`;
+  });
+
+  // New ride request from passenger
+  socket.on('ride:new', (ride) => {
+    if (!isOnline || activeRide || sentOffer) return;
+    pendingRide = ride;
+    showRideRequest(ride);
+  });
+
+  // Customer raised their offered fare on an existing ride
+  socket.on('ride:fare-updated', ({ id, fare }) => {
+    if (pendingRide && String(pendingRide.id) === String(id)) {
+      pendingRide.fare = fare;
+      document.getElementById('rr-fare').textContent = `Rs ${(fare || 0).toLocaleString()}`;
+      showToast(`Customer raised offer to Rs ${fare.toLocaleString()}!`, 'info');
+    }
+  });
+
+  // Customer selected a driver — check if it's us
+  socket.on('ride:accepted', ({ rideId, driver }) => {
+    if (sentOffer && String(sentOffer.rideId) === String(rideId)) {
+      if (String(driver.id) === String(user.id)) {
+        // We were selected — dismiss the "offer sent" card immediately
+        sentOffer = null;
+        hideRideRequest();   // ← clears the waiting card right away
+        apiCall(`/api/rides/${rideId}`)
+          .then(ride => {
+            activeRide = ride;
+            showActivePanel(ride);
+            showRideOnMap(ride);
+            socket.emit('ride:join', rideId);
+            showToast('🎉 Customer accepted your offer! Head to pickup.', 'success');
+          })
+          .catch(() => showToast('Ride accepted — loading details…', 'success'));
+      } else {
+        // Another driver was selected
+        sentOffer = null;
+        hideRideRequest();   // ← also dismiss the card for the losing driver
+        clearRideMap();
+        showToast('Customer chose another driver', 'info');
+      }
+    }
+  });
+
+  // Another driver took this ride (or customer cancelled)
+  socket.on('ride:taken', ({ rideId }) => {
+    const matchesPending = pendingRide && String(pendingRide.id) === String(rideId);
+    const matchesSent    = sentOffer   && String(sentOffer.rideId) === String(rideId);
+    if (matchesPending) {
+      hideRideRequest();
+      showToast('Ride was taken by another driver', 'info');
+    } else if (matchesSent) {
+      sentOffer = null;
+      clearRideMap();
+      showToast('Ride was taken by another driver', 'info');
+    }
+  });
+
+  // Ride status from passenger cancel — covers all three driver states
+  socket.on('ride:status', ({ rideId, status }) => {
+    if (status !== 'cancelled') return;
+
+    if (activeRide && String(activeRide._id) === String(rideId)) {
+      // Passenger cancelled an in-progress/accepted ride
+      showToast('⚠️ Passenger cancelled the ride', 'error');
+      endActiveRide();
+    } else if (sentOffer && String(sentOffer.rideId) === String(rideId)) {
+      // Passenger cancelled while driver was waiting for their counter-offer to be picked
+      sentOffer = null;
+      hideRideRequest();
+      clearRideMap();
+      showToast('⚠️ Passenger cancelled — your offer was not chosen', 'error');
+    } else if (pendingRide && String(pendingRide.id) === String(rideId)) {
+      // Passenger cancelled while the ride card was still showing
+      hideRideRequest();
+      clearRideMap();
+      showToast('⚠️ Passenger cancelled the ride request', 'error');
+    }
+  });
+}
+
+// ── Ride Request Popup ─────────────────────────────────────────────────────
+const PAY_ICONS = { cash: '💵', easypaisa: '📱', jazzcash: '🎵', wallet: '💰' };
+const PAY_NAMES = { cash: 'Cash on delivery', easypaisa: 'EasyPaisa', jazzcash: 'JazzCash', wallet: 'Wallet' };
+
+function formatStopAddr(loc) {
+  return loc?.address || (loc ? `${loc.lat?.toFixed(4)}, ${loc.lng?.toFixed(4)}` : '—');
+}
+
+function showRideRequest(ride) {
+  document.getElementById('rr-pickup').textContent = formatStopAddr(ride.pickupLocation);
+
+  // Build stop rows (multi-stop aware)
+  const stops = (ride.dropoffLocations && ride.dropoffLocations.length)
+    ? ride.dropoffLocations
+    : (ride.dropoffLocation ? [ride.dropoffLocation] : []);
+
+  const stopIcons = ['🎯', '📌', '📌', '📌'];
+  const stopLabels = stops.length > 1
+    ? stops.map((_, i) => `Drop ${i + 1}`)
+    : ['Dropoff'];
+
+  document.getElementById('rr-stops-container').innerHTML = stops.map((s, i) => `
+    <div class="rr-divider"></div>
+    <div class="rr-point">
+      <span class="rr-point-icon">${stopIcons[i] || '📌'}</span>
+      <span class="rr-point-text">
+        ${stops.length > 1 ? `<span style="font-size:.65rem;color:#666;display:block;margin-bottom:.05rem">${stopLabels[i]}</span>` : ''}
+        ${formatStopAddr(s)}
+      </span>
+    </div>
+  `).join('');
+
+  document.getElementById('rr-fare').textContent    = `Rs ${(ride.fare || 0).toLocaleString()}`;
+  document.getElementById('rr-dist').textContent    = ride.distance ? `${ride.distance.toFixed(1)} km` : '—';
+  document.getElementById('rr-vehicle').textContent = ride.vehicleType || '—';
+
+  // Payment method badge
+  const pm = ride.paymentMethod || 'cash';
+  document.getElementById('rr-pay-icon').textContent  = PAY_ICONS[pm] || '💵';
+  document.getElementById('rr-pay-label').textContent = PAY_NAMES[pm] || 'Cash on delivery';
+
+  // Reset counter input and offer-sent state
+  document.getElementById('rr-counter-input').value = '';
+  document.getElementById('rr-offer-sent').style.display = 'none';
+  document.getElementById('rr-actions').style.display = 'flex';
+
+  document.getElementById('ride-request').style.display = 'block';
+
+  // 25-second countdown timer
+  let secs = 25;
+  document.getElementById('rr-timer').textContent = `${secs}s`;
+  clearInterval(requestTimer);
+  requestTimer = setInterval(() => {
+    secs--;
+    document.getElementById('rr-timer').textContent = `${secs}s`;
+    if (secs <= 0) { clearInterval(requestTimer); hideRideRequest(); }
+  }, 1000);
+
+  showRideOnMap(ride);
+  startRideAlert(ride);
+
+  // Grey out Accept button if today's platform fee is not yet paid
+  const acceptBtn = document.querySelector('.btn-accept');
+  if (acceptBtn) {
+    if (dailyFeeDue) {
+      const _rate = user?.dailyFeeRate || DAILY_FEE_RATES[user?.vehicleType] || 220;
+      acceptBtn.disabled = false; // keep clickable so tapping redirects to Payments
+      acceptBtn.textContent = `Pay Rs ${_rate} Daily Fee to Accept`;
+      acceptBtn.style.opacity = '0.6';
+      acceptBtn.style.cursor  = 'pointer';
+      acceptBtn.onclick = (e) => { e.stopPropagation(); goToPayFee(_rate); };
+    } else {
+      acceptBtn.disabled = false;
+      acceptBtn.textContent = '✓ Accept';
+      acceptBtn.style.opacity = '';
+      acceptBtn.style.cursor  = '';
+      acceptBtn.onclick = () => acceptRide();
+    }
+  }
+}
+
+function hideRideRequest() {
+  document.getElementById('ride-request').style.display = 'none';
+  clearInterval(requestTimer);
+  stopRideAlert();
+  pendingRide = null;
+  document.getElementById('rr-counter-input').value = '';
+  document.getElementById('rr-offer-sent').style.display = 'none';
+  document.getElementById('rr-actions').style.display = 'flex';
+}
+
+// ── Ride Alert: Audio + Vibration + Browser Notification ───────────────────
+function startRideAlert(ride) {
+  // Repeating device vibration
+  if (navigator.vibrate) navigator.vibrate([500, 200, 500, 200, 500, 200, 500]);
+
+  // Web Audio API — loud two-tone alert beep
+  try {
+    alertAudioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    function playBeep() {
+      if (!alertAudioCtx) return;
+      const osc  = alertAudioCtx.createOscillator();
+      const gain = alertAudioCtx.createGain();
+      osc.connect(gain);
+      gain.connect(alertAudioCtx.destination);
+      osc.type = 'square';
+      osc.frequency.setValueAtTime(1100, alertAudioCtx.currentTime);
+      osc.frequency.setValueAtTime(750,  alertAudioCtx.currentTime + 0.18);
+      osc.frequency.setValueAtTime(1100, alertAudioCtx.currentTime + 0.36);
+      gain.gain.setValueAtTime(1.0, alertAudioCtx.currentTime);
+      gain.gain.exponentialRampToValueAtTime(0.001, alertAudioCtx.currentTime + 0.6);
+      osc.start(alertAudioCtx.currentTime);
+      osc.stop(alertAudioCtx.currentTime + 0.6);
+    }
+    playBeep();
+    alertInterval = setInterval(playBeep, 1400);
+  } catch(e) { console.warn('Audio alert error:', e); }
+
+  // Browser push notification (works even if tab is backgrounded)
+  if (Notification.permission === 'granted' && ride) {
+    try {
+      new Notification('🚗 New Ride Request!', {
+        body: `📍 ${ride.pickupLocation?.address || 'Nearby'}\n💰 Rs ${(ride.fare || 0).toLocaleString()} · ${ride.distance ? ride.distance.toFixed(1) + ' km' : ''}`,
+        requireInteraction: true,
+        tag: 'ride-request'
+      });
+    } catch(e) {}
+  }
+
+  // Web Speech Synthesis — announce new ride vocally (Urdu/English)
+  try {
+    if (window.speechSynthesis) {
+      const pickup  = ride.pickupLocation?.address  || 'a nearby location';
+      const dropoff = (ride.dropoffLocations?.[0]?.address || ride.dropoffLocation?.address || 'destination');
+      const text    = `New Ride Request! Pickup from ${pickup} to ${dropoff}`;
+      const utt     = new SpeechSynthesisUtterance(text);
+      utt.lang   = 'en-PK';
+      utt.rate   = 0.92;
+      utt.volume = 1.0;
+      window.speechSynthesis.cancel();   // clear any queued speech first
+      window.speechSynthesis.speak(utt);
+    }
+  } catch(e) { console.warn('TTS error:', e); }
+}
+
+function stopRideAlert() {
+  clearInterval(alertInterval);
+  alertInterval = null;
+  if (alertAudioCtx) {
+    try { alertAudioCtx.close(); } catch(e) {}
+    alertAudioCtx = null;
+  }
+  if (navigator.vibrate) navigator.vibrate(0);
+}
+
+function rejectRide() {
+  hideRideRequest();
+  clearRideMap();
+  showToast('Ride rejected', 'info');
+}
+
+// Send an accept-type offer at the customer's listed fare.
+// The customer sees it in their offers list and confirms the booking by choosing us.
+async function acceptRide() {
+  if (!pendingRide) return;
+  const rideId  = pendingRide.id;
+  const offeredFare = pendingRide.fare;
+  try {
+    await apiCall(`/api/rides/${rideId}/counter`, 'PATCH', { price: offeredFare, type: 'accept' });
+    socket.emit('ride:join', rideId);
+    sentOffer = { rideId };
+    pendingRide = null;
+    clearInterval(requestTimer);
+    stopRideAlert();
+    // Hide action buttons, show offer-sent confirmation
+    document.getElementById('rr-actions').style.display   = 'none';
+    document.getElementById('rr-offer-sent').style.display = 'block';
+    document.getElementById('rr-offer-sent').textContent  =
+      `✓ Offer sent at Rs ${(offeredFare || 0).toLocaleString()} — waiting for customer…`;
+    document.getElementById('rr-timer').textContent = '⏳';
+    document.getElementById('rr-counter-input').value = '';
+    showToast('Offer sent! Waiting for customer to choose.', 'success');
+  } catch (e) {
+    showToast(e.message || 'Could not send offer — try again', 'error');
+  }
+}
+
+// Pause the 25-second countdown immediately (called when driver types in counter field)
+function pauseRideTimer() {
+  if (!requestTimer) return;   // already paused or not started
+  clearInterval(requestTimer);
+  requestTimer = null;
+  document.getElementById('rr-timer').textContent = '⏸';
+}
+
+// Send a counter-offer at a different price
+async function sendCounter() {
+  if (!pendingRide) return;
+  const counterInput = document.getElementById('rr-counter-input');
+  const price = parseFloat(counterInput.value);
+  if (!price || price < 1) return showToast('Enter a counter price', 'error');
+  const rideId = pendingRide.id;
+
+  // Freeze the timer BEFORE the network call — prevents expiry mid-request
+  pauseRideTimer();
+
+  try {
+    await apiCall(`/api/rides/${rideId}/counter`, 'PATCH', { price, type: 'counter' });
+    socket.emit('ride:join', rideId);
+    sentOffer = { rideId };
+    pendingRide = null;
+    stopRideAlert();
+    document.getElementById('rr-actions').style.display   = 'none';
+    document.getElementById('rr-offer-sent').style.display = 'block';
+    document.getElementById('rr-offer-sent').textContent  = `⇄ Counter Rs ${price.toLocaleString()} sent — waiting…`;
+    document.getElementById('rr-timer').textContent = '⏳';
+    showToast(`Counter offer Rs ${price.toLocaleString()} sent!`, 'success');
+  } catch (e) {
+    showToast(e.message, 'error');
+  }
+}
+
+// ── Active Ride Panel ──────────────────────────────────────────────────────
+function showActivePanel(ride) {
+  document.getElementById('info-panel').style.display   = 'none';
+  document.getElementById('active-panel').style.display = 'block';
+  // Repaint map tiles — the panel swap can leave a black frame on slow devices
+  setTimeout(() => map?.invalidateSize(), 150);
+  setTimeout(() => map?.invalidateSize(), 600);
+  document.getElementById('ap-status-text').textContent    = 'On the way to pickup';
+  document.getElementById('ap-passenger-name').textContent = ride.passenger?.name || 'Passenger';
+  document.getElementById('ap-pickup').textContent         = ride.pickupLocation?.address  || 'Pickup';
+  document.getElementById('ap-dropoff').textContent        = ride.dropoffLocation?.address || 'Dropoff';
+
+  // Dual call buttons — Phone + WhatsApp
+  const rawPhone = ride.passenger?.phone || '';
+  const digits   = rawPhone.replace(/\D/g, '');
+  const telPhone = digits ? (digits.startsWith('92') ? `+${digits}` : `+92${digits.replace(/^0/, '')}`) : '';
+  const waPhone  = digits ? (digits.startsWith('92') ? digits : `92${digits.replace(/^0/, '')}`) : '';
+  const callEl = document.getElementById('ap-call-passenger');
+  if (callEl) {
+    callEl.innerHTML = telPhone
+      ? `<div class="ap-dual-btns">
+           <a class="btn-call-pass" href="tel:${telPhone}">📞 Phone Call</a>
+           <a class="btn-wa-pass"   href="https://wa.me/${waPhone}" target="_blank" rel="noopener">💬 WhatsApp</a>
+         </div>`
+      : '';
+  }
+  renderActiveButtons('accepted');
+}
+
+function renderActiveButtons(status) {
+  const btns = document.getElementById('ap-btns');
+  const map = {
+    accepted: `<button class="ap-btn arrived" onclick="updateStatus('arrived')">✓ Arrived at Pickup</button>`,
+    arrived:  `<button class="ap-btn start" onclick="requestPinToStart()">🔐 Enter PIN to Start</button>`,
+    'in-progress': `<button class="ap-btn complete" onclick="updateStatus('completed')">🏁 Complete Ride</button>`
+  };
+  btns.innerHTML = (map[status] || '') +
+    (status !== 'in-progress' ? `<button class="ap-btn cancel" onclick="cancelActiveRide()">✗ Cancel Ride</button>` : '');
+}
+
+async function updateStatus(status) {
+  if (!activeRide) return;
+  try {
+    await apiCall(`/api/rides/${activeRide._id}/status`, 'PATCH', { status });
+    activeRide.status = status;
+    const labels = { arrived: 'Arrived at pickup!', 'in-progress': 'Ride in progress', completed: 'Ride completed!' };
+    document.getElementById('ap-status-text').textContent = labels[status] || status;
+    if (status === 'completed') {
+      todayRides++; todayEarnings += +(activeRide.fare * 0.85).toFixed(2);
+      document.getElementById('stat-rides').textContent   = todayRides;
+      document.getElementById('stat-earning').textContent = `Rs ${todayEarnings.toLocaleString()}`;
+      document.getElementById('earnings-val').textContent = todayEarnings.toLocaleString();
+      showToast('Ride completed! 🎉 Rate your passenger', 'success');
+      setTimeout(showDriverRatingModal, 1500);
+    } else {
+      renderActiveButtons(status);
+      const msgs = { arrived: 'Marked as arrived', 'in-progress': 'Ride started' };
+      showToast(msgs[status] || '', 'success');
+    }
+  } catch (e) { showToast(e.message, 'error'); }
+}
+
+async function cancelActiveRide() {
+  if (!activeRide) return;
+  if (!confirm('Cancel this ride?')) return;
+  try {
+    await apiCall(`/api/rides/${activeRide._id}/cancel`, 'PATCH');
+    showToast('Ride cancelled', 'info');
+    endActiveRide();
+  } catch (e) { showToast(e.message, 'error'); }
+}
+
+function endActiveRide() {
+  const finishedRideId = activeRide?._id;
+  activeRide = null;
+
+  document.getElementById('active-panel').style.display = 'none';
+  document.getElementById('info-panel').style.display   = 'block';
+  clearRideMap();
+
+  // Leave the completed ride's socket room so stale events don't bleed through
+  // NOTE: the socket itself is intentionally kept alive so new ride notifications
+  // (bell + audio alerts) keep working without requiring a logout/login cycle.
+  if (finishedRideId && socket) socket.emit('ride:leave', String(finishedRideId));
+
+  // Map tiles go blank when the container was re-shown after being hidden.
+  // Three staggered calls cover slow repaints on Android and low-end iOS.
+  setTimeout(() => map?.invalidateSize(), 150);
+  setTimeout(() => map?.invalidateSize(), 600);
+  setTimeout(() => map?.invalidateSize(), 1200);
+
+  // Re-check support-ticket badge so the bell reflects the real unread count
+  checkUnreadDriverTickets();
+}
+
+// ── Force-sync dashboard state from server (called by the Refresh button) ──
+async function refreshDashboard() {
+  const btn = document.querySelector('.idle-refresh-btn');
+  if (btn) { btn.textContent = '⏳ Refreshing…'; btn.disabled = true; }
+  try {
+    const { ride } = await apiCall('/api/driver/active-ride');
+    if (ride) {
+      // Server has an active ride we don't know about — restore it
+      activeRide = ride;
+      showActivePanel(ride);
+      showRideOnMap(ride);
+      if (socket) socket.emit('ride:join', String(ride._id));
+      showToast('Dashboard synced — active ride restored', 'success');
+    } else {
+      // No active ride — make sure we're showing idle state
+      if (activeRide) endActiveRide();
+      showToast('Dashboard synced — no active ride', 'info');
+    }
+    // Ensure socket rooms are correct
+    if (socket && isOnline) socket.emit('driver:status', { isOnline: true });
+  } catch (e) {
+    showToast('Refresh failed — check connection', 'error');
+  } finally {
+    if (btn) { btn.textContent = '🔄 Tap to Refresh Dashboard'; btn.disabled = false; }
+  }
+}
+
+// ── Bottom Tab Navigation ──────────────────────────────────────────────────
+function switchBottomTab(tab) {
+  const isHome = tab === 'home';
+  document.getElementById('tab-home-btn').classList.toggle('active', isHome);
+  document.getElementById('tab-payments-btn').classList.toggle('active', !isHome);
+
+  if (isHome) {
+    // Show home panels (info or active ride), hide payments
+    document.getElementById('payments-panel').style.display = 'none';
+    if (activeRide) {
+      document.getElementById('active-panel').style.display = 'block';
+      document.getElementById('info-panel').style.display   = 'none';
+    } else {
+      document.getElementById('info-panel').style.display   = 'block';
+      document.getElementById('active-panel').style.display = 'none';
+    }
+  } else {
+    // Show payments panel, hide home panels
+    document.getElementById('info-panel').style.display    = 'none';
+    document.getElementById('active-panel').style.display  = 'none';
+    document.getElementById('payments-panel').style.display = 'block';
+    loadPayments();
+    updateDailyFeeBanner();
+  }
+  // Repaint map tiles after panel reflow (50 ms is too short for iOS)
+  setTimeout(() => map?.invalidateSize(), 150);
+}
+
+// ── Payments ───────────────────────────────────────────────────────────────
+async function loadPayments() {
+  await Promise.all([loadWalletSummary(), loadPaymentHistory(), loadAdminPaymentAccounts()]);
+}
+
+// Load admin-configured payment accounts and render them
+async function loadAdminPaymentAccounts() {
+  const el = document.getElementById('pay-accounts-list');
+  if (!el) return;
+  try {
+    const r = await fetch('/api/settings/payment');
+    const accts = await r.json();
+    const cards = [];
+
+    if (accts.jazzcash?.number) {
+      cards.push(`<div class="pay-account-card">
+        <div class="pay-account-icon">📱</div>
+        <div class="pay-account-info">
+          <div class="pay-account-name">JazzCash</div>
+          ${accts.jazzcash.title ? `<div class="pay-account-title">${accts.jazzcash.title}</div>` : ''}
+          <div class="pay-account-number">${accts.jazzcash.number}</div>
+        </div>
+        <button class="btn-copy" onclick="copyNum(this,'${accts.jazzcash.number}')">📋 Copy</button>
+      </div>`);
+    }
+    if (accts.easypaisa?.number) {
+      cards.push(`<div class="pay-account-card">
+        <div class="pay-account-icon">💚</div>
+        <div class="pay-account-info">
+          <div class="pay-account-name">EasyPaisa</div>
+          ${accts.easypaisa.title ? `<div class="pay-account-title">${accts.easypaisa.title}</div>` : ''}
+          <div class="pay-account-number">${accts.easypaisa.number}</div>
+        </div>
+        <button class="btn-copy" onclick="copyNum(this,'${accts.easypaisa.number}')">📋 Copy</button>
+      </div>`);
+    }
+    if (accts.bank?.iban) {
+      cards.push(`<div class="pay-account-card">
+        <div class="pay-account-icon">🏦</div>
+        <div class="pay-account-info">
+          <div class="pay-account-name">${accts.bank.name || 'Bank Transfer'}</div>
+          ${accts.bank.title ? `<div class="pay-account-title">${accts.bank.title}</div>` : ''}
+          <div class="pay-account-iban">IBAN: ${accts.bank.iban}</div>
+        </div>
+        <button class="btn-copy" onclick="copyNum(this,'${accts.bank.iban}')">📋 Copy</button>
+      </div>`);
+    }
+
+    el.innerHTML = cards.length
+      ? cards.join('')
+      : '<div class="pay-accounts-empty">No payment accounts configured yet. Contact admin.</div>';
+  } catch {
+    el.innerHTML = '<div class="pay-accounts-empty">Could not load payment accounts.</div>';
+  }
+}
+
+function copyNum(btn, text) {
+  navigator.clipboard.writeText(text).then(() => {
+    btn.textContent = '✓ Copied!';
+    btn.classList.add('copied');
+    setTimeout(() => { btn.textContent = '📋 Copy'; btn.classList.remove('copied'); }, 2000);
+  }).catch(() => {
+    // Fallback for non-https
+    const ta = document.createElement('textarea');
+    ta.value = text; ta.style.position = 'fixed'; ta.style.opacity = '0';
+    document.body.appendChild(ta); ta.select();
+    document.execCommand('copy');
+    document.body.removeChild(ta);
+    btn.textContent = '✓ Copied!'; btn.classList.add('copied');
+    setTimeout(() => { btn.textContent = '📋 Copy'; btn.classList.remove('copied'); }, 2000);
+  });
+}
+
+let selectedPayType = 'jazzcash';
+function selectPayType(el) {
+  document.querySelectorAll('.pay-type-btn').forEach(b => b.classList.remove('active'));
+  el.classList.add('active');
+  selectedPayType = el.dataset.type;
+}
+
+async function loadWalletSummary() {
+  try {
+    const data = await apiCall('/api/wallet/summary');
+    // 3-card summary — total shown as sum of real cash + bonus
+    const realCash  = data.realCashWallet ?? 0;
+    const bonusCred = data.bonusWallet    ?? 0;
+    const total     = realCash + bonusCred;
+    document.getElementById('wsum-balance').textContent = total.toLocaleString();
+    document.getElementById('wsum-balance').style.color = total < 0 ? '#ef4444' : '#4caf50';
+    document.getElementById('wsum-bonus').textContent = bonusCred.toLocaleString();
+    // Breakdown rows
+    document.getElementById('wsum-real-cash').textContent    = 'Rs ' + realCash.toLocaleString();
+    document.getElementById('wsum-bonus-credit').textContent = 'Rs ' + bonusCred.toLocaleString();
+
+    // Transaction ledger
+    const ledgerEl = document.getElementById('wsum-ledger');
+    if (!data.ledger?.length) {
+      ledgerEl.innerHTML = '<div class="ledger-empty">No transactions yet</div>';
+    } else {
+      ledgerEl.innerHTML = data.ledger.map(t => {
+        const isCredit = t.type === 'credit';
+        const d = new Date(t.createdAt).toLocaleDateString('en-PK', { day:'numeric', month:'short' });
+        // Categorise with emoji
+        let icon = isCredit ? '⬆' : '⬇';
+        if (t.description?.toLowerCase().includes('bonus') || t.description?.toLowerCase().includes('trial')) icon = '🎁';
+        else if (t.description?.toLowerCase().includes('ride')) icon = '🚗';
+        else if (t.description?.toLowerCase().includes('subscription') || t.description?.toLowerCase().includes('daily')) icon = '📅';
+        return `<div class="ledger-item">
+          <span style="font-size:.85rem;flex-shrink:0">${icon}</span>
+          <span class="ledger-desc">${t.description || '—'}</span>
+          <span class="ledger-date">${d}</span>
+          <span class="ledger-amt ${t.type}">${isCredit ? '+' : '−'}${(t.amount || 0).toLocaleString()}</span>
+        </div>`;
+      }).join('');
+    }
+
+    // If today's payment already submitted, swap the TRX form
+    if (data.todayPayment) {
+      const s = data.todayPayment.status;
+      const statusMap = { pending: '⏳ Pending', approved: '✅ Approved', rejected: '❌ Rejected' };
+      const trxSection = document.getElementById('trx-form-section');
+      if (trxSection) {
+        trxSection.innerHTML = `<div class="trx-form-title">Today's Submission</div>
+          <div style="font-size:.85rem;color:#ccc;margin:.4rem 0">TRX: <span style="font-family:monospace">${data.todayPayment.trxId}</span></div>
+          <div style="font-size:.85rem;color:#ccc;margin:.4rem 0">Amount: <strong style="color:#f5c518">Rs ${data.todayPayment.amount?.toLocaleString()}</strong></div>
+          <div style="margin:.4rem 0"><span class="pay-status-pill ${s}">${statusMap[s] || s}</span></div>
+          ${data.todayPayment.adminNote ? `<div class="pay-note">Note: ${data.todayPayment.adminNote}</div>` : ''}`;
+      }
+    }
+  } catch (e) {
+    console.warn('Wallet summary error:', e.message);
+  }
+}
+
+// ── 3-Dot Menu ────────────────────────────────────────────────────────────────
+function toggleDriverMenu(e) {
+  e.stopPropagation();
+  const dd = document.getElementById('driver-dots-dropdown');
+  dd.style.display = dd.style.display === 'none' ? 'block' : 'none';
+}
+function closeDriverMenu() { document.getElementById('driver-dots-dropdown').style.display = 'none'; }
+document.addEventListener('click', (e) => {
+  if (!e.target.closest('#driver-dots-btn')) closeDriverMenu();
+});
+
+// ── My Tickets ────────────────────────────────────────────────────────────────
+function openMyTickets() {
+  document.getElementById('my-tickets-overlay').classList.add('open');
+  loadMyTickets();
+  // Mark all as read
+  apiCall('/api/support/my/read', 'PATCH').catch(() => {});
+  document.getElementById('driver-unread-dot').style.display   = 'none';
+  document.getElementById('driver-ticket-badge').style.display = 'none';
+}
+function closeMyTickets() { document.getElementById('my-tickets-overlay').classList.remove('open'); }
+
+async function loadMyTickets() {
+  const el = document.getElementById('my-tickets-list');
+  el.innerHTML = '<div style="color:#475569;text-align:center;padding:1rem">Loading…</div>';
+  try {
+    const tickets = await apiCall('/api/support/my');
+    if (!tickets.length) {
+      el.innerHTML = '<div style="color:#475569;text-align:center;padding:1rem;font-size:.83rem">No tickets yet.</div>';
+      return;
+    }
+    el.innerHTML = tickets.map(t => {
+      const isOpen   = t.status === 'open';
+      const hasReply = t.adminReply?.trim().length > 0;
+      const isUnread = hasReply && !t.readByUser;
+      const d = new Date(t.createdAt).toLocaleDateString('en-PK', { day:'numeric', month:'short', year:'numeric' });
+      return `<div style="background:#06060e;border:1px solid ${isUnread ? '#f5c518' : '#1a1a2a'};border-radius:10px;padding:.75rem;margin-bottom:.55rem">
+        <div style="display:flex;align-items:center;gap:.4rem;flex-wrap:wrap;margin-bottom:.3rem">
+          <span style="font-size:.82rem;font-weight:700;color:#e2e8f0;flex:1">${t.subject}</span>
+          <span style="font-size:.62rem;padding:.12rem .35rem;border-radius:4px;background:${isOpen?'#1a1a0a':'#0a1a0a'};color:${isOpen?'#f5c518':'#22c55e'};border:1px solid ${isOpen?'#2a2a10':'#0a3018'}">${isOpen?'Open':'Resolved'}</span>
+          ${isUnread ? '<span style="font-size:.6rem;background:#f5c518;color:#06060e;border-radius:4px;padding:.1rem .3rem;font-weight:800">NEW REPLY</span>' : ''}
+        </div>
+        <div style="font-size:.75rem;color:#475569">${t.message}</div>
+        ${hasReply ? `<div style="background:#0a1a0a;border:1px solid #1a3a1a;border-radius:8px;padding:.5rem .6rem;margin-top:.4rem">
+          <div style="font-size:.63rem;color:#4caf50;font-weight:700;margin-bottom:.2rem">✉ Admin Reply</div>
+          <div style="font-size:.78rem;color:#a3a3a3">${t.adminReply}</div>
+        </div>` : ''}
+        <div style="font-size:.63rem;color:#334155;margin-top:.3rem">${d}</div>
+      </div>`;
+    }).join('');
+  } catch (e) {
+    el.innerHTML = `<div style="color:#ef4444;text-align:center;padding:1rem;font-size:.83rem">${e.message}</div>`;
+  }
+}
+
+async function checkUnreadDriverTickets() {
+  try {
+    const tickets = await apiCall('/api/support/my');
+    const unread = tickets.filter(t => t.adminReply?.trim() && !t.readByUser).length;
+    if (unread > 0) {
+      document.getElementById('driver-unread-dot').style.display   = 'inline-block';
+      document.getElementById('driver-ticket-badge').style.display = 'inline';
+      document.getElementById('driver-ticket-badge').textContent   = unread;
+    }
+  } catch {}
+}
+
+async function loadPaymentHistory() {
+  const el = document.getElementById('payment-history-list');
+  try {
+    const payments = await apiCall('/api/payments/my');
+    if (!payments.length) {
+      el.innerHTML = '<div class="idle-msg" style="padding:1rem;color:#555">No payment submissions yet</div>';
+      return;
+    }
+    const statusMap = { pending: '⏳ Pending', approved: '✅ Approved', rejected: '❌ Rejected' };
+    el.innerHTML = payments.map(p => {
+      const date = new Date(p.createdAt).toLocaleDateString('en-PK', { day:'numeric', month:'short', year:'numeric' });
+      return `<div class="pay-item ${p.status}">
+        <div class="pay-item-row">
+          <span class="pay-trx">${p.trxId}</span>
+          <span class="pay-amount">Rs ${p.amount?.toLocaleString()}</span>
+        </div>
+        <div class="pay-item-row">
+          <span class="pay-meta">${date} · ${p.vehicleCategory}</span>
+          <span class="pay-status-pill ${p.status}">${statusMap[p.status] || p.status}</span>
+        </div>
+        ${p.adminNote ? `<div class="pay-note">Admin: ${p.adminNote}</div>` : ''}
+      </div>`;
+    }).join('');
+  } catch (e) {
+    el.innerHTML = `<div class="idle-msg" style="padding:1rem;color:#ff5555">${e.message}</div>`;
+  }
+}
+
+async function submitTrxPayment() {
+  const trxId  = document.getElementById('trx-id-input').value.trim();
+  const amount = document.getElementById('trx-amount-input').value;
+  if (!trxId)  return showToast('Enter a TRX / Reference ID', 'error');
+  if (!amount || Number(amount) <= 0) return showToast('Enter a valid amount', 'error');
+
+  const btn = document.getElementById('submit-trx-btn');
+  btn.disabled = true;
+  btn.textContent = 'Submitting…';
+  try {
+    await apiCall('/api/payments/submit', 'POST', {
+      trxId,
+      amount:      Number(amount),
+      paymentType: selectedPayType || 'jazzcash'
+    });
+    // Optimistic local unlock — treat as paid for the rest of today
+    const _until = new Date();
+    _until.setUTCHours(23, 59, 59, 999);
+    user.paidUntilDate = _until.toISOString();
+    localStorage.setItem('rh_user', JSON.stringify(user));
+    unlockAcceptButton();
+    showToast('✅ Payment submitted! Ride acceptance is now active.', 'success');
+    document.getElementById('trx-id-input').value     = '';
+    document.getElementById('trx-amount-input').value = '';
+    const ss = document.getElementById('trx-screenshot');
+    if (ss) ss.value = '';
+    await loadPayments();
+  } catch (e) {
+    showToast(e.message, 'error');
+    btn.disabled = false;
+    btn.textContent = 'Submit Payment';
+  }
+}
+
+// ── Support Ticket ────────────────────────────────────────────────────────
+function openSupportModal() { document.getElementById('support-overlay').classList.add('open'); }
+function closeSupportModal() { document.getElementById('support-overlay').classList.remove('open'); }
+
+async function submitSupportTicket() {
+  const subject = document.getElementById('sup-subject').value.trim();
+  const message = document.getElementById('sup-message').value.trim();
+  if (!subject) return showToast('Enter a subject', 'error');
+  if (!message) return showToast('Enter your message', 'error');
+  const btn = document.getElementById('sup-submit-btn');
+  btn.disabled = true; btn.textContent = 'Sending…';
+  try {
+    await apiCall('/api/support/ticket', 'POST', { subject, message });
+    showToast('Support ticket submitted! We\'ll respond soon.', 'success');
+    document.getElementById('sup-subject').value = '';
+    document.getElementById('sup-message').value = '';
+    closeSupportModal();
+  } catch (e) { showToast(e.message, 'error'); }
+  finally { btn.disabled = false; btn.textContent = 'Send Ticket'; }
+}
+
+// ── Stats ──────────────────────────────────────────────────────────────────
+async function loadStats() {
+  try {
+    const w = await apiCall('/api/wallet');
+    const bal = +(w.balance || 0);
+    document.getElementById('earnings-val').textContent  = bal.toLocaleString();
+    document.getElementById('stat-earning').textContent  = `Rs ${bal.toLocaleString()}`;
+
+    const rides = await apiCall('/api/rides/my');
+    const today = new Date().toDateString();
+    const todayCompleted = rides.filter(r => r.status === 'completed' && new Date(r.createdAt).toDateString() === today);
+    todayRides    = todayCompleted.length;
+    todayEarnings = todayCompleted.reduce((s, r) => s + r.fare * 0.85, 0);
+    document.getElementById('stat-rides').textContent   = todayRides;
+    document.getElementById('stat-rating').textContent  = (user.rating || 5.0).toFixed(1) + ' ⭐';
+  } catch {}
+}
+
+// ── PIN Entry for Ride Start ──────────────────────────────────────────────
+function requestPinToStart() {
+  document.getElementById('pin-input').value = '';
+  document.getElementById('pin-error').textContent = '';
+  document.getElementById('pin-entry-modal').style.display = 'flex';
+  setTimeout(() => document.getElementById('pin-input').focus(), 120);
+}
+
+function closePinModal() {
+  document.getElementById('pin-entry-modal').style.display = 'none';
+}
+
+async function submitStartPin() {
+  if (!activeRide) return;
+  const pin = String(document.getElementById('pin-input').value).trim();
+  if (!pin || pin.length !== 4) {
+    document.getElementById('pin-error').textContent = 'Enter the 4-digit PIN from the passenger';
+    return;
+  }
+  const btn = document.getElementById('pin-submit-btn');
+  btn.disabled = true; btn.textContent = 'Verifying…';
+  try {
+    await apiCall(`/api/rides/${activeRide._id}/status`, 'PATCH', { status: 'in-progress', pin });
+    closePinModal();
+    activeRide.status = 'in-progress';
+    document.getElementById('ap-status-text').textContent = 'Ride in progress';
+    renderActiveButtons('in-progress');
+    showToast('Ride started! 🚗', 'success');
+  } catch (e) {
+    const errMsg = e.message || '';
+    if (errMsg.includes('WRONG_PIN') || errMsg.includes('Wrong')) {
+      document.getElementById('pin-error').textContent = '❌ Wrong PIN — ask the passenger again';
+    } else {
+      document.getElementById('pin-error').textContent = errMsg;
+    }
+  } finally {
+    btn.disabled = false; btn.textContent = '▶ Start Ride';
+  }
+}
+
+// ── Driver Rating Modal ───────────────────────────────────────────────────
+let _drRatingRideId    = null;
+let _drRatingSelected  = 0;
+let _drPassengerName   = 'your passenger';
+
+function showDriverRatingModal() {
+  _drRatingRideId   = activeRide?._id || null;
+  _drPassengerName  = activeRide?.passenger?.name || 'your passenger';
+  _drRatingSelected = 0;
+  document.querySelectorAll('#driver-rating-modal .dr-star-btn').forEach(b => b.classList.remove('selected'));
+  document.getElementById('dr-review-text').value = '';
+  document.getElementById('dr-passenger-name').textContent = _drPassengerName;
+  document.getElementById('driver-rating-modal').style.display = 'flex';
+}
+
+function selectDriverStar(n) {
+  _drRatingSelected = n;
+  document.querySelectorAll('#driver-rating-modal .dr-star-btn').forEach((b, i) =>
+    b.classList.toggle('selected', i < n));
+}
+
+async function submitDriverRating() {
+  if (!_drRatingSelected) { showToast('Please select a star rating', 'error'); return; }
+  const review = document.getElementById('dr-review-text').value.trim();
+  const btn    = document.getElementById('dr-submit-btn');
+  btn.disabled = true; btn.textContent = 'Submitting…';
+  try {
+    if (_drRatingRideId) {
+      await apiCall(`/api/rides/${_drRatingRideId}/review-passenger`, 'PATCH',
+        { rating: _drRatingSelected, review });
+    }
+    document.getElementById('driver-rating-modal').style.display = 'none';
+    showToast('Rating submitted! ⭐', 'success');
+  } catch (e) {
+    showToast(e.message || 'Could not submit rating', 'error');
+  } finally {
+    btn.disabled = false; btn.textContent = 'Submit Rating';
+    endActiveRide();
+  }
+}
+
+function skipDriverRating() {
+  document.getElementById('driver-rating-modal').style.display = 'none';
+  endActiveRide();
+}
+
+// ── Init ───────────────────────────────────────────────────────────────────
+if (token && user && user.role === 'driver') {
+  bootApp();
+} else if (token && user && user.role !== 'driver') {
+  // Customer (or other non-driver) trying to open the Driver App — evict them.
+  // We preserve their session so they land already logged-in on the Customer App.
+  alert('Access Denied: This account is registered as a Customer. Redirecting to the Customer App.');
+  window.location.replace('/customer');
+} else {
+  // No session — show the auth screen so the driver can log in
+  document.getElementById('auth-screen').style.display = 'flex';
+}
+</script>
+
+<!-- ── PIN Entry Modal ── -->
+<div id="pin-entry-modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.92);z-index:3500;align-items:center;justify-content:center">
+  <div style="background:#1a1a2a;border:2px solid #f5c518;border-radius:16px;padding:1.75rem;max-width:300px;width:90%;margin:auto;text-align:center">
+    <div style="font-size:2.5rem;margin-bottom:.4rem">🔐</div>
+    <h3 style="color:#f5c518;margin:0 0 .35rem;font-size:1.1rem">Enter Ride PIN</h3>
+    <p style="color:#888;font-size:.82rem;margin-bottom:1rem">Ask your passenger for their 4-digit ride PIN</p>
+    <input type="tel" id="pin-input" maxlength="4" placeholder="••••" inputmode="numeric"
+           style="width:100%;text-align:center;font-size:2.2rem;letter-spacing:.6rem;padding:.6rem .5rem;border-radius:10px;border:2px solid #f5c518;background:#0a0a14;color:#f5c518;outline:none;margin-bottom:.45rem;box-sizing:border-box">
+    <p id="pin-error" style="color:#ef4444;font-size:.8rem;min-height:1.2em;margin-bottom:.5rem"></p>
+    <div style="display:flex;gap:.5rem">
+      <button onclick="closePinModal()" style="flex:1;padding:.7rem;border-radius:8px;background:#1a1a2a;border:1px solid #333;color:#888;cursor:pointer;font-size:.85rem">Cancel</button>
+      <button id="pin-submit-btn" onclick="submitStartPin()" style="flex:2;padding:.7rem;border-radius:8px;background:#f5c518;color:#06060e;border:none;cursor:pointer;font-size:.9rem;font-weight:800">▶ Start Ride</button>
+    </div>
+  </div>
+</div>
+
+<!-- ── Driver Rating Modal ── -->
+<div id="driver-rating-modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.92);z-index:3500;align-items:center;justify-content:center" onclick="if(event.target===this)skipDriverRating()">
+  <div style="background:#1a1a2a;border:1px solid #2a2a4a;border-radius:16px;padding:1.75rem;max-width:320px;width:92%;margin:auto;text-align:center">
+    <div style="font-size:1.8rem;margin-bottom:.4rem">⭐</div>
+    <h3 style="color:#e2e8f0;margin:0 0 .25rem;font-size:1rem;font-weight:800">Rate Your Passenger</h3>
+    <p style="color:#64748b;font-size:.82rem;margin-bottom:1rem">How was <span id="dr-passenger-name">your passenger</span>?</p>
+    <div style="display:flex;justify-content:center;gap:.4rem;margin-bottom:.9rem">
+      <button class="dr-star-btn" onclick="selectDriverStar(1)" style="font-size:1.8rem;background:none;border:none;cursor:pointer;color:#334155;transition:color .15s">★</button>
+      <button class="dr-star-btn" onclick="selectDriverStar(2)" style="font-size:1.8rem;background:none;border:none;cursor:pointer;color:#334155;transition:color .15s">★</button>
+      <button class="dr-star-btn" onclick="selectDriverStar(3)" style="font-size:1.8rem;background:none;border:none;cursor:pointer;color:#334155;transition:color .15s">★</button>
+      <button class="dr-star-btn" onclick="selectDriverStar(4)" style="font-size:1.8rem;background:none;border:none;cursor:pointer;color:#334155;transition:color .15s">★</button>
+      <button class="dr-star-btn" onclick="selectDriverStar(5)" style="font-size:1.8rem;background:none;border:none;cursor:pointer;color:#334155;transition:color .15s">★</button>
+    </div>
+    <style>#driver-rating-modal .dr-star-btn.selected{color:#f5c518}</style>
+    <textarea id="dr-review-text" placeholder="Add a comment (optional)…" style="width:100%;background:#06060e;border:1px solid #1e1e2e;border-radius:8px;padding:.6rem .8rem;color:#e2e8f0;font-size:.82rem;resize:none;height:70px;outline:none;margin-bottom:.75rem;box-sizing:border-box"></textarea>
+    <div style="display:flex;gap:.5rem">
+      <button onclick="skipDriverRating()" style="flex:1;padding:.65rem;border-radius:8px;background:#1a1a2a;border:1px solid #1e1e2e;color:#64748b;cursor:pointer;font-size:.85rem">Skip</button>
+      <button id="dr-submit-btn" onclick="submitDriverRating()" style="flex:2;padding:.65rem;border-radius:8px;background:#4caf50;color:#fff;border:none;cursor:pointer;font-size:.85rem;font-weight:800">Submit Rating</button>
+    </div>
+  </div>
+</div>
+
+<!-- ── Contact Support Modal ── -->
+<div class="support-overlay" id="support-overlay" onclick="if(event.target===this)closeSupportModal()">
+  <div class="support-modal">
+    <h3>🎫 Contact Support</h3>
+    <input  class="support-input" id="sup-subject" type="text"     placeholder="Subject (e.g. Payment issue, App bug…)">
+    <textarea class="support-input" id="sup-message"               placeholder="Describe your issue in detail…"></textarea>
+    <div class="support-modal-btns">
+      <button class="btn-sup-cancel" onclick="closeSupportModal()">Cancel</button>
+      <button class="btn-sup-submit" id="sup-submit-btn" onclick="submitSupportTicket()">Send Ticket</button>
+    </div>
+  </div>
+</div>
+
+<!-- ── My Tickets Modal ── -->
+<div class="support-overlay" id="my-tickets-overlay" onclick="if(event.target===this)closeMyTickets()">
+  <div class="support-modal" style="max-width:400px;max-height:80vh;display:flex;flex-direction:column">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:.85rem;flex-shrink:0">
+      <h3 style="margin:0;font-size:.95rem">📋 My Support Tickets</h3>
+      <button onclick="closeMyTickets()" style="background:none;border:none;color:#555;cursor:pointer;font-size:1.1rem;padding:.2rem">✕</button>
+    </div>
+    <div id="my-tickets-list" style="overflow-y:auto;flex:1"></div>
+    <div style="flex-shrink:0;margin-top:.65rem">
+      <button class="btn-sup-submit" onclick="closeMyTickets();openSupportModal()" style="width:100%;padding:.55rem;font-size:.83rem">+ New Ticket</button>
+    </div>
+  </div>
+</div>
+
+<!-- ── Upload Progress Overlay ───────────────────────────────────────────── -->
+<div id="upload-progress-screen" style="display:none;position:fixed;inset:0;background:#0a0a0f;z-index:1100;flex-direction:column;align-items:center;justify-content:center;padding:2rem;text-align:center">
+  <div style="font-size:3.5rem;margin-bottom:1rem">📤</div>
+  <h2 style="color:#f5c518;margin:0 0 .35rem;font-size:1.25rem">Uploading Documents</h2>
+  <p style="color:#666;font-size:.83rem;margin-bottom:2rem;max-width:280px">Please wait while your files are uploading to our servers…</p>
+  <div style="width:280px;background:#1a1a2a;border-radius:999px;height:14px;overflow:hidden;margin-bottom:.75rem">
+    <div id="upload-progress-bar" style="height:100%;background:linear-gradient(90deg,#f5c518,#ff9900);border-radius:999px;transition:width .25s ease;width:0%"></div>
+  </div>
+  <div id="upload-progress-pct" style="color:#f5c518;font-size:1.5rem;font-weight:700;margin-bottom:.4rem">0%</div>
+  <p style="color:#333;font-size:.7rem">Do not close this page</p>
+</div>
+
+
+<!-- ── Change Phone Modal ─────────────────────────────────────────────────── -->
+<div id="change-phone-modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.8);z-index:2100;align-items:center;justify-content:center">
+  <div style="background:#1a1a2a;border:1px solid #2a2a4a;border-radius:16px;padding:1.5rem;max-width:340px;width:90%;margin:auto">
+    <h3 style="color:#f5c518;margin:0 0 1rem;font-size:1rem">📱 Change Phone Number</h3>
+    <input type="password" id="cp-phone-current" placeholder="Current password" style="width:100%;padding:.7rem;border-radius:8px;border:1px solid #333;background:#0d0d1a;color:#fff;margin-bottom:.5rem;box-sizing:border-box;font-size:.875rem">
+    <input type="tel" id="cp-phone-new" placeholder="New phone number" inputmode="tel" style="width:100%;padding:.7rem;border-radius:8px;border:1px solid #333;background:#0d0d1a;color:#fff;margin-bottom:.4rem;box-sizing:border-box;font-size:.875rem">
+    <p id="cp-phone-err" style="color:#ff4444;font-size:.78rem;min-height:1em;margin-bottom:.5rem"></p>
+    <div style="display:flex;gap:.5rem">
+      <button onclick="closeChangePhoneModal()" style="flex:1;padding:.7rem;border-radius:8px;border:1px solid #333;background:#1a1a2a;color:#aaa;cursor:pointer;font-size:.85rem">Cancel</button>
+      <button id="cp-phone-btn" onclick="submitChangePhone()" style="flex:1;padding:.7rem;border-radius:8px;border:none;background:#f5c518;color:#000;font-weight:600;cursor:pointer;font-size:.85rem">Update</button>
+    </div>
+  </div>
+</div>
+
+<!-- ── Change Password Modal ──────────────────────────────────────────────── -->
+<div id="change-password-modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.8);z-index:2100;align-items:center;justify-content:center">
+  <div style="background:#1a1a2a;border:1px solid #2a2a4a;border-radius:16px;padding:1.5rem;max-width:340px;width:90%;margin:auto">
+    <h3 style="color:#f5c518;margin:0 0 1rem;font-size:1rem">🔑 Change Password</h3>
+    <input type="password" id="cp-pass-current" placeholder="Current password" style="width:100%;padding:.7rem;border-radius:8px;border:1px solid #333;background:#0d0d1a;color:#fff;margin-bottom:.5rem;box-sizing:border-box;font-size:.875rem">
+    <input type="password" id="cp-pass-new" placeholder="New password (min 6 characters)" style="width:100%;padding:.7rem;border-radius:8px;border:1px solid #333;background:#0d0d1a;color:#fff;margin-bottom:.4rem;box-sizing:border-box;font-size:.875rem">
+    <p id="cp-pass-err" style="color:#ff4444;font-size:.78rem;min-height:1em;margin-bottom:.5rem"></p>
+    <div style="display:flex;gap:.5rem">
+      <button onclick="closeChangePasswordModal()" style="flex:1;padding:.7rem;border-radius:8px;border:1px solid #333;background:#1a1a2a;color:#aaa;cursor:pointer;font-size:.85rem">Cancel</button>
+      <button id="cp-pass-btn" onclick="submitChangePassword()" style="flex:1;padding:.7rem;border-radius:8px;border:none;background:#f5c518;color:#000;font-weight:600;cursor:pointer;font-size:.85rem">Update</button>
+    </div>
+  </div>
+</div>
+
+<!-- ── Change Vehicle Info Modal ──────────────────────────────────────────── -->
+<div id="change-vehicle-modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.8);z-index:2100;align-items:center;justify-content:center">
+  <div style="background:#1a1a2a;border:1px solid #2a2a4a;border-radius:16px;padding:1.5rem;max-width:340px;width:90%;margin:auto">
+    <h3 style="color:#f5c518;margin:0 0 1rem;font-size:1rem">🚗 Change Vehicle Info</h3>
+    <input type="password" id="cv-current" placeholder="Current password" style="width:100%;padding:.7rem;border-radius:8px;border:1px solid #333;background:#0d0d1a;color:#fff;margin-bottom:.5rem;box-sizing:border-box;font-size:.875rem">
+    <input type="text" id="cv-model" placeholder="Vehicle model (e.g. Suzuki Cultus 2022)" style="width:100%;padding:.7rem;border-radius:8px;border:1px solid #333;background:#0d0d1a;color:#fff;margin-bottom:.5rem;box-sizing:border-box;font-size:.875rem">
+    <input type="text" id="cv-plate" placeholder="Number plate (e.g. LHR-1234)" style="width:100%;padding:.7rem;border-radius:8px;border:1px solid #333;background:#0d0d1a;color:#fff;margin-bottom:.4rem;box-sizing:border-box;font-size:.875rem;text-transform:uppercase">
+    <p id="cv-err" style="color:#ff4444;font-size:.78rem;min-height:1em;margin-bottom:.5rem"></p>
+    <div style="display:flex;gap:.5rem">
+      <button onclick="closeChangeVehicleModal()" style="flex:1;padding:.7rem;border-radius:8px;border:1px solid #333;background:#1a1a2a;color:#aaa;cursor:pointer;font-size:.85rem">Cancel</button>
+      <button id="cv-btn" onclick="submitChangeVehicle()" style="flex:1;padding:.7rem;border-radius:8px;border:none;background:#f5c518;color:#000;font-weight:600;cursor:pointer;font-size:.85rem">Update</button>
+    </div>
+  </div>
+</div>
+
+<script>
+// ── Upload Progress ────────────────────────────────────────────────────────
+function showUploadProgress() { document.getElementById('upload-progress-screen').style.display = 'flex'; }
+function hideUploadProgress() { document.getElementById('upload-progress-screen').style.display = 'none'; }
+function setUploadProgress(pct) {
+  const bar = document.getElementById('upload-progress-bar');
+  const txt = document.getElementById('upload-progress-pct');
+  if (bar) bar.style.width = pct + '%';
+  if (txt) txt.textContent = pct + '%';
+}
+
+// ── Daily Platform Fee ─────────────────────────────────────────────────────
+const DAILY_FEE_RATES = { 'Bike': 70, 'Rickshaw': 130, 'Car Mini': 220, 'Car AC': 270 };
+
+function checkDailyFee() {
+  if (!user || user.role !== 'driver') return;
+  const feeRate   = user.dailyFeeRate || DAILY_FEE_RATES[user.vehicleType] || 220;
+  const paidUntil = user.paidUntilDate ? new Date(user.paidUntilDate) : null;
+  dailyFeeDue     = !paidUntil || paidUntil < new Date();
+
+  // Update fee info bar
+  const barEl     = document.getElementById('fee-info-bar');
+  const statusEl  = document.getElementById('fee-status-text');
+  const rateEl    = document.getElementById('fee-rate-text');
+  const vehicleEl = document.getElementById('fee-vehicle-text');
+  if (barEl)     barEl.style.display   = 'flex';
+  if (vehicleEl) vehicleEl.textContent = user.vehicleType || 'Vehicle';
+  if (rateEl)    rateEl.textContent    = `Daily Fee: Rs ${feeRate}`;
+  if (statusEl) {
+    if (dailyFeeDue) {
+      statusEl.textContent = '⚠ Fee unpaid — Accept disabled';
+      statusEl.style.color = '#f59e0b';
+    } else if (user.isFreeTrial) {
+      const ds = paidUntil ? paidUntil.toLocaleDateString('en-PK', { day: 'numeric', month: 'short', year: 'numeric' }) : '';
+      statusEl.textContent = `✅ Paid by server till ${ds}`;
+      statusEl.style.color = '#22c55e';
+    } else {
+      const ds = paidUntil ? paidUntil.toLocaleDateString('en-PK', { day: '2-digit', month: 'short' }) : '';
+      statusEl.textContent = `✓ Paid till ${ds}`;
+      statusEl.style.color = '#22c55e';
+    }
+  }
+  // Trial history banner
+  const trialBannerEl = document.getElementById('trial-history-banner');
+  if (trialBannerEl) {
+    if (user.isFreeTrial && user.trialStartDate && paidUntil && !dailyFeeDue) {
+      const startDs = new Date(user.trialStartDate).toLocaleDateString('en-PK', { day: 'numeric', month: 'short', year: 'numeric' });
+      const endDs   = paidUntil.toLocaleDateString('en-PK', { day: 'numeric', month: 'short', year: 'numeric' });
+      trialBannerEl.textContent = `Free Trial Granted: ${startDs} to ${endDs}`;
+      trialBannerEl.style.display = 'flex';
+    } else {
+      trialBannerEl.style.display = 'none';
+    }
+  }
+}
+
+// Unlock the Accept button (called after payment submit or admin fee:waived event)
+function unlockAcceptButton() {
+  dailyFeeDue = false;
+  checkDailyFee();
+  const acceptBtn = document.querySelector('.btn-accept');
+  if (acceptBtn && pendingRide) {
+    acceptBtn.disabled      = false;
+    acceptBtn.textContent   = '✓ Accept';
+    acceptBtn.style.opacity = '';
+    acceptBtn.style.cursor  = '';
+    acceptBtn.onclick = () => acceptRide();
+  }
+  // Dismiss the daily fee banner
+  const banner = document.getElementById('daily-fee-banner');
+  if (banner) banner.style.display = 'none';
+}
+
+// Show/hide the daily fee banner inside the Payments panel
+function updateDailyFeeBanner() {
+  const banner    = document.getElementById('daily-fee-banner');
+  const amountEl  = document.getElementById('daily-fee-banner-amount');
+  if (!banner) return;
+  if (dailyFeeDue) {
+    const feeRate = user?.dailyFeeRate || DAILY_FEE_RATES[user?.vehicleType] || 220;
+    if (amountEl) amountEl.textContent = `Rs ${feeRate}`;
+    banner.style.display = 'flex';
+  } else {
+    banner.style.display = 'none';
+  }
+}
+
+// Navigate to the Payments tab and scroll the TRX form into view
+function goToPayFee(rate) {
+  // Dismiss the ride-request overlay so the Payments panel is fully visible
+  hideRideRequest();
+
+  switchBottomTab('payments');
+  const feeRate = rate || user?.dailyFeeRate || DAILY_FEE_RATES[user?.vehicleType] || 220;
+  const banner   = document.getElementById('daily-fee-banner');
+  const amountEl = document.getElementById('daily-fee-banner-amount');
+  if (banner)   banner.style.display = 'flex';
+  if (amountEl) amountEl.textContent = `Rs ${feeRate}`;
+  // Scroll TRX form into view then focus the TRX input
+  setTimeout(() => {
+    const trxSection = document.getElementById('trx-form-section');
+    if (trxSection) trxSection.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    setTimeout(() => {
+      const trxInput = document.getElementById('trx-id-input');
+      if (trxInput) trxInput.focus();
+    }, 400);
+  }, 200);
+}
+
+// ── Profile Update Helpers ─────────────────────────────────────────────────
+async function profileUpdate(payload, modalId) {
+  try {
+    const res = await apiCall('/api/user/update-profile', 'POST', payload);
+    if (res.user) { user = { ...user, ...res.user }; localStorage.setItem('rh_user', JSON.stringify(user)); }
+    document.getElementById(modalId).style.display = 'none';
+    showToast('✅ ' + res.message, 'success');
+    return null;
+  } catch (e) { return e.message; }
+}
+
+// Change Phone
+function openChangePhoneModal() {
+  ['cp-phone-current','cp-phone-new'].forEach(id => { const el = document.getElementById(id); if (el) el.value = ''; });
+  document.getElementById('cp-phone-err').textContent = '';
+  const btn = document.getElementById('cp-phone-btn'); if (btn) { btn.disabled = false; btn.textContent = 'Update'; }
+  document.getElementById('change-phone-modal').style.display = 'flex';
+}
+function closeChangePhoneModal() { document.getElementById('change-phone-modal').style.display = 'none'; }
+async function submitChangePhone() {
+  const currentPassword = document.getElementById('cp-phone-current').value;
+  const newPhone        = document.getElementById('cp-phone-new').value.trim();
+  const errEl = document.getElementById('cp-phone-err');
+  const btn   = document.getElementById('cp-phone-btn');
+  if (!currentPassword) { errEl.textContent = 'Current password is required'; return; }
+  if (!newPhone)        { errEl.textContent = 'New phone number is required';  return; }
+  btn.disabled = true; btn.textContent = 'Updating…'; errEl.textContent = '';
+  const err = await profileUpdate({ currentPassword, newPhone }, 'change-phone-modal');
+  if (err) { errEl.textContent = err; btn.disabled = false; btn.textContent = 'Update'; }
+}
+
+// Change Password
+function openChangePasswordModal() {
+  ['cp-pass-current','cp-pass-new'].forEach(id => { const el = document.getElementById(id); if (el) el.value = ''; });
+  document.getElementById('cp-pass-err').textContent = '';
+  const btn = document.getElementById('cp-pass-btn'); if (btn) { btn.disabled = false; btn.textContent = 'Update'; }
+  document.getElementById('change-password-modal').style.display = 'flex';
+}
+function closeChangePasswordModal() { document.getElementById('change-password-modal').style.display = 'none'; }
+async function submitChangePassword() {
+  const currentPassword = document.getElementById('cp-pass-current').value;
+  const newPassword     = document.getElementById('cp-pass-new').value;
+  const errEl = document.getElementById('cp-pass-err');
+  const btn   = document.getElementById('cp-pass-btn');
+  if (!currentPassword)       { errEl.textContent = 'Current password is required'; return; }
+  if (newPassword.length < 6) { errEl.textContent = 'New password must be at least 6 characters'; return; }
+  btn.disabled = true; btn.textContent = 'Updating…'; errEl.textContent = '';
+  const err = await profileUpdate({ currentPassword, newPassword }, 'change-password-modal');
+  if (err) { errEl.textContent = err; btn.disabled = false; btn.textContent = 'Update'; }
+}
+
+// Change Vehicle Info
+function openChangeVehicleModal() {
+  document.getElementById('cv-current').value = '';
+  document.getElementById('cv-model').value   = user?.vehicleModel || '';
+  document.getElementById('cv-plate').value   = user?.vehiclePlate || '';
+  document.getElementById('cv-err').textContent = '';
+  const btn = document.getElementById('cv-btn'); if (btn) { btn.disabled = false; btn.textContent = 'Update'; }
+  document.getElementById('change-vehicle-modal').style.display = 'flex';
+}
+function closeChangeVehicleModal() { document.getElementById('change-vehicle-modal').style.display = 'none'; }
+async function submitChangeVehicle() {
+  const currentPassword = document.getElementById('cv-current').value;
+  const vehicleModel    = document.getElementById('cv-model').value.trim();
+  const vehiclePlate    = document.getElementById('cv-plate').value.trim();
+  const errEl = document.getElementById('cv-err');
+  const btn   = document.getElementById('cv-btn');
+  if (!currentPassword) { errEl.textContent = 'Current password is required'; return; }
+  if (!vehicleModel)    { errEl.textContent = 'Vehicle model is required';     return; }
+  if (!vehiclePlate)    { errEl.textContent = 'Number plate is required';      return; }
+  btn.disabled = true; btn.textContent = 'Updating…'; errEl.textContent = '';
+  const err = await profileUpdate({ currentPassword, vehicleModel, vehiclePlate }, 'change-vehicle-modal');
+  if (err) { errEl.textContent = err; btn.disabled = false; btn.textContent = 'Update'; }
+}
+</script>
+
+<!-- ── Delete Account Modal ──────────────────────────────────────────────── -->
+<div id="delete-account-modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.8);z-index:2000;align-items:center;justify-content:center">
+  <div style="background:#1a1a2a;border:1px solid #3a1a1a;border-radius:16px;padding:1.5rem;max-width:340px;width:90%;margin:auto">
+    <h3 style="color:#ff4444;margin:0 0 .5rem">⚠️ Delete Account Permanently</h3>
+    <p style="color:#aaa;font-size:.82rem;line-height:1.5;margin-bottom:1rem">This cannot be undone. Enter your password to confirm. An admin will review and remove all your data within 24–48 hours.</p>
+    <input type="password" id="del-acc-pass" placeholder="Enter your password" style="width:100%;padding:.75rem;border-radius:8px;border:1px solid #444;background:#0d0d1a;color:#fff;margin-bottom:.5rem;box-sizing:border-box;font-size:.9rem">
+    <p id="del-acc-err" style="color:#ff4444;font-size:.8rem;min-height:1.1em;margin-bottom:.75rem"></p>
+    <div style="display:flex;gap:.5rem">
+      <button onclick="closeDeleteAccountModal()" style="flex:1;padding:.75rem;border-radius:8px;border:1px solid #333;background:#1a1a2a;color:#aaa;cursor:pointer;font-size:.875rem">Cancel</button>
+      <button id="del-acc-btn" onclick="doDeleteAccount()" style="flex:1;padding:.75rem;border-radius:8px;border:none;background:#cc2222;color:#fff;font-weight:600;cursor:pointer;font-size:.875rem">Delete My Account</button>
+    </div>
+  </div>
+</div>
+
+<script>
+function openDeleteAccountModal() {
+  document.getElementById('del-acc-pass').value = '';
+  document.getElementById('del-acc-err').textContent = '';
+  const btn = document.getElementById('del-acc-btn');
+  if (btn) { btn.disabled = false; btn.textContent = 'Delete My Account'; }
+  document.getElementById('delete-account-modal').style.display = 'flex';
+}
+function closeDeleteAccountModal() {
+  document.getElementById('delete-account-modal').style.display = 'none';
+}
+async function doDeleteAccount() {
+  const pass  = document.getElementById('del-acc-pass').value;
+  const errEl = document.getElementById('del-acc-err');
+  const btn   = document.getElementById('del-acc-btn');
+  if (!pass) { errEl.textContent = 'Password is required'; return; }
+  btn.disabled = true; btn.textContent = 'Processing…';
+  try {
+    const res = await apiCall('/api/account/delete-request', 'POST', { password: pass });
+    closeDeleteAccountModal();
+    alert('✅ ' + res.message);
+    doLogout();
+  } catch (e) {
+    errEl.textContent = e.message;
+    btn.disabled = false; btn.textContent = 'Delete My Account';
+  }
+}
+</script>
+
+<!-- ── PWA Service Worker Registration ── -->
+<script>
+if ('serviceWorker' in navigator) {
+  window.addEventListener('load', () => {
+    navigator.serviceWorker.register('/sw.js', { scope: '/' })
+      .then(reg => console.log('[SW] Driver registered, scope:', reg.scope))
+      .catch(err => console.warn('[SW] Registration failed:', err));
+  });
+}
+</script>
+</body>
+</html>

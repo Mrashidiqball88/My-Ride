@@ -1,0 +1,2098 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<!-- PWA -->
+<meta name="theme-color" content="#000000">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="MyRide">
+<link rel="manifest" href="/customer-manifest.json">
+<link rel="apple-touch-icon" href="/apple-touch-icon.png">
+<link rel="icon" type="image/png" sizes="192x192" href="/icon-192.png">
+<title>MyRide — Customer</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script src="/socket.io/socket.io.js"></script>
+<style>
+*{margin:0;padding:0;box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+body{font-family:'Segoe UI',sans-serif;background:#0a0a0f;color:#fff;height:100dvh;overflow:hidden;display:flex;flex-direction:column}
+
+/* ── Auth ── */
+#auth-screen{position:fixed;inset:0;z-index:1000;background:#0a0a0f;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:1.5rem}
+.auth-logo{font-size:2rem;font-weight:800;margin-bottom:.25rem}.auth-logo span{color:#f5c518}
+.auth-subtitle{color:#555;font-size:.85rem;margin-bottom:2rem}
+.auth-card{background:#13131a;border:1px solid #222;border-radius:20px;padding:1.5rem;width:100%;max-width:360px}
+.auth-tabs{display:flex;gap:.5rem;margin-bottom:1.5rem;background:#0a0a0f;border-radius:10px;padding:.25rem}
+.auth-tab{flex:1;padding:.6rem;border:none;background:transparent;color:#666;border-radius:8px;font-size:.9rem;cursor:pointer;transition:all .2s}
+.auth-tab.active{background:#f5c518;color:#0a0a0f;font-weight:700}
+.form-group{margin-bottom:1rem}
+.form-group label{display:block;font-size:.8rem;color:#888;margin-bottom:.4rem}
+.form-group input,.form-group select{width:100%;background:#0a0a0f;border:1px solid #333;border-radius:10px;padding:.75rem 1rem;color:#fff;font-size:.95rem;outline:none;transition:border-color .2s}
+.form-group input:focus,.form-group select:focus{border-color:#f5c518}
+.form-group select option{background:#13131a}
+.btn-primary{width:100%;background:#f5c518;color:#0a0a0f;border:none;border-radius:12px;padding:.85rem;font-size:1rem;font-weight:700;cursor:pointer;margin-top:.5rem;transition:opacity .2s}
+.btn-primary:hover{opacity:.9}
+.btn-primary:disabled{opacity:.5;cursor:not-allowed}
+.auth-error{color:#ff5555;font-size:.85rem;text-align:center;margin-top:.75rem;min-height:1.2em}
+
+/* ── App Layout ── */
+#app{display:none;flex-direction:column;height:100dvh}
+#map{flex:1;z-index:1;width:100%;min-height:0;position:relative;overflow:hidden}
+
+/* ── Header ── */
+.header{background:#13131a;border-bottom:1px solid #222;padding:.75rem 1rem;display:flex;align-items:center;justify-content:space-between;z-index:10;flex-shrink:0}
+.header-logo{font-size:1.2rem;font-weight:800}.header-logo span{color:#f5c518}
+.header-user{display:flex;align-items:center;gap:.5rem}
+.avatar{width:32px;height:32px;background:#f5c518;border-radius:50%;display:flex;align-items:center;justify-content:center;font-weight:700;color:#0a0a0f;font-size:.85rem}
+.header-name{font-size:.85rem;color:#ccc;max-width:100px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+/* ── 3-dots menu ── */
+.dots-menu-wrap{position:relative}
+.btn-dots{background:none;border:1px solid #333;color:#aaa;border-radius:8px;width:32px;height:32px;font-size:1.25rem;line-height:1;cursor:pointer;display:flex;align-items:center;justify-content:center;transition:border-color .2s}
+.btn-dots:hover{border-color:#f5c518;color:#f5c518}
+.dots-dropdown{position:absolute;right:0;top:calc(100% + 6px);background:#1a1a2a;border:1px solid #2a2a4a;border-radius:12px;min-width:180px;box-shadow:0 8px 24px rgba(0,0,0,.5);z-index:200;overflow:hidden}
+.dots-item{padding:.75rem 1rem;font-size:.875rem;cursor:pointer;transition:background .15s;display:flex;align-items:center;gap:.6rem}
+.dots-item:hover{background:#252535}
+.dots-item.danger{color:#ff5555}
+.dots-item.danger:hover{background:rgba(255,60,60,.1)}
+/* ── Forgot password ── */
+.fp-otp-box{background:#1a1a0a;border:2px solid #f5c518;border-radius:12px;padding:1rem;text-align:center;margin:.75rem 0}
+.fp-otp-code{font-size:2rem;font-weight:800;letter-spacing:.25em;color:#f5c518}
+.fp-otp-note{font-size:.7rem;color:#888;margin-top:.35rem}
+.btn-text-link{background:none;border:none;color:#f5c518;font-size:.8rem;cursor:pointer;text-decoration:underline;margin-top:.4rem;display:inline-block;padding:0}
+/* ── Password eye toggle ── */
+.pw-wrap{position:relative;display:block}
+.pw-wrap input{padding-right:2.8rem!important;width:100%}
+.pw-eye{position:absolute;right:.75rem;top:50%;transform:translateY(-50%);background:none;border:none;color:#555;cursor:pointer;font-size:1rem;padding:.15rem;display:flex;align-items:center;justify-content:center;line-height:1;transition:color .2s}
+.pw-eye:hover{color:#f5c518}
+/* ── Rating & Support modals ── */
+#rating-modal.open,#support-modal.open,#my-tickets-modal.open{display:flex!important}
+.star-btn{background:none;border:none;font-size:1.8rem;color:#334155;cursor:pointer;transition:color .15s;line-height:1}
+.star-btn:hover,.star-btn.selected{color:#f5c518}
+/* ── Ticket badge ── */
+.cust-ticket-badge{background:#ef4444;color:#fff;border-radius:100px;font-size:.6rem;font-weight:800;padding:.1rem .4rem;min-width:16px;text-align:center;margin-left:auto}
+.dots-unread-dot{position:absolute;top:-2px;right:-2px;width:8px;height:8px;background:#ef4444;border-radius:50%;border:1px solid #0a0a0f}
+/* ── Emergency contacts modal ── */
+.ec-modal-title{font-size:1.05rem;font-weight:700;color:#fff;margin-bottom:.3rem}
+.ec-modal-note{font-size:.77rem;color:#666;margin-bottom:1rem}
+.ec-section-label{font-size:.7rem;font-weight:700;color:#f5c518;text-transform:uppercase;letter-spacing:.06em;margin:.9rem 0 .4rem}
+
+/* ── Bottom Panel ── */
+#bottom-panel{background:#13131a;border-top:1px solid #222;max-height:65vh;overflow-y:auto;flex-shrink:0;z-index:10}
+.tabs{display:flex;border-bottom:1px solid #222;background:#0a0a0f}
+.tab{flex:1;padding:.75rem;border:none;background:transparent;color:#666;font-size:.8rem;cursor:pointer;transition:all .2s;display:flex;flex-direction:column;align-items:center;gap:.15rem}
+.tab.active{color:#f5c518;border-bottom:2px solid #f5c518}
+.tab-icon{font-size:1.1rem}
+.tab-content{display:none;padding:1rem}
+.tab-content.active{display:block}
+
+/* ── Location inputs ── */
+.loc-wrap{position:relative;margin-bottom:.75rem}
+.pin-indicator{position:absolute;left:.75rem;top:50%;transform:translateY(-50%);font-size:1rem;z-index:1;pointer-events:none}
+.location-input{width:100%;background:#0a0a0f;border:1px solid #333;border-radius:12px;padding:.75rem 2rem .75rem 2.5rem;color:#fff;font-size:.9rem;outline:none;transition:border-color .2s}
+.btn-clear-loc{display:none;position:absolute;right:.55rem;top:50%;transform:translateY(-50%);width:22px;height:22px;border-radius:50%;border:none;background:#2a2a3a;color:#94a3b8;font-size:.7rem;line-height:1;cursor:pointer;z-index:2;align-items:center;justify-content:center}
+.btn-clear-loc.visible{display:flex}
+.btn-clear-loc:hover{background:#3a3a50;color:#fff}
+.btn-locate-me{position:absolute;right:2.2rem;top:50%;transform:translateY(-50%);width:24px;height:24px;border-radius:50%;border:none;background:transparent;color:#f5c518;font-size:.95rem;line-height:1;cursor:pointer;z-index:2;display:flex;align-items:center;justify-content:center;padding:0;opacity:.85}
+.btn-locate-me:hover{opacity:1;background:#1a1a2a}
+.location-input:focus{border-color:#f5c518}
+.location-input.has-val{border-color:#2d5a2d}
+.location-dropdown{position:absolute;top:calc(100% + 4px);left:0;right:0;background:#1a1a2a;border:1px solid #333;border-radius:10px;max-height:185px;overflow-y:auto;z-index:500;display:none;box-shadow:0 8px 24px rgba(0,0,0,.6)}
+.location-dropdown.open{display:block}
+.loc-item{padding:.5rem .85rem;cursor:pointer;border-bottom:1px solid #1e1e2e;transition:background .15s}
+.loc-item:last-child{border-bottom:none}
+.loc-item:hover,.loc-item:active{background:#22223a}
+.loc-primary{font-size:.85rem;color:#ddd;font-weight:600;line-height:1.3}
+.loc-secondary{font-size:.72rem;color:#555;margin-top:.1rem}
+.loc-loading{padding:.6rem .85rem;font-size:.8rem;color:#555;text-align:center}
+
+.divider-line{display:flex;align-items:center;gap:.5rem;margin:.25rem 0;color:#444;font-size:.7rem}
+.divider-line::before,.divider-line::after{content:'';flex:1;height:1px;background:#222}
+/* ── Multi-stop ── */
+.stop-wrap{margin-bottom:.55rem}
+.stop-wrap .loc-wrap{margin-bottom:0}
+.stop-header{display:flex;align-items:center;gap:.35rem;margin-bottom:.3rem}
+.stop-num-badge{width:17px;height:17px;border-radius:50%;background:#f5c51820;border:1px solid #f5c51855;color:#f5c518;font-size:.6rem;font-weight:800;display:inline-flex;align-items:center;justify-content:center;flex-shrink:0}
+.stop-lbl-text{font-size:.68rem;color:#666;font-weight:600;letter-spacing:.02em}
+.btn-rm-stop{margin-left:auto;background:none;border:1px solid #2a1a1a;color:#664444;border-radius:6px;padding:.1rem .38rem;font-size:.65rem;cursor:pointer;transition:all .15s;line-height:1.4}
+.btn-rm-stop:hover{border-color:#ff5555;color:#ff5555;background:#1a0505}
+.btn-add-stop{display:flex;align-items:center;justify-content:center;gap:.35rem;width:100%;background:transparent;border:1px dashed #2c2c2c;border-radius:10px;color:#555;font-size:.78rem;padding:.5rem .75rem;cursor:pointer;transition:all .2s;margin:.25rem 0 .6rem}
+.btn-add-stop:hover{border-color:#f5c518;color:#f5c518;background:#0f0f08}
+.multi-route-badge{display:inline-flex;align-items:center;gap:.3rem;background:#1a1a0a;border:1px solid #2a2a10;border-radius:6px;padding:.18rem .5rem;font-size:.68rem;color:#a0a060;margin-top:.1rem}
+
+/* ── Vehicle grid ── */
+.vehicle-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:.5rem;margin:.75rem 0}
+.vehicle-btn{background:#0a0a0f;border:1px solid #333;border-radius:10px;padding:.6rem .3rem;cursor:pointer;text-align:center;transition:all .2s;color:#fff}
+.vehicle-btn.active{background:#1a2a0a;border-color:#f5c518;color:#f5c518}
+.vehicle-btn .v-icon{font-size:1.3rem}
+.vehicle-btn .v-name{font-size:.65rem;margin-top:.2rem;color:inherit}
+.vehicle-btn .v-fare{font-size:.6rem;color:#888}
+.vehicle-btn.active .v-fare{color:#a0a060}
+
+/* ── Fare Negotiation ── */
+.fare-negotiate-card{background:#0a0a0f;border:1px solid #2a2a10;border-radius:12px;padding:.7rem 1rem;margin:.5rem 0}
+.fare-neg-top{display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:.45rem}
+.fare-neg-left .fare-label-row{display:flex;align-items:center;gap:.35rem}
+.fare-label{color:#888;font-size:.78rem;font-weight:600;text-transform:uppercase;letter-spacing:.04em}
+.fare-badge{font-size:.58rem;background:#f5c51822;color:#f5c518;border:1px solid #f5c51844;border-radius:4px;padding:.08rem .3rem;font-weight:700;letter-spacing:.02em}
+.fare-meta{font-size:.7rem;color:#555;margin-top:.2rem}
+.fare-suggested{text-align:right}
+.fare-suggested-lbl{font-size:.65rem;color:#444;margin-bottom:.1rem}
+.fare-suggested-val{font-size:.82rem;color:#666;font-weight:600}
+.fare-stepper{display:flex;align-items:center;justify-content:center;gap:.75rem;margin:.2rem 0 .45rem}
+.fare-adj-btn{width:38px;height:38px;border-radius:50%;border:2px solid #f5c518;background:transparent;color:#f5c518;font-size:1.25rem;font-weight:700;cursor:pointer;display:flex;align-items:center;justify-content:center;transition:all .15s;user-select:none;line-height:1}
+.fare-adj-btn:hover{background:#f5c518;color:#0a0a0f}
+.fare-adj-btn:active{transform:scale(.88)}
+.fare-offered-val{font-size:1.55rem;font-weight:800;color:#f5c518;min-width:110px;text-align:center;letter-spacing:-.02em}
+.fare-quick-row{display:flex;gap:.35rem;justify-content:center;flex-wrap:wrap}
+.fare-quick{background:#1a1a0a;border:1px solid #2a2a0a;color:#bbb;border-radius:100px;padding:.25rem .6rem;font-size:.72rem;cursor:pointer;transition:all .15s;white-space:nowrap}
+.fare-quick:hover{border-color:#f5c518;color:#f5c518;background:#1f1f0a}
+.fare-quick.neg{background:#0d0d0a;border-color:#1e1e1e;color:#666}
+.fare-quick.neg:hover{border-color:#cc4433;color:#ff6655;background:#1a0a0a}
+.fare-min-note{font-size:.63rem;color:#444;text-align:center;margin-top:.35rem}
+
+
+.map-hint{background:#1a1a2a;border:1px dashed #333;border-radius:10px;padding:.6rem 1rem;text-align:center;color:#666;font-size:.8rem;margin-bottom:.75rem}
+.map-hint.pickup-mode{border-color:#2266cc;color:#6699ff}
+.map-hint.dropoff-mode{border-color:#cc6622;color:#ff9966}
+
+/* ── Active Ride Panel ── */
+#active-ride{display:none;position:fixed;bottom:0;left:0;right:0;z-index:50;background:#13131a;border-top:2px solid #f5c518;padding:.85rem 1rem;max-height:80vh;overflow-y:auto}
+.ride-status-badge{display:inline-flex;align-items:center;gap:.4rem;background:#1a2a0a;border:1px solid #4caf50;border-radius:100px;padding:.22rem .65rem;font-size:.73rem;color:#4caf50;margin-bottom:.5rem}
+.ride-status-dot{width:6px;height:6px;background:#4caf50;border-radius:50%;animation:pulse 1.5s infinite}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.3}}
+.ride-actions{display:flex;gap:.5rem;margin-top:.55rem}
+.btn-danger{flex:1;background:#2a0a0a;border:1px solid #cc3333;color:#ff6666;border-radius:10px;padding:.6rem;font-size:.85rem;cursor:pointer}
+.btn-secondary{flex:1;background:#0a0a1a;border:1px solid #333;color:#aaa;border-radius:10px;padding:.6rem;font-size:.85rem;cursor:pointer}
+
+/* ── Live fare update strip (waiting state) ── */
+.ar-fare-strip{display:flex;align-items:center;justify-content:space-between;background:#0a0a0f;border-radius:10px;padding:.5rem .75rem;margin:.35rem 0}
+.ar-fare-info{display:flex;flex-direction:column}
+.ar-fare-label{font-size:.65rem;color:#666;text-transform:uppercase;letter-spacing:.04em}
+.ar-fare-big{font-size:1.1rem;font-weight:800;color:#f5c518}
+.ar-btns{display:flex;gap:.28rem}
+.ar-adj{background:#1a1a0a;border:1px solid #2a2a10;color:#ccc;border-radius:7px;padding:.28rem .52rem;font-size:.72rem;cursor:pointer;white-space:nowrap;transition:all .15s}
+.ar-adj:hover{border-color:#f5c518;color:#f5c518}
+.ar-adj.broadcast{background:#1a2a0a;border-color:#2d5a2d;color:#4caf50}
+.ar-adj.broadcast:hover{border-color:#4caf50}
+
+/* ── Offers list ── */
+.offers-hdr{display:flex;justify-content:space-between;align-items:center;margin:.4rem 0 .3rem}
+.offers-hdr-label{font-size:.75rem;color:#888;font-weight:600}
+.offers-hdr-count{font-size:.72rem;color:#555}
+.offers-list{max-height:200px;overflow-y:auto;display:flex;flex-direction:column;gap:.38rem;margin-bottom:.4rem}
+.no-offers-msg{text-align:center;color:#444;font-size:.8rem;padding:.85rem}
+.offer-card{background:#0d0d1a;border:1px solid #1e1e2e;border-radius:11px;padding:.6rem .75rem;transition:border-color .18s}
+.offer-card-top{display:flex;align-items:center;gap:.55rem}
+.offer-avatar{width:32px;height:32px;background:#1e3a5f;border-radius:50%;display:flex;align-items:center;justify-content:center;font-weight:700;font-size:.85rem;flex-shrink:0;color:#fff}
+.offer-body{flex:1;min-width:0}
+.offer-name{font-size:.85rem;font-weight:600;color:#ddd}
+.offer-vehicle{font-size:.68rem;color:#555;margin-top:.08rem;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.offer-plate{display:inline-block;background:#0a0a15;border:1px solid #2a2a3a;border-radius:4px;padding:.02rem .32rem;font-size:.64rem;font-family:monospace;color:#888;letter-spacing:.06em;margin-left:.3rem}
+.offer-price-col{text-align:right;flex-shrink:0}
+.offer-price-amt{font-size:1rem;font-weight:800;color:#f5c518;display:block}
+.offer-type-badge{font-size:.58rem;padding:.07rem .32rem;border-radius:4px;font-weight:700}
+.offer-type-badge.accept{background:#1a3a1a;color:#4caf50}
+.offer-type-badge.counter{background:#1a1a3a;color:#66aaff}
+.btn-accept-driver{width:100%;margin-top:.4rem;background:#1e3a5f;border:1px solid #336699;color:#fff;border-radius:8px;padding:.38rem;font-size:.78rem;font-weight:700;cursor:pointer;transition:background .2s}
+.btn-accept-driver:hover{background:#254f80}
+
+/* ── Matched driver card ── */
+.matched-card{background:#0d1117;border:1px solid #1e3a5f;border-radius:13px;padding:.8rem;margin:.4rem 0}
+.matched-top{display:flex;align-items:center;gap:.65rem;margin-bottom:.55rem}
+.matched-avatar{width:52px;height:52px;background:#1e3a5f;border-radius:50%;display:flex;align-items:center;justify-content:center;font-weight:800;font-size:1.2rem;flex-shrink:0;overflow:hidden}
+.matched-avatar img{width:100%;height:100%;object-fit:cover;border-radius:50%}
+.matched-info{flex:1;min-width:0}
+.matched-name{font-size:.95rem;font-weight:700}
+.matched-vehicle-row{font-size:.75rem;color:#888;margin-top:.1rem}
+.matched-plate{display:inline-block;background:#0a0a15;border:1px solid #2a2a3a;border-radius:4px;padding:.02rem .35rem;font-size:.68rem;font-family:monospace;color:#aaa;letter-spacing:.07em;margin-left:.35rem}
+.matched-rating{font-size:.82rem;color:#f5c518;font-weight:600;white-space:nowrap}
+.matched-fare-row{display:flex;justify-content:space-between;font-size:.8rem;color:#666;padding:.3rem 0;border-top:1px solid #1a1a2a}
+.matched-fare-val{font-size:1rem;font-weight:800;color:#f5c518}
+.matched-pay-row{font-size:.75rem;color:#666;padding:.2rem 0}
+.contact-btns{display:flex;gap:.45rem;margin:.5rem 0}
+.btn-call,.btn-whatsapp{flex:1;border-radius:10px;padding:.6rem;font-size:.82rem;font-weight:700;cursor:pointer;text-align:center;text-decoration:none;display:flex;align-items:center;justify-content:center;gap:.3rem}
+.btn-call{background:#1a3a1a;border:1px solid #2d5a2d;color:#4caf50}
+.btn-call:hover{background:#1e4a1e}
+.btn-whatsapp{background:#0d2b1a;border:1px solid #25d366;color:#25d366}
+.btn-whatsapp:hover{background:#113520}
+
+/* ── empty-msg shared ── */
+.empty-msg{text-align:center;color:#444;padding:2rem;font-size:.9rem}
+
+/* ── Rides Tab ── */
+.ride-history-item{background:#0a0a0f;border-radius:12px;padding:.75rem;margin-bottom:.6rem;border-left:3px solid #333}
+.ride-history-item.completed{border-left-color:#4caf50}
+.ride-history-item.cancelled{border-left-color:#ff5555}
+.rh-route{font-size:.85rem;margin-bottom:.4rem}
+.rh-route span{color:#888}
+.rh-meta{display:flex;justify-content:space-between;font-size:.75rem;color:#666}
+.rh-fare{color:#f5c518;font-weight:600}
+.status-pill{display:inline-block;padding:.15rem .5rem;border-radius:100px;font-size:.65rem;font-weight:600;text-transform:uppercase}
+.status-pill.completed{background:#1a3a1a;color:#4caf50}
+.status-pill.cancelled{background:#3a1a1a;color:#ff5555}
+.status-pill.requested{background:#2a2a1a;color:#f5c518}
+.status-pill.accepted,.status-pill.arrived,.status-pill.in-progress{background:#1a2a3a;color:#66aaff}
+
+/* ── SOS tab ── */
+.tab.sos-tab{color:#cc3333}
+.tab.sos-tab:hover,.tab.sos-tab:active{color:#ff5555;background:rgba(204,0,0,.08)}
+@keyframes sos-pulse{0%,100%{box-shadow:0 0 0 4px rgba(204,0,0,.25)}50%{box-shadow:0 0 0 8px rgba(204,0,0,.1)}}
+
+/* ── Distance badge ── */
+.dist-badge{display:inline-flex;align-items:center;gap:.3rem;background:#1a1a2a;border:1px solid #2a2a4a;border-radius:6px;padding:.2rem .55rem;font-size:.78rem;color:#88aaff;font-weight:600;margin-left:.3rem}
+
+/* ── Toast ── */
+.toast{position:fixed;top:1rem;left:50%;transform:translateX(-50%);background:#222;border-radius:10px;padding:.6rem 1.2rem;font-size:.85rem;z-index:9999;pointer-events:none;opacity:0;transition:opacity .3s;white-space:nowrap;max-width:90vw;text-overflow:ellipsis;overflow:hidden}
+.toast.show{opacity:1}
+.toast.success{border-left:3px solid #4caf50}
+.toast.error{border-left:3px solid #ff5555}
+.toast.info{border-left:3px solid #f5c518}
+
+/* ── Modal ── */
+.modal-overlay{position:fixed;inset:0;z-index:200;background:rgba(0,0,0,.7);display:flex;align-items:center;justify-content:center;padding:1.5rem;opacity:0;pointer-events:none;transition:opacity .25s}
+.modal-overlay.open{opacity:1;pointer-events:all}
+.modal-card{background:#13131a;border:1px solid #333;border-radius:20px;padding:1.5rem;width:100%;max-width:340px;transform:translateY(20px);transition:transform .25s}
+.modal-overlay.open .modal-card{transform:translateY(0)}
+.modal-brand{display:flex;align-items:center;gap:.75rem;margin-bottom:1.25rem}
+.modal-brand-icon{font-size:2.2rem;line-height:1}
+.modal-brand-name{font-size:1.1rem;font-weight:700}
+.modal-brand-sub{font-size:.8rem;color:#888;margin-top:.1rem}
+.modal-field label{display:block;font-size:.8rem;color:#888;margin-bottom:.4rem}
+.modal-field input{width:100%;background:#0a0a0f;border:1px solid #333;border-radius:10px;padding:.75rem 1rem;color:#fff;font-size:1rem;outline:none;transition:border-color .2s;letter-spacing:.05em}
+.modal-field input:focus{border-color:#f5c518}
+.modal-note{font-size:.75rem;color:#555;margin-top:.4rem}
+.modal-actions{display:flex;gap:.5rem;margin-top:1.25rem}
+.btn-modal-cancel{flex:1;background:#0a0a0f;border:1px solid #333;color:#888;border-radius:10px;padding:.7rem;font-size:.9rem;cursor:pointer}
+.btn-modal-confirm{flex:2;border:none;border-radius:10px;padding:.7rem;font-size:.9rem;font-weight:700;cursor:pointer;transition:opacity .2s}
+.btn-modal-confirm:hover{opacity:.9}
+
+/* ── Leaflet ── */
+.leaflet-container{background:#1a1a2a}
+.pickup-marker{background:#2266cc;border:3px solid #fff;width:18px;height:18px;border-radius:50%;box-shadow:0 0 8px rgba(34,102,204,.8)}
+.dropoff-marker{background:#cc6622;border:3px solid #fff;width:18px;height:18px;border-radius:50%;box-shadow:0 0 8px rgba(204,102,34,.8)}
+.driver-marker{font-size:24px;line-height:1}
+/* ── ETA Bar ── */
+.eta-bar{display:flex;align-items:center;gap:.5rem;background:#0a1a0a;border:1px solid #2d5a2d;border-radius:10px;padding:.5rem .75rem;margin:.45rem 0;font-size:.82rem;color:#a5d6a7}
+.eta-icon{font-size:1rem;flex-shrink:0}
+.eta-text{font-weight:600}
+.eta-dist{font-size:.72rem;color:#666;margin-left:auto;white-space:nowrap}
+</style>
+</head>
+<body>
+
+<!-- ── AUTH ── -->
+<div id="auth-screen">
+  <div class="auth-logo">My<span>Ride</span></div>
+  <p class="auth-subtitle">Customer Portal</p>
+  <div class="auth-card">
+    <div class="auth-tabs" id="auth-tabs-row">
+      <button class="auth-tab active" onclick="switchTab('login')">Sign In</button>
+      <button class="auth-tab" onclick="switchTab('register')">Register</button>
+    </div>
+
+    <!-- Sign In -->
+    <div id="login-form">
+      <div class="form-group"><label>Phone or Email</label><input type="text" id="l-email" placeholder="03001234567 or you@email.com" autocomplete="username" inputmode="tel"></div>
+      <div class="form-group">
+        <label>Password</label>
+        <div class="pw-wrap">
+          <input type="password" id="l-pass" placeholder="••••••••" autocomplete="current-password">
+          <button type="button" class="pw-eye" onclick="togglePw('l-pass')" tabindex="-1">👁</button>
+        </div>
+      </div>
+      <button class="btn-primary" onclick="doLogin()">Sign In</button>
+      <div style="text-align:center;margin-top:.6rem">
+        <button class="btn-text-link" onclick="switchTab('forgot')">Forgot Password?</button>
+      </div>
+    </div>
+
+    <!-- Register -->
+    <div id="register-form" style="display:none">
+      <div class="form-group"><label>Full Name <span style="color:#f5c518">*</span></label><input type="text" id="r-name" placeholder="Your full name"></div>
+      <div class="form-group"><label>Phone Number <span style="color:#f5c518">*</span></label><input type="tel" id="r-phone" placeholder="+92 300 0000000" inputmode="tel"></div>
+      <div class="form-group"><label>CNIC / Identity Card Number <span style="color:#f5c518">*</span></label><input type="text" id="r-cnic" placeholder="e.g. 35202-1234567-9" inputmode="numeric" maxlength="20"></div>
+      <div class="form-group"><label>Email <span style="color:#555;font-size:.75em">(optional)</span></label><input type="email" id="r-email" placeholder="you@email.com"></div>
+      <div class="form-group">
+        <label>Password <span style="color:#f5c518">*</span></label>
+        <div class="pw-wrap">
+          <input type="password" id="r-pass" placeholder="min 6 characters" autocomplete="new-password">
+          <button type="button" class="pw-eye" onclick="togglePw('r-pass')" tabindex="-1">👁</button>
+        </div>
+      </div>
+      <button class="btn-primary" onclick="doRegister()">Create Account</button>
+    </div>
+
+    <!-- Forgot Password -->
+    <div id="forgot-form" style="display:none">
+      <!-- Step 1: enter phone -->
+      <div id="fp-step1">
+        <div class="form-group"><label>Registered Phone Number</label><input type="tel" id="fp-phone" placeholder="+92 300 0000000" inputmode="tel"></div>
+        <button class="btn-primary" onclick="forgotSendOtp()">Send OTP</button>
+        <div style="text-align:center;margin-top:.5rem"><button class="btn-text-link" onclick="switchTab('login')">← Back to Sign In</button></div>
+      </div>
+      <!-- Step 2: verify OTP -->
+      <div id="fp-step2" style="display:none">
+        <p style="font-size:.82rem;color:#888;margin-bottom:.6rem">Enter the 4-digit code sent to your phone.</p>
+        <div class="fp-otp-box" id="fp-otp-display-box" style="display:none">
+          <div class="fp-otp-code" id="fp-otp-code"></div>
+          <div class="fp-otp-note">Demo mode — in production this is SMS only</div>
+        </div>
+        <div class="form-group"><label>OTP Code</label><input type="text" id="fp-otp" placeholder="4-digit code" maxlength="4" inputmode="numeric" style="letter-spacing:.3em;font-size:1.2rem;text-align:center"></div>
+        <button class="btn-primary" onclick="forgotVerifyOtp()">Verify OTP</button>
+        <div style="text-align:center;margin-top:.5rem"><button class="btn-text-link" onclick="forgotSendOtp()">Resend OTP</button></div>
+      </div>
+      <!-- Step 3: new password -->
+      <div id="fp-step3" style="display:none">
+        <p style="font-size:.82rem;color:#66bb66;margin-bottom:.75rem">✓ OTP verified! Set your new password.</p>
+        <div class="form-group">
+          <label>New Password</label>
+          <div class="pw-wrap">
+            <input type="password" id="fp-newpass" placeholder="min 6 characters" autocomplete="new-password">
+            <button type="button" class="pw-eye" onclick="togglePw('fp-newpass')" tabindex="-1">👁</button>
+          </div>
+        </div>
+        <button class="btn-primary" onclick="forgotResetPassword()">Reset Password</button>
+      </div>
+    </div>
+
+    <div class="auth-error" id="auth-error"></div>
+  </div>
+</div>
+
+<!-- ── APP ── -->
+<div id="app">
+  <div class="header">
+    <div class="header-logo">My<span>Ride</span></div>
+    <div class="header-user">
+      <div class="avatar" id="avatar-init">?</div>
+      <div class="header-name" id="header-name">Loading…</div>
+      <div class="dots-menu-wrap">
+        <button class="btn-dots" id="dots-btn" onclick="toggleDotsMenu(event)" aria-label="Menu" style="position:relative">⋮
+          <span class="dots-unread-dot" id="cust-unread-dot" style="display:none"></span>
+        </button>
+        <div class="dots-dropdown" id="dots-dropdown" style="display:none">
+          <div class="dots-item" onclick="openEmergencyContactsModal()">🆘 Emergency Contacts</div>
+          <div class="dots-item" onclick="openSupportModal()">🎫 Contact Support</div>
+          <div class="dots-item" onclick="openMyTickets()">📋 My Tickets <span id="cust-ticket-badge" class="cust-ticket-badge" style="display:none">0</span></div>
+          <div class="dots-item" onclick="openChangePhoneModal();closeDotsMenu()">📱 Change Phone Number</div>
+          <div class="dots-item" onclick="openChangePasswordModal();closeDotsMenu()">🔑 Change Password</div>
+          <div class="dots-item danger" onclick="openDeleteAccountModal()">🗑 Delete Account</div>
+          <div class="dots-item danger" onclick="doLogout()">🚪 Logout</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div id="map"></div>
+
+  <div id="bottom-panel">
+    <div class="tabs">
+      <button class="tab active" onclick="switchAppTab('book')"><span class="tab-icon">📍</span>Book</button>
+      <button class="tab" onclick="switchAppTab('rides')"><span class="tab-icon">🚗</span>Rides</button>
+      <button class="tab sos-tab" onclick="triggerSOS()"><span class="tab-icon">🆘</span>SOS</button>
+    </div>
+
+    <!-- ── BOOK TAB ── -->
+    <div class="tab-content active" id="tab-book">
+      <div class="map-hint" id="map-hint">Tap map or search a <strong>pickup</strong> location below</div>
+
+      <!-- Pickup -->
+      <div class="loc-wrap" id="pickup-wrap">
+        <span class="pin-indicator">📍</span>
+        <input class="location-input" id="pickup-input"
+               placeholder="Search pickup (e.g. Thokar Niaz Baig)"
+               autocomplete="off" spellcheck="false"
+               oninput="onLocInput('pickup');updateClearBtn('pickup')"
+               onfocus="onLocFocus('pickup')"
+               onblur="onLocBlur('pickup')">
+        <button class="btn-locate-me" onclick="locateMe()" title="Use my current location">🎯</button>
+        <button class="btn-clear-loc" id="clear-pickup" onclick="clearLocation('pickup')" title="Clear pickup">✕</button>
+        <div class="location-dropdown" id="pickup-dropdown"></div>
+      </div>
+
+      <div class="divider-line">↕</div>
+
+      <!-- ── Multi-stop Dropoffs ── -->
+      <div id="stops-container">
+
+        <!-- Stop 0: Drop 1 — always visible, no remove btn -->
+        <div class="stop-wrap" id="stop-wrap-0">
+          <div class="stop-header">
+            <span class="stop-num-badge">1</span>
+            <span class="stop-lbl-text">Drop 1 — Main Dropoff</span>
+          </div>
+          <div class="loc-wrap" style="margin-bottom:0">
+            <span class="pin-indicator">🎯</span>
+            <input class="location-input" id="stop-0-input"
+                   placeholder="Search Drop 1 (e.g. DHA Phase 5)"
+                   autocomplete="off" spellcheck="false"
+                   oninput="onLocInput('stop-0');updateClearBtn('stop-0')"
+                   onfocus="onLocFocus('stop-0')"
+                   onblur="onLocBlur('stop-0')">
+            <button class="btn-clear-loc" id="clear-stop-0" onclick="clearLocation('stop-0')" title="Clear drop 1">✕</button>
+            <div class="location-dropdown" id="stop-0-dropdown"></div>
+          </div>
+        </div>
+
+        <!-- Stop 1: Drop 2 — hidden initially -->
+        <div class="stop-wrap" id="stop-wrap-1" style="display:none">
+          <div class="stop-header">
+            <span class="stop-num-badge">2</span>
+            <span class="stop-lbl-text">Drop 2</span>
+            <button class="btn-rm-stop" onclick="removeStop(1)">✕</button>
+          </div>
+          <div class="loc-wrap" style="margin-bottom:0">
+            <span class="pin-indicator">📌</span>
+            <input class="location-input" id="stop-1-input"
+                   placeholder="Search Drop 2 (optional)"
+                   autocomplete="off" spellcheck="false"
+                   oninput="onLocInput('stop-1');updateClearBtn('stop-1')"
+                   onfocus="onLocFocus('stop-1')"
+                   onblur="onLocBlur('stop-1')">
+            <button class="btn-clear-loc" id="clear-stop-1" onclick="clearLocation('stop-1')" title="Clear drop 2">✕</button>
+            <div class="location-dropdown" id="stop-1-dropdown"></div>
+          </div>
+        </div>
+
+        <!-- Stop 2: Drop 3 — hidden initially -->
+        <div class="stop-wrap" id="stop-wrap-2" style="display:none">
+          <div class="stop-header">
+            <span class="stop-num-badge">3</span>
+            <span class="stop-lbl-text">Drop 3</span>
+            <button class="btn-rm-stop" onclick="removeStop(2)">✕</button>
+          </div>
+          <div class="loc-wrap" style="margin-bottom:0">
+            <span class="pin-indicator">📌</span>
+            <input class="location-input" id="stop-2-input"
+                   placeholder="Search Drop 3 (optional)"
+                   autocomplete="off" spellcheck="false"
+                   oninput="onLocInput('stop-2');updateClearBtn('stop-2')"
+                   onfocus="onLocFocus('stop-2')"
+                   onblur="onLocBlur('stop-2')">
+            <button class="btn-clear-loc" id="clear-stop-2" onclick="clearLocation('stop-2')" title="Clear drop 3">✕</button>
+            <div class="location-dropdown" id="stop-2-dropdown"></div>
+          </div>
+        </div>
+
+        <!-- Stop 3: Drop 4 — hidden initially -->
+        <div class="stop-wrap" id="stop-wrap-3" style="display:none">
+          <div class="stop-header">
+            <span class="stop-num-badge">4</span>
+            <span class="stop-lbl-text">Drop 4</span>
+            <button class="btn-rm-stop" onclick="removeStop(3)">✕</button>
+          </div>
+          <div class="loc-wrap" style="margin-bottom:0">
+            <span class="pin-indicator">📌</span>
+            <input class="location-input" id="stop-3-input"
+                   placeholder="Search Drop 4 (optional)"
+                   autocomplete="off" spellcheck="false"
+                   oninput="onLocInput('stop-3');updateClearBtn('stop-3')"
+                   onfocus="onLocFocus('stop-3')"
+                   onblur="onLocBlur('stop-3')">
+            <button class="btn-clear-loc" id="clear-stop-3" onclick="clearLocation('stop-3')" title="Clear drop 4">✕</button>
+            <div class="location-dropdown" id="stop-3-dropdown"></div>
+          </div>
+        </div>
+
+      </div><!-- /stops-container -->
+
+      <button class="btn-add-stop" id="add-stop-btn" onclick="addStop()">＋ Add Stop</button>
+
+      <!-- Vehicle type -->
+      <div class="vehicle-grid">
+        <button class="vehicle-btn active" data-type="Bike" onclick="selectVehicle(this)">
+          <div class="v-icon">🛵</div><div class="v-name">Bike</div><div class="v-fare">Rs 30/km</div>
+        </button>
+        <button class="vehicle-btn" data-type="Rickshaw" onclick="selectVehicle(this)">
+          <div class="v-icon">🛺</div><div class="v-name">Rickshaw</div><div class="v-fare">Rs 40/km</div>
+        </button>
+        <button class="vehicle-btn" data-type="Car Mini" onclick="selectVehicle(this)">
+          <div class="v-icon">🚙</div><div class="v-name">Car Mini</div><div class="v-fare">Rs 50/km</div>
+        </button>
+        <button class="vehicle-btn" data-type="Car AC" onclick="selectVehicle(this)">
+          <div class="v-icon">🚗</div><div class="v-name">Car AC</div><div class="v-fare">Rs 70/km</div>
+        </button>
+      </div>
+
+      <!-- ── Fare Negotiation Card ── -->
+      <div class="fare-negotiate-card" id="fare-row" style="display:none">
+        <div class="fare-neg-top">
+          <div class="fare-neg-left">
+            <div class="fare-label-row">
+              <span class="fare-label">Your Offer</span>
+              <span class="fare-badge">MyRide</span>
+            </div>
+            <div class="fare-meta" id="fare-meta"></div>
+            <div style="margin-top:.25rem"><span class="dist-badge" id="dist-badge" style="display:none">📍 <span id="dist-km-val">0</span> km</span></div>
+          </div>
+          <div class="fare-suggested">
+            <div class="fare-suggested-lbl">Suggested</div>
+            <div class="fare-suggested-val" id="fare-suggested-val">—</div>
+          </div>
+        </div>
+        <!-- Stepper row -->
+        <div class="fare-stepper">
+          <button class="fare-adj-btn" onclick="adjustFare(-10)" title="Decrease by Rs 10">−</button>
+          <div class="fare-offered-val" id="fare-display">Rs 0</div>
+          <button class="fare-adj-btn" onclick="adjustFare(+10)" title="Increase by Rs 10">+</button>
+        </div>
+        <!-- Quick buttons -->
+        <div class="fare-quick-row">
+          <button class="fare-quick neg" onclick="adjustFare(-50)">−50</button>
+          <button class="fare-quick neg" onclick="adjustFare(-20)">−20</button>
+          <button class="fare-quick" onclick="adjustFare(+20)">+20</button>
+          <button class="fare-quick" onclick="adjustFare(+50)">+50</button>
+          <button class="fare-quick" onclick="adjustFare(+100)">+100</button>
+        </div>
+        <div class="fare-min-note" id="fare-min-note"></div>
+      </div>
+
+      <button class="btn-primary" id="book-btn" onclick="bookRide()" style="display:none;margin-top:.75rem">Book Ride 🚗</button>
+    </div>
+
+    <!-- RIDES TAB -->
+    <div class="tab-content" id="tab-rides">
+      <div id="ride-history-list"><div class="empty-msg">Loading your rides…</div></div>
+    </div>
+
+  </div>
+</div>
+
+<!-- Active Ride Panel (multi-state) -->
+<div id="active-ride">
+
+  <!-- ── State: Waiting for driver offers ── -->
+  <div id="ar-waiting">
+    <div class="ride-status-badge"><span class="ride-status-dot"></span><span id="ride-status-text">Broadcasting your offer…</span></div>
+
+    <!-- Live fare update strip -->
+    <div class="ar-fare-strip">
+      <div class="ar-fare-info">
+        <span class="ar-fare-label">Your Offer</span>
+        <span class="ar-fare-big" id="ar-live-fare">Rs 0</span>
+      </div>
+      <div class="ar-btns">
+        <button class="ar-adj" onclick="liveAdjustFare(-20)">−20</button>
+        <button class="ar-adj" onclick="liveAdjustFare(+20)">+20</button>
+        <button class="ar-adj" onclick="liveAdjustFare(+50)">+50</button>
+        <button class="ar-adj broadcast" onclick="broadcastFareUpdate()">📢 Raise</button>
+      </div>
+    </div>
+
+    <!-- Driver offers list -->
+    <div class="offers-hdr">
+      <span class="offers-hdr-label">Driver Offers</span>
+      <span class="offers-hdr-count" id="offers-count"></span>
+    </div>
+    <div class="offers-list" id="offers-list">
+      <div class="no-offers-msg">🔍 Waiting for nearby drivers to respond…</div>
+    </div>
+
+    <div class="ride-actions">
+      <button class="btn-danger" onclick="cancelRide()">✗ Cancel</button>
+      <button class="btn-secondary" onclick="shareLocation()">📍 Share</button>
+    </div>
+  </div>
+
+  <!-- ── State: Driver matched ── -->
+  <div id="ar-matched" style="display:none">
+    <div class="ride-status-badge" style="background:#1a2a0a;border-color:#4caf50"><span class="ride-status-dot"></span><span id="ar-status-text">Driver on the way!</span></div>
+    <div class="eta-bar" id="ar-eta-bar" style="display:none">
+      <span class="eta-icon">🕐</span>
+      <span class="eta-text" id="ar-eta-text">Calculating arrival…</span>
+      <span class="eta-dist" id="ar-eta-dist"></span>
+    </div>
+
+    <div class="matched-card">
+      <div class="matched-top">
+        <div class="matched-avatar" id="ar-avatar">?</div>
+        <div class="matched-info">
+          <div class="matched-name" id="ar-driver-name">—</div>
+          <div class="matched-vehicle-row">
+            <span id="ar-driver-vehicle">—</span>
+            <span class="matched-plate" id="ar-driver-plate">—</span>
+          </div>
+        </div>
+        <div class="matched-rating" id="ar-driver-rating">⭐ 5.0</div>
+      </div>
+      <div class="matched-fare-row">
+        <span>Agreed Fare</span>
+        <span class="matched-fare-val" id="ar-fare">—</span>
+      </div>
+      <div class="matched-pay-row" id="ar-payment">—</div>
+    </div>
+
+    <!-- Ride Verification PIN (shown after driver accepts) -->
+    <div id="ar-pin-card" style="display:none;background:#0a1a0a;border:1.5px solid #22c55e;border-radius:10px;padding:.75rem 1rem;margin-bottom:.75rem;text-align:center">
+      <div style="font-size:.7rem;color:#22c55e;font-weight:700;letter-spacing:.07em;margin-bottom:.3rem">🔐 YOUR RIDE PIN — share with driver</div>
+      <div id="ar-pin-value" style="font-size:2.4rem;font-weight:900;letter-spacing:.5em;color:#22c55e;font-family:monospace;line-height:1.1">—</div>
+      <div style="font-size:.7rem;color:#475569;margin-top:.3rem">Driver must enter this PIN to start the ride</div>
+    </div>
+
+    <div class="contact-btns" id="ar-contact-btns">
+      <!-- populated by JS after driver phone is known -->
+    </div>
+
+    <div class="ride-actions">
+      <button class="btn-danger" onclick="cancelRide()">✗ Cancel Ride</button>
+      <button class="btn-secondary" onclick="shareLocation()">📍 Share Location</button>
+    </div>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<!-- ── Rating Modal ── -->
+<div class="modal-overlay" id="rating-modal" style="display:none;align-items:center" onclick="if(event.target===this)skipRating()">
+  <div class="modal-card" style="text-align:center;max-width:320px">
+    <div style="font-size:1.6rem;margin-bottom:.5rem">⭐</div>
+    <div style="font-size:1rem;font-weight:800;color:#e2e8f0;margin-bottom:.25rem">Rate Your Ride</div>
+    <div style="font-size:.8rem;color:#64748b;margin-bottom:1.1rem">How was <span id="rating-driver-name">your driver</span>?</div>
+    <div style="display:flex;justify-content:center;gap:.5rem;margin-bottom:.9rem">
+      <button class="star-btn" onclick="selectStar(1)">★</button>
+      <button class="star-btn" onclick="selectStar(2)">★</button>
+      <button class="star-btn" onclick="selectStar(3)">★</button>
+      <button class="star-btn" onclick="selectStar(4)">★</button>
+      <button class="star-btn" onclick="selectStar(5)">★</button>
+    </div>
+    <textarea id="rating-review-text" placeholder="Add a comment (optional)…" style="width:100%;background:#06060e;border:1px solid #1e1e2e;border-radius:8px;padding:.6rem .8rem;color:#e2e8f0;font-size:.82rem;resize:none;height:70px;outline:none;margin-bottom:.75rem"></textarea>
+    <div style="display:flex;gap:.5rem">
+      <button onclick="skipRating()" style="flex:1;padding:.6rem;border-radius:8px;background:#1a1a2a;border:1px solid #1e1e2e;color:#64748b;cursor:pointer;font-size:.85rem">Skip</button>
+      <button id="rating-submit-btn" onclick="submitRating()" style="flex:2;padding:.6rem;border-radius:8px;background:#f5c518;color:#06060e;border:none;cursor:pointer;font-size:.85rem;font-weight:800">Submit Rating</button>
+    </div>
+  </div>
+</div>
+
+<!-- ── My Tickets Modal ── -->
+<div class="modal-overlay" id="my-tickets-modal" style="display:none;align-items:center" onclick="if(event.target===this)closeMyTickets()">
+  <div class="modal-card" style="max-width:380px;max-height:80vh;display:flex;flex-direction:column;padding:1.1rem">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:.85rem;flex-shrink:0">
+      <div style="font-size:.95rem;font-weight:800;color:#e2e8f0">📋 My Support Tickets</div>
+      <button onclick="closeMyTickets()" style="background:none;border:none;color:#475569;cursor:pointer;font-size:1.1rem">✕</button>
+    </div>
+    <div id="cust-tickets-list" style="overflow-y:auto;flex:1"></div>
+    <div style="flex-shrink:0;margin-top:.65rem">
+      <button onclick="closeMyTickets();openSupportModal()" style="width:100%;padding:.6rem;border-radius:8px;background:#f5c518;color:#06060e;border:none;cursor:pointer;font-size:.85rem;font-weight:800">+ New Ticket</button>
+    </div>
+  </div>
+</div>
+
+<!-- ── Support Modal ── -->
+<div class="modal-overlay" id="support-modal" style="display:none;align-items:center" onclick="if(event.target===this)closeSupportModal()">
+  <div class="modal-card" style="max-width:360px">
+    <div style="font-size:1rem;font-weight:800;color:#e2e8f0;margin-bottom:.9rem">🎫 Contact Support</div>
+    <input id="sup-subject" type="text" placeholder="Subject (e.g. Payment issue…)" style="width:100%;background:#06060e;border:1px solid #1e1e2e;border-radius:8px;padding:.6rem .8rem;color:#e2e8f0;font-size:.85rem;outline:none;margin-bottom:.55rem">
+    <textarea id="sup-message" placeholder="Describe your issue…" style="width:100%;background:#06060e;border:1px solid #1e1e2e;border-radius:8px;padding:.6rem .8rem;color:#e2e8f0;font-size:.85rem;resize:none;height:90px;outline:none;margin-bottom:.75rem"></textarea>
+    <div style="display:flex;gap:.5rem">
+      <button onclick="closeSupportModal()" style="flex:1;padding:.6rem;border-radius:8px;background:#1a1a2a;border:1px solid #1e1e2e;color:#64748b;cursor:pointer;font-size:.85rem">Cancel</button>
+      <button id="sup-submit-btn" onclick="submitSupportTicket()" style="flex:2;padding:.6rem;border-radius:8px;background:#f5c518;color:#06060e;border:none;cursor:pointer;font-size:.85rem;font-weight:800">Send Ticket</button>
+    </div>
+  </div>
+</div>
+
+<!-- ── Emergency Contacts Modal ── -->
+<div class="modal-overlay" id="ec-modal">
+  <div class="modal-card">
+    <div class="ec-modal-title">🆘 Emergency Contacts</div>
+    <div class="ec-modal-note">Saved contacts are included automatically in every SOS alert with your live location and driver details.</div>
+    <div class="ec-section-label">Contact 1</div>
+    <div class="form-group" style="margin-bottom:.6rem"><label>Name</label><input type="text" id="ec1-name" placeholder="e.g. Ammi"></div>
+    <div class="form-group"><label>Phone</label><input type="tel" id="ec1-phone" placeholder="+92 300 0000000" inputmode="tel"></div>
+    <div class="ec-section-label">Contact 2 <span style="color:#555;font-size:.75em;text-transform:none">(optional)</span></div>
+    <div class="form-group" style="margin-bottom:.6rem"><label>Name</label><input type="text" id="ec2-name" placeholder="e.g. Bhai"></div>
+    <div class="form-group"><label>Phone</label><input type="tel" id="ec2-phone" placeholder="+92 300 0000000" inputmode="tel"></div>
+    <div class="modal-actions">
+      <button class="btn-modal-cancel" onclick="closeEcModal()">Cancel</button>
+      <button class="btn-modal-confirm" style="background:#f5c518;color:#0a0a0f" onclick="saveEmergencyContacts()">Save Contacts</button>
+    </div>
+  </div>
+</div>
+
+<script>
+// ── Constants ─────────────────────────────────────────────────────────────
+const API = '';
+const FARE_RATES = { 'Bike': 30, 'Rickshaw': 40, 'Car Mini': 50, 'Car AC': 70 };
+const MIN_FARES  = { 'Bike': 50, 'Rickshaw': 70, 'Car Mini': 100, 'Car AC': 150 };
+const TILE_URL   = 'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png';
+const TILE_OPTS  = {
+  attribution : '© <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
+  maxNativeZoom: 19,
+  maxZoom      : 20,
+  subdomains   : 'abc',
+  detectRetina : true,
+  crossOrigin  : true
+};
+
+// ── State ─────────────────────────────────────────────────────────────────
+let token = localStorage.getItem('rh_token');
+let user  = JSON.parse(localStorage.getItem('rh_user') || 'null');
+let map, pickupMarker, routeLine, driverMarker;
+let nearbyDriversLayer = [];
+let nearbyPollInterval = null;
+let stopMarkers = [null, null, null, null]; // markers for each drop stop
+let pickup  = null;
+let dropoffs = [null, null, null, null];    // up to 4 stops; dropoffs[0] = main/first
+let activeStops = 1;                        // how many stop rows are visible (1-4)
+let mapMode = 'pickup';
+let selectedVehicle = 'Bike';
+let routeDistanceKm = null;
+let offeredFare = 0;
+let activeRide = null;
+let socket = null;
+let locationWatchId = null;
+let driverOffers = [];
+let activeLiveFare = 0;
+let activeDriverInfo = null;
+let locTimer = {};                          // keyed by type string e.g. 'pickup','stop-0'
+
+// ── Toast ─────────────────────────────────────────────────────────────────
+function showToast(msg, type = 'info') {
+  const el = document.getElementById('toast');
+  el.textContent = msg; el.className = `toast ${type} show`;
+  setTimeout(() => el.className = 'toast', 3000);
+}
+
+// ── Auth ──────────────────────────────────────────────────────────────────
+function switchTab(t) {
+  document.getElementById('login-form').style.display    = t === 'login'    ? 'block' : 'none';
+  document.getElementById('register-form').style.display = t === 'register' ? 'block' : 'none';
+  document.getElementById('forgot-form').style.display   = t === 'forgot'   ? 'block' : 'none';
+  // Tabs row visible only for login/register
+  document.getElementById('auth-tabs-row').style.display = t === 'forgot' ? 'none' : 'flex';
+  document.querySelectorAll('.auth-tab').forEach((b, i) =>
+    b.classList.toggle('active', (i === 0) === (t === 'login')));
+  document.getElementById('auth-error').textContent = '';
+  // Reset forgot steps
+  if (t === 'forgot') {
+    document.getElementById('fp-step1').style.display = 'block';
+    document.getElementById('fp-step2').style.display = 'none';
+    document.getElementById('fp-step3').style.display = 'none';
+  }
+}
+
+async function apiCall(path, method = 'GET', body = null) {
+  const opts = { method, headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) } };
+  if (body) opts.body = JSON.stringify(body);
+  const r = await fetch(API + path, opts);
+  const data = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(data.error || 'Request failed');
+  return data;
+}
+
+async function doLogin() {
+  const identifier = document.getElementById('l-email').value.trim();
+  const pass = document.getElementById('l-pass').value;
+  if (!identifier) return (document.getElementById('auth-error').textContent = 'Enter your phone number or email');
+  try {
+    const res = await apiCall('/api/auth/login', 'POST', { identifier, password: pass });
+    saveSession(res);
+  } catch (e) { document.getElementById('auth-error').textContent = e.message; }
+}
+
+async function doRegister() {
+  const name  = document.getElementById('r-name').value.trim();
+  const phone = document.getElementById('r-phone').value.trim();
+  const cnic  = document.getElementById('r-cnic').value.trim();
+  const email = document.getElementById('r-email').value.trim();
+  const pass  = document.getElementById('r-pass').value;
+  if (!name)  return (document.getElementById('auth-error').textContent = 'Full name is required');
+  if (!phone) return (document.getElementById('auth-error').textContent = 'Phone number is required');
+  if (!cnic)  return (document.getElementById('auth-error').textContent = 'CNIC / Identity Card Number is required');
+  if (pass.length < 6) return (document.getElementById('auth-error').textContent = 'Password must be at least 6 characters');
+  try {
+    const res = await apiCall('/api/auth/register', 'POST', { name, phone, email, password: pass, role: 'customer', cnicNumber: cnic });
+    saveSession(res);
+  } catch (e) { document.getElementById('auth-error').textContent = e.message; }
+}
+
+// ── Password visibility toggle ─────────────────────────────────────────────
+function togglePw(id) {
+  const inp = document.getElementById(id);
+  const btn = inp?.nextElementSibling;
+  if (!inp) return;
+  inp.type = inp.type === 'password' ? 'text' : 'password';
+  if (btn) btn.textContent = inp.type === 'password' ? '👁' : '🙈';
+}
+
+// ── Forgot Password Flow ───────────────────────────────────────────────────
+let _fpPhone = '';
+
+async function forgotSendOtp() {
+  const phone = document.getElementById('fp-phone').value.trim();
+  if (!phone) return (document.getElementById('auth-error').textContent = 'Enter your registered phone number');
+  document.getElementById('auth-error').textContent = '';
+  try {
+    const res = await apiCall('/api/auth/forgot-password', 'POST', { phone });
+    _fpPhone = phone;
+    // Show OTP in UI (demo mode)
+    if (res.otp) {
+      document.getElementById('fp-otp-code').textContent = res.otp;
+      document.getElementById('fp-otp-display-box').style.display = 'block';
+    }
+    document.getElementById('fp-step1').style.display = 'none';
+    document.getElementById('fp-step2').style.display = 'block';
+  } catch (e) { document.getElementById('auth-error').textContent = e.message; }
+}
+
+async function forgotVerifyOtp() {
+  const otp = document.getElementById('fp-otp').value.trim();
+  if (otp.length !== 4) return (document.getElementById('auth-error').textContent = 'Enter the 4-digit OTP');
+  // Client-side: just compare with displayed OTP (server will re-verify on reset)
+  document.getElementById('auth-error').textContent = '';
+  document.getElementById('fp-step2').style.display = 'none';
+  document.getElementById('fp-step3').style.display = 'block';
+}
+
+async function forgotResetPassword() {
+  const otp     = document.getElementById('fp-otp').value.trim();
+  const newPass = document.getElementById('fp-newpass').value;
+  if (newPass.length < 6) return (document.getElementById('auth-error').textContent = 'Password must be at least 6 characters');
+  try {
+    await apiCall('/api/auth/reset-password', 'POST', { phone: _fpPhone, otp, newPassword: newPass });
+    showToast && showToast('Password reset! Please sign in.', 'success');
+    document.getElementById('auth-error').textContent = '';
+    switchTab('login');
+    document.getElementById('l-email').value = _fpPhone;
+    _fpPhone = '';
+  } catch (e) { document.getElementById('auth-error').textContent = e.message; }
+}
+
+function saveSession(res) {
+  token = res.token; user = res.user;
+  localStorage.setItem('rh_token', token);
+  localStorage.setItem('rh_user', JSON.stringify(user));
+  bootApp();
+}
+
+function doLogout() {
+  closeDotsMenu();
+
+  // 1. Wipe all auth state from memory and storage
+  localStorage.clear();
+  sessionStorage.clear();
+  token = null; user = null; activeRide = null;
+
+  // 2. Disconnect live connections
+  if (socket) { socket.disconnect(); socket = null; }
+  if (locationWatchId) { navigator.geolocation.clearWatch(locationWatchId); locationWatchId = null; }
+  stopNearbyDrivers();
+
+  // 3. Clear every login / register field so nothing persists visually
+  ['l-email', 'l-pass',
+   'r-name', 'r-phone', 'r-cnic', 'r-email', 'r-pass',
+   'fp-phone', 'fp-otp', 'fp-newpass'
+  ].forEach(id => { const el = document.getElementById(id); if (el) el.value = ''; });
+  document.getElementById('auth-error').textContent = '';
+
+  // 4. Show auth screen, hide app panels
+  document.getElementById('auth-screen').style.display = 'flex';
+  document.getElementById('app').style.display = 'none';
+  document.getElementById('active-ride').style.display = 'none';
+  switchTab('login');
+
+  // 5. Replace history entry so the Back button cannot return to the app
+  history.replaceState(null, '', location.pathname);
+}
+
+// ── 3-Dots Dropdown Menu ──────────────────────────────────────────────────
+function toggleDotsMenu(e) {
+  e?.stopPropagation();
+  const dd = document.getElementById('dots-dropdown');
+  dd.style.display = dd.style.display === 'none' ? 'block' : 'none';
+}
+function closeDotsMenu() {
+  document.getElementById('dots-dropdown').style.display = 'none';
+}
+document.addEventListener('click', (e) => {
+  if (!document.getElementById('dots-btn')?.contains(e.target)) closeDotsMenu();
+});
+
+// ── Emergency Contacts ────────────────────────────────────────────────────
+let _emergencyContacts = [];   // cached for SOS use
+
+async function loadEmergencyContacts() {
+  try {
+    _emergencyContacts = await apiCall('/api/auth/emergency-contacts');
+  } catch { _emergencyContacts = []; }
+}
+
+function openEmergencyContactsModal() {
+  closeDotsMenu();
+  // Pre-fill form from cached contacts
+  const c1 = _emergencyContacts[0] || {};
+  const c2 = _emergencyContacts[1] || {};
+  document.getElementById('ec1-name').value  = c1.name  || '';
+  document.getElementById('ec1-phone').value = c1.phone || '';
+  document.getElementById('ec2-name').value  = c2.name  || '';
+  document.getElementById('ec2-phone').value = c2.phone || '';
+  document.getElementById('ec-modal').classList.add('open');
+}
+function closeEcModal() {
+  document.getElementById('ec-modal').classList.remove('open');
+}
+async function saveEmergencyContacts() {
+  const contacts = [
+    { name: document.getElementById('ec1-name').value.trim(), phone: document.getElementById('ec1-phone').value.trim() },
+    { name: document.getElementById('ec2-name').value.trim(), phone: document.getElementById('ec2-phone').value.trim() }
+  ].filter(c => c.phone);
+
+  if (!contacts.length) return showToast('Add at least one contact phone number', 'error');
+  try {
+    const res = await apiCall('/api/auth/emergency-contacts', 'PATCH', { contacts });
+    _emergencyContacts = res.contacts;
+    closeEcModal();
+    showToast(`${contacts.length} emergency contact${contacts.length > 1 ? 's' : ''} saved ✓`, 'success');
+  } catch (e) { showToast(e.message, 'error'); }
+}
+
+// ── Boot ──────────────────────────────────────────────────────────────────
+function bootApp() {
+  document.getElementById('auth-screen').style.display = 'none';
+  document.getElementById('app').style.display = 'flex';
+  document.getElementById('avatar-init').textContent = (user.name || '?')[0].toUpperCase();
+  document.getElementById('header-name').textContent = user.name || user.phone || user.email || 'User';
+  connectSocket(); loadRideHistory();
+  loadEmergencyContacts();   // pre-cache for SOS
+  checkUnreadCustTickets();  // badge for unread admin replies
+  // Double rAF ensures the browser has fully painted the flex layout before
+  // Leaflet measures #map — fixes the 0×0 container race condition.
+  requestAnimationFrame(() => requestAnimationFrame(() => {
+    initMap();
+    // Belt-and-suspenders: re-invalidate at 300 ms and 700 ms for iOS Safari
+    setTimeout(() => map?.invalidateSize(), 300);
+    setTimeout(() => map?.invalidateSize(), 700);
+  }));
+}
+
+// ── Map ───────────────────────────────────────────────────────────────────
+function initMap() {
+  if (map) return;
+  map = L.map('map', { zoomControl: false, preferCanvas: true }).setView([31.5204, 74.3587], 15);
+  L.tileLayer(TILE_URL, TILE_OPTS).addTo(map);
+  L.control.zoom({ position: 'topright' }).addTo(map);
+
+  // Staggered invalidations catch every rendering phase (especially iOS Safari)
+  requestAnimationFrame(() => map.invalidateSize());
+  setTimeout(() => map.invalidateSize(), 150);
+  setTimeout(() => map.invalidateSize(), 500);
+  window.addEventListener('resize', () => map.invalidateSize());
+  // Re-fire when the page becomes visible again (e.g. switching tabs/apps)
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible') map?.invalidateSize();
+  });
+
+  map.on('click', (e) => {
+    const { lat, lng } = e.latlng;
+    if (mapMode === 'pickup') {
+      setPickup(lat, lng);
+    } else if (mapMode.startsWith('stop-')) {
+      // Support map-tap for any active stop slot (stop-0 through stop-3)
+      const idx = parseInt(mapMode.split('-')[1], 10);
+      setStop(idx, lat, lng);
+    }
+  });
+  // Auto-set pickup to current location on first map open
+  if (navigator.geolocation) {
+    navigator.geolocation.getCurrentPosition(pos => {
+      if (!pickup) setPickup(pos.coords.latitude, pos.coords.longitude);
+    }, () => {}, { enableHighAccuracy: true, timeout: 8000 });
+  }
+  // Start showing nearby online drivers after map is ready
+  setTimeout(startNearbyDrivers, 800);
+}
+
+// ── Nearby Drivers ────────────────────────────────────────────────────────
+const _vehicleIcons = { 'Bike': '🛵', 'Rickshaw': '🛺', 'Car Mini': '🚗', 'Car AC': '🚙' };
+
+async function pollNearbyDrivers() {
+  if (activeRide || !map || !token) return;
+  const center = pickup
+    ? { lat: pickup.lat, lng: pickup.lng }
+    : { lat: map.getCenter().lat, lng: map.getCenter().lng };
+  try {
+    const nearby = await apiCall(`/api/drivers/nearby?lat=${center.lat}&lng=${center.lng}`);
+    nearbyDriversLayer.forEach(m => m.remove());
+    nearbyDriversLayer = [];
+    if (activeRide) return; // double-check: ride may have started while request was in flight
+    nearby.forEach(d => {
+      const icon = _vehicleIcons[d.vehicleType] || '🚗';
+      const marker = L.marker([d.lat, d.lng], {
+        icon: L.divIcon({
+          className: '',
+          html: `<div style="font-size:18px;line-height:1;filter:drop-shadow(0 1px 3px rgba(0,0,0,.7))">${icon}</div>`,
+          iconSize: [24, 24], iconAnchor: [12, 12]
+        }),
+        interactive: false,
+        zIndexOffset: -100
+      }).addTo(map);
+      nearbyDriversLayer.push(marker);
+    });
+  } catch (e) { /* silent — nearby drivers are cosmetic only */ }
+}
+
+function startNearbyDrivers() {
+  pollNearbyDrivers();
+  if (!nearbyPollInterval) nearbyPollInterval = setInterval(pollNearbyDrivers, 15000);
+}
+
+function stopNearbyDrivers() {
+  if (nearbyPollInterval) { clearInterval(nearbyPollInterval); nearbyPollInterval = null; }
+  nearbyDriversLayer.forEach(m => m.remove());
+  nearbyDriversLayer = [];
+}
+
+function createCircleIcon(cls) {
+  return L.divIcon({ className: cls, iconSize: [18, 18], iconAnchor: [9, 9] });
+}
+
+async function reverseGeocode(lat, lng) {
+  try {
+    const r = await fetch(`https://nominatim.openstreetmap.org/reverse?lat=${lat}&lon=${lng}&format=json`);
+    const d = await r.json();
+    return d.display_name ? d.display_name.split(',').slice(0, 2).join(',').trim() : `${lat.toFixed(4)}, ${lng.toFixed(4)}`;
+  } catch { return `${lat.toFixed(4)}, ${lng.toFixed(4)}`; }
+}
+
+// ── Location Autocomplete ─────────────────────────────────────────────────
+async function searchPlaces(query) {
+  try {
+    const r = await fetch(`/api/geocode?q=${encodeURIComponent(query)}`);
+    return await r.json();
+  } catch { return []; }
+}
+
+// Build the best human-readable label from a geocode result
+function buildLabel(item) {
+  const a = item.address || {};
+  const nn = item.namedetails?.name || item.namedetails?.['name:en'] || '';
+  // Most specific name first
+  const primary =
+    nn ||
+    a.neighbourhood || a.suburb || a.quarter ||
+    a.road          || a.footway || a.pedestrian ||
+    a.village       || a.hamlet  ||
+    a.town          || a.city    ||
+    (item.display_name || '').split(',')[0];
+
+  // Context: city / district / province — skip the country
+  const parts = (item.display_name || '').split(',').map(p => p.trim());
+  const skip  = new Set([primary, 'Pakistan']);
+  const ctx   = parts.filter(p => p && !skip.has(p)).slice(0, 3).join(', ');
+  return { primary, secondary: ctx };
+}
+
+function renderDropdown(type, results) {
+  const dd = document.getElementById(`${type}-dropdown`);
+  if (!results || !results.length) {
+    dd.innerHTML = '<div class="loc-loading" style="color:#888">No results found</div>';
+    dd.className = 'location-dropdown open';
+    setTimeout(() => { dd.className = 'location-dropdown'; }, 1800);
+    return;
+  }
+  dd.innerHTML = results.map(item => {
+    const { primary, secondary } = buildLabel(item);
+    const safePrimary = JSON.stringify(primary);
+    // pointerdown fires before blur on all devices; mousedown + touchstart for compat
+    return `<div class="loc-item"
+        onpointerdown="pickFromSearch(event,'${type}',${item.lat},${item.lon},${safePrimary})"
+        onmousedown="pickFromSearch(event,'${type}',${item.lat},${item.lon},${safePrimary})"
+        ontouchstart="pickFromSearch(event,'${type}',${item.lat},${item.lon},${safePrimary})">
+      <div class="loc-primary">${primary}</div>
+      ${secondary ? `<div class="loc-secondary">${secondary}</div>` : ''}
+    </div>`;
+  }).join('');
+  dd.className = 'location-dropdown open';
+}
+
+// Guard against touchstart→mousedown double-fire on mobile
+let _pickingGuard = false;
+
+function pickFromSearch(e, type, lat, lng, display) {
+  if (_pickingGuard) return;
+  _pickingGuard = true;
+  setTimeout(() => { _pickingGuard = false; }, 600);
+
+  e.preventDefault();
+  e.stopPropagation();
+  closeDropdown(type);
+  if (type === 'pickup') {
+    setPickup(+lat, +lng, display);
+  } else if (type.startsWith('stop-')) {
+    const idx = parseInt(type.split('-')[1], 10);
+    setStop(idx, +lat, +lng, display);
+  }
+}
+
+function closeDropdown(type) {
+  document.getElementById(`${type}-dropdown`).className = 'location-dropdown';
+}
+
+function onLocInput(type) {
+  const val = document.getElementById(`${type}-input`).value.trim();
+  clearTimeout(locTimer[type]);
+  if (val.length < 2) { closeDropdown(type); return; }
+  const dd = document.getElementById(`${type}-dropdown`);
+  dd.innerHTML = '<div class="loc-loading">Searching…</div>';
+  dd.className = 'location-dropdown open';
+  locTimer[type] = setTimeout(async () => {
+    const results = await searchPlaces(val);
+    renderDropdown(type, results);
+  }, 380);
+}
+
+function onLocFocus(type) {
+  const val = document.getElementById(`${type}-input`).value.trim();
+  if (val.length >= 2) onLocInput(type);
+}
+
+function onLocBlur(type) {
+  // Delay must exceed the 380 ms search debounce so the dropdown stays open
+  // long enough for the user to see and tap results.  600 ms also covers
+  // the mousedown / touchstart / pointerdown handlers on dropdown items.
+  setTimeout(() => closeDropdown(type), 600);
+}
+
+// ── Set Locations ─────────────────────────────────────────────────────────
+async function setPickup(lat, lng, preDisplay = null) {
+  pickup = { lat, lng };
+  if (pickupMarker) pickupMarker.remove();
+  pickupMarker = L.marker([lat, lng], { icon: createCircleIcon('pickup-marker') }).addTo(map);
+  closeDropdown('pickup');
+  document.getElementById('pickup-input').value = preDisplay || 'Locating…';
+  document.getElementById('pickup-input').classList.add('has-val');
+  const addr = preDisplay || await reverseGeocode(lat, lng);
+  pickup.address = addr;
+  document.getElementById('pickup-input').value = addr;
+  updateClearBtn('pickup');
+
+  mapMode = 'stop-0';
+  const hint = document.getElementById('map-hint');
+  hint.textContent = 'Now search or tap your Drop 1 location';
+  hint.className = 'map-hint dropoff-mode';
+  hint.style.display = 'block';
+
+  if (dropoffs[0]) {
+    const distKm = await drawRoute();
+    routeDistanceKm = distKm;
+    updateFare();
+  } else {
+    map.setView([lat, lng], 14);
+  }
+}
+
+// ── Set a specific stop by index (0=Drop1, 1=Drop2, …) ────────────────────
+async function setStop(idx, lat, lng, preDisplay = null) {
+  dropoffs[idx] = { lat, lng };
+  if (stopMarkers[idx]) stopMarkers[idx].remove();
+  stopMarkers[idx] = L.marker([lat, lng], {
+    icon: createCircleIcon(idx === 0 ? 'dropoff-marker' : 'dropoff-marker stop-extra-marker')
+  }).addTo(map);
+  closeDropdown(`stop-${idx}`);
+  document.getElementById(`stop-${idx}-input`).value = preDisplay || 'Locating…';
+  document.getElementById(`stop-${idx}-input`).classList.add('has-val');
+  const addr = preDisplay || await reverseGeocode(lat, lng);
+  dropoffs[idx].address = addr;
+  document.getElementById(`stop-${idx}-input`).value = addr;
+  updateClearBtn(`stop-${idx}`);
+
+  mapMode = 'idle';
+  document.getElementById('map-hint').style.display = 'none';
+
+  if (pickup) {
+    const distKm = await drawRoute();
+    routeDistanceKm = distKm;
+    updateFare();
+  } else {
+    map.setView([lat, lng], 14);
+  }
+}
+
+// ── Locate Me (re-center map + set pickup to live GPS position) ───────────
+function locateMe() {
+  if (!navigator.geolocation) return showToast('Geolocation not supported by this browser', 'error');
+  const inp = document.getElementById('pickup-input');
+  if (inp) { inp.value = '📍 Locating…'; inp.classList.add('has-val'); }
+  navigator.geolocation.getCurrentPosition(pos => {
+    setPickup(pos.coords.latitude, pos.coords.longitude);
+  }, () => {
+    showToast('Could not get your location — check GPS permissions', 'error');
+    if (inp && inp.value === '📍 Locating…') { inp.value = ''; inp.classList.remove('has-val'); }
+  }, { enableHighAccuracy: true, timeout: 10000 });
+}
+
+// ── Clear Location ────────────────────────────────────────────────────────
+function updateClearBtn(type) {
+  const inp    = document.getElementById(`${type === 'pickup' ? 'pickup' : type}-input`);
+  const btnId  = type === 'pickup' ? 'clear-pickup' : `clear-${type}`;
+  const btn    = document.getElementById(btnId);
+  if (!btn) return;
+  btn.classList.toggle('visible', !!(inp && inp.value.trim()));
+}
+
+function clearLocation(type) {
+  const isPickup = type === 'pickup';
+  const inputId  = isPickup ? 'pickup-input' : `${type}-input`;
+  const btnId    = isPickup ? 'clear-pickup' : `clear-${type}`;
+  const inp      = document.getElementById(inputId);
+  if (inp) { inp.value = ''; inp.classList.remove('has-val'); }
+  const btn = document.getElementById(btnId);
+  if (btn) btn.classList.remove('visible');
+  closeDropdown(type);
+
+  if (isPickup) {
+    pickup = null;
+    if (pickupMarker) { pickupMarker.remove(); pickupMarker = null; }
+    const hint = document.getElementById('map-hint');
+    if (hint) { hint.textContent = 'Tap map or search a pickup location below'; hint.className = 'map-hint'; hint.style.display = 'block'; }
+    mapMode = 'pickup';
+  } else {
+    const idx = parseInt(type.replace('stop-', ''));
+    dropoffs[idx] = null;
+    if (stopMarkers[idx]) { stopMarkers[idx].remove(); stopMarkers[idx] = null; }
+  }
+
+  // Clear route and reset fare whenever any location is removed
+  if (routeLine) { (Array.isArray(routeLine) ? routeLine : [routeLine]).forEach(l => l.remove()); routeLine = null; }
+  routeDistanceKm = null;
+  document.getElementById('fare-row').style.display  = 'none';
+  document.getElementById('book-btn').style.display  = 'none';
+  document.getElementById('dist-badge').style.display = 'none';
+
+  // If there's still a valid pickup+stop combo, redraw route
+  const hasRoute = pickup && dropoffs.slice(0, activeStops).some(d => d);
+  if (hasRoute) drawRoute().then(km => { routeDistanceKm = km; updateFare(); });
+}
+
+async function drawRoute() {
+  if (routeLine) { if (Array.isArray(routeLine)) routeLine.forEach(l => l.remove()); else routeLine.remove(); routeLine = null; }
+
+  // Build ordered waypoints: pickup + all non-null stops (in order)
+  const activeDropoffs = dropoffs.slice(0, activeStops).filter(d => d !== null);
+  if (!pickup || !activeDropoffs.length) return 0;
+  const waypoints = [pickup, ...activeDropoffs];
+
+  try {
+    // OSRM supports multiple waypoints as semicolon-separated lng,lat pairs
+    const coordStr = waypoints.map(p => `${p.lng},${p.lat}`).join(';');
+    const url = `https://router.project-osrm.org/route/v1/driving/${coordStr}?overview=full&geometries=geojson`;
+    const r = await fetch(url);
+    const d = await r.json();
+    if (d.routes && d.routes[0]) {
+      const coords = d.routes[0].geometry.coordinates.map(([lng, lat]) => [lat, lng]);
+      const shadow = L.polyline(coords, { color: '#000', weight: 8, opacity: .35 }).addTo(map);
+      const line   = L.polyline(coords, { color: '#f5c518', weight: 5, opacity: 1 }).addTo(map);
+      // Draw stop waypoint markers over the route line
+      routeLine = [shadow, line];
+      map.fitBounds(line.getBounds(), { padding: [50, 50] });
+      // Sum all leg distances for the cumulative total
+      const totalKm = d.routes[0].legs.reduce((sum, leg) => sum + leg.distance, 0) / 1000;
+      return totalKm;
+    }
+  } catch {}
+
+  // Fallback: straight dashed line connecting all waypoints
+  const coords = waypoints.map(p => [p.lat, p.lng]);
+  const line = L.polyline(coords, { color: '#f5c518', weight: 5, dashArray: '10,8', opacity: .9 }).addTo(map);
+  routeLine = [line];
+  if (coords.length >= 2) map.fitBounds(L.latLngBounds(coords), { padding: [50, 50] });
+  // Haversine sum across legs
+  let total = 0;
+  for (let i = 0; i < waypoints.length - 1; i++)
+    total += haversine(waypoints[i].lat, waypoints[i].lng, waypoints[i+1].lat, waypoints[i+1].lng);
+  return total;
+}
+
+function haversine(lat1, lng1, lat2, lng2) {
+  const R = 6371, dLat = (lat2-lat1)*Math.PI/180, dLng = (lng2-lng1)*Math.PI/180;
+  const a = Math.sin(dLat/2)**2 + Math.cos(lat1*Math.PI/180)*Math.cos(lat2*Math.PI/180)*Math.sin(dLng/2)**2;
+  return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+}
+
+// ── Fare Negotiation ──────────────────────────────────────────────────────
+function updateFare() {
+  const activeDrop = dropoffs.slice(0, activeStops).find(d => d !== null);
+  if (!pickup || !activeDrop) return;
+
+  let dist;
+  if (routeDistanceKm !== null) {
+    dist = routeDistanceKm;
+  } else {
+    // Haversine fallback: sum all legs
+    const pts = [pickup, ...dropoffs.slice(0, activeStops).filter(d => d)];
+    dist = 0;
+    for (let i = 0; i < pts.length - 1; i++)
+      dist += haversine(pts[i].lat, pts[i].lng, pts[i+1].lat, pts[i+1].lng);
+  }
+
+  const rate      = FARE_RATES[selectedVehicle] || 50;
+  const min       = MIN_FARES[selectedVehicle] || 100;
+  const suggested = Math.max(Math.round(dist * rate), min);
+  offeredFare = suggested;
+
+  const stopCount = dropoffs.slice(0, activeStops).filter(d => d).length;
+  const distLabel = stopCount > 1 ? `📍 ${dist.toFixed(1)} km total · ${stopCount} stops` : `📍 ${dist.toFixed(1)} km`;
+  document.getElementById('fare-meta').textContent = `Rs ${rate}/km`;
+  document.getElementById('fare-suggested-val').textContent = `Rs ${suggested.toLocaleString()}`;
+  document.getElementById('dist-km-val').textContent = dist.toFixed(1);
+  document.getElementById('dist-badge').style.display = 'inline-flex';
+  document.getElementById('dist-badge').title = distLabel;
+  renderOfferedFare();
+  document.getElementById('fare-row').style.display  = 'block';
+  document.getElementById('book-btn').style.display  = 'block';
+}
+
+function adjustFare(delta) {
+  const min = MIN_FARES[selectedVehicle] || 50;
+  offeredFare = Math.max(min, offeredFare + delta);
+  renderOfferedFare();
+}
+
+function renderOfferedFare() {
+  const min = MIN_FARES[selectedVehicle] || 50;
+  document.getElementById('fare-display').textContent = `Rs ${offeredFare.toLocaleString()}`;
+  document.getElementById('fare-min-note').textContent =
+    offeredFare <= min ? `⚠ Minimum fare: Rs ${min}` : `Drivers see your offer · Min: Rs ${min}`;
+}
+
+function selectVehicle(btn) {
+  document.querySelectorAll('.vehicle-btn').forEach(b => b.classList.remove('active'));
+  btn.classList.add('active');
+  selectedVehicle = btn.dataset.type;
+  if (pickup && dropoffs[0]) updateFare();
+}
+
+// ── Add / Remove Stops ───────────────────────────────────────────────────
+function addStop() {
+  if (activeStops >= 4) return showToast('Maximum 4 drop stops', 'info');
+  const newIdx = activeStops;
+  document.getElementById(`stop-wrap-${newIdx}`).style.display = 'block';
+  activeStops++;
+  // Point map-tap at this new stop so the user can place it by tapping the map
+  mapMode = `stop-${newIdx}`;
+  const hint = document.getElementById('map-hint');
+  hint.textContent = `Tap map to set Drop ${newIdx + 1}, or search below`;
+  hint.className   = 'map-hint dropoff-mode';
+  hint.style.display = 'block';
+  document.getElementById('add-stop-btn').style.display = activeStops >= 4 ? 'none' : 'flex';
+}
+
+function removeStop(idx) {
+  // Clear the stop at idx and shift higher stops down to close the gap
+  if (stopMarkers[idx]) { stopMarkers[idx].remove(); stopMarkers[idx] = null; }
+  dropoffs[idx] = null;
+
+  for (let i = idx; i < activeStops - 1; i++) {
+    dropoffs[i]     = dropoffs[i + 1];
+    stopMarkers[i]  = stopMarkers[i + 1];
+    const fromInput = document.getElementById(`stop-${i+1}-input`);
+    const toInput   = document.getElementById(`stop-${i}-input`);
+    toInput.value   = fromInput.value;
+    toInput.classList.toggle('has-val', fromInput.classList.contains('has-val'));
+    fromInput.value = '';
+    fromInput.classList.remove('has-val');
+  }
+  // Wipe the last (now-duplicate) slot
+  dropoffs[activeStops - 1]    = null;
+  stopMarkers[activeStops - 1] = null;
+
+  activeStops--;
+  document.getElementById(`stop-wrap-${activeStops}`).style.display = 'none';
+  document.getElementById('add-stop-btn').style.display = 'flex';
+
+  // Redraw if possible
+  if (pickup && dropoffs[0]) {
+    drawRoute().then(dist => { routeDistanceKm = dist; updateFare(); });
+  } else {
+    routeDistanceKm = null;
+    if (routeLine) { if (Array.isArray(routeLine)) routeLine.forEach(l => l.remove()); else routeLine.remove(); routeLine = null; }
+    document.getElementById('fare-row').style.display = 'none';
+    document.getElementById('book-btn').style.display = 'none';
+  }
+}
+
+// ── Book Ride ─────────────────────────────────────────────────────────────
+async function bookRide() {
+  if (!pickup)       return showToast('Set pickup location first', 'error');
+  if (!dropoffs[0])  return showToast('Set at least one dropoff location', 'error');
+  if (!offeredFare || offeredFare < 1) return showToast('Invalid fare amount', 'error');
+
+  const activeDropoffsList = dropoffs.slice(0, activeStops).filter(d => d !== null);
+
+  const dist = routeDistanceKm !== null ? routeDistanceKm : (() => {
+    const pts = [pickup, ...activeDropoffsList];
+    let total = 0;
+    for (let i = 0; i < pts.length - 1; i++)
+      total += haversine(pts[i].lat, pts[i].lng, pts[i+1].lat, pts[i+1].lng);
+    return total;
+  })();
+
+  try {
+    const ride = await apiCall('/api/rides', 'POST', {
+      pickupLocation:   { ...pickup },
+      dropoffLocation:  { ...activeDropoffsList[0] },             // primary stop
+      dropoffLocations: activeDropoffsList.map(d => ({ ...d })), // full list
+      fare:             offeredFare,
+      offeredFare:      offeredFare,
+      distance:         +dist.toFixed(2),
+      vehicleType:      selectedVehicle,
+      paymentMethod:    'cash'
+    });
+    activeRide = ride;
+    activeLiveFare = offeredFare;
+    driverOffers = [];
+    showWaitingPanel(ride);
+    connectToRideRoom(ride._id);
+    const stopStr = activeDropoffsList.length > 1 ? ` · ${activeDropoffsList.length} stops` : '';
+    showToast(`Offer broadcast${stopStr}! Waiting for drivers…`, 'success');
+  } catch (e) { showToast(e.message, 'error'); }
+}
+
+// ── Waiting Panel (post-booking, before driver selection) ──────────────────
+function showWaitingPanel(ride) {
+  stopNearbyDrivers(); // hide nearby markers once a ride is in progress
+  document.getElementById('active-ride').style.display = 'block';
+  document.getElementById('bottom-panel').style.display = 'none';
+  document.getElementById('ar-waiting').style.display = 'block';
+  document.getElementById('ar-matched').style.display = 'none';
+  document.getElementById('ar-live-fare').textContent = `Rs ${(activeLiveFare || ride.fare || 0).toLocaleString()}`;
+  document.getElementById('ride-status-text').textContent = 'Broadcasting your offer…';
+  document.getElementById('offers-list').innerHTML = '<div class="no-offers-msg">🔍 Waiting for nearby drivers to respond…</div>';
+  document.getElementById('offers-count').textContent = '';
+}
+
+// ── Matched Panel (after customer selects a driver) ────────────────────────
+function showMatchedPanel(driver, agreedFare) {
+  document.getElementById('ar-waiting').style.display = 'none';
+  document.getElementById('ar-matched').style.display = 'block';
+  document.getElementById('ar-status-text').textContent = 'Driver on the way! 🚗';
+  // Driver avatar — show profile photo if available, else initial letter
+  const avatarEl = document.getElementById('ar-avatar');
+  if (driver.profilePhoto) {
+    avatarEl.innerHTML = `<img src="${driver.profilePhoto}" alt="Driver">`;
+  } else {
+    avatarEl.textContent = (driver.name || '?')[0].toUpperCase();
+  }
+  document.getElementById('ar-driver-name').textContent = driver.name || '—';
+  document.getElementById('ar-driver-vehicle').textContent = [driver.vehicleType, driver.vehicleModel].filter(Boolean).join(' · ') || '—';
+  document.getElementById('ar-driver-plate').textContent = driver.vehiclePlate || '—';
+  document.getElementById('ar-driver-rating').textContent = `⭐ ${(driver.rating || 5.0).toFixed(1)}`;
+  document.getElementById('ar-fare').textContent = `Rs ${(agreedFare || 0).toLocaleString()}`;
+  document.getElementById('ar-payment').textContent = '💵 Cash (direct)';
+
+  // Dual call buttons — Phone + WhatsApp
+  const digits = driver.phone ? driver.phone.replace(/\D/g, '') : '';
+  const telPhone = digits ? (digits.startsWith('92') ? `+${digits}` : `+92${digits.replace(/^0/, '')}`) : '';
+  const waPhone  = digits ? (digits.startsWith('92') ? digits : `92${digits.replace(/^0/, '')}`) : '';
+  const contactHtml = telPhone
+    ? `<a class="btn-call"      href="tel:${telPhone}">📞 Phone Call</a>
+       <a class="btn-whatsapp"  href="https://wa.me/${waPhone}" target="_blank" rel="noopener">💬 WhatsApp</a>`
+    : `<div style="font-size:.78rem;color:#555;text-align:center;flex:1">Contact details not available</div>`;
+  document.getElementById('ar-contact-btns').innerHTML = contactHtml;
+}
+
+// ── Render offers list ─────────────────────────────────────────────────────
+function renderOffers(offers) {
+  driverOffers = offers || [];
+  const el = document.getElementById('offers-list');
+  const count = document.getElementById('offers-count');
+  if (!driverOffers.length) {
+    el.innerHTML = '<div class="no-offers-msg">🔍 Waiting for nearby drivers to respond…</div>';
+    count.textContent = '';
+    return;
+  }
+  count.textContent = `${driverOffers.length} response${driverOffers.length > 1 ? 's' : ''}`;
+  el.innerHTML = driverOffers.map(o => {
+    const initial = (o.driverName || '?')[0].toUpperCase();
+    const vehicleStr = [o.vehicleModel, o.vehiclePlate].filter(Boolean).join(' · ');
+    const typeBadge = o.type === 'counter'
+      ? '<span class="offer-type-badge counter">Counter</span>'
+      : '<span class="offer-type-badge accept">Accepts offer</span>';
+    return `<div class="offer-card">
+      <div class="offer-card-top">
+        <div class="offer-avatar">${initial}</div>
+        <div class="offer-body">
+          <div class="offer-name">${o.driverName || 'Driver'}${typeBadge}</div>
+          <div class="offer-vehicle">⭐ ${(o.rating||5).toFixed(1)} ${vehicleStr ? '· ' + vehicleStr : ''}</div>
+        </div>
+        <div class="offer-price-col">
+          <span class="offer-price-amt">Rs ${(o.price||0).toLocaleString()}</span>
+        </div>
+      </div>
+      <button class="btn-accept-driver" onclick="acceptDriver('${o.driverId}',${o.price})">✓ Accept — Rs ${(o.price||0).toLocaleString()}</button>
+    </div>`;
+  }).join('');
+}
+
+// ── Accept specific driver ─────────────────────────────────────────────────
+async function acceptDriver(driverId, agreedFare) {
+  if (!activeRide) return;
+  try {
+    const ride = await apiCall(`/api/rides/${activeRide._id}/accept-driver`, 'PATCH', { driverId });
+    activeRide = ride;
+    // The full driver info arrives via ride:accepted socket event
+    // But we can pre-populate from offers list while socket event comes in
+    const offer = driverOffers.find(o => o.driverId === driverId);
+    if (offer) {
+      showMatchedPanel({
+        name: offer.driverName, vehicleModel: offer.vehicleModel,
+        vehiclePlate: offer.vehiclePlate, rating: offer.rating
+      }, agreedFare);
+    }
+    showToast('Driver accepted! They\'re on the way.', 'success');
+  } catch (e) { showToast(e.message, 'error'); }
+}
+
+// ── Live fare adjustment (during waiting) ─────────────────────────────────
+function liveAdjustFare(delta) {
+  const min = MIN_FARES[selectedVehicle] || 50;
+  activeLiveFare = Math.max(min, activeLiveFare + delta);
+  document.getElementById('ar-live-fare').textContent = `Rs ${activeLiveFare.toLocaleString()}`;
+}
+
+async function broadcastFareUpdate() {
+  if (!activeRide) return;
+  try {
+    await apiCall(`/api/rides/${activeRide._id}/update-fare`, 'PATCH', { fare: activeLiveFare });
+    activeRide.fare = activeLiveFare;
+    showToast(`Offer updated to Rs ${activeLiveFare.toLocaleString()} — drivers notified!`, 'success');
+  } catch (e) { showToast(e.message, 'error'); }
+}
+
+function statusLabel(s) {
+  return { requested: 'Broadcasting offer…', accepted: 'Driver on the way!', arrived: 'Driver arrived!', 'in-progress': 'On the ride!', completed: 'Ride complete!', cancelled: 'Ride cancelled' }[s] || s;
+}
+
+async function cancelRide() {
+  if (!activeRide) return;
+  try {
+    await apiCall(`/api/rides/${activeRide._id}/cancel`, 'PATCH');
+    endRide(); showToast('Ride cancelled', 'info');
+  } catch (e) { showToast(e.message, 'error'); }
+}
+
+function endRide() {
+  activeRide = null; routeDistanceKm = null; offeredFare = 0;
+  activeLiveFare = 0; driverOffers = []; activeDriverInfo = null;
+  // Hide PIN card and reset it for the next ride
+  const pinCard = document.getElementById('ar-pin-card');
+  if (pinCard) { pinCard.style.display = 'none'; document.getElementById('ar-pin-value').textContent = '—'; }
+  document.getElementById('active-ride').style.display = 'none';
+  document.getElementById('ar-waiting').style.display = 'block';
+  document.getElementById('ar-matched').style.display = 'none';
+  document.getElementById('bottom-panel').style.display = 'block';
+  if (pickupMarker)  { pickupMarker.remove();  pickupMarker  = null; }
+  stopMarkers.forEach((m, i) => { if (m) { m.remove(); stopMarkers[i] = null; } });
+  if (routeLine)     { (Array.isArray(routeLine) ? routeLine : [routeLine]).forEach(l => l.remove()); routeLine = null; }
+  if (driverMarker)  { driverMarker.remove();  driverMarker  = null; }
+  pickup = null;
+  dropoffs = [null, null, null, null];
+  activeStops = 1;
+  mapMode = 'pickup';
+  document.getElementById('pickup-input').value = '';
+  document.getElementById('pickup-input').classList.remove('has-val');
+  // Reset all stop inputs
+  [0, 1, 2, 3].forEach(i => {
+    const inp = document.getElementById(`stop-${i}-input`);
+    if (inp) { inp.value = ''; inp.classList.remove('has-val'); }
+  });
+  // Hide extra stops
+  [1, 2, 3].forEach(i => {
+    const wrap = document.getElementById(`stop-wrap-${i}`);
+    if (wrap) wrap.style.display = 'none';
+  });
+  document.getElementById('add-stop-btn').style.display = 'flex';
+  document.getElementById('fare-row').style.display = 'none';
+  document.getElementById('dist-badge').style.display = 'none';
+  document.getElementById('book-btn').style.display = 'none';
+  document.getElementById('map-hint').style.display = 'block';
+  document.getElementById('map-hint').className = 'map-hint';
+  document.getElementById('map-hint').textContent = 'Tap map or search a pickup location below';
+  loadRideHistory();
+  setTimeout(startNearbyDrivers, 500); // restore nearby markers after ride ends
+}
+
+// ── Socket.io ─────────────────────────────────────────────────────────────
+function connectSocket() {
+  if (socket) return;
+  socket = io({ auth: { token } });
+  socket.on('connect_error', (e) => console.warn('Socket error:', e.message));
+
+  // Fired on both initial connection AND every successful reconnect.
+  // Re-join the active ride room and restore the last-known driver position
+  // from the persisted driverLocation field so the map is never blank after
+  // a brief server restart or network blip.
+  socket.on('connect', () => {
+    if (!activeRide) return;
+    socket.emit('ride:join', activeRide._id);
+    // Fetch persisted ride data to restore driver marker from last saved location
+    apiCall(`/api/rides/${activeRide._id}`).then(ride => {
+      const loc = ride?.driverLocation;
+      if (loc?.lat && loc?.lng && map) {
+        if (driverMarker) driverMarker.remove();
+        driverMarker = L.marker([loc.lat, loc.lng], {
+          icon: L.divIcon({ className: 'driver-marker', html: '🚗', iconSize: [28, 28], iconAnchor: [14, 14] })
+        }).addTo(map);
+        // Pan map to show driver position relative to pickup
+        const pu = activeRide.pickupLocation;
+        if (pu?.lat && pu?.lng) {
+          try {
+            map.fitBounds(
+              L.latLngBounds([[loc.lat, loc.lng], [pu.lat, pu.lng]]),
+              { padding: [55, 55], maxZoom: 16, animate: false }
+            );
+          } catch(e) {}
+        }
+      }
+    }).catch(() => {});
+  });
+
+  // Admin replied to a support ticket
+  socket.on('support:replied', ({ subject, reply }) => {
+    showToast(`📋 Admin replied to: "${subject}"`, 'info');
+    document.getElementById('cust-unread-dot').style.display   = 'inline-block';
+    const badge = document.getElementById('cust-ticket-badge');
+    badge.style.display = 'inline';
+    badge.textContent   = String((parseInt(badge.textContent) || 0) + 1);
+  });
+}
+
+function connectToRideRoom(rideId) {
+  if (!socket) return;
+  socket.emit('ride:join', rideId);
+
+  // Driver offers / counter-offers arriving in real time
+  socket.on('ride:offers', (offers) => {
+    renderOffers(offers);
+    if (offers.length === 1) showToast(`A driver responded to your offer!`, 'info');
+    else if (offers.length > 1) showToast(`${offers.length} drivers have responded!`, 'info');
+  });
+
+  // Customer selected a driver — full driver profile arrives here
+  socket.on('ride:accepted', ({ driver, rideId: acceptedRideId, verificationPin }) => {
+    if (activeRide && String(activeRide._id) === String(acceptedRideId)) {
+      activeDriverInfo = driver;
+      showMatchedPanel(driver, activeRide.fare);
+      // Display verification PIN so customer can share it with driver
+      if (verificationPin) {
+        document.getElementById('ar-pin-card').style.display = 'block';
+        document.getElementById('ar-pin-value').textContent  = verificationPin;
+      }
+      showToast(`${driver.name} is on the way!`, 'success');
+    }
+  });
+
+  socket.on('ride:status', ({ status }) => {
+    if (status === 'completed') { showToast('Ride completed! 🎉', 'success'); setTimeout(showRatingModal, 1500); }
+    else if (status === 'cancelled') { showToast('Ride was cancelled', 'error'); setTimeout(endRide, 1500); }
+    else if (status === 'arrived') {
+      document.getElementById('ar-status-text').textContent = 'Driver has arrived! 📍';
+      showToast('Your driver has arrived!', 'info');
+    } else if (status === 'in-progress') {
+      document.getElementById('ar-status-text').textContent = 'Ride in progress 🚗';
+    }
+  });
+
+  socket.on('driver:location', ({ lat, lng }) => {
+    // Update / create driver marker
+    if (driverMarker) driverMarker.remove();
+    driverMarker = L.marker([lat, lng], {
+      icon: L.divIcon({ className: 'driver-marker', html: '🚗', iconSize: [28, 28], iconAnchor: [14, 14] })
+    }).addTo(map);
+
+    // Pan map to show both driver and pickup
+    const pickup = activeRide?.pickupLocation;
+    if (pickup?.lat && pickup?.lng) {
+      try {
+        map.fitBounds(
+          L.latLngBounds([[lat, lng], [pickup.lat, pickup.lng]]),
+          { padding: [55, 55], maxZoom: 16, animate: true }
+        );
+      } catch(e) {}
+
+      // ETA — Haversine distance ÷ 30 km/h city speed
+      const distKm = haversineKm(lat, lng, pickup.lat, pickup.lng);
+      const etaMins = Math.max(1, Math.round(distKm / 30 * 60));
+      const etaBar  = document.getElementById('ar-eta-bar');
+      const etaTxt  = document.getElementById('ar-eta-text');
+      const etaDist = document.getElementById('ar-eta-dist');
+      if (etaBar && etaTxt) {
+        etaBar.style.display = 'flex';
+        etaTxt.textContent   = etaMins <= 1 ? 'Driver is almost here! 📍' : `Driver arriving in ~${etaMins} min${etaMins !== 1 ? 's' : ''}`;
+        if (etaDist) etaDist.textContent = `${distKm < 1 ? (distKm * 1000).toFixed(0) + ' m' : distKm.toFixed(1) + ' km'} away`;
+      }
+    }
+  });
+}
+
+function haversineKm(lat1, lng1, lat2, lng2) {
+  const R = 6371;
+  const dLat = (lat2 - lat1) * Math.PI / 180;
+  const dLng = (lng2 - lng1) * Math.PI / 180;
+  const a = Math.sin(dLat / 2) ** 2
+    + Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) * Math.sin(dLng / 2) ** 2;
+  return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+}
+
+// ── Share Location ─────────────────────────────────────────────────────────
+function shareLocation() {
+  if (!navigator.geolocation) return showToast('Geolocation not supported', 'error');
+  if (locationWatchId) {
+    navigator.geolocation.clearWatch(locationWatchId);
+    locationWatchId = null;
+    showToast('Location sharing stopped', 'info'); return;
+  }
+  locationWatchId = navigator.geolocation.watchPosition(pos => {
+    const { latitude: lat, longitude: lng } = pos.coords;
+    if (socket && activeRide) socket.emit('location:share', { lat, lng, rideId: activeRide._id });
+  }, () => {}, { enableHighAccuracy: true });
+  showToast('Sharing your live location', 'success');
+}
+
+// ── SOS ───────────────────────────────────────────────────────────────────
+async function triggerSOS() {
+  const contactStr = _emergencyContacts.length
+    ? _emergencyContacts.map(c => `${c.name || 'Contact'}: ${c.phone}`).join(', ')
+    : 'No emergency contacts saved';
+
+  const msg = `🆘 Send SOS emergency alert?\n\nEmergency contacts: ${contactStr}\n\nThis will send your live location, ride & driver details to all listed contacts.`;
+  if (!confirm(msg)) return;
+
+  // Get live GPS location
+  let location = { lat: 0, lng: 0 };
+  try {
+    const pos = await new Promise((resolve, reject) =>
+      navigator.geolocation.getCurrentPosition(resolve, reject, { timeout: 6000, enableHighAccuracy: true })
+    );
+    location = { lat: pos.coords.latitude, lng: pos.coords.longitude };
+  } catch {}
+
+  const mapsLink = `https://maps.google.com/?q=${location.lat},${location.lng}`;
+
+  // Build driver info from active matched driver
+  const driverInfo = activeDriverInfo
+    ? { name: activeDriverInfo.name, phone: activeDriverInfo.phone,
+        vehiclePlate: activeDriverInfo.vehiclePlate, vehicleModel: activeDriverInfo.vehicleModel,
+        vehicleType: activeRide?.vehicleType }
+    : null;
+
+  // Compose full alert message
+  const fullMsg = driverInfo
+    ? `🆘 SOS from ${user.name}! Ride with ${driverInfo.name} — ${driverInfo.vehiclePlate || driverInfo.vehicleModel || driverInfo.vehicleType || 'Unknown vehicle'}. Live location: ${mapsLink}`
+    : `🆘 SOS from ${user.name}! Live location: ${mapsLink}`;
+
+  try {
+    const res = await apiCall('/api/sos', 'POST', {
+      location, message: fullMsg,
+      rideId: activeRide?._id || null, driverInfo
+    });
+    // Refresh emergency contacts cache
+    if (res.emergencyContacts?.length) _emergencyContacts = res.emergencyContacts;
+    const notified = res.emergencyContacts?.length
+      ? `${res.emergencyContacts.length} contact${res.emergencyContacts.length > 1 ? 's' : ''} notified.`
+      : 'Add emergency contacts to notify them automatically.';
+    showToast(`🆘 SOS sent! ${notified}`, 'error');
+  } catch {
+    showToast('🆘 SOS sent (backup mode)!', 'error');
+  }
+}
+
+// ── Ride History ───────────────────────────────────────────────────────────
+async function loadRideHistory() {
+  try {
+    const rides = await apiCall('/api/rides/my');
+    const el = document.getElementById('ride-history-list');
+    if (!rides.length) { el.innerHTML = '<div class="empty-msg">No rides yet. Book your first ride!</div>'; return; }
+    el.innerHTML = rides.map(r => {
+      return `<div class="ride-history-item ${r.status}">
+        <div class="rh-route">${r.pickupLocation?.address || 'Pickup'} <span>→</span> ${r.dropoffLocation?.address || 'Dropoff'}</div>
+        <div class="rh-meta">
+          <span class="status-pill ${r.status}">${r.status}</span>
+          <span class="rh-fare">Rs ${r.fare} 💵</span>
+          <span>${new Date(r.createdAt).toLocaleDateString()}</span>
+        </div>
+      </div>`;
+    }).join('');
+  } catch {}
+}
+
+// ── Rating Modal ──────────────────────────────────────────────────────────
+let _ratingRideId = null;
+let _ratingSelected = 0;
+
+function showRatingModal() {
+  _ratingRideId = activeRide?._id || null;
+  _ratingSelected = 0;
+  document.querySelectorAll('.star-btn').forEach(b => b.classList.remove('selected'));
+  document.getElementById('rating-review-text').value = '';
+  document.getElementById('rating-driver-name').textContent = activeDriverInfo?.name || 'your driver';
+  document.getElementById('rating-modal').classList.add('open');
+}
+
+function selectStar(n) {
+  _ratingSelected = n;
+  document.querySelectorAll('.star-btn').forEach((b, i) => b.classList.toggle('selected', i < n));
+}
+
+async function submitRating() {
+  if (!_ratingSelected) return showToast('Please select a star rating', 'error');
+  const review = document.getElementById('rating-review-text').value.trim();
+  const btn = document.getElementById('rating-submit-btn');
+  btn.disabled = true; btn.textContent = 'Submitting…';
+  try {
+    if (_ratingRideId) {
+      await apiCall(`/api/rides/${_ratingRideId}/review`, 'PATCH', { rating: _ratingSelected, review });
+    }
+    document.getElementById('rating-modal').classList.remove('open');
+    showToast('Thanks for your feedback! ⭐', 'success');
+  } catch (e) {
+    showToast(e.message || 'Could not submit rating', 'error');
+  } finally {
+    btn.disabled = false; btn.textContent = 'Submit Rating';
+    endRide();
+  }
+}
+
+function skipRating() {
+  document.getElementById('rating-modal').classList.remove('open');
+  endRide();
+}
+
+// ── My Tickets ────────────────────────────────────────────────────────────
+function openMyTickets() {
+  document.getElementById('dots-dropdown').style.display = 'none';
+  document.getElementById('my-tickets-modal').classList.add('open');
+  loadMyTickets();
+  apiCall('/api/support/my/read', 'PATCH').catch(() => {});
+  document.getElementById('cust-unread-dot').style.display    = 'none';
+  document.getElementById('cust-ticket-badge').style.display  = 'none';
+}
+function closeMyTickets() { document.getElementById('my-tickets-modal').classList.remove('open'); }
+
+async function loadMyTickets() {
+  const el = document.getElementById('cust-tickets-list');
+  el.innerHTML = '<div style="color:#475569;text-align:center;padding:1rem;font-size:.83rem">Loading…</div>';
+  try {
+    const tickets = await apiCall('/api/support/my');
+    if (!tickets.length) {
+      el.innerHTML = '<div style="color:#475569;text-align:center;padding:1rem;font-size:.83rem">No tickets yet. Tap "+ New Ticket" to submit one.</div>';
+      return;
+    }
+    el.innerHTML = tickets.map(t => {
+      const isOpen   = t.status === 'open';
+      const hasReply = t.adminReply?.trim().length > 0;
+      const isUnread = hasReply && !t.readByUser;
+      const d = new Date(t.createdAt).toLocaleDateString('en-PK', { day:'numeric', month:'short', year:'numeric' });
+      return `<div style="background:#06060e;border:1px solid ${isUnread ? '#f5c518' : '#1e1e2e'};border-radius:10px;padding:.75rem;margin-bottom:.55rem">
+        <div style="display:flex;align-items:center;gap:.4rem;flex-wrap:wrap;margin-bottom:.3rem">
+          <span style="font-size:.82rem;font-weight:700;color:#e2e8f0;flex:1">${t.subject}</span>
+          <span style="font-size:.62rem;padding:.12rem .35rem;border-radius:4px;background:${isOpen?'#1a1a0a':'#0a1a0a'};color:${isOpen?'#f5c518':'#22c55e'};border:1px solid ${isOpen?'#2a2a10':'#0a3018'}">${isOpen?'Open':'Resolved'}</span>
+          ${isUnread ? '<span style="font-size:.6rem;background:#f5c518;color:#06060e;border-radius:4px;padding:.1rem .3rem;font-weight:800">NEW REPLY</span>' : ''}
+        </div>
+        <div style="font-size:.75rem;color:#475569">${t.message}</div>
+        ${hasReply ? `<div style="background:#0a1a0a;border:1px solid #1a3a1a;border-radius:8px;padding:.5rem .6rem;margin-top:.4rem">
+          <div style="font-size:.63rem;color:#22c55e;font-weight:700;margin-bottom:.2rem">✉ Admin Reply</div>
+          <div style="font-size:.78rem;color:#a3a3a3">${t.adminReply}</div>
+        </div>` : '<div style="font-size:.72rem;color:#334155;margin-top:.3rem;font-style:italic">Awaiting admin response…</div>'}
+        <div style="font-size:.63rem;color:#334155;margin-top:.3rem">${d}</div>
+      </div>`;
+    }).join('');
+  } catch (e) {
+    el.innerHTML = `<div style="color:#ef4444;text-align:center;padding:1rem;font-size:.83rem">${e.message}</div>`;
+  }
+}
+
+async function checkUnreadCustTickets() {
+  try {
+    const tickets = await apiCall('/api/support/my');
+    const unread = tickets.filter(t => t.adminReply?.trim() && !t.readByUser).length;
+    if (unread > 0) {
+      document.getElementById('cust-unread-dot').style.display   = 'inline-block';
+      document.getElementById('cust-ticket-badge').style.display = 'inline';
+      document.getElementById('cust-ticket-badge').textContent   = unread;
+    }
+  } catch {}
+}
+
+// ── Support Ticket ────────────────────────────────────────────────────────
+function openSupportModal() {
+  document.getElementById('support-modal').classList.add('open');
+  // Close dots menu
+  document.getElementById('dots-dropdown').style.display = 'none';
+}
+function closeSupportModal() { document.getElementById('support-modal').classList.remove('open'); }
+
+async function submitSupportTicket() {
+  const subject = document.getElementById('sup-subject').value.trim();
+  const message = document.getElementById('sup-message').value.trim();
+  if (!subject) return showToast('Enter a subject', 'error');
+  if (!message) return showToast('Enter your message', 'error');
+  const btn = document.getElementById('sup-submit-btn');
+  btn.disabled = true; btn.textContent = 'Sending…';
+  try {
+    await apiCall('/api/support/ticket', 'POST', { subject, message });
+    showToast('Ticket submitted! We\'ll get back to you soon.', 'success');
+    document.getElementById('sup-subject').value = '';
+    document.getElementById('sup-message').value = '';
+    closeSupportModal();
+  } catch (e) { showToast(e.message, 'error'); }
+  finally { btn.disabled = false; btn.textContent = 'Send Ticket'; }
+}
+
+// ── Tab Navigation ─────────────────────────────────────────────────────────
+function switchAppTab(name) {
+  document.querySelectorAll('.tab:not(.sos-tab)').forEach(b => b.classList.toggle('active', b.textContent.trim().toLowerCase().includes(name)));
+  document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
+  document.getElementById(`tab-${name}`).classList.add('active');
+  if (name === 'rides') loadRideHistory();
+  // Repaint map tiles after the bottom panel reflows (50 ms is too short)
+  setTimeout(() => map?.invalidateSize(), 150);
+}
+
+
+// ── Init ──────────────────────────────────────────────────────────────────
+if (token && user && user.role === 'driver') {
+  // Driver accidentally opened the Customer App — redirect without wiping their session.
+  alert('This account is registered as a Driver. Redirecting to the Driver App.');
+  window.location.replace('/driver');
+} else if (token && user) {
+  bootApp();
+} else {
+  document.getElementById('auth-screen').style.display = 'flex';
+}
+</script>
+<!-- ── PWA Service Worker Registration ── -->
+<script>
+if ('serviceWorker' in navigator) {
+  window.addEventListener('load', () => {
+    navigator.serviceWorker.register('/sw.js', { scope: '/' })
+      .then(reg => console.log('[SW] Customer registered, scope:', reg.scope))
+      .catch(err => console.warn('[SW] Registration failed:', err));
+  });
+}
+</script>
+
+<!-- ── Change Phone Modal ─────────────────────────────────────────────────── -->
+<div id="change-phone-modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.8);z-index:2100;align-items:center;justify-content:center">
+  <div style="background:#0d1117;border:1px solid #21262d;border-radius:16px;padding:1.5rem;max-width:340px;width:90%;margin:auto">
+    <h3 style="color:#58a6ff;margin:0 0 1rem;font-size:1rem">📱 Change Phone Number</h3>
+    <input type="password" id="cp-phone-current" placeholder="Current password" style="width:100%;padding:.7rem;border-radius:8px;border:1px solid #30363d;background:#161b22;color:#e6edf3;margin-bottom:.5rem;box-sizing:border-box;font-size:.875rem">
+    <input type="tel" id="cp-phone-new" placeholder="New phone number" inputmode="tel" style="width:100%;padding:.7rem;border-radius:8px;border:1px solid #30363d;background:#161b22;color:#e6edf3;margin-bottom:.4rem;box-sizing:border-box;font-size:.875rem">
+    <p id="cp-phone-err" style="color:#ff4444;font-size:.78rem;min-height:1em;margin-bottom:.5rem"></p>
+    <div style="display:flex;gap:.5rem">
+      <button onclick="closeChangePhoneModal()" style="flex:1;padding:.7rem;border-radius:8px;border:1px solid #30363d;background:#0d1117;color:#8b949e;cursor:pointer;font-size:.85rem">Cancel</button>
+      <button id="cp-phone-btn" onclick="submitChangePhone()" style="flex:1;padding:.7rem;border-radius:8px;border:none;background:#238636;color:#fff;font-weight:600;cursor:pointer;font-size:.85rem">Update</button>
+    </div>
+  </div>
+</div>
+
+<!-- ── Change Password Modal ──────────────────────────────────────────────── -->
+<div id="change-password-modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.8);z-index:2100;align-items:center;justify-content:center">
+  <div style="background:#0d1117;border:1px solid #21262d;border-radius:16px;padding:1.5rem;max-width:340px;width:90%;margin:auto">
+    <h3 style="color:#58a6ff;margin:0 0 1rem;font-size:1rem">🔑 Change Password</h3>
+    <input type="password" id="cp-pass-current" placeholder="Current password" style="width:100%;padding:.7rem;border-radius:8px;border:1px solid #30363d;background:#161b22;color:#e6edf3;margin-bottom:.5rem;box-sizing:border-box;font-size:.875rem">
+    <input type="password" id="cp-pass-new" placeholder="New password (min 6 characters)" style="width:100%;padding:.7rem;border-radius:8px;border:1px solid #30363d;background:#161b22;color:#e6edf3;margin-bottom:.4rem;box-sizing:border-box;font-size:.875rem">
+    <p id="cp-pass-err" style="color:#ff4444;font-size:.78rem;min-height:1em;margin-bottom:.5rem"></p>
+    <div style="display:flex;gap:.5rem">
+      <button onclick="closeChangePasswordModal()" style="flex:1;padding:.7rem;border-radius:8px;border:1px solid #30363d;background:#0d1117;color:#8b949e;cursor:pointer;font-size:.85rem">Cancel</button>
+      <button id="cp-pass-btn" onclick="submitChangePassword()" style="flex:1;padding:.7rem;border-radius:8px;border:none;background:#238636;color:#fff;font-weight:600;cursor:pointer;font-size:.85rem">Update</button>
+    </div>
+  </div>
+</div>
+
+<script>
+// ── Profile Update ─────────────────────────────────────────────────────────
+async function profileUpdate(payload, modalId) {
+  try {
+    const res = await apiCall('/api/user/update-profile', 'POST', payload);
+    if (res.user) { user = { ...user, ...res.user }; localStorage.setItem('rh_user', JSON.stringify(user)); }
+    document.getElementById(modalId).style.display = 'none';
+    showToast('✅ ' + res.message, 'success');
+    return null;
+  } catch (e) { return e.message; }
+}
+
+function openChangePhoneModal() {
+  ['cp-phone-current','cp-phone-new'].forEach(id => { const el = document.getElementById(id); if (el) el.value = ''; });
+  document.getElementById('cp-phone-err').textContent = '';
+  const btn = document.getElementById('cp-phone-btn'); if (btn) { btn.disabled = false; btn.textContent = 'Update'; }
+  document.getElementById('change-phone-modal').style.display = 'flex';
+}
+function closeChangePhoneModal() { document.getElementById('change-phone-modal').style.display = 'none'; }
+async function submitChangePhone() {
+  const currentPassword = document.getElementById('cp-phone-current').value;
+  const newPhone        = document.getElementById('cp-phone-new').value.trim();
+  const errEl = document.getElementById('cp-phone-err');
+  const btn   = document.getElementById('cp-phone-btn');
+  if (!currentPassword) { errEl.textContent = 'Current password is required'; return; }
+  if (!newPhone)        { errEl.textContent = 'New phone number is required';  return; }
+  btn.disabled = true; btn.textContent = 'Updating…'; errEl.textContent = '';
+  const err = await profileUpdate({ currentPassword, newPhone }, 'change-phone-modal');
+  if (err) { errEl.textContent = err; btn.disabled = false; btn.textContent = 'Update'; }
+}
+
+function openChangePasswordModal() {
+  ['cp-pass-current','cp-pass-new'].forEach(id => { const el = document.getElementById(id); if (el) el.value = ''; });
+  document.getElementById('cp-pass-err').textContent = '';
+  const btn = document.getElementById('cp-pass-btn'); if (btn) { btn.disabled = false; btn.textContent = 'Update'; }
+  document.getElementById('change-password-modal').style.display = 'flex';
+}
+function closeChangePasswordModal() { document.getElementById('change-password-modal').style.display = 'none'; }
+async function submitChangePassword() {
+  const currentPassword = document.getElementById('cp-pass-current').value;
+  const newPassword     = document.getElementById('cp-pass-new').value;
+  const errEl = document.getElementById('cp-pass-err');
+  const btn   = document.getElementById('cp-pass-btn');
+  if (!currentPassword)       { errEl.textContent = 'Current password is required'; return; }
+  if (newPassword.length < 6) { errEl.textContent = 'New password must be at least 6 characters'; return; }
+  btn.disabled = true; btn.textContent = 'Updating…'; errEl.textContent = '';
+  const err = await profileUpdate({ currentPassword, newPassword }, 'change-password-modal');
+  if (err) { errEl.textContent = err; btn.disabled = false; btn.textContent = 'Update'; }
+}
+</script>
+
+<!-- ── Delete Account Modal ──────────────────────────────────────────────── -->
+<div id="delete-account-modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.8);z-index:2000;align-items:center;justify-content:center">
+  <div style="background:#0d1117;border:1px solid #3a1a1a;border-radius:16px;padding:1.5rem;max-width:340px;width:90%;margin:auto">
+    <h3 style="color:#ff4444;margin:0 0 .5rem">⚠️ Delete Account Permanently</h3>
+    <p style="color:#aaa;font-size:.82rem;line-height:1.5;margin-bottom:1rem">This cannot be undone. Enter your password to confirm. An admin will review and remove all your data within 24–48 hours.</p>
+    <input type="password" id="del-acc-pass" placeholder="Enter your password" style="width:100%;padding:.75rem;border-radius:8px;border:1px solid #444;background:#161b22;color:#fff;margin-bottom:.5rem;box-sizing:border-box;font-size:.9rem">
+    <p id="del-acc-err" style="color:#ff4444;font-size:.8rem;min-height:1.1em;margin-bottom:.75rem"></p>
+    <div style="display:flex;gap:.5rem">
+      <button onclick="closeDeleteAccountModal()" style="flex:1;padding:.75rem;border-radius:8px;border:1px solid #333;background:#0d1117;color:#aaa;cursor:pointer;font-size:.875rem">Cancel</button>
+      <button id="del-acc-btn" onclick="doDeleteAccount()" style="flex:1;padding:.75rem;border-radius:8px;border:none;background:#cc2222;color:#fff;font-weight:600;cursor:pointer;font-size:.875rem">Delete My Account</button>
+    </div>
+  </div>
+</div>
+<script>
+function openDeleteAccountModal() {
+  document.getElementById('del-acc-pass').value = '';
+  document.getElementById('del-acc-err').textContent = '';
+  const btn = document.getElementById('del-acc-btn');
+  if (btn) { btn.disabled = false; btn.textContent = 'Delete My Account'; }
+  document.getElementById('delete-account-modal').style.display = 'flex';
+}
+function closeDeleteAccountModal() {
+  document.getElementById('delete-account-modal').style.display = 'none';
+}
+async function doDeleteAccount() {
+  const pass  = document.getElementById('del-acc-pass').value;
+  const errEl = document.getElementById('del-acc-err');
+  const btn   = document.getElementById('del-acc-btn');
+  if (!pass) { errEl.textContent = 'Password is required'; return; }
+  btn.disabled = true; btn.textContent = 'Processing…';
+  try {
+    const res = await apiCall('/api/account/delete-request', 'POST', { password: pass });
+    closeDeleteAccountModal();
+    alert('✅ ' + res.message);
+    doLogout();
+  } catch (e) {
+    errEl.textContent = e.message;
+    btn.disabled = false; btn.textContent = 'Delete My Account';
+  }
+}
+</script>
+</body>
+</html>

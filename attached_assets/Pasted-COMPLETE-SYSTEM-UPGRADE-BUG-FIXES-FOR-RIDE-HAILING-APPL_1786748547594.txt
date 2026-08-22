@@ -1,0 +1,48 @@
+COMPLETE SYSTEM UPGRADE & BUG FIXES FOR RIDE-HAILING APPLICATION:
+
+Please implement the following 5 mandatory fixes/features across backend and frontend in `ride-hailing/`:
+
+----------------------------------------------------------------------
+1. DRIVER REGISTRATION FILE UPLOAD FIX
+----------------------------------------------------------------------
+- In `server.js`, set body-parser payload limits to `50mb`:
+  `app.use(express.json({ limit: '50mb' }));`
+  `app.use(express.urlencoded({ limit: '50mb', extended: true }));`
+- In Driver UI (Step 2 Uploads), disable the submit button immediately upon click and show "Uploading documents, please wait..." indicator.
+- Return explicit JSON error messages on failure instead of letting the request hang.
+
+----------------------------------------------------------------------
+2. SINGLE DEVICE LOGIN ENFORCEMENT
+----------------------------------------------------------------------
+- In Driver Schema, add `activeSessionToken: { type: String }`.
+- On login/auth, generate a unique session token, save it to MongoDB, and return it to client.
+- Middleware Check: On every request, verify client token matches MongoDB `activeSessionToken`. If mismatched, return HTTP 401 (`LOGGED_IN_ELSEWHERE`).
+- Frontend: Auto-logout driver and show alert "Logged in on another device" if HTTP 401 `LOGGED_IN_ELSEWHERE` is received.
+
+----------------------------------------------------------------------
+3. DRIVER WALLET BALANCE & AUTOMATIC DAILY DEDUCTION
+----------------------------------------------------------------------
+- In Driver Schema, add `walletBalance: { type: Number, default: 0 }`.
+- Ride Matching Logic: ONLY dispatch ride requests to drivers whose `walletBalance >= minimumRequiredBalance` (e.g. > 0). Block zero/negative balance drivers from receiving rides.
+- Send automated notification to low-balance drivers: "Insufficient wallet balance. Please deposit funds to receive rides." Include target deposit account details.
+- Cron/Scheduled Job: Set up a daily automated task (e.g., midnight run) to deduct fixed daily system fee from driver wallet.
+
+----------------------------------------------------------------------
+4. HIGH-PRIORITY RIDE NOTIFICATION WITH ACTIONS (LOCKSCREEN POPUP)
+----------------------------------------------------------------------
+- Upgrade Ride Dispatch Notifications: Configure high-priority/heads-up push & socket notifications that trigger even when screen is locked or app is backgrounded.
+- Notification Body: Show Customer Name, Pickup Location, and Fare.
+- Interactive Notification Action Buttons:
+  1. "Accept Ride"
+  2. "Reject Ride"
+  3. "Go to App" (direct link to open app for fare negotiation/bargaining).
+
+----------------------------------------------------------------------
+5. SECURE ACCOUNT DELETION (THREE-DOTS MENU)
+----------------------------------------------------------------------
+- In top 3-dots settings menu (Driver & Customer UI), add "Delete Account Permanently".
+- Modal Prompt: Require user password confirmation before submitting deletion.
+- Backend API (`POST /api/account/delete-request`): Mark account status as `pending_deletion` and alert Admin/Server for final approval before removing record from MongoDB.
+
+----------------------------------------------------------------------
+Verify all 5 implementations locally and confirm when ready for final deployment.

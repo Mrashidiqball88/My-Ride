@@ -1,0 +1,37 @@
+IMPLEMENT DEFAULT CURRENT LOCATION PICKUP, PERMANENT DRIVER DOCUMENT STORAGE, AND CUSTOMER CNIC FIELD:
+
+Please update the code in `ride-hailing/` backend and frontend to strictly implement the following 3 features:
+
+----------------------------------------------------------------------
+1. AUTOMATIC CURRENT LOCATION ("MY LOCATION") DEFAULT & LOCATION TARGET ICON (CUSTOMER APP)
+----------------------------------------------------------------------
+- On opening Customer App / Booking Screen:
+  * Automatically trigger browser/device Geolocation (`navigator.geolocation.getCurrentPosition`) to set the Pickup Location to user's exact pinpoint current position ("My Location").
+  * Show a GPS Target / Locate Me icon inside or next to the Pickup input box.
+- Location Selection Behavior:
+  * Clicking the GPS Target icon re-centers the map and re-populates user's exact live location.
+  * Allow clicking a "Search / Select Other Location" option or editing text to let the user pick a different pickup location via text search or map pin dragging.
+
+----------------------------------------------------------------------
+2. PERMANENT DRIVER DOCUMENT STORAGE & ADMIN DOCUMENT VIEWER
+----------------------------------------------------------------------
+- Backend Upload Storage:
+  * Store all uploaded driver documents (CNIC Front, CNIC Back, License, Profile Photo) permanently in persistent disk storage (`uploads/driver_docs/`).
+  * Ensure file paths are saved correctly in MongoDB and never lost or deleted on server restart.
+- Admin Panel:
+  * In Admin Drivers Directory, add a "View Documents" button for each driver row.
+  * Clicking "View Documents" opens a preview modal displaying all uploaded images (CNIC Front, CNIC Back, License, Photo) clearly with zoom/download capability.
+
+----------------------------------------------------------------------
+3. CUSTOMER REGISTRATION CNIC/IDENTITY NUMBER FIELD & ADMIN DISPLAY
+----------------------------------------------------------------------
+- Backend / Schema:
+  * Add `cnicNumber: { type: String, required: true }` to the Customer Schema.
+- Frontend Registration:
+  * On Customer Sign-Up Form, add an input field for "CNIC / Identity Card Number".
+  * Validate and require this field before account creation.
+- Admin Panel:
+  * In Admin Customers Directory Table, display a dedicated column for "CNIC Number" under each customer's details.
+
+----------------------------------------------------------------------
+Verify all implementations locally and confirm when complete.
