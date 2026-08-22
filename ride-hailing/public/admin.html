@@ -200,6 +200,43 @@ body{font-family:'Segoe UI',system-ui,sans-serif;background:#06060e;color:#e2e8f
 .modal-input:focus{border-color:#f5c518}
 textarea.modal-input{resize:vertical;min-height:70px}
 
+/* ── Mobile layout containment ── */
+@media (max-width:700px){
+  html,body{width:100%;height:100%;min-height:100%;overflow:hidden}
+  body{display:block}
+  #admin-app{width:100%;height:100dvh;min-height:0;display:flex;flex-direction:column;overflow:hidden}
+  #sidebar{width:100%;min-width:0;height:auto;max-height:42dvh;flex:0 0 auto;overflow:hidden;border-right:0;border-bottom:1px solid #12122a}
+  .sb-logo{padding:.75rem 1rem .6rem}
+  .sb-nav{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:0;overflow-y:auto;padding:.35rem 0}
+  .sb-group-label{grid-column:1/-1;padding:.55rem 1rem .2rem}
+  .sb-group-label:first-of-type{padding-top:.25rem}
+  .sb-item{min-width:0;padding:.55rem .7rem;font-size:.74rem;line-height:1.2}
+  .sb-item .sb-icon{width:16px;flex:0 0 16px}
+  .sb-footer{flex:0 0 auto;padding:.55rem 1rem}
+  #main{width:100%;min-width:0;min-height:0;flex:1;overflow:hidden}
+  #top-header{min-height:52px;padding:.65rem 1rem;gap:.5rem;flex-wrap:wrap}
+  #section-title{font-size:.9rem}
+  .header-badges{margin-left:auto;max-width:100%;flex-wrap:wrap}
+  #content-area{width:100%;min-width:0;min-height:0;overflow-x:hidden;overflow-y:auto;padding:1rem}
+  .sec-hdr{align-items:flex-start}
+  .sec-hdr h2{max-width:100%;line-height:1.3}
+  .sec-hdr-actions{width:100%;margin-left:0;justify-content:flex-start}
+  .field-row{display:grid;grid-template-columns:minmax(0,1fr);gap:.5rem}
+  .field-item{min-width:0;width:100%}
+  .payment-settings-card{width:100%;max-width:100%;overflow:visible}
+  #sec-pay-settings .btn{max-width:100%;white-space:normal;line-height:1.25}
+  #sec-pay-settings>.btn-primary{position:static;display:flex;width:100%;justify-content:center;margin-top:.25rem}
+  .table-wrap{max-width:100%;overflow-x:auto}
+  .modal-backdrop{padding:.75rem;overflow-y:auto;align-items:flex-start}
+  .modal-box{width:100%;max-width:100%;max-height:calc(100dvh - 1.5rem);border-radius:14px}
+  .modal-body{padding:1rem}
+  .modal-footer{padding:.75rem 1rem;flex-wrap:wrap}
+  .modal-footer .btn{flex:1 1 120px;justify-content:center}
+  .doc-grid{grid-template-columns:1fr}
+  .radius-control{max-width:100%;flex-wrap:wrap}
+  .radius-control .modal-input{width:100%;flex-basis:100%}
+}
+
 /* ── Empty / Loading states ── */
 .empty-state{text-align:center;padding:2.5rem;color:#334155;font-size:.85rem}
 .empty-icon{font-size:2rem;margin-bottom:.5rem;display:block}
@@ -516,7 +553,7 @@ input[type=date]:focus{border-color:#f5c518}
         </div>
 
         <!-- Dynamic Daily Fee Settings -->
-        <div style="background:#0f0f1e;border:1px solid #f5c518;border-radius:14px;padding:1.2rem;margin-bottom:1rem">
+        <div class="payment-settings-card" style="background:#0f0f1e;border:1px solid #f5c518;border-radius:14px;padding:1.2rem;margin-bottom:1rem">
           <div style="display:flex;align-items:center;gap:.5rem;margin-bottom:.4rem">
             <span style="font-size:1.2rem">📅</span>
             <span style="font-size:.9rem;font-weight:700;color:#f5c518">Update Daily Fee</span>
@@ -544,7 +581,7 @@ input[type=date]:focus{border-color:#f5c518}
         </div>
 
         <!-- Dynamic /km Fare Rates -->
-        <div style="background:#0f0f1e;border:1px solid #38bdf8;border-radius:14px;padding:1.2rem;margin-bottom:1rem">
+        <div class="payment-settings-card" style="background:#0f0f1e;border:1px solid #38bdf8;border-radius:14px;padding:1.2rem;margin-bottom:1rem">
           <div style="display:flex;align-items:center;gap:.5rem;margin-bottom:.4rem">
             <span style="font-size:1.2rem">🛣️</span>
             <span style="font-size:.9rem;font-weight:700;color:#38bdf8">Update /km Rates</span>
@@ -572,7 +609,7 @@ input[type=date]:focus{border-color:#f5c518}
         </div>
 
         <!-- JazzCash -->
-        <div style="background:#0f0f1e;border:1px solid #1e1e2e;border-radius:14px;padding:1.2rem;margin-bottom:1rem">
+        <div class="payment-settings-card" style="background:#0f0f1e;border:1px solid #1e1e2e;border-radius:14px;padding:1.2rem;margin-bottom:1rem">
           <div style="display:flex;align-items:center;gap:.5rem;margin-bottom:.9rem">
             <span style="font-size:1.2rem">📱</span>
             <span style="font-size:.9rem;font-weight:700;color:#e2e8f0">JazzCash</span>
@@ -600,7 +637,7 @@ input[type=date]:focus{border-color:#f5c518}
         </div>
 
         <!-- EasyPaisa -->
-        <div style="background:#0f0f1e;border:1px solid #1e1e2e;border-radius:14px;padding:1.2rem;margin-bottom:1rem">
+        <div class="payment-settings-card" style="background:#0f0f1e;border:1px solid #1e1e2e;border-radius:14px;padding:1.2rem;margin-bottom:1rem">
           <div style="display:flex;align-items:center;gap:.5rem;margin-bottom:.9rem">
             <span style="font-size:1.2rem">💚</span>
             <span style="font-size:.9rem;font-weight:700;color:#e2e8f0">EasyPaisa</span>
@@ -628,7 +665,7 @@ input[type=date]:focus{border-color:#f5c518}
         </div>
 
         <!-- Bank Account -->
-        <div style="background:#0f0f1e;border:1px solid #1e1e2e;border-radius:14px;padding:1.2rem;margin-bottom:1.5rem">
+        <div class="payment-settings-card" style="background:#0f0f1e;border:1px solid #1e1e2e;border-radius:14px;padding:1.2rem;margin-bottom:1.5rem">
           <div style="display:flex;align-items:center;gap:.5rem;margin-bottom:.9rem">
             <span style="font-size:1.2rem">🏦</span>
             <span style="font-size:.9rem;font-weight:700;color:#e2e8f0">Bank Transfer</span>
