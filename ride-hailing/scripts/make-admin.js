@@ -41,9 +41,9 @@ const User = mongoose.model('User', userSchema);
   await mongoose.connect(normalizeMongoUri(uri));
   const result = await User.updateOne({ email: email.toLowerCase() }, { $set: { isAdmin: true } });
   if (result.matchedCount === 0) {
-    console.error(`No user found with email: ${email}`);
+    console.error('No matching user found.');
   } else {
-    console.log(`✓ User "${email}" is now an admin.`);
+    console.log('User promotion completed.');
   }
   await mongoose.disconnect();
 })();

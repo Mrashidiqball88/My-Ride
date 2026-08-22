@@ -42,6 +42,15 @@ async function adminRequest(server, path, token, method = 'GET') {
   catch { return { response, body: { raw } }; }
 }
 
+async function adminJsonRequest(server, path, token, method, body) {
+  const response = await fetch(`http://127.0.0.1:${server.address().port}${path}`, {
+    method,
+    headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+    body: JSON.stringify(body)
+  });
+  return { response, body: await response.json() };
+}
+
 function driverDocument(overrides = {}) {
   return {
     accountStatus: 'active',
@@ -250,6 +259,47 @@ test('Sub-Admin permissions normalize to the full catalog and reject unknown leg
   assert.equal(normalized.viewPaymentProofs, true);
   assert.equal('manageWallets' in normalized, false);
   assert.equal(normalized.manageFareSettings, false);
+});
+
+test('Sub-Admins cannot bypass driver or customer status permissions through direct API calls', async () => {
+  models.SubAdmin.findById = () => ({
+    select: () => ({
+      lean: async () => ({
+        _id: '507f1f77bcf86cd799439012',
+        username: 'limited-ops',
+        isBlocked: false,
+        permissions: { viewDrivers: true }
+      })
+    })
+  });
+  models.User.findById = id => ({
+    select: () => ({ _id: id, role: String(id).endsWith('1') ? 'driver' : 'customer' })
+  });
+
+  const server = app.listen(0);
+  try {
+    const driverReject = await adminJsonRequest(
+      server,
+      '/api/admin/users/507f1f77bcf86cd799439011/status',
+      subAdminToken(),
+      'PATCH',
+      { action: 'reject' }
+    );
+    assert.equal(driverReject.response.status, 403);
+    assert.match(driverReject.body.error, /manageDriverApprovals/);
+
+    const customerSuspend = await adminJsonRequest(
+      server,
+      '/api/admin/users/507f1f77bcf86cd799439012/status',
+      subAdminToken(),
+      'PATCH',
+      { action: 'suspend' }
+    );
+    assert.equal(customerSuspend.response.status, 403);
+    assert.match(customerSuspend.body.error, /manageCustomers/);
+  } finally {
+    await new Promise(resolve => server.close(resolve));
+  }
 });
 
 test('Sub-Admin revocation takes effect immediately and protected settings APIs fail closed', async () => {

@@ -18,9 +18,27 @@ import {
 
 const router: IRouter = Router();
 const passwordSaltRounds = 12;
+const emailPattern = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 function validationMessage(error: unknown): string {
   return error instanceof Error ? error.message : "Invalid request body.";
+}
+
+function normalizeEmailForLookup(value: unknown): string {
+  if (typeof value !== "string") {
+    throw new Error("Email must be a string.");
+  }
+  const email = value.trim().toLowerCase();
+  if (!emailPattern.test(email)) {
+    throw new Error("A valid email address is required.");
+  }
+  return email;
+}
+
+function userEmailFilter(email: string) {
+  // `$eq` receives a validated scalar only. Keeping the query construction
+  // isolated prevents a request object from ever becoming a MongoDB operator.
+  return { email: { $eq: email } };
 }
 
 router.post("/auth/signup", async (req, res) => {
@@ -33,8 +51,8 @@ router.post("/auth/signup", async (req, res) => {
   }
 
   const users = await getUsersCollection(getMongoDB());
-  const email = credentials.email.trim().toLowerCase();
-  const existingUser = await users.findOne({ email });
+  const email = normalizeEmailForLookup(credentials.email);
+  const existingUser = await users.findOne(userEmailFilter(email));
 
   if (existingUser) {
     res.status(409).json({ message: "An account with this email already exists." });
@@ -80,8 +98,8 @@ router.post("/auth/login", async (req, res) => {
   }
 
   const users = await getUsersCollection(getMongoDB());
-  const email = credentials.email.trim().toLowerCase();
-  const user = await users.findOne({ email });
+  const email = normalizeEmailForLookup(credentials.email);
+  const user = await users.findOne(userEmailFilter(email));
 
   if (!user || !(await bcrypt.compare(credentials.password, user.passwordHash))) {
     res.status(401).json({ message: "Invalid email or password." });

@@ -14,7 +14,10 @@ const fs = require('fs');
 const path = require('path');
 
 const STATIC_ROOT = path.resolve(__dirname, '..', 'static-build');
+const REAL_STATIC_ROOT = fs.realpathSync(STATIC_ROOT);
 const TEMPLATE_PATH = path.resolve(__dirname, 'templates', 'landing-page.html');
+const IOS_MANIFEST_PATH = path.join(STATIC_ROOT, 'ios', 'manifest.json');
+const ANDROID_MANIFEST_PATH = path.join(STATIC_ROOT, 'android', 'manifest.json');
 const basePath = (process.env.BASE_PATH || '/').replace(/\/+$/, '');
 
 const MIME_TYPES = {
@@ -64,7 +67,7 @@ function toScriptString(value) {
 }
 
 function serveManifest(platform, res) {
-  const manifestPath = path.join(STATIC_ROOT, platform, 'manifest.json');
+  const manifestPath = platform === 'ios' ? IOS_MANIFEST_PATH : ANDROID_MANIFEST_PATH;
 
   if (!fs.existsSync(manifestPath)) {
     res.writeHead(404, { 'content-type': 'application/json' });
@@ -101,10 +104,25 @@ function serveLandingPage(req, res, landingPageTemplate, appName) {
 }
 
 function serveStaticFile(urlPath, res) {
-  const safePath = path.normalize(urlPath).replace(/^(\.\.(\/|\\|$))+/, '');
-  const filePath = path.join(STATIC_ROOT, safePath);
+  let decodedPath;
+  try {
+    decodedPath = decodeURIComponent(urlPath);
+  } catch {
+    res.writeHead(400);
+    res.end('Bad Request');
+    return;
+  }
+  if (decodedPath.includes('\0')) {
+    res.writeHead(400);
+    res.end('Bad Request');
+    return;
+  }
+  const safeRelativePath = path.posix.normalize(`/${decodedPath.replaceAll('\\', '/')}`)
+    .replace(/^\/+/, '');
+  const filePath = path.resolve(REAL_STATIC_ROOT, safeRelativePath);
+  const staticRootPrefix = `${REAL_STATIC_ROOT}${path.sep}`;
 
-  if (!filePath.startsWith(STATIC_ROOT)) {
+  if (filePath !== REAL_STATIC_ROOT && !filePath.startsWith(staticRootPrefix)) {
     res.writeHead(403);
     res.end('Forbidden');
     return;
@@ -115,10 +133,18 @@ function serveStaticFile(urlPath, res) {
     res.end('Not Found');
     return;
   }
+  // `resolve()` above prevents traversal through path segments. Realpath adds
+  // the same containment guarantee for accidental symlinks in build output.
+  const realFilePath = fs.realpathSync(filePath);
+  if (!realFilePath.startsWith(staticRootPrefix)) {
+    res.writeHead(403);
+    res.end('Forbidden');
+    return;
+  }
 
-  const ext = path.extname(filePath).toLowerCase();
+  const ext = path.extname(realFilePath).toLowerCase();
   const contentType = MIME_TYPES[ext] || 'application/octet-stream';
-  const content = fs.readFileSync(filePath);
+  const content = fs.readFileSync(realFilePath);
   res.writeHead(200, { 'content-type': contentType });
   res.end(content);
 }

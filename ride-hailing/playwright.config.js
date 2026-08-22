@@ -9,6 +9,9 @@ module.exports = defineConfig({
     baseURL: 'http://localhost:3000',
     headless: true,
     viewport: { width: 390, height: 844 },   // mobile-ish, matches driver PWA
+    ...(process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE
+      ? { launchOptions: { executablePath: process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE } }
+      : {}),
   },
   // Start the server automatically before the test run.
   // Uses PORT=3000 to match the configured baseURL above.

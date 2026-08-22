@@ -1363,28 +1363,42 @@ app.post('/api/account/delete-request', authMiddleware, async (req, res) => {
 app.post('/api/auth/forgot-password', async (req, res) => {
   try {
     const { phone } = req.body;
-    if (!phone) return res.status(400).json({ error: 'Phone number required' });
-    const user = await User.findOne({ phone: phone.trim() });
-    if (!user) return res.status(404).json({ error: 'No account found with this phone number' });
+    // Always return the same response to avoid exposing which phone numbers
+    // are registered. Reject non-string input before it can reach MongoDB.
+    const normalizedPhone = typeof phone === 'string' ? phone.trim() : '';
+    const genericResponse = {
+      success: true,
+      message: 'If the phone number is registered, a password reset code has been issued.'
+    };
+    if (!normalizedPhone) return res.json(genericResponse);
+    const user = await User.findOne({ phone: normalizedPhone });
+    if (!user) return res.json(genericResponse);
 
-    const otp = String(Math.floor(1000 + Math.random() * 9000));   // 4-digit
+    const otp = String(crypto.randomInt(100000, 1000000));          // 6-digit, CSPRNG
     const expiry = new Date(Date.now() + 10 * 60 * 1000);           // 10 min
-    await User.updateOne({ _id: user._id }, { otpCode: otp, otpExpiry: expiry });
+    await User.updateOne(
+      { _id: user._id },
+      { otpCode: await bcrypt.hash(otp, 12), otpExpiry: expiry }
+    );
 
-    console.log(`[OTP] ${user.name} (${phone}): ${otp}`);  // simulate SMS
-    // In production: integrate Twilio / Infobip to send real SMS
-    res.json({ success: true, otp, hint: 'OTP returned for demo — in production this is SMS-only' });
+    // OTP values and account identifiers must never be returned to the caller
+    // or written to logs. Connect an SMS provider before enabling this flow in
+    // production; until then, the code is intentionally server-only.
+    res.json(genericResponse);
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
 app.post('/api/auth/reset-password', async (req, res) => {
   try {
     const { phone, otp, newPassword } = req.body;
-    if (!phone || !otp || !newPassword)
+    if (typeof phone !== 'string' || typeof otp !== 'string' || typeof newPassword !== 'string' ||
+        !phone.trim() || !otp.trim() || !newPassword)
       return res.status(400).json({ error: 'Phone, OTP, and new password required' });
-    const user = await User.findOne({ phone: phone.trim(), otpCode: otp });
-    if (!user) return res.status(400).json({ error: 'Invalid or expired OTP' });
+    const user = await User.findOne({ phone: phone.trim() });
+    if (!user || !user.otpCode || !(await bcrypt.compare(otp.trim(), user.otpCode)))
+      return res.status(400).json({ error: 'Invalid or expired OTP' });
     if (user.otpExpiry < new Date()) return res.status(400).json({ error: 'OTP has expired — request a new one' });
+    if (newPassword.length < 8) return res.status(400).json({ error: 'New password must be at least 8 characters' });
     const hash = await bcrypt.hash(newPassword, 12);
     await User.updateOne({ _id: user._id }, { password: hash, otpCode: null, otpExpiry: null });
     res.json({ success: true });
@@ -2282,7 +2296,7 @@ app.get('/api/wallet/status', authMiddleware, async (req, res) => {
 });
 
 // GET /api/payments/pending — admin: list pending submissions
-app.get('/api/payments/pending', authMiddleware, adminMiddleware, async (req, res) => {
+app.get('/api/payments/pending', adminJwt, requirePerm('viewPayments'), async (req, res) => {
   try {
     const payments = await Payment.find({ status: 'pending' })
       .populate('driver', 'name phone vehicleType')
@@ -2294,17 +2308,17 @@ app.get('/api/payments/pending', authMiddleware, adminMiddleware, async (req, re
 });
 
 // PATCH /api/payments/:id/approve — admin
-app.patch('/api/payments/:id/approve', authMiddleware, adminMiddleware, async (req, res) => {
+app.patch('/api/payments/:id/approve', adminJwt, requirePerm('approveWalletTopups'), async (req, res) => {
   return res.status(410).json({ error: 'Use the Admin Panel payment approval workflow so the decision is fully audited.' });
 });
 
 // PATCH /api/payments/:id/reject — admin
-app.patch('/api/payments/:id/reject', authMiddleware, adminMiddleware, async (req, res) => {
+app.patch('/api/payments/:id/reject', adminJwt, requirePerm('approveWalletTopups'), async (req, res) => {
   return res.status(410).json({ error: 'Use the Admin Panel payment rejection workflow so the decision is fully audited.' });
 });
 
 // GET /api/payments/history — admin: recently approved/rejected submissions
-app.get('/api/payments/history', authMiddleware, adminMiddleware, async (req, res) => {
+app.get('/api/payments/history', adminJwt, requirePerm('viewPayments'), async (req, res) => {
   try {
     const payments = await Payment.find({ status: { $in: ['approved', 'rejected'] } })
       .populate('driver', 'name phone vehicleType')
@@ -2659,22 +2673,39 @@ app.get('/api/admin/passengers', adminJwt, requirePerm('viewCustomers'), async (
 app.patch('/api/admin/users/:id/status', adminJwt, async (req, res) => {
   try {
     const { action, reason } = req.body;
+    const target = await User.findById(req.params.id).select('role');
+    if (!target) return res.status(404).json({ error: 'User not found' });
+    if (!['driver', 'customer'].includes(target.role)) {
+      return res.status(403).json({ error: 'Only Driver and Customer accounts can be managed from this endpoint' });
+    }
 
-    // Sub-admin permission enforcement per action + target role
-    if (!req.admin.isSuperAdmin) {
-      if (action === 'reject-deletion') {
-        return res.status(403).json({ error: 'Permission denied: Super Admin required for deletion requests' });
+    // This route has multiple action/target combinations, so it cannot use a
+    // single generic permission guard. The matrix below is exhaustive and
+    // fail-closed; any missing action or role combination is denied.
+    const requiredPermission = {
+      driver: {
+        approve: 'manageDriverApprovals',
+        reject: 'manageDriverApprovals',
+        suspend: 'manageDriverStatus',
+        block: 'manageDriverStatus',
+        unblock: 'manageDriverStatus'
+      },
+      customer: {
+        approve: 'manageCustomers',
+        reject: 'manageCustomers',
+        suspend: 'manageCustomers',
+        block: 'manageCustomers',
+        unblock: 'manageCustomers'
       }
-      const target = await User.findById(req.params.id).select('role');
-      if (!target) return res.status(404).json({ error: 'User not found' });
-      if (action === 'approve' && target.role === 'driver' && !hasAdminPermission(req.admin, 'manageDriverApprovals'))
-        return res.status(403).json({ error: 'Permission denied: manageDriverApprovals required' });
-      if (action === 'approve' && target.role === 'customer' && !hasAdminPermission(req.admin, 'manageCustomers'))
-        return res.status(403).json({ error: 'Permission denied: manageCustomers required' });
-      if (['suspend','block','unblock'].includes(action) && target.role === 'driver' && !hasAdminPermission(req.admin, 'manageDriverStatus'))
-        return res.status(403).json({ error: 'Permission denied: manageDriverStatus required' });
-      if (['block','unblock','reject'].includes(action) && target.role === 'customer' && !hasAdminPermission(req.admin, 'manageCustomers'))
-        return res.status(403).json({ error: 'Permission denied: manageCustomers required' });
+    }[target.role]?.[action];
+    if (action === 'reject-deletion' && !req.admin.isSuperAdmin) {
+      return res.status(403).json({ error: 'Permission denied: Super Admin required for deletion requests' });
+    }
+    if (action !== 'reject-deletion' && !requiredPermission) {
+      return res.status(400).json({ error: 'Invalid action' });
+    }
+    if (!req.admin.isSuperAdmin && !hasAdminPermission(req.admin, requiredPermission)) {
+      return res.status(403).json({ error: `Permission denied: ${requiredPermission} required` });
     }
 
     let update = {};
@@ -2686,8 +2717,7 @@ app.patch('/api/admin/users/:id/status', adminJwt, async (req, res) => {
     else if (action === 'reject')           update = { accountStatus: 'blocked', identityVerificationStatus: 'rejected', suspendReason: reason || 'Identity documents rejected', suspendedAt: new Date() };
     else return res.status(400).json({ error: 'Invalid action' });
 
-    const user = await User.findByIdAndUpdate(req.params.id, { ...update, isOnline: false }, { new: true }).select('-password');
-    if (!user) return res.status(404).json({ error: 'User not found' });
+    const user = await User.findByIdAndUpdate(target._id, { ...update, isOnline: false }, { new: true }).select('-password');
 
     if (action === 'suspend' || action === 'block')
       io.to(`user:${req.params.id}`).emit('account:suspended', { reason: reason || 'Account suspended' });
@@ -3561,13 +3591,13 @@ io.on('connection', async (socket) => {
   // ── Admin socket ───────────────────────────────────────────────────────────
   if (user.isAdmin) {
     socket.join('admin-room');
-    console.log(`Admin socket connected [${user.email}]`);
-    socket.on('disconnect', () => console.log(`Admin socket disconnected [${user.email}]`));
+    console.log('Admin socket connected');
+    socket.on('disconnect', () => console.log('Admin socket disconnected'));
     return;  // no further driver/passenger setup
   }
 
   const { id, name, role } = user;
-  console.log(`Socket connected: ${name} [${role}]`);
+  console.log(`Authenticated ${role || 'user'} socket connected`);
 
   // Join personal notification room
   socket.join(`user:${id}`);
@@ -3594,7 +3624,7 @@ io.on('connection', async (socket) => {
       // Re-join the active ride room so location updates reach the passenger
       if (activeRide) {
         socket.join(`ride:${activeRide._id}`);
-        console.log(`Driver ${name} rejoined ride room ride:${activeRide._id} after reconnect`);
+        console.log('Driver rejoined an active ride room after reconnect');
       }
     }).catch(() => {});
   }
@@ -3670,7 +3700,7 @@ io.on('connection', async (socket) => {
   });
 
   socket.on('disconnect', async () => {
-    console.log(`Socket disconnected: ${name}`);
+    console.log('Authenticated socket disconnected');
     // Do not set a driver offline here. A native foreground service can suffer
     // a brief Socket.io/radio disconnect while still being actively online and
     // tracking GPS; its persisted availability and heartbeat are authoritative.
