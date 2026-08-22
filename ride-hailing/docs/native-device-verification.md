@@ -71,15 +71,27 @@ sound/vibration, radio recovery, or force-stop behavior.
 
 ## Verification record
 
-Complete one record per device before production reliance:
+The physical-device pass could not be executed in this workspace: no Android or
+iOS phone, installed native build, or device-level notification/location
+telemetry is attached. The entries below are therefore explicitly marked
+**Not run**, not passed. The supporting implementation and automated contract
+evidence is included to make the remaining hands-on work reproducible.
+
+**Recorded:** 2026-08-22
+**Tester:** Replit workspace (physical-device access unavailable)
 
 | Scenario | Device / OS / build | Evidence (timestamp, ride ID, screenshot/log) | Pass/Fail | Tester |
 | --- | --- | --- | --- | --- |
-| Android locked location |  |  |  |  |
-| iOS locked location |  |  |  |  |
-| Alert and matching offer |  |  |  |  |
-| Network interruption |  |  |  |  |
-| Force-stop / permission revoke |  |  |  |  |
+| Android locked location | Not available | Not run; physical Android lock-screen movement, foreground-service notification, and timestamped location update require hardware. Supporting configuration: `app.json` enables Android background location and foreground service; `background-location.ts` uses 25 m / 15 s updates. | Not run | Replit workspace |
+| iOS locked location | Not available | Not run; physical iOS lock-screen movement, system location indicator, Settings permission state, and timestamped location update require hardware. Supporting configuration: `app.json` declares When In Use and Always location usage descriptions; `background-location.ts` enables the background indicator. | Not run | Replit workspace |
+| Alert and matching offer | Not available | Not run; audible/vibration output and lock-screen tap-through require hardware. Supporting implementation uses an Android MAX channel, default sound, vibration pattern, ride-request category, and preserves the ride payload/ID when the alert opens. | Not run | Replit workspace |
+| Network interruption | Not available | Not run; Wi-Fi/mobile-data switching and duplicate-visible-offer behavior require hardware. Supporting implementation enables infinite Socket.io reconnection, refreshes available rides on reconnect, and ignores a repeated offer with the same ride ID. | Not run | Replit workspace |
+| Force-stop / permission revoke | Not available | Not run; Android force-stop/iOS termination, permission revocation, and the >90-second wait require hardware. Supporting server contract coverage verifies heartbeat persistence; the server eligibility window is 90 seconds and background location fails closed on 401/403. | Not run | Replit workspace |
 
-The automated server contract checks remain useful regression coverage, but
-they are not a substitute for completing this matrix on real hardware.
+## Sign-off status
+
+**Not approved for production reliance on locked-screen tracking or push
+alerts.** A tester must replace each “Not available”/“Not run” entry with the
+device model, OS, native build, timestamp, ride ID, and screenshot or log after
+completing the acceptance steps above. The automated server contract checks
+remain regression coverage only; they do not close this physical-device gate.
