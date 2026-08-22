@@ -174,6 +174,7 @@ const FARE_VEHICLE_ALIASES = {
   SUV: 'Car SUV',
   Van: 'Van Seven Seats',
   'Van Seven Seats': 'Van Seven Seats',
+  'Carry Dibba': 'Cary Dibba',
   'Cary Dibba': 'Cary Dibba'
 };
 const PAYMENT_GATEWAYS = ['jazzcash', 'easypaisa', 'bank', 'sadapay'];
@@ -297,6 +298,41 @@ async function getDailyFeeForVehicle(vehicleType, settings = null) {
   return current[normalizeFareVehicle(vehicleType)] ?? null;
 }
 
+const DEFAULT_PER_KM_RATES = {
+  Bike: 30,
+  Riksha: 40,
+  'Car Mini': 50,
+  'Car Sedan': 70,
+  'Cary Dibba': 80,
+  'Car SUV': 100,
+  'Van Seven Seats': 100
+};
+
+function normalizePerKmRates(value = {}) {
+  return Object.fromEntries(FARE_VEHICLE_CATEGORIES.map(category => {
+    const aliases = Object.keys(FARE_VEHICLE_ALIASES).filter(alias => FARE_VEHICLE_ALIASES[alias] === category);
+    const raw = value?.[category] ?? aliases.map(alias => value?.[alias]).find(item => item !== undefined);
+    const rate = raw === '' || raw === null || raw === undefined ? DEFAULT_PER_KM_RATES[category] : Number(raw);
+    return [category, rate];
+  }));
+}
+
+function validatePerKmRates(value) {
+  const rates = normalizePerKmRates(value);
+  const errors = [];
+  for (const category of FARE_VEHICLE_CATEGORIES) {
+    if (!Number.isFinite(rates[category]) || rates[category] <= 0) {
+      errors.push(`${category}: /km rate must be greater than zero`);
+    }
+  }
+  return { rates, errors };
+}
+
+async function getPerKmRates() {
+  const doc = await Settings.findOne({ key: 'per_km_rates' }).lean();
+  return normalizePerKmRates(doc?.value);
+}
+
 function emptyFareSettings() {
   return Object.fromEntries(FARE_VEHICLE_CATEGORIES.map(category => [category, {
     baseFare: null,
@@ -376,7 +412,7 @@ function timeMatchesRule(rule, date = new Date()) {
   return start <= end ? current >= start && current <= end : current >= start || current <= end;
 }
 
-function calculateFareFromSettings(settings, vehicleType, distanceKm, at = new Date()) {
+function calculateFareFromSettings(settings, vehicleType, distanceKm, at = new Date(), perKmRates = DEFAULT_PER_KM_RATES) {
   const category = normalizeFareVehicle(vehicleType);
   const rule = settings[category];
   const distance = Number(distanceKm);
@@ -401,12 +437,19 @@ function calculateFareFromSettings(settings, vehicleType, distanceKm, at = new D
       };
     });
   const adjustmentPercent = activeRules.reduce((sum, item) => sum + item.adjustmentPercent, 0);
-  const subtotal = rule.baseFare + slab.rate;
+  const perKmRate = Number(perKmRates[category]);
+  if (!Number.isFinite(perKmRate) || perKmRate <= 0) {
+    return { error: `/km rate is not configured for ${category}` };
+  }
+  const distanceFare = distance * perKmRate;
+  const subtotal = rule.baseFare + distanceFare;
   const total = Math.max(0, Math.round(subtotal * (1 + adjustmentPercent / 100)));
   return {
     vehicleType: category,
     distanceKm: Number(distance.toFixed(2)),
     baseFare: rule.baseFare,
+    perKmRate,
+    distanceFare: Number(distanceFare.toFixed(2)),
     slab: { ...slab },
     activeRules,
     adjustmentPercent,
@@ -416,10 +459,11 @@ function calculateFareFromSettings(settings, vehicleType, distanceKm, at = new D
   };
 }
 
-async function refreshPendingRideFares(settings) {
+async function refreshPendingRideFares(settings, perKmRates = null) {
+  const currentPerKmRates = perKmRates || await getPerKmRates();
   const pendingRides = await Ride.find({ status: 'requested' });
   for (const ride of pendingRides) {
-    const fareQuote = calculateFareFromSettings(settings, ride.vehicleType, ride.distance);
+    const fareQuote = calculateFareFromSettings(settings, ride.vehicleType, ride.distance, new Date(), currentPerKmRates);
     if (fareQuote.error || ride.fare === fareQuote.totalFare) continue;
     ride.fare = fareQuote.totalFare;
     ride.fareQuote = fareQuote;
@@ -941,8 +985,17 @@ app.get('/api/auth/me', authMiddleware, async (req, res) => {
 // calculated from the current Admin Settings document.
 app.post('/api/fare/calculate', async (req, res) => {
   try {
-    const settingsDoc = await Settings.findOne({ key: 'daily_fare_settings' }).lean();
-    const result = calculateFareFromSettings(normalizeFareSettings(settingsDoc?.value), req.body?.vehicleType, req.body?.distanceKm);
+    const [settingsDoc, ratesDoc] = await Promise.all([
+      Settings.findOne({ key: 'daily_fare_settings' }).lean(),
+      Settings.findOne({ key: 'per_km_rates' }).lean()
+    ]);
+    const result = calculateFareFromSettings(
+      normalizeFareSettings(settingsDoc?.value),
+      req.body?.vehicleType,
+      req.body?.distanceKm,
+      new Date(),
+      normalizePerKmRates(ratesDoc?.value)
+    );
     if (result.error) return res.status(422).json({ error: result.error });
     res.json(result);
   } catch (err) { res.status(500).json({ error: err.message }); }
@@ -965,11 +1018,16 @@ app.post('/api/rides', authMiddleware, async (req, res) => {
     if (!pickupLocation) {
       return res.status(400).json({ error: 'Pickup is required' });
     }
-    const settingsDoc = await Settings.findOne({ key: 'daily_fare_settings' }).lean();
+    const [settingsDoc, ratesDoc] = await Promise.all([
+      Settings.findOne({ key: 'daily_fare_settings' }).lean(),
+      Settings.findOne({ key: 'per_km_rates' }).lean()
+    ]);
     const fareQuote = calculateFareFromSettings(
       normalizeFareSettings(settingsDoc?.value),
       vehicleType,
-      distance
+      distance,
+      new Date(),
+      normalizePerKmRates(ratesDoc?.value)
     );
     if (fareQuote.error) return res.status(422).json({ error: fareQuote.error });
     // Resolve stops: prefer dropoffLocations array; fall back to single dropoffLocation
@@ -1340,11 +1398,16 @@ app.patch('/api/rides/:id/update-fare', authMiddleware, async (req, res) => {
   try {
     const ride = await Ride.findOne({ _id: req.params.id, passenger: req.user.id, status: 'requested' });
     if (!ride) return res.status(404).json({ error: 'Ride not found or already accepted' });
-    const settingsDoc = await Settings.findOne({ key: 'daily_fare_settings' }).lean();
+    const [settingsDoc, ratesDoc] = await Promise.all([
+      Settings.findOne({ key: 'daily_fare_settings' }).lean(),
+      Settings.findOne({ key: 'per_km_rates' }).lean()
+    ]);
     const fareQuote = calculateFareFromSettings(
       normalizeFareSettings(settingsDoc?.value),
       ride.vehicleType,
-      ride.distance
+      ride.distance,
+      new Date(),
+      normalizePerKmRates(ratesDoc?.value)
     );
     if (fareQuote.error) return res.status(422).json({ error: fareQuote.error });
     ride.fare = fareQuote.totalFare;
@@ -2442,6 +2505,8 @@ app.get('/api/settings/payment', async (req, res) => {
     for (const gateway of PAYMENT_GATEWAYS) gatewayStatus[gateway] = publicGatewayConfig(gatewayDoc?.value?.[gateway]);
     res.json({ ...accounts, gatewayStatus, dailyFeeSettings: publicDailyFeeSettings(
       (await Settings.findOne({ key: 'daily_fee_settings' }).lean())?.value
+    ), perKmRates: normalizePerKmRates(
+      (await Settings.findOne({ key: 'per_km_rates' }).lean())?.value
     ), dailyFareSettings: publicFareSettings(
       (await Settings.findOne({ key: 'daily_fare_settings' }).lean())?.value
     ) });
@@ -2459,6 +2524,8 @@ app.get('/api/admin/settings', adminJwt, async (req, res) => {
     for (const gateway of PAYMENT_GATEWAYS) gatewayStatus[gateway] = publicGatewayConfig(gatewayDoc?.value?.[gateway]);
     res.json({ ...accounts, gatewayStatus, dailyFeeSettings: publicDailyFeeSettings(
       (await Settings.findOne({ key: 'daily_fee_settings' }).lean())?.value
+    ), perKmRates: normalizePerKmRates(
+      (await Settings.findOne({ key: 'per_km_rates' }).lean())?.value
     ), dailyFareSettings: publicFareSettings(
       (await Settings.findOne({ key: 'daily_fare_settings' }).lean())?.value
     ) });
@@ -2469,6 +2536,39 @@ app.get('/api/admin/fare-settings', adminJwt, async (req, res) => {
   try {
     const doc = await Settings.findOne({ key: 'daily_fare_settings' }).lean();
     res.json(publicFareSettings(doc?.value));
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.get('/api/per-km-rates', async (req, res) => {
+  try {
+    const doc = await Settings.findOne({ key: 'per_km_rates' }).lean();
+    res.json(normalizePerKmRates(doc?.value));
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.get('/api/admin/per-km-rates', adminJwt, async (req, res) => {
+  try {
+    const doc = await Settings.findOne({ key: 'per_km_rates' }).lean();
+    res.json(normalizePerKmRates(doc?.value));
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.patch('/api/admin/per-km-rates', adminJwt, async (req, res) => {
+  try {
+    const validated = validatePerKmRates(req.body?.perKmRates);
+    if (validated.errors.length) {
+      return res.status(422).json({ error: 'Invalid /km Rates', errors: validated.errors });
+    }
+    await Settings.findOneAndUpdate(
+      { key: 'per_km_rates' },
+      { key: 'per_km_rates', value: validated.rates },
+      { upsert: true, new: true, setDefaultsOnInsert: true }
+    );
+    const fareDoc = await Settings.findOne({ key: 'daily_fare_settings' }).lean();
+    await refreshPendingRideFares(normalizeFareSettings(fareDoc?.value), validated.rates);
+    const payload = { rates: validated.rates, updatedAt: new Date().toISOString() };
+    io.emit('per-km:updated', payload);
+    res.json({ success: true, ...payload });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 

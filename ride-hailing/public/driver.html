@@ -676,6 +676,7 @@ let alertInterval = null;   // repeating beep interval
 let dailyFeeDue   = false;  // true when driver hasn't submitted today's platform fee
 let driverFareSettings = {};
 let dailyFeeSettings = {};
+let driverPerKmRates = {};
 
 // ── Toast ──────────────────────────────────────────────────────────────────
 function showToast(msg, type = 'info') {
@@ -704,6 +705,7 @@ function renderTodayFareWidget() {
   widget.style.display = 'block';
   const category = fareCategoryForDriver(user.vehicleType);
   const rules = driverFareSettings?.[category];
+  const perKmRate = Number(driverPerKmRates?.[category]);
   title.textContent = `Today’s Fare · ${category || 'Vehicle'}`;
   if (!rules || rules.baseFare === null || rules.baseFare === undefined || !rules.distanceSlabs?.length) {
     content.innerHTML = '<span style="color:#f59e0b">Admin has not configured active fare slabs for this vehicle yet.</span>';
@@ -717,12 +719,18 @@ function renderTodayFareWidget() {
     ? rules.peakRules.map(r => `<div style="color:${fareRuleIsActive(r) ? '#f5c518' : '#94a3b8'}">• ${r.start}–${r.end}: ${r.adjustmentType === 'down' ? 'Down Fare −' : 'Up Fare +'}${r.percentage}%${fareRuleIsActive(r) ? ' (active)' : ''}</div>`).join('')
     : '<div style="color:#64748b">No peak-hour or promo rules today.</div>';
   content.innerHTML = `<div>Base fare: <strong style="color:#fff">Rs ${Number(rules.baseFare).toLocaleString()}</strong></div>
+    <div>Rate: <strong style="color:#fff">${Number.isFinite(perKmRate) ? `Rs ${perKmRate.toLocaleString()}/km` : 'Not configured'}</strong></div>
     <div style="margin-top:.4rem;color:#f5c518;font-weight:700">Distance slabs</div>${slabs}
     <div style="margin-top:.45rem;color:#f5c518;font-weight:700">Time rules</div>${timeRules}`;
 }
 async function loadDriverFareSettings() {
   try {
-    driverFareSettings = await apiCall('/api/fare-settings');
+    const [settings, rates] = await Promise.all([
+      apiCall('/api/fare-settings'),
+      apiCall('/api/per-km-rates')
+    ]);
+    driverFareSettings = settings;
+    driverPerKmRates = rates;
     renderTodayFareWidget();
   } catch (e) {
     renderTodayFareWidget();
@@ -1354,6 +1362,12 @@ function connectSocket() {
     checkDailyFee();
     updateDailyFeeBanner();
     showToast('📅 Admin updated Daily Fees. Your current fee has refreshed.', 'info');
+  });
+
+  socket.on('per-km:updated', ({ rates }) => {
+    if (rates) driverPerKmRates = rates;
+    renderTodayFareWidget();
+    showToast('🛣️ Admin updated /km rates. Today’s Fare has refreshed.', 'info');
   });
 
   // Account suspended / balance too low

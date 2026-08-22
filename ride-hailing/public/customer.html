@@ -522,7 +522,7 @@ body{font-family:'Segoe UI',sans-serif;background:#0a0a0f;color:#fff;height:100d
           <div class="v-icon">🚐</div><div class="v-name">Van Seven Seats</div><div class="v-fare">Admin-set fare</div>
         </button>
         <button class="vehicle-btn" data-type="Cary Dibba" onclick="selectVehicle(this)">
-          <div class="v-icon">🛻</div><div class="v-name">Cary Dibba</div><div class="v-fare">Admin-set fare</div>
+          <div class="v-icon">🛻</div><div class="v-name">Carry Dibba</div><div class="v-fare">Admin-set fare</div>
         </button>
       </div>
 
@@ -737,6 +737,7 @@ let activeDriverInfo = null;
 let locTimer = {};                          // keyed by type string e.g. 'pickup','stop-0'
 let currentFareQuote = null;
 let fareQuoteRequest = 0;
+let customerPerKmRates = {};
 
 // ── Toast ─────────────────────────────────────────────────────────────────
 function showToast(msg, type = 'info') {
@@ -945,6 +946,7 @@ function bootApp() {
   document.getElementById('avatar-init').textContent = (user.name || '?')[0].toUpperCase();
   document.getElementById('header-name').textContent = user.name || user.phone || user.email || 'User';
   connectSocket(); loadRideHistory();
+  loadCustomerPerKmRates();
   loadEmergencyContacts();   // pre-cache for SOS
   checkUnreadCustTickets();  // badge for unread admin replies
   // Double rAF ensures the browser has fully painted the flex layout before
@@ -955,6 +957,24 @@ function bootApp() {
     setTimeout(() => map?.invalidateSize(), 300);
     setTimeout(() => map?.invalidateSize(), 700);
   }));
+}
+
+function renderCustomerPerKmRates(rates = {}) {
+  customerPerKmRates = rates;
+  document.querySelectorAll('.vehicle-btn').forEach(button => {
+    const rate = Number(rates[button.dataset.type]);
+    const label = button.querySelector('.v-fare');
+    if (label && Number.isFinite(rate) && rate > 0) label.textContent = `Rs ${rate.toLocaleString()}/km`;
+  });
+}
+
+async function loadCustomerPerKmRates() {
+  try {
+    const rates = await apiCall('/api/per-km-rates');
+    renderCustomerPerKmRates(rates);
+  } catch {
+    // Quote endpoint still presents the explicit server-side configuration error.
+  }
 }
 
 // ── Map ───────────────────────────────────────────────────────────────────
@@ -1339,7 +1359,7 @@ async function updateFare() {
       ? ` · ${quote.adjustmentPercent > 0 ? '+' : ''}${quote.adjustmentPercent}% ${quote.adjustmentPercent > 0 ? 'surge' : 'discount'}`
       : '';
     document.getElementById('fare-meta').textContent =
-      `Base Rs ${quote.baseFare.toLocaleString()} + slab Rs ${quote.slab.rate.toLocaleString()}${adjustment}`;
+      `Base Rs ${quote.baseFare.toLocaleString()} + ${quote.distanceKm} km × Rs ${quote.perKmRate.toLocaleString()}/km${adjustment}`;
     document.getElementById('fare-suggested-val').textContent = `Rs ${quote.totalFare.toLocaleString()}`;
     document.getElementById('dist-km-val').textContent = dist.toFixed(1);
     document.getElementById('dist-badge').style.display = 'inline-flex';
@@ -1650,6 +1670,12 @@ function connectSocket() {
   socket.on('fare:updated', () => {
     if (pickup && dropoffs.slice(0, activeStops).some(Boolean)) updateFare();
     showToast('Admin updated fare rules. Your quote has been refreshed.', 'info');
+  });
+  socket.on('per-km:updated', ({ rates }) => {
+    if (rates) renderCustomerPerKmRates(rates);
+    else loadCustomerPerKmRates();
+    if (pickup && dropoffs.slice(0, activeStops).some(Boolean)) updateFare();
+    showToast('Admin updated /km rates. Your quote has been refreshed.', 'info');
   });
 }
 

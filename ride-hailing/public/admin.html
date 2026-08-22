@@ -479,6 +479,34 @@ input[type=date]:focus{border-color:#f5c518}
           <div id="daily-fee-feedback" style="margin-top:.65rem;font-size:.78rem;min-height:1.1rem"></div>
         </div>
 
+        <!-- Dynamic /km Fare Rates -->
+        <div style="background:#0f0f1e;border:1px solid #38bdf8;border-radius:14px;padding:1.2rem;margin-bottom:1rem">
+          <div style="display:flex;align-items:center;gap:.5rem;margin-bottom:.4rem">
+            <span style="font-size:1.2rem">🛣️</span>
+            <span style="font-size:.9rem;font-weight:700;color:#38bdf8">Update /km Rates</span>
+          </div>
+          <p style="font-size:.76rem;color:#94a3b8;margin:0 0 .9rem">
+            These live per-kilometer rates are used in every customer fare quote: distance × category rate, plus the configured base fare and any active surge or discount.
+          </p>
+          <div class="field-row">
+            <div class="field-item"><div class="field-label">Bike (PKR /km)</div><input class="modal-input per-km-input" data-category="Bike" type="number" min="0.01" step="0.01"></div>
+            <div class="field-item"><div class="field-label">Riksha (PKR /km)</div><input class="modal-input per-km-input" data-category="Riksha" type="number" min="0.01" step="0.01"></div>
+          </div>
+          <div class="field-row">
+            <div class="field-item"><div class="field-label">Car Mini (PKR /km)</div><input class="modal-input per-km-input" data-category="Car Mini" type="number" min="0.01" step="0.01"></div>
+            <div class="field-item"><div class="field-label">Car Sedan (PKR /km)</div><input class="modal-input per-km-input" data-category="Car Sedan" type="number" min="0.01" step="0.01"></div>
+          </div>
+          <div class="field-row">
+            <div class="field-item"><div class="field-label">Carry Dibba (PKR /km)</div><input class="modal-input per-km-input" data-category="Cary Dibba" type="number" min="0.01" step="0.01"></div>
+            <div class="field-item"><div class="field-label">Car SUV (PKR /km)</div><input class="modal-input per-km-input" data-category="Car SUV" type="number" min="0.01" step="0.01"></div>
+          </div>
+          <div class="field-row">
+            <div class="field-item"><div class="field-label">Van Seven Seats (PKR /km)</div><input class="modal-input per-km-input" data-category="Van Seven Seats" type="number" min="0.01" step="0.01"></div>
+          </div>
+          <button class="btn btn-primary" type="button" style="padding:.65rem 1.25rem;font-size:.82rem;background:#0ea5e9" onclick="savePerKmRates()">💾 Save /km Rates</button>
+          <div id="per-km-feedback" style="margin-top:.65rem;font-size:.78rem;min-height:1.1rem"></div>
+        </div>
+
         <!-- JazzCash -->
         <div style="background:#0f0f1e;border:1px solid #1e1e2e;border-radius:14px;padding:1.2rem;margin-bottom:1rem">
           <div style="display:flex;align-items:center;gap:.5rem;margin-bottom:.9rem">
@@ -1960,6 +1988,7 @@ async function loadPaymentSettings() {
     setGatewayStatus('bk', s.gatewayStatus?.bank);
     setGatewayStatus('sp', s.gatewayStatus?.sadapay);
     renderDailyFeeSettings(s.dailyFeeSettings || {});
+    renderPerKmRates(s.perKmRates || {});
     document.getElementById('ps-feedback').textContent = '';
   } catch (e) {
     document.getElementById('ps-feedback').textContent = '⚠ ' + e.message;
@@ -2007,6 +2036,36 @@ async function saveDailyFeeSettings() {
     feedback.textContent = `✕ ${e.message || 'Could not save Daily Fees'}${details}`;
     feedback.style.color = '#ef4444';
     showToast(e.message || 'Could not save Daily Fees', 'error');
+  }
+}
+
+// ── Dynamic /km Fare Rates ─────────────────────────────────────────────────────
+function renderPerKmRates(rates = {}) {
+  document.querySelectorAll('.per-km-input').forEach(input => {
+    input.value = rates[input.dataset.category] ?? '';
+  });
+}
+
+function readPerKmRates() {
+  return Object.fromEntries(
+    [...document.querySelectorAll('.per-km-input')].map(input => [input.dataset.category, input.value])
+  );
+}
+
+async function savePerKmRates() {
+  const feedback = document.getElementById('per-km-feedback');
+  feedback.textContent = 'Saving /km rates…'; feedback.style.color = '#64748b';
+  try {
+    const result = await api('/api/admin/per-km-rates', 'PATCH', { perKmRates: readPerKmRates() });
+    renderPerKmRates(result.rates);
+    feedback.textContent = '✓ /km rates saved and fare quotes refreshed live.';
+    feedback.style.color = '#22c55e';
+    showToast('/km rates updated ✓', 'success');
+  } catch (e) {
+    const details = Array.isArray(e.errors) ? `: ${e.errors.join('; ')}` : '';
+    feedback.textContent = `✕ ${e.message || 'Could not save /km rates'}${details}`;
+    feedback.style.color = '#ef4444';
+    showToast(e.message || 'Could not save /km rates', 'error');
   }
 }
 
