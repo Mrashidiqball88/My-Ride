@@ -115,6 +115,47 @@ test('daily fee is charged from the wallet only when a driver goes online, and i
   }
 });
 
+test('an active 24-hour fee pass survives reconnects, then expires into one new online charge', async () => {
+  const charges = [];
+  const chargeQueries = [];
+  let paidAt = new Date(Date.now() - (2 * 60 * 60 * 1000));
+  models.Settings.findOne = () => ({
+    lean: async () => ({ value: { 'Car Mini': 100 } })
+  });
+  models.User.findById = () => ({
+    select: () => ({
+      lean: async () => driverDocument({ lastDailyFeePaidAt: paidAt, paidUntilDate: null, isFreeTrial: false })
+    })
+  });
+  models.User.updateOne = async () => ({ acknowledged: true });
+  models.Wallet.findOne = () => ({
+    select: () => ({
+      lean: async () => ({ balance: 500, fee_paid_at: paidAt })
+    })
+  });
+  models.Wallet.findOneAndUpdate = async (query, update) => {
+    chargeQueries.push(query);
+    charges.push(update);
+    return { balance: 400 };
+  };
+
+  const server = app.listen(0);
+  try {
+    const reconnect = await request(server, '/api/driver/availability', { isOnline: true });
+    assert.equal(reconnect.response.status, 200);
+    assert.equal(charges.length, 0, 'a fee pass under 24 hours old must not be charged again');
+
+    paidAt = new Date(Date.now() - (25 * 60 * 60 * 1000));
+    const afterExpiry = await request(server, '/api/driver/availability', { isOnline: true });
+    assert.equal(afterExpiry.response.status, 200);
+    assert.equal(charges.length, 1);
+    assert.ok(charges[0].$set.fee_paid_at instanceof Date);
+    assert.ok(chargeQueries[0].$or.some(condition => condition.fee_paid_at?.$lte));
+  } finally {
+    await new Promise(resolve => server.close(resolve));
+  }
+});
+
 test('background GPS location rejects invalid coordinates and only accepts a valid driver location', async () => {
   const updates = [];
   models.User.findById = () => ({ select: () => ({ lean: async () => driverDocument() }) });

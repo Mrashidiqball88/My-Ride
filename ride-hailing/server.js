@@ -1537,7 +1537,8 @@ app.get('/api/rides/available', authMiddleware, driverOnly, async (req, res) => 
 app.post('/api/driver/availability', authMiddleware, driverOnly, async (req, res) => {
   try {
     const isOnline = req.body?.isOnline === true;
-    const driver = await User.findById(req.user.id).select('accountStatus vehicleType paidUntilDate').lean();
+    const driver = await User.findById(req.user.id)
+      .select('accountStatus vehicleType paidUntilDate lastDailyFeePaidAt isFreeTrial').lean();
     if (!driver || driver.accountStatus !== 'active') {
       return res.status(403).json({ error: 'Your driver account is not approved for online availability' });
     }
@@ -2101,11 +2102,11 @@ async function processGatewayWebhook(req, res, requestedGateway) {
     payment.adminNote = `Automatically verified by ${gateway}`;
     await payment.save();
 
-    const paidUntilDate = new Date();
-    paidUntilDate.setUTCHours(23, 59, 59, 999);
+    const paidAt = new Date();
+    const paidUntilDate = new Date(paidAt.getTime() + ACTIVE_FEE_PASS_MS);
     await User.updateOne(
       { _id: payment.driver },
-      { lastDailyFeePaidAt: new Date(), paidUntilDate }
+      { lastDailyFeePaidAt: paidAt, paidUntilDate }
     );
     const notification = {
       paymentId: String(payment._id),
@@ -3509,7 +3510,7 @@ io.on('connection', async (socket) => {
     if (role !== 'driver') return;
     if (isOnline) {
       const driver = await User.findById(id)
-        .select('accountStatus vehicleType paidUntilDate').catch(() => null);
+        .select('accountStatus vehicleType paidUntilDate lastDailyFeePaidAt isFreeTrial').catch(() => null);
       if (driver?.accountStatus === 'pending') {
         socket.emit('account:suspended', { reason: 'Your account is pending Admin approval. You will be notified once approved.' });
         return;

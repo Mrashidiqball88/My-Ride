@@ -71,6 +71,9 @@ body{font-family:'Segoe UI',system-ui,sans-serif;background:#06060e;color:#e2e8f
 .radius-control{display:flex;align-items:center;gap:.8rem;max-width:460px}
 .radius-control input[type=range]{flex:1;accent-color:#f5c518}
 .radius-control .modal-input{width:105px;flex:0 0 105px}
+.fee-pass-active{display:inline-flex;align-items:center;background:#052a10;border:1px solid #0a4a20;color:#4ade80;border-radius:999px;padding:.14rem .42rem;font-size:.62rem;font-weight:800;white-space:nowrap}
+.fee-pass-expired{display:inline-flex;align-items:center;background:#2a1305;border:1px solid #5b2508;color:#fbbf24;border-radius:999px;padding:.14rem .42rem;font-size:.62rem;font-weight:800;white-space:nowrap}
+.fee-pass-time{font-size:.64rem;color:#64748b;margin-top:.2rem;white-space:nowrap}
 
 /* ── Stats Cards ── */
 .stats-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:.9rem;margin-bottom:1.5rem}
@@ -1373,17 +1376,22 @@ async function loadDrivers(status = 'all') {
         ? `<img src="${d.profilePhoto}" style="width:30px;height:30px;border-radius:50%;object-fit:cover;border:1px solid #2a2a38;vertical-align:middle;margin-right:.4rem">`
         : `<span style="display:inline-flex;align-items:center;justify-content:center;width:30px;height:30px;border-radius:50%;background:#1a1a28;color:#f5c518;font-size:.75rem;font-weight:700;vertical-align:middle;margin-right:.4rem">${(d.name||'D')[0].toUpperCase()}</span>`;
       const dailyRate  = dailyFeeForVehicle(d.vehicleType);
-      const paidUntil  = d.paidUntilDate ? new Date(d.paidUntilDate) : null;
+      const paidAt     = d.lastDailyFeePaidAt ? new Date(d.lastDailyFeePaidAt) : null;
+      const paidUntil  = paidAt ? new Date(paidAt.getTime() + 24 * 60 * 60 * 1000) : (d.paidUntilDate ? new Date(d.paidUntilDate) : null);
       const feePaid    = paidUntil && paidUntil > new Date();
       const ds         = feePaid ? paidUntil.toLocaleDateString('en-PK', { day:'2-digit', month:'short' }) : '';
       let feeCell;
       if (feePaid && d.isFreeTrial) {
         feeCell = `<div style="font-size:.73rem"><span style="color:#f5c518;font-weight:700">🎁 Free Trial Active</span><br><span style="color:#64748b;font-size:.65rem">(Until ${ds})</span></div>`;
       } else if (feePaid) {
-        feeCell = `<div style="font-size:.73rem"><span style="color:#22c55e;font-weight:700">✅ Fee Paid</span><br><span style="color:#64748b;font-size:.65rem">(Until ${ds})</span></div>`;
+        feeCell = `<div style="font-size:.73rem">
+          <span class="fee-pass-active fee-pass-timer" data-fee-expiry="${paidUntil.toISOString()}">Active Pass</span>
+          <div class="fee-pass-time">Paid at: ${paidAt ? paidAt.toLocaleTimeString('en-PK', { hour:'numeric', minute:'2-digit' }) : '—'}</div>
+          <div class="fee-pass-time fee-pass-countdown" data-fee-expiry="${paidUntil.toISOString()}">Pass valid: calculating…</div>
+        </div>`;
       } else {
         const feeLabel = dailyRate ? `Rs ${dailyRate.toLocaleString()}/day` : 'Fee not configured';
-        feeCell = `<div style="font-size:.73rem"><span style="color:#f59e0b;font-weight:700">⚠️ Unpaid</span><br><span style="color:#64748b;font-size:.65rem">(${feeLabel})</span></div>`;
+        feeCell = `<div style="font-size:.73rem"><span class="fee-pass-expired">Pass Expired / Unpaid</span><br><span style="color:#64748b;font-size:.65rem">(${feeLabel})</span></div>`;
       }
       return `<tr>
         <td><input type="checkbox" class="driver-chk" value="${d._id}" style="cursor:pointer" onchange="toggleDriverSelect('${d._id}',this.checked)"></td>
@@ -1408,8 +1416,32 @@ async function loadDrivers(status = 'all') {
         </div></td>
       </tr>`;
     }).join('');
+    refreshFeePassTimers();
   } catch (e) { tbody.innerHTML = `<tr><td colspan="9" style="text-align:center;color:#ef4444;padding:1rem">${e.message}</td></tr>`; }
 }
+
+function refreshFeePassTimers() {
+  const now = Date.now();
+  document.querySelectorAll('.fee-pass-countdown').forEach(el => {
+    const remaining = new Date(el.dataset.feeExpiry).getTime() - now;
+    const status = el.closest('div')?.querySelector('.fee-pass-timer');
+    if (remaining <= 0) {
+      el.textContent = 'Pass expired';
+      status?.classList.remove('fee-pass-active');
+      status?.classList.add('fee-pass-expired');
+      if (status) status.textContent = 'Pass Expired / Unpaid';
+      return;
+    }
+    const totalMinutes = Math.floor(remaining / 60000);
+    const hours = Math.floor(totalMinutes / 60);
+    const minutes = totalMinutes % 60;
+    el.textContent = `Pass valid: ${hours}h ${String(minutes).padStart(2, '0')}m remaining`;
+    if (status) status.textContent = `Active Pass (${hours}h ${String(minutes).padStart(2, '0')}m left)`;
+  });
+}
+setInterval(() => {
+  if (document.getElementById('sec-drivers')?.classList.contains('active')) refreshFeePassTimers();
+}, 30000);
 
 // ── 4. PASSENGERS ─────────────────────────────────────────────────────────────
 async function loadPassengers(status = 'all') {
