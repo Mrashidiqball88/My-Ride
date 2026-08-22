@@ -97,7 +97,10 @@ const UPLOADS_DIR = path.resolve(__dirname, 'uploads', 'driver_docs');
 const CUSTOMER_ID_UPLOADS_DIR = path.resolve(__dirname, 'uploads', 'customer_identity');
 fs.mkdirSync(UPLOADS_DIR, { recursive: true });
 fs.mkdirSync(CUSTOMER_ID_UPLOADS_DIR, { recursive: true });
-app.use('/uploads', express.static(path.resolve(__dirname, 'uploads')));
+// Only driver review documents are public. Never mount the parent uploads
+// directory, because it also contains customer identity files.
+app.use('/uploads/customer_identity', (_req, res) => res.status(404).end());
+app.use('/uploads/driver_docs', express.static(UPLOADS_DIR));
 
 const MAX_ID_DOCUMENT_BYTES = 6 * 1024 * 1024;
 const ID_DOCUMENT_DATA_URL = /^data:image\/(jpeg|jpg|png|webp);base64,([A-Za-z0-9+/=\s]+)$/s;
