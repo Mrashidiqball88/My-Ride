@@ -102,7 +102,7 @@ body{font-family:'Segoe UI',sans-serif;background:#0a0a0f;color:#fff;height:100d
 .btn-locate-me:hover{opacity:1;background:#1a1a2a}
 .location-input:focus{border-color:#f5c518}
 .location-input.has-val{border-color:#2d5a2d}
-.location-dropdown{position:absolute;top:calc(100% + 4px);left:0;right:0;background:#1a1a2a;border:1px solid #333;border-radius:10px;max-height:185px;overflow-y:auto;z-index:500;display:none;box-shadow:0 8px 24px rgba(0,0,0,.6)}
+.location-dropdown{display:none!important}
 .location-dropdown.open{display:block}
 .loc-item{padding:.5rem .85rem;cursor:pointer;border-bottom:1px solid #1e1e2e;transition:background .15s}
 .loc-item:last-child{border-bottom:none}
@@ -110,6 +110,16 @@ body{font-family:'Segoe UI',sans-serif;background:#0a0a0f;color:#fff;height:100d
 .loc-primary{font-size:.85rem;color:#ddd;font-weight:600;line-height:1.3}
 .loc-secondary{font-size:.72rem;color:#555;margin-top:.1rem}
 .loc-loading{padding:.6rem .85rem;font-size:.8rem;color:#555;text-align:center}
+.location-sheet{position:fixed;left:0;right:0;bottom:0;z-index:40;display:flex;flex-direction:column;max-height:min(72vh,620px);min-height:260px;background:#13131a;border-top:1px solid #3a3a4a;border-radius:20px 20px 0 0;box-shadow:0 -12px 35px rgba(0,0,0,.5);transform:translateY(110%);transition:transform .22s ease;pointer-events:none;touch-action:none}
+.location-sheet.open{transform:translateY(0);pointer-events:auto}
+.location-sheet.dragging{transition:none}
+.sheet-grabber{width:52px;height:5px;border-radius:99px;background:#555;margin:.7rem auto .4rem;cursor:grab;flex:0 0 auto}
+.sheet-header{display:flex;align-items:center;gap:.65rem;padding:.35rem 1rem .75rem;border-bottom:1px solid #252535;flex:0 0 auto}
+.sheet-header-copy{flex:1}.sheet-kicker{font-size:.63rem;color:#f5c518;font-weight:800;text-transform:uppercase;letter-spacing:.08em}.sheet-title{font-size:.92rem;color:#fff;font-weight:700;margin-top:.15rem}
+.sheet-close{width:32px;height:32px;border:1px solid #343448;background:#1e1e2e;color:#bbb;border-radius:50%;font-size:.9rem;cursor:pointer}
+.sheet-list{overflow-y:auto;overscroll-behavior:contain;-webkit-overflow-scrolling:touch;padding:.35rem .7rem 1.2rem;touch-action:pan-y}
+.sheet-item{display:flex;align-items:center;gap:.7rem;width:100%;border:0;border-bottom:1px solid #242436;background:transparent;color:#fff;text-align:left;padding:.78rem .45rem;cursor:pointer;min-height:58px}
+.sheet-item:last-child{border-bottom:0}.sheet-item:active,.sheet-item:focus-visible{background:#22223a;outline:none}.sheet-item-icon{width:30px;text-align:center;font-size:1.15rem}.sheet-item-copy{min-width:0}.sheet-item-primary{font-size:.86rem;color:#eee;font-weight:650;line-height:1.3}.sheet-item-secondary{font-size:.7rem;color:#777;margin-top:.15rem;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.sheet-item.my-location{background:#142333;border:1px solid #22547b;border-radius:11px;margin:.3rem 0 .45rem;padding:.72rem .45rem}.sheet-empty{padding:1rem .5rem;text-align:center;color:#777;font-size:.8rem}
 
 .divider-line{display:flex;align-items:center;gap:.5rem;margin:.25rem 0;color:#444;font-size:.7rem}
 .divider-line::before,.divider-line::after{content:'';flex:1;height:1px;background:#222}
@@ -399,6 +409,15 @@ body{font-family:'Segoe UI',sans-serif;background:#0a0a0f;color:#fff;height:100d
   </div>
 
   <div id="map"></div>
+
+  <section id="location-sheet" class="location-sheet" aria-label="Location suggestions" aria-hidden="true">
+    <div id="location-sheet-grabber" class="sheet-grabber" aria-label="Drag suggestions"></div>
+    <div class="sheet-header">
+      <div class="sheet-header-copy"><div class="sheet-kicker" id="location-sheet-kicker">Choose a location</div><div class="sheet-title" id="location-sheet-title">Search an area</div></div>
+      <button class="sheet-close" type="button" onclick="closeLocationSheet()" aria-label="Close location suggestions">✕</button>
+    </div>
+    <div id="location-sheet-list" class="sheet-list"></div>
+  </section>
 
   <div id="bottom-panel">
     <div class="tabs">
@@ -747,9 +766,34 @@ let driverOffers = [];
 let activeLiveFare = 0;
 let activeDriverInfo = null;
 let locTimer = {};                          // keyed by type string e.g. 'pickup','stop-0'
+let locSearchSeq = {};
+let activeLocationSearch = null;
+let locationSheetResults = [];
+let locationSheetDrag = null;
 let currentFareQuote = null;
 let fareQuoteRequest = 0;
 let customerPerKmRates = {};
+
+const LOCAL_LOCATION_AREAS = [
+  ['Salamatpura', 'Lahore', 31.5967, 74.3701],
+  ['Sabzazar', 'Lahore', 31.4941, 74.2775],
+  ['Samanabad', 'Lahore', 31.5337, 74.2865],
+  ['Shadbagh', 'Lahore', 31.5885, 74.3432],
+  ['Shahdara', 'Lahore', 31.6200, 74.2875],
+  ['Tajpura', 'Lahore', 31.5701, 74.3868],
+  ['Township', 'Lahore', 31.4580, 74.3040],
+  ['Tufailabad', 'Lahore', 31.5535, 74.3195],
+  ['Thokar Niaz Baig', 'Lahore', 31.4300, 74.2510],
+  ['Model Town', 'Lahore', 31.4800, 74.3250],
+  ['Gulberg', 'Lahore', 31.5100, 74.3500],
+  ['DHA Phase 5', 'Lahore', 31.4697, 74.4087],
+  ['Johar Town', 'Lahore', 31.4697, 74.2728],
+  ['Wapda Town', 'Lahore', 31.4437, 74.2764],
+  ['Valencia Town', 'Lahore', 31.4147, 74.2518],
+  ['Iqbal Town', 'Lahore', 31.5095, 74.2840],
+  ['Garden Town', 'Lahore', 31.4920, 74.3210],
+  ['Faisal Town', 'Lahore', 31.4865, 74.3005]
+];
 
 // ── Toast ─────────────────────────────────────────────────────────────────
 function showToast(msg, type = 'info') {
@@ -1074,12 +1118,8 @@ function initMap() {
       setStop(idx, lat, lng);
     }
   });
-  // Auto-set pickup to current location on first map open
-  if (navigator.geolocation) {
-    navigator.geolocation.getCurrentPosition(pos => {
-      if (!pickup) setPickup(pos.coords.latitude, pos.coords.longitude);
-    }, () => {}, { enableHighAccuracy: true, timeout: 8000 });
-  }
+  // Do not request GPS on page load. Pickup is explicit: the customer can
+  // choose “Pin-Point / My Location” or search for a custom address.
   // Start showing nearby online drivers after map is ready
   setTimeout(startNearbyDrivers, 800);
 }
@@ -1168,75 +1208,147 @@ function buildLabel(item) {
   return { primary, secondary: ctx };
 }
 
-function renderDropdown(type, results) {
-  const dd = document.getElementById(`${type}-dropdown`);
-  if (!results || !results.length) {
-    dd.innerHTML = '<div class="loc-loading" style="color:#888">No results found</div>';
-    dd.className = 'location-dropdown open';
-    setTimeout(() => { dd.className = 'location-dropdown'; }, 1800);
-    return;
+function escapeLocationText(value) {
+  return String(value ?? '').replace(/[&<>"']/g, char => ({
+    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+  }[char]));
+}
+
+function localLocationResults(query) {
+  const needle = query.trim().toLocaleLowerCase();
+  return LOCAL_LOCATION_AREAS
+    .filter(([name]) => !needle || name.toLocaleLowerCase().includes(needle))
+    .map(([primary, secondary, lat, lon]) => ({ primary, secondary, lat, lon, local: true }));
+}
+
+function openLocationSheet(type) {
+  activeLocationSearch = type;
+  const sheet = document.getElementById('location-sheet');
+  sheet.classList.add('open');
+  sheet.setAttribute('aria-hidden', 'false');
+}
+
+function closeLocationSheet() {
+  activeLocationSearch = null;
+  const sheet = document.getElementById('location-sheet');
+  sheet.classList.remove('open', 'dragging');
+  sheet.style.transform = '';
+  sheet.setAttribute('aria-hidden', 'true');
+}
+
+function renderLocationSheet(type, results, query = '') {
+  const list = document.getElementById('location-sheet-list');
+  const title = document.getElementById('location-sheet-title');
+  const kicker = document.getElementById('location-sheet-kicker');
+  const isPickup = type === 'pickup';
+  kicker.textContent = isPickup ? 'Pickup location' : 'Drop-off location';
+  title.textContent = query ? `Areas matching “${query}”` : 'Search an area or choose an option';
+  locationSheetResults = [];
+  let markup = '';
+  if (isPickup) {
+    markup += `<button type="button" class="sheet-item my-location" data-location-action="locate">
+      <span class="sheet-item-icon">🎯</span><span class="sheet-item-copy">
+      <span class="sheet-item-primary">Pin-Point / My Location</span>
+      <span class="sheet-item-secondary">Use your phone GPS for the pickup point</span></span></button>`;
   }
-  dd.innerHTML = results.map(item => {
-    const { primary, secondary } = buildLabel(item);
-    const safePrimary = JSON.stringify(primary);
-    // pointerdown fires before blur on all devices; mousedown + touchstart for compat
-    return `<div class="loc-item"
-        onpointerdown="pickFromSearch(event,'${type}',${item.lat},${item.lon},${safePrimary})"
-        onmousedown="pickFromSearch(event,'${type}',${item.lat},${item.lon},${safePrimary})"
-        ontouchstart="pickFromSearch(event,'${type}',${item.lat},${item.lon},${safePrimary})">
-      <div class="loc-primary">${primary}</div>
-      ${secondary ? `<div class="loc-secondary">${secondary}</div>` : ''}
-    </div>`;
+  locationSheetResults = (results || []).slice(0, 12);
+  markup += locationSheetResults.map((item, index) => {
+    const { primary, secondary } = item.primary ? item : buildLabel(item);
+    return `<button type="button" class="sheet-item" data-location-index="${index}">
+      <span class="sheet-item-icon">${isPickup ? '📍' : '🎯'}</span><span class="sheet-item-copy">
+      <span class="sheet-item-primary">${escapeLocationText(primary)}</span>
+      ${secondary ? `<span class="sheet-item-secondary">${escapeLocationText(secondary)}</span>` : ''}</span></button>`;
   }).join('');
-  dd.className = 'location-dropdown open';
+  list.innerHTML = markup || '<div class="sheet-empty">No matching areas yet. Try another letter or search phrase.</div>';
+  openLocationSheet(type);
 }
 
-// Guard against touchstart→mousedown double-fire on mobile
-let _pickingGuard = false;
+function renderDropdown(type, results) {
+  // Kept as a compatibility shim for any older callers; the visible UI is the
+  // single draggable sheet, which avoids competing touch/blur handlers.
+  renderLocationSheet(type, results, document.getElementById(`${type}-input`)?.value.trim() || '');
+}
 
-function pickFromSearch(e, type, lat, lng, display) {
-  if (_pickingGuard) return;
-  _pickingGuard = true;
-  setTimeout(() => { _pickingGuard = false; }, 600);
+function selectLocationFromSheet(index) {
+  const item = locationSheetResults[index];
+  const type = activeLocationSearch;
+  if (!item || !type) return;
+  closeLocationSheet();
+  if (type === 'pickup') setPickup(+item.lat, +item.lon, item.primary);
+  else if (type.startsWith('stop-')) setStop(parseInt(type.split('-')[1], 10), +item.lat, +item.lon, item.primary);
+}
 
-  e.preventDefault();
-  e.stopPropagation();
-  closeDropdown(type);
-  if (type === 'pickup') {
-    setPickup(+lat, +lng, display);
-  } else if (type.startsWith('stop-')) {
-    const idx = parseInt(type.split('-')[1], 10);
-    setStop(idx, +lat, +lng, display);
+document.getElementById('location-sheet-list')?.addEventListener('click', event => {
+  const option = event.target.closest('[data-location-index]');
+  if (option) return selectLocationFromSheet(Number(option.dataset.locationIndex));
+  if (event.target.closest('[data-location-action="locate"]')) {
+    closeLocationSheet();
+    locateMe();
   }
-}
+});
+
+// A single pointer gesture on the grabber controls the sheet. The list itself
+// remains a normal scroll container, so swiping a long result list never
+// accidentally closes the search surface.
+document.getElementById('location-sheet-grabber')?.addEventListener('pointerdown', event => {
+  const sheet = document.getElementById('location-sheet');
+  locationSheetDrag = { id: event.pointerId, startY: event.clientY, currentY: 0 };
+  sheet.classList.add('dragging');
+  event.currentTarget.setPointerCapture(event.pointerId);
+});
+document.getElementById('location-sheet-grabber')?.addEventListener('pointermove', event => {
+  if (!locationSheetDrag || locationSheetDrag.id !== event.pointerId) return;
+  const delta = Math.max(-360, Math.min(420, event.clientY - locationSheetDrag.startY));
+  locationSheetDrag.currentY = delta;
+  document.getElementById('location-sheet').style.transform = `translateY(${delta}px)`;
+});
+document.getElementById('location-sheet-grabber')?.addEventListener('pointerup', event => {
+  if (!locationSheetDrag || locationSheetDrag.id !== event.pointerId) return;
+  const delta = locationSheetDrag.currentY;
+  locationSheetDrag = null;
+  const sheet = document.getElementById('location-sheet');
+  sheet.classList.remove('dragging');
+  if (delta > 130) closeLocationSheet();
+  else sheet.style.transform = '';
+});
 
 function closeDropdown(type) {
-  document.getElementById(`${type}-dropdown`).className = 'location-dropdown';
+  document.getElementById(`${type}-dropdown`)?.classList.remove('open');
+  if (activeLocationSearch === type) closeLocationSheet();
 }
 
 function onLocInput(type) {
-  const val = document.getElementById(`${type}-input`).value.trim();
+  const input = document.getElementById(`${type}-input`);
+  const query = input.value.trim();
   clearTimeout(locTimer[type]);
-  if (val.length < 2) { closeDropdown(type); return; }
-  const dd = document.getElementById(`${type}-dropdown`);
-  dd.innerHTML = '<div class="loc-loading">Searching…</div>';
-  dd.className = 'location-dropdown open';
+  const local = localLocationResults(query);
+  renderLocationSheet(type, local, query);
+  const requestId = (locSearchSeq[type] || 0) + 1;
+  locSearchSeq[type] = requestId;
+  if (query.length < 2) return;
   locTimer[type] = setTimeout(async () => {
-    const results = await searchPlaces(val);
-    renderDropdown(type, results);
-  }, 380);
+    const remote = await searchPlaces(query);
+    if (locSearchSeq[type] !== requestId) return;
+    const seen = new Set(local.map(item => `${item.primary}|${item.lat}`));
+    const merged = [...local, ...remote.map(item => {
+      const label = buildLabel(item);
+      return { ...item, ...label };
+    }).filter(item => {
+      const key = `${item.primary}|${item.lat}`;
+      if (seen.has(key)) return false;
+      seen.add(key); return true;
+    })];
+    renderLocationSheet(type, merged, query);
+  }, 260);
 }
 
 function onLocFocus(type) {
-  const val = document.getElementById(`${type}-input`).value.trim();
-  if (val.length >= 2) onLocInput(type);
+  onLocInput(type);
 }
 
-function onLocBlur(type) {
-  // Delay must exceed the 380 ms search debounce so the dropdown stays open
-  // long enough for the user to see and tap results.  600 ms also covers
-  // the mousedown / touchstart / pointerdown handlers on dropdown items.
-  setTimeout(() => closeDropdown(type), 600);
+function onLocBlur() {
+  // Intentionally empty. Selecting an item or pressing the sheet close button
+  // is the only way to close suggestions; blur must never race touch input.
 }
 
 // ── Set Locations ─────────────────────────────────────────────────────────
