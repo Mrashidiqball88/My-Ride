@@ -4,6 +4,9 @@
 
 The Expo native Driver app is the supported experience for drivers who need to remain available while the screen is locked or the app is backgrounded.
 
+For the required final physical-device pass, use the
+[native driver device verification runbook](./native-device-verification.md).
+
 - When a driver switches **Online**, Android starts an ongoing foreground-service notification and native background location updates.
 - The service posts GPS updates and a heartbeat at controlled intervals. Availability expires server-side after a short grace window without an update, so a force-stopped or disconnected app fails closed rather than receiving rides indefinitely.
 - Socket.io reconnects automatically. When the app reconnects it restores the matching vehicle room, refreshes currently available rides, and rejoins the active ride room when applicable.
