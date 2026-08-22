@@ -353,6 +353,8 @@ function endOfTodayUTC() {
 // The automatic fee is a cost of going online, not a cost of merely having
 // an active driver account. The conditional wallet query also prevents two
 // simultaneous online requests from charging the same driver twice.
+const ACTIVE_FEE_PASS_MS = 24 * 60 * 60 * 1000;
+
 async function chargeDailyFeeForOnlineDriver(driverId, driver) {
   const rate = await getDailyFeeForVehicle(driver.vehicleType);
   if (!Number.isFinite(rate) || rate <= 0) {
@@ -360,20 +362,31 @@ async function chargeDailyFeeForOnlineDriver(driverId, driver) {
   }
 
   const now = new Date();
+  const activePassCutoff = new Date(now.getTime() - ACTIVE_FEE_PASS_MS);
   if (driver.paidUntilDate && new Date(driver.paidUntilDate) >= now) {
     return { allowed: true, charged: false, rate, alreadyPaid: true };
   }
 
-  const date = todayUTC();
+  const walletSnapshot = await Wallet.findOne({ user: driverId })
+    .select('fee_paid_at balance').lean();
+  const previousFeePaidAt = walletSnapshot?.fee_paid_at || driver.lastDailyFeePaidAt;
+  if (previousFeePaidAt && new Date(previousFeePaidAt) > activePassCutoff) {
+    return { allowed: true, charged: false, rate, alreadyPaid: true, feePaidAt: previousFeePaidAt };
+  }
+
   const wallet = await Wallet.findOneAndUpdate(
     {
       user: driverId,
       balance: { $gte: rate },
-      dailyFeeChargedDate: { $ne: date }
+      $or: [
+        { fee_paid_at: { $exists: false } },
+        { fee_paid_at: null },
+        { fee_paid_at: { $lte: activePassCutoff } }
+      ]
     },
     {
       $inc: { balance: -rate },
-      $set: { dailyFeeChargedDate: date },
+      $set: { fee_paid_at: now, dailyFeeChargedDate: todayUTC() },
       $push: {
         transactions: {
           amount: rate,
@@ -387,18 +400,22 @@ async function chargeDailyFeeForOnlineDriver(driverId, driver) {
 
   if (!wallet) {
     const currentWallet = await Wallet.findOne({ user: driverId })
-      .select('balance dailyFeeChargedDate').lean();
-    if (currentWallet?.dailyFeeChargedDate === date) {
-      return { allowed: true, charged: false, rate, alreadyCharged: true, balance: currentWallet.balance };
+      .select('balance fee_paid_at').lean();
+    if (currentWallet?.fee_paid_at && new Date(currentWallet.fee_paid_at) > activePassCutoff) {
+      return { allowed: true, charged: false, rate, alreadyCharged: true, balance: currentWallet.balance, feePaidAt: currentWallet.fee_paid_at };
     }
     return { allowed: false, charged: false, rate, balance: currentWallet?.balance || 0 };
   }
 
   await User.updateOne(
     { _id: driverId },
-    { lastDailyFeePaidAt: now, paidUntilDate: endOfTodayUTC(), isFreeTrial: false }
+    {
+      lastDailyFeePaidAt: now,
+      paidUntilDate: new Date(now.getTime() + ACTIVE_FEE_PASS_MS),
+      isFreeTrial: false
+    }
   );
-  return { allowed: true, charged: true, rate, balance: wallet.balance };
+  return { allowed: true, charged: true, rate, balance: wallet.balance, feePaidAt: now };
 }
 
 const DEFAULT_PER_KM_RATES = {
