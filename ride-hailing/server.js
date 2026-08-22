@@ -154,6 +154,26 @@ function decryptSecret(value) {
   }
 }
 
+const FARE_VEHICLE_CATEGORIES = [
+  'Car Sedan',
+  'Car Mini',
+  'Riksha',
+  'Bike',
+  'Car SUV',
+  'Van Seven Seats',
+  'Cary Dibba'
+];
+const FARE_VEHICLE_ALIASES = {
+  Sedan: 'Car Sedan',
+  'Car AC': 'Car Sedan',
+  Rickshaw: 'Riksha',
+  'Car Mini': 'Car Mini',
+  Bike: 'Bike',
+  SUV: 'Car SUV',
+  Van: 'Van Seven Seats',
+  'Van Seven Seats': 'Van Seven Seats',
+  'Cary Dibba': 'Cary Dibba'
+};
 const PAYMENT_GATEWAYS = ['jazzcash', 'easypaisa', 'bank', 'sadapay'];
 const PAYMENT_GATEWAY_DEFAULTS = {
   jazzcash: { title: '', number: '' },
@@ -220,6 +240,116 @@ function publicGatewayConfig(value) {
   };
 }
 
+function normalizeFareVehicle(value) {
+  const raw = String(value || '').trim();
+  return FARE_VEHICLE_CATEGORIES.includes(raw) ? raw : (FARE_VEHICLE_ALIASES[raw] || raw);
+}
+
+function emptyFareSettings() {
+  return Object.fromEntries(FARE_VEHICLE_CATEGORIES.map(category => [category, {
+    baseFare: null,
+    distanceSlabs: [],
+    peakRules: []
+  }]));
+}
+
+function normalizeFareSettings(input) {
+  const output = emptyFareSettings();
+  if (!input || typeof input !== 'object') return output;
+  for (const category of FARE_VEHICLE_CATEGORIES) {
+    const source = input[category] || {};
+    output[category] = {
+      baseFare: Number.isFinite(Number(source.baseFare)) && Number(source.baseFare) >= 0
+        ? Number(source.baseFare) : null,
+      distanceSlabs: Array.isArray(source.distanceSlabs) ? source.distanceSlabs.map(slab => ({
+        minKm: Number(slab.minKm),
+        maxKm: slab.maxKm === null || slab.maxKm === '' || slab.maxKm === undefined ? null : Number(slab.maxKm),
+        rate: Number(slab.rate)
+      })).filter(slab =>
+        Number.isFinite(slab.minKm) && slab.minKm >= 0 &&
+        (slab.maxKm === null || (Number.isFinite(slab.maxKm) && slab.maxKm > slab.minKm)) &&
+        Number.isFinite(slab.rate) && slab.rate >= 0
+      ).sort((a, b) => a.minKm - b.minKm) : [],
+      peakRules: Array.isArray(source.peakRules) ? source.peakRules.map(rule => ({
+        start: String(rule.start || ''),
+        end: String(rule.end || ''),
+        adjustmentType: rule.adjustmentType === 'down' ? 'down' : 'up',
+        percentage: Number(rule.percentage ?? Math.abs(Number(rule.adjustmentPercent || 0))),
+        adjustmentPercent: rule.adjustmentType === 'down'
+          ? -Math.abs(Number(rule.percentage ?? rule.adjustmentPercent ?? 0))
+          : Math.abs(Number(rule.percentage ?? rule.adjustmentPercent ?? 0))
+      })).filter(rule =>
+        /^([01]\d|2[0-3]):[0-5]\d$/.test(rule.start) &&
+        /^([01]\d|2[0-3]):[0-5]\d$/.test(rule.end) &&
+        Number.isFinite(rule.percentage) && rule.percentage >= 0 &&
+        (rule.adjustmentType === 'up' || rule.percentage <= 100)
+      ) : []
+    };
+  }
+  return output;
+}
+
+function validateFareSettings(input) {
+  const settings = normalizeFareSettings(input);
+  const errors = [];
+  for (const category of FARE_VEHICLE_CATEGORIES) {
+    const rule = settings[category];
+    if (rule.baseFare === null) errors.push(`${category}: Base Fare is required`);
+    for (let i = 0; i < rule.distanceSlabs.length; i++) {
+      const slab = rule.distanceSlabs[i];
+      const next = rule.distanceSlabs[i + 1];
+      if (next && slab.maxKm !== null && slab.maxKm > next.minKm) {
+        errors.push(`${category}: distance slabs overlap`);
+      }
+      if (i === 0 && slab.minKm !== 0) errors.push(`${category}: first distance slab must start at 0 km`);
+      if (i === rule.distanceSlabs.length - 1 && slab.maxKm !== null) {
+        errors.push(`${category}: last distance slab must have no maximum`);
+      }
+    }
+    if (!rule.distanceSlabs.length) errors.push(`${category}: at least one distance slab is required`);
+  }
+  return { settings, errors };
+}
+
+function timeMatchesRule(rule, date = new Date()) {
+  const current = date.getHours() * 60 + date.getMinutes();
+  const parse = value => Number(value.slice(0, 2)) * 60 + Number(value.slice(3));
+  const start = parse(rule.start);
+  const end = parse(rule.end);
+  return start <= end ? current >= start && current <= end : current >= start || current <= end;
+}
+
+function calculateFareFromSettings(settings, vehicleType, distanceKm, at = new Date()) {
+  const category = normalizeFareVehicle(vehicleType);
+  const rule = settings[category];
+  const distance = Number(distanceKm);
+  if (!rule || !Number.isFinite(distance) || distance < 0) {
+    return { error: 'A valid vehicle category and distance are required' };
+  }
+  if (rule.baseFare === null || !rule.distanceSlabs.length) {
+    return { error: `Fare settings are not configured for ${category}` };
+  }
+  const slab = rule.distanceSlabs.find(item =>
+    distance >= item.minKm && (item.maxKm === null || distance <= item.maxKm)
+  );
+  if (!slab) return { error: `No distance slab covers ${distance} km for ${category}` };
+  const activeRules = rule.peakRules.filter(item => timeMatchesRule(item, at));
+  const adjustmentPercent = activeRules.reduce((sum, item) => sum + item.adjustmentPercent, 0);
+  const subtotal = rule.baseFare + slab.rate;
+  const total = Math.max(0, Math.round(subtotal * (1 + adjustmentPercent / 100)));
+  return {
+    vehicleType: category,
+    distanceKm: Number(distance.toFixed(2)),
+    baseFare: rule.baseFare,
+    slab: { ...slab },
+    activeRules,
+    adjustmentPercent,
+    subtotal,
+    totalFare: total,
+    calculatedAt: at.toISOString()
+  };
+}
+
 // Encode raw special characters in username/password without double-encoding
 // already-percent-encoded sequences (mirrors the existing api-server approach).
 function normalizeMongoUri(uri) {
@@ -251,7 +381,7 @@ const userSchema = new mongoose.Schema({
   password:{ type: String, required: true },
   phone:   { type: String, default: '', trim: true },
   role:    { type: String, enum: ['customer', 'driver'], default: 'customer' },
-  vehicleType:  { type: String, enum: ['Bike', 'Rickshaw', 'Car Mini', 'Car AC', ''], default: '' },
+  vehicleType:  { type: String, enum: [...FARE_VEHICLE_CATEGORIES, 'Rickshaw', 'Car AC', ''], default: '' },
   vehicleModel: { type: String, default: '' },
   vehiclePlate: { type: String, default: '' },
   isOnline: { type: Boolean, default: false },
@@ -307,6 +437,17 @@ const rideSchema = new mongoose.Schema({
     address: { type: String, default: 'Stop' }
   }],
   fare:        { type: Number, required: true },
+  fareQuote: {
+    vehicleType: String,
+    distanceKm: Number,
+    baseFare: Number,
+    slab: { minKm: Number, maxKm: Number, rate: Number },
+    activeRules: [{ start: String, end: String, adjustmentPercent: Number }],
+    adjustmentPercent: Number,
+    subtotal: Number,
+    totalFare: Number,
+    calculatedAt: Date
+  },
   distance:    { type: Number, default: 0 },
   status: {
     type: String,
@@ -716,16 +857,41 @@ app.get('/api/auth/me', authMiddleware, async (req, res) => {
   }
 });
 
+// Public fare quote used by both customer and driver apps. Pricing is always
+// calculated from the current Admin Settings document.
+app.post('/api/fare/calculate', async (req, res) => {
+  try {
+    const settingsDoc = await Settings.findOne({ key: 'daily_fare_settings' }).lean();
+    const result = calculateFareFromSettings(normalizeFareSettings(settingsDoc?.value), req.body?.vehicleType, req.body?.distanceKm);
+    if (result.error) return res.status(422).json({ error: result.error });
+    res.json(result);
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.get('/api/fare-settings', async (req, res) => {
+  try {
+    const settingsDoc = await Settings.findOne({ key: 'daily_fare_settings' }).lean();
+    res.json(normalizeFareSettings(settingsDoc?.value));
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Ride Routes
 // ─────────────────────────────────────────────────────────────────────────────
 
 app.post('/api/rides', authMiddleware, async (req, res) => {
   try {
-    const { pickupLocation, dropoffLocation, dropoffLocations, fare, distance, vehicleType, notes, paymentMethod, mobileAccount } = req.body;
-    if (!pickupLocation || !fare) {
-      return res.status(400).json({ error: 'Pickup and fare are required' });
+    const { pickupLocation, dropoffLocation, dropoffLocations, distance, vehicleType, notes, paymentMethod, mobileAccount } = req.body;
+    if (!pickupLocation) {
+      return res.status(400).json({ error: 'Pickup is required' });
     }
+    const settingsDoc = await Settings.findOne({ key: 'daily_fare_settings' }).lean();
+    const fareQuote = calculateFareFromSettings(
+      normalizeFareSettings(settingsDoc?.value),
+      vehicleType,
+      distance
+    );
+    if (fareQuote.error) return res.status(422).json({ error: fareQuote.error });
     // Resolve stops: prefer dropoffLocations array; fall back to single dropoffLocation
     const stops = Array.isArray(dropoffLocations) && dropoffLocations.length
       ? dropoffLocations
@@ -737,9 +903,10 @@ app.post('/api/rides', authMiddleware, async (req, res) => {
       pickupLocation,
       dropoffLocation:  stops[0],        // primary stop
       dropoffLocations: stops,
-      fare,
-      distance:      distance      || 0,
-      vehicleType:   vehicleType   || 'Car Mini',
+      fare:          fareQuote.totalFare,
+      fareQuote,
+      distance:      fareQuote.distanceKm,
+      vehicleType:   fareQuote.vehicleType,
       notes:         notes         || '',
       paymentMethod: paymentMethod || 'cash',
       mobileAccount: mobileAccount || ''
@@ -753,6 +920,7 @@ app.post('/api/rides', authMiddleware, async (req, res) => {
       dropoffLocations: ride.dropoffLocations,   // full multi-stop list
       fare:             ride.fare,
       distance:         ride.distance,
+      fareQuote:        ride.fareQuote,
       vehicleType:      ride.vehicleType,
       paymentMethod:    ride.paymentMethod,
       notes:            ride.notes,
@@ -2162,6 +2330,10 @@ function defaultPaymentAccounts() {
   return JSON.parse(JSON.stringify(PAYMENT_GATEWAY_DEFAULTS));
 }
 
+function publicFareSettings(value) {
+  return normalizeFareSettings(value);
+}
+
 // GET /api/settings/payment — public: drivers/customers read account details,
 // never gateway credentials or webhook secrets.
 app.get('/api/settings/payment', async (req, res) => {
@@ -2171,7 +2343,9 @@ app.get('/api/settings/payment', async (req, res) => {
     const gatewayDoc = await Settings.findOne({ key: 'payment_gateway_configs' }).lean();
     const gatewayStatus = {};
     for (const gateway of PAYMENT_GATEWAYS) gatewayStatus[gateway] = publicGatewayConfig(gatewayDoc?.value?.[gateway]);
-    res.json({ ...accounts, gatewayStatus });
+    res.json({ ...accounts, gatewayStatus, dailyFareSettings: publicFareSettings(
+      (await Settings.findOne({ key: 'daily_fare_settings' }).lean())?.value
+    ) });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
@@ -2184,7 +2358,9 @@ app.get('/api/admin/settings', adminJwt, async (req, res) => {
     const gatewayDoc = await Settings.findOne({ key: 'payment_gateway_configs' }).lean();
     const gatewayStatus = {};
     for (const gateway of PAYMENT_GATEWAYS) gatewayStatus[gateway] = publicGatewayConfig(gatewayDoc?.value?.[gateway]);
-    res.json({ ...accounts, gatewayStatus });
+    res.json({ ...accounts, gatewayStatus, dailyFareSettings: publicFareSettings(
+      (await Settings.findOne({ key: 'daily_fare_settings' }).lean())?.value
+    ) });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
@@ -2192,7 +2368,7 @@ app.get('/api/admin/settings', adminJwt, async (req, res) => {
 // credentials. Blank credential inputs mean "leave the existing value unchanged".
 app.patch('/api/admin/settings', adminJwt, async (req, res) => {
   try {
-    const { jazzcash, easypaisa, bank, sadapay, gatewayConfigs } = req.body;
+    const { jazzcash, easypaisa, bank, sadapay, gatewayConfigs, dailyFareSettings } = req.body;
     const value = {
       jazzcash:  { title: jazzcash?.title  || '', number: jazzcash?.number || '' },
       easypaisa: { title: easypaisa?.title || '', number: easypaisa?.number || '' },
@@ -2223,10 +2399,31 @@ app.patch('/api/admin/settings', adminJwt, async (req, res) => {
         { upsert: true, new: true, setDefaultsOnInsert: true }
       );
     }
+    let savedFareSettings;
+    if (dailyFareSettings !== undefined) {
+      const validated = validateFareSettings(dailyFareSettings);
+      if (validated.errors.length) {
+        return res.status(422).json({ error: 'Invalid Daily Fare Settings', errors: validated.errors });
+      }
+      savedFareSettings = validated.settings;
+      await Settings.findOneAndUpdate(
+        { key: 'daily_fare_settings' },
+        { key: 'daily_fare_settings', value: savedFareSettings },
+        { upsert: true, new: true, setDefaultsOnInsert: true }
+      );
+      io.emit('fare:updated', { settings: savedFareSettings, updatedAt: new Date().toISOString() });
+    }
     const gatewayDoc = await Settings.findOne({ key: 'payment_gateway_configs' }).lean();
     const gatewayStatus = {};
     for (const gateway of PAYMENT_GATEWAYS) gatewayStatus[gateway] = publicGatewayConfig(gatewayDoc?.value?.[gateway]);
-    res.json({ success: true, value, gatewayStatus });
+    res.json({
+      success: true,
+      value,
+      gatewayStatus,
+      dailyFareSettings: publicFareSettings(savedFareSettings || (
+        await Settings.findOne({ key: 'daily_fare_settings' }).lean()
+      )?.value)
+    });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
