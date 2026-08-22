@@ -47,6 +47,9 @@ body{font-family:'Segoe UI',system-ui,sans-serif;background:#06060e;color:#e2e8f
 
 /* ── Header ── */
 #top-header{background:#0a0a16;border-bottom:1px solid #12122a;padding:.75rem 1.5rem;display:flex;align-items:center;gap:1rem;flex-shrink:0}
+#global-back{display:none;align-items:center;gap:.35rem;background:#0f0f1e;border:1px solid #1e1e3a;color:#cbd5e1;border-radius:8px;padding:.42rem .7rem;font-size:.75rem;font-weight:700;cursor:pointer;white-space:nowrap}
+#global-back.visible{display:inline-flex}
+#global-back:hover{border-color:#f5c518;color:#f5c518}
 #section-title{font-size:1rem;font-weight:700;color:#e2e8f0}
 .header-badges{display:flex;gap:.5rem;margin-left:auto;align-items:center}
 .hbadge{font-size:.7rem;padding:.2rem .6rem;border-radius:100px;font-weight:700}
@@ -77,6 +80,9 @@ body{font-family:'Segoe UI',system-ui,sans-serif;background:#06060e;color:#e2e8f
 .fee-pass-active{display:inline-flex;align-items:center;background:#052a10;border:1px solid #0a4a20;color:#4ade80;border-radius:999px;padding:.14rem .42rem;font-size:.62rem;font-weight:800;white-space:nowrap}
 .fee-pass-expired{display:inline-flex;align-items:center;background:#2a1305;border:1px solid #5b2508;color:#fbbf24;border-radius:999px;padding:.14rem .42rem;font-size:.62rem;font-weight:800;white-space:nowrap}
 .fee-pass-time{font-size:.64rem;color:#64748b;margin-top:.2rem;white-space:nowrap}
+.section-action-bar{display:flex;align-items:center;justify-content:space-between;gap:.75rem;margin-top:1.5rem;padding:1rem 0;border-top:1px solid #1e1e2e}
+.section-action-bar .section-back-inline{background:#0f0f1e;border:1px solid #1e1e3a;color:#94a3b8}
+.section-action-bar .section-save{margin-left:auto}
 
 /* ── Stats Cards ── */
 .stats-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:.9rem;margin-bottom:1.5rem}
@@ -217,6 +223,7 @@ textarea.modal-input{resize:vertical;min-height:70px}
   #top-header{min-height:52px;padding:.65rem 1rem;gap:.5rem;flex-wrap:wrap}
   #section-title{font-size:.9rem}
   .header-badges{margin-left:auto;max-width:100%;flex-wrap:wrap}
+  #global-back{order:-1;padding:.38rem .55rem;font-size:.7rem}
   #content-area{width:100%;min-width:0;min-height:0;overflow-x:hidden;overflow-y:auto;padding:1rem}
   .sec-hdr{align-items:flex-start}
   .sec-hdr h2{max-width:100%;line-height:1.3}
@@ -232,6 +239,9 @@ textarea.modal-input{resize:vertical;min-height:70px}
   .modal-body{padding:1rem}
   .modal-footer{padding:.75rem 1rem;flex-wrap:wrap}
   .modal-footer .btn{flex:1 1 120px;justify-content:center}
+  .section-action-bar{align-items:stretch;flex-direction:column;padding:1rem 0;margin-top:1rem}
+  .section-action-bar .btn{width:100%;justify-content:center}
+  .section-action-bar .section-save{margin-left:0}
   .doc-grid{grid-template-columns:1fr}
   .radius-control{max-width:100%;flex-wrap:wrap}
   .radius-control .modal-input{width:100%;flex-basis:100%}
