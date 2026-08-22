@@ -344,6 +344,63 @@ async function getDailyFeeForVehicle(vehicleType, settings = null) {
   return current[normalizeFareVehicle(vehicleType)] ?? null;
 }
 
+function endOfTodayUTC() {
+  const end = new Date();
+  end.setUTCHours(23, 59, 59, 999);
+  return end;
+}
+
+// The automatic fee is a cost of going online, not a cost of merely having
+// an active driver account. The conditional wallet query also prevents two
+// simultaneous online requests from charging the same driver twice.
+async function chargeDailyFeeForOnlineDriver(driverId, driver) {
+  const rate = await getDailyFeeForVehicle(driver.vehicleType);
+  if (!Number.isFinite(rate) || rate <= 0) {
+    return { allowed: true, charged: false, rate: null };
+  }
+
+  const now = new Date();
+  if (driver.paidUntilDate && new Date(driver.paidUntilDate) >= now) {
+    return { allowed: true, charged: false, rate, alreadyPaid: true };
+  }
+
+  const date = todayUTC();
+  const wallet = await Wallet.findOneAndUpdate(
+    {
+      user: driverId,
+      balance: { $gte: rate },
+      dailyFeeChargedDate: { $ne: date }
+    },
+    {
+      $inc: { balance: -rate },
+      $set: { dailyFeeChargedDate: date },
+      $push: {
+        transactions: {
+          amount: rate,
+          type: 'debit',
+          description: `Automatic daily fee for going online (${driver.vehicleType || 'Car'})`
+        }
+      }
+    },
+    { new: true }
+  );
+
+  if (!wallet) {
+    const currentWallet = await Wallet.findOne({ user: driverId })
+      .select('balance dailyFeeChargedDate').lean();
+    if (currentWallet?.dailyFeeChargedDate === date) {
+      return { allowed: true, charged: false, rate, alreadyCharged: true, balance: currentWallet.balance };
+    }
+    return { allowed: false, charged: false, rate, balance: currentWallet?.balance || 0 };
+  }
+
+  await User.updateOne(
+    { _id: driverId },
+    { lastDailyFeePaidAt: now, paidUntilDate: endOfTodayUTC(), isFreeTrial: false }
+  );
+  return { allowed: true, charged: true, rate, balance: wallet.balance };
+}
+
 const DEFAULT_PER_KM_RATES = {
   Bike: 30,
   Riksha: 40,
@@ -665,6 +722,7 @@ const walletSchema = new mongoose.Schema({
   balance:        { type: Number, default: 0 },             // net spendable (all credits − debits)
   realCashWallet: { type: Number, default: 0 },             // deposits + ride earnings only
   bonusWallet:    { type: Number, default: 0 },             // promotional bonuses only
+  dailyFeeChargedDate: { type: String, default: '' },       // UTC date of the last automatic online fee
   transactions: [{
     amount:        Number,
     type:          { type: String, enum: ['credit', 'debit'] },
@@ -1461,14 +1519,16 @@ app.get('/api/rides/available', authMiddleware, driverOnly, async (req, res) => 
 app.post('/api/driver/availability', authMiddleware, driverOnly, async (req, res) => {
   try {
     const isOnline = req.body?.isOnline === true;
-    const driver = await User.findById(req.user.id).select('accountStatus vehicleType').lean();
+    const driver = await User.findById(req.user.id).select('accountStatus vehicleType paidUntilDate').lean();
     if (!driver || driver.accountStatus !== 'active') {
       return res.status(403).json({ error: 'Your driver account is not approved for online availability' });
     }
     if (isOnline) {
-      const wallet = await Wallet.findOne({ user: req.user.id }).select('balance').lean();
-      if (wallet && wallet.balance < 0) {
-        return res.status(403).json({ error: `Insufficient wallet balance (Rs ${Math.abs(wallet.balance).toFixed(0)} due). Please recharge to go online.` });
+      const feeResult = await chargeDailyFeeForOnlineDriver(req.user.id, driver);
+      if (!feeResult.allowed) {
+        return res.status(403).json({
+          error: `Wallet balance must cover today's Daily Fee of Rs ${feeResult.rate.toLocaleString()} before going online. Current balance: Rs ${Number(feeResult.balance).toLocaleString()}.`
+        });
       }
     }
     const update = isOnline
@@ -3430,10 +3490,8 @@ io.on('connection', async (socket) => {
   socket.on('driver:status', async ({ isOnline }) => {
     if (role !== 'driver') return;
     if (isOnline) {
-      const [driver, wallet] = await Promise.all([
-        User.findById(id).select('accountStatus vehicleType').catch(() => null),
-        Wallet.findOne({ user: id }).select('balance').catch(() => null)
-      ]);
+      const driver = await User.findById(id)
+        .select('accountStatus vehicleType paidUntilDate').catch(() => null);
       if (driver?.accountStatus === 'pending') {
         socket.emit('account:suspended', { reason: 'Your account is pending Admin approval. You will be notified once approved.' });
         return;
@@ -3442,9 +3500,10 @@ io.on('connection', async (socket) => {
         socket.emit('account:suspended', { reason: 'Your account has been suspended. Please contact Admin.' });
         return;
       }
-      if (wallet && wallet.balance < 0) {
+      const feeResult = await chargeDailyFeeForOnlineDriver(id, driver);
+      if (!feeResult.allowed) {
         socket.emit('account:suspended', {
-          reason: `Insufficient wallet balance (Rs ${Math.abs(wallet.balance).toFixed(0)} due). Please recharge to go online.`
+          reason: `Wallet balance must cover today's Daily Fee of Rs ${feeResult.rate.toLocaleString()} before going online. Current balance: Rs ${Number(feeResult.balance).toLocaleString()}.`
         });
         return;
       }
@@ -3589,30 +3648,17 @@ if (require.main === module) {
 
 async function runDailyDeduction() {
   if (!dbConnected) return;
-  console.log('⏰ Running daily subscription deduction…');
+  console.log('⏰ Running daily fee rollover checks…');
   try {
-    const dailyFeeSettings = await getDailyFeeSettings();
-    const drivers = await User.find({ role: 'driver', accountStatus: 'active' }).select('_id vehicleType name');
-    let count = 0;
-    for (const driver of drivers) {
-      const rate = await getDailyFeeForVehicle(driver.vehicleType, dailyFeeSettings);
-      if (!Number.isFinite(rate) || rate <= 0) {
-        console.warn(`⚠ Skipped daily deduction for ${driver.name || driver._id}: no Daily Fee configured for ${driver.vehicleType || 'vehicle category'}`);
-        continue;
-      }
-      await Wallet.findOneAndUpdate(
-        { user: driver._id },
-        { $inc: { balance: -rate },
-          $push: { transactions: { amount: rate, type: 'debit',
-            description: `Daily subscription (${driver.vehicleType || 'Car'})` } } },
-        { upsert: true }
-      ).catch(() => {});
-      count++;
-    }
-    console.log(`✓ Daily deduction complete: ${count} drivers charged`);
+    // Fees are charged atomically when a driver first toggles ONLINE. This
+    // midnight job intentionally does not debit wallets, which means drivers
+    // who stayed offline all day are never charged.
+    const drivers = await User.find({ role: 'driver', accountStatus: 'active' })
+      .select('_id vehicleType name');
+    console.log(`✓ Daily fee rollover complete: ${drivers.length} active driver(s) checked; no offline-account charge`);
 
     // Notify drivers who now have zero or negative balance
-    if (global._vapidPublicKey && count > 0) {
+    if (global._vapidPublicKey && drivers.length > 0) {
       try {
         const driverIds    = drivers.map(d => d._id);
         const lowWallets   = await Wallet.find({ user: { $in: driverIds }, balance: { $lte: 0 } }).select('user').lean();

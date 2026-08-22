@@ -10,12 +10,16 @@ const original = {
   userFindById: models.User.findById,
   userUpdateOne: models.User.updateOne,
   walletFindOne: models.Wallet.findOne,
+  walletFindOneAndUpdate: models.Wallet.findOneAndUpdate,
+  settingsFindOne: models.Settings.findOne,
 };
 
 afterEach(() => {
   models.User.findById = original.userFindById;
   models.User.updateOne = original.userUpdateOne;
   models.Wallet.findOne = original.walletFindOne;
+  models.Wallet.findOneAndUpdate = original.walletFindOneAndUpdate;
+  models.Settings.findOne = original.settingsFindOne;
 });
 
 function driverToken() {
@@ -42,6 +46,7 @@ async function request(server, path, body) {
 
 test('native availability persists online state with a heartbeat instead of tying it to a socket lifetime', async () => {
   const updates = [];
+  models.Settings.findOne = () => ({ lean: async () => null });
   models.User.findById = () => ({ select: () => ({ lean: async () => driverDocument() }) });
   models.Wallet.findOne = () => ({ select: () => ({ lean: async () => ({ balance: 0 }) }) });
   models.User.updateOne = async (_query, update) => { updates.push(update); return { acknowledged: true }; };
@@ -58,6 +63,53 @@ test('native availability persists online state with a heartbeat instead of tyin
     assert.equal(heartbeat.response.status, 200);
     assert.ok(updates[1].lastOnlineHeartbeat instanceof Date);
     assert.equal('isOnline' in updates[1], false);
+  } finally {
+    await new Promise(resolve => server.close(resolve));
+  }
+});
+
+test('daily fee is charged from the wallet only when a driver goes online, and insufficient balance blocks activation', async () => {
+  const updates = [];
+  const charges = [];
+  let walletBalance = 500;
+  models.Settings.findOne = () => ({
+    lean: async () => ({ value: { 'Car Mini': 100 } })
+  });
+  models.User.findById = () => ({
+    select: () => ({
+      lean: async () => driverDocument({ paidUntilDate: null })
+    })
+  });
+  models.User.updateOne = async (_query, update) => { updates.push(update); return { acknowledged: true }; };
+  models.Wallet.findOneAndUpdate = async (_query, update) => {
+    charges.push(update);
+    walletBalance -= 100;
+    return { balance: walletBalance };
+  };
+  models.Wallet.findOne = () => ({
+    select: () => ({
+      lean: async () => ({ balance: walletBalance, dailyFeeChargedDate: '' })
+    })
+  });
+
+  const server = app.listen(0);
+  try {
+    const offline = await request(server, '/api/driver/availability', { isOnline: false });
+    assert.equal(offline.response.status, 200);
+    assert.equal(charges.length, 0);
+
+    const online = await request(server, '/api/driver/availability', { isOnline: true });
+    assert.equal(online.response.status, 200);
+    assert.equal(charges.length, 1);
+    assert.equal(charges[0].$inc.balance, -100);
+    assert.match(charges[0].$push.transactions.description, /going online/);
+    assert.ok(updates.some(update => update.paidUntilDate));
+
+    walletBalance = 50;
+    models.Wallet.findOneAndUpdate = async () => null;
+    const insufficient = await request(server, '/api/driver/availability', { isOnline: true });
+    assert.equal(insufficient.response.status, 403);
+    assert.match(insufficient.body.error, /must cover today's Daily Fee/);
   } finally {
     await new Promise(resolve => server.close(resolve));
   }
