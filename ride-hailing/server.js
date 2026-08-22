@@ -1229,7 +1229,7 @@ app.post('/api/payments/submit', authMiddleware, async (req, res) => {
       return res.status(409).json({ error: 'You have already submitted a payment for today. Wait for admin review before resubmitting.' });
     }
 
-    const validTypes = ['jazzcash', 'easypaisa', 'bank'];
+    const validTypes = ['jazzcash', 'easypaisa', 'bank', 'sadapay'];
     const payment = await Payment.create({
       driver:          req.user.id,
       trxId:           cleanTrx,
@@ -1238,11 +1238,6 @@ app.post('/api/payments/submit', authMiddleware, async (req, res) => {
       vehicleCategory: driver.vehicleType || 'Car Mini',
       submittedDate:   dateStr
     });
-
-    // Mark daily fee as paid immediately upon TRX submission (unlocks ride acceptance for today)
-    const paidUntilDate = new Date();
-    paidUntilDate.setUTCHours(23, 59, 59, 999);   // end of current UTC day
-    await User.updateOne({ _id: req.user.id }, { lastDailyFeePaidAt: new Date(), paidUntilDate }).catch(() => {});
 
     res.status(201).json(payment);
   } catch (err) {
@@ -1325,19 +1320,7 @@ app.get('/api/payments/pending', authMiddleware, adminMiddleware, async (req, re
 
 // PATCH /api/payments/:id/approve — admin
 app.patch('/api/payments/:id/approve', authMiddleware, adminMiddleware, async (req, res) => {
-  try {
-    const payment = await Payment.findById(req.params.id);
-    if (!payment) return res.status(404).json({ error: 'Payment not found' });
-    if (payment.status !== 'pending') {
-      return res.status(400).json({ error: `Payment is already ${payment.status}` });
-    }
-    payment.status    = 'approved';
-    payment.adminNote = req.body.adminNote || '';
-    await payment.save();
-    res.json(payment);
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
+  return res.status(403).json({ error: 'Manual approval is disabled. Payments are approved only after a verified gateway webhook.' });
 });
 
 // PATCH /api/payments/:id/reject — admin
@@ -1741,15 +1724,7 @@ app.get('/api/admin/payments', adminJwt, async (req, res) => {
 });
 
 app.patch('/api/admin/payments/:id/approve', adminJwt, requirePerm('manageWallets'), async (req, res) => {
-  try {
-    const payment = await Payment.findById(req.params.id);
-    if (!payment) return res.status(404).json({ error: 'Not found' });
-    if (payment.status !== 'pending') return res.status(400).json({ error: `Already ${payment.status}` });
-    payment.status = 'approved'; payment.adminNote = req.body.adminNote || '';
-    await payment.save();
-    io.to(`user:${payment.driver}`).emit('payment:approved', { amount: payment.amount });
-    res.json({ success: true, payment });
-  } catch (err) { res.status(500).json({ error: err.message }); }
+  return res.status(403).json({ error: 'Manual approval is disabled. Payments are approved only after a verified gateway webhook.' });
 });
 
 app.patch('/api/admin/payments/:id/reject', adminJwt, requirePerm('manageWallets'), async (req, res) => {
@@ -2095,37 +2070,75 @@ app.post('/api/admin/drivers/grant-fee-waiver', adminJwt, requirePerm('manageWal
 // Settings Routes
 // ─────────────────────────────────────────────────────────────────────────────
 
-// GET /api/settings/payment — public: drivers/customers read admin account numbers
+function defaultPaymentAccounts() {
+  return JSON.parse(JSON.stringify(PAYMENT_GATEWAY_DEFAULTS));
+}
+
+// GET /api/settings/payment — public: drivers/customers read account details,
+// never gateway credentials or webhook secrets.
 app.get('/api/settings/payment', async (req, res) => {
   try {
     const doc = await Settings.findOne({ key: 'payment_accounts' });
-    res.json(doc?.value || { jazzcash: { title: '', number: '' }, easypaisa: { title: '', number: '' }, bank: { name: '', title: '', iban: '' } });
+    const accounts = { ...defaultPaymentAccounts(), ...(doc?.value || {}) };
+    const gatewayDoc = await Settings.findOne({ key: 'payment_gateway_configs' }).lean();
+    const gatewayStatus = {};
+    for (const gateway of PAYMENT_GATEWAYS) gatewayStatus[gateway] = publicGatewayConfig(gatewayDoc?.value?.[gateway]);
+    res.json({ ...accounts, gatewayStatus });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-// GET /api/admin/settings — admin: read all settings
+// GET /api/admin/settings — admin: return account details and credential
+// presence only. Plaintext secrets are never sent back after saving.
 app.get('/api/admin/settings', adminJwt, async (req, res) => {
   try {
     const doc = await Settings.findOne({ key: 'payment_accounts' });
-    res.json(doc?.value || { jazzcash: { title: '', number: '' }, easypaisa: { title: '', number: '' }, bank: { name: '', title: '', iban: '' } });
+    const accounts = { ...defaultPaymentAccounts(), ...(doc?.value || {}) };
+    const gatewayDoc = await Settings.findOne({ key: 'payment_gateway_configs' }).lean();
+    const gatewayStatus = {};
+    for (const gateway of PAYMENT_GATEWAYS) gatewayStatus[gateway] = publicGatewayConfig(gatewayDoc?.value?.[gateway]);
+    res.json({ ...accounts, gatewayStatus });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-// PATCH /api/admin/settings — admin: save payment account details
+// PATCH /api/admin/settings — save public account details and encrypted gateway
+// credentials. Blank credential inputs mean "leave the existing value unchanged".
 app.patch('/api/admin/settings', adminJwt, async (req, res) => {
   try {
-    const { jazzcash, easypaisa, bank } = req.body;
+    const { jazzcash, easypaisa, bank, sadapay, gatewayConfigs } = req.body;
     const value = {
       jazzcash:  { title: jazzcash?.title  || '', number: jazzcash?.number || '' },
       easypaisa: { title: easypaisa?.title || '', number: easypaisa?.number || '' },
-      bank:      { name:  bank?.name  || '', title: bank?.title || '', iban: bank?.iban || '' }
+      bank:      { name:  bank?.name  || '', title: bank?.title || '', iban: bank?.iban || '' },
+      sadapay:   { title: sadapay?.title || '', number: sadapay?.number || '' }
     };
     await Settings.findOneAndUpdate(
       { key: 'payment_accounts' },
       { key: 'payment_accounts', value },
       { upsert: true, new: true, setDefaultsOnInsert: true }
     );
-    res.json({ success: true, value });
+    if (gatewayConfigs && typeof gatewayConfigs === 'object') {
+      const existing = (await Settings.findOne({ key: 'payment_gateway_configs' }).lean())?.value || {};
+      const encrypted = {};
+      for (const gateway of PAYMENT_GATEWAYS) {
+        const input = gatewayConfigs[gateway] || {};
+        const previous = existing[gateway] || {};
+        encrypted[gateway] = { ...previous };
+        for (const field of ['apiKey', 'accessToken', 'merchantId', 'secretKey', 'webhookSecret']) {
+          if (typeof input[field] === 'string' && input[field].trim()) {
+            encrypted[gateway][field] = encryptSecret(input[field].trim());
+          }
+        }
+      }
+      await Settings.findOneAndUpdate(
+        { key: 'payment_gateway_configs' },
+        { key: 'payment_gateway_configs', value: encrypted },
+        { upsert: true, new: true, setDefaultsOnInsert: true }
+      );
+    }
+    const gatewayDoc = await Settings.findOne({ key: 'payment_gateway_configs' }).lean();
+    const gatewayStatus = {};
+    for (const gateway of PAYMENT_GATEWAYS) gatewayStatus[gateway] = publicGatewayConfig(gatewayDoc?.value?.[gateway]);
+    res.json({ success: true, value, gatewayStatus });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
