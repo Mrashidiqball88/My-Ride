@@ -37,6 +37,9 @@ body{font-family:'Segoe UI',sans-serif;background:#0a0a0f;color:#fff;height:100d
 .btn-primary:hover{opacity:.9}
 .btn-primary:disabled{opacity:.5;cursor:not-allowed}
 .auth-error{color:#ff5555;font-size:.85rem;text-align:center;margin-top:.75rem;min-height:1.2em}
+.upload-wait{position:fixed;inset:0;z-index:2000;background:rgba(5,12,20,.82);display:none;align-items:center;justify-content:center;padding:1.5rem}
+.upload-wait.open{display:flex}.upload-wait-card{width:min(360px,100%);background:#fff;border-radius:18px;padding:1.4rem;color:#10243a;text-align:center}
+.upload-progress-track{height:9px;background:#dbeafe;border-radius:100px;overflow:hidden;margin:1rem 0 .55rem}.upload-progress-fill{height:100%;width:0;background:#38bdf8;transition:width .2s}
 
 /* ── App Layout ── */
 #app{display:none;flex-direction:column;height:100dvh}
@@ -364,6 +367,12 @@ body{font-family:'Segoe UI',sans-serif;background:#0a0a0f;color:#fff;height:100d
     <div class="auth-error" id="auth-error"></div>
   </div>
 </div>
+<div class="upload-wait" id="customer-upload-wait" role="status" aria-live="polite"><div class="upload-wait-card">
+  <div style="font-size:2rem">🪪</div><strong id="customer-upload-title">Uploading documents…</strong>
+  <p id="customer-upload-copy" style="font-size:.8rem;color:#52667a;margin-top:.45rem">Please wait while we securely process your ID.</p>
+  <div class="upload-progress-track"><div class="upload-progress-fill" id="customer-upload-progress"></div></div><span id="customer-upload-percent" style="font-size:.75rem;color:#52667a">0%</span>
+  <button class="btn-primary" id="customer-upload-close" style="display:none;margin-top:1rem" onclick="closeCustomerUploadNotice()">Continue</button>
+</div></div>
 
 <!-- ── APP ── -->
 <div id="app">
@@ -803,17 +812,46 @@ async function doRegister() {
     const submitButton = document.querySelector('#register-form .btn-primary');
     if (submitButton) { submitButton.disabled = true; submitButton.textContent = 'Verifying identity…'; }
     const [cnicFront, cnicBack] = await Promise.all([imageFileToDataUrl(frontFile), imageFileToDataUrl(backFile)]);
-    const res = await apiCall('/api/auth/register', 'POST', {
-      name, phone, email, password: pass, role: 'customer', cnicNumber: cnic, cnicFront, cnicBack
-    });
-    saveSession(res);
+    showCustomerUploadWait();
+    const res = await registerCustomerWithProgress({ name, phone, email, password: pass, role: 'customer', cnicNumber: cnic, cnicFront, cnicBack });
+    setCustomerUploadProgress(100);
+    document.getElementById('customer-upload-title').textContent = 'Documents uploaded successfully!';
+    document.getElementById('customer-upload-copy').textContent = 'Your account is pending verification.';
+    document.getElementById('customer-upload-close').style.display = 'block';
+    window._pendingCustomerSession = res;
   } catch (e) {
+    document.getElementById('customer-upload-wait').classList.remove('open');
     document.getElementById('auth-error').textContent = e.message;
     if (e.message === 'Wrong Documents / Document Verification Failed') alert(e.message);
   } finally {
     const submitButton = document.querySelector('#register-form .btn-primary');
     if (submitButton) { submitButton.disabled = false; submitButton.textContent = 'Create Account'; }
   }
+}
+
+function showCustomerUploadWait() {
+  document.getElementById('customer-upload-wait').classList.add('open');
+  document.getElementById('customer-upload-close').style.display = 'none';
+  setCustomerUploadProgress(2);
+}
+function setCustomerUploadProgress(value) {
+  document.getElementById('customer-upload-progress').style.width = `${value}%`;
+  document.getElementById('customer-upload-percent').textContent = `${value}%`;
+}
+function closeCustomerUploadNotice() {
+  document.getElementById('customer-upload-wait').classList.remove('open');
+  if (window._pendingCustomerSession) { const session = window._pendingCustomerSession; window._pendingCustomerSession = null; saveSession(session); }
+}
+function registerCustomerWithProgress(payload) {
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open('POST', API + '/api/auth/register');
+    xhr.setRequestHeader('Content-Type', 'application/json');
+    xhr.upload.onprogress = event => { if (event.lengthComputable) setCustomerUploadProgress(Math.min(96, Math.round(event.loaded / event.total * 100))); };
+    xhr.onload = () => { let data = {}; try { data = JSON.parse(xhr.responseText); } catch {} if (xhr.status >= 200 && xhr.status < 300) resolve(data); else reject(new Error(data.error || 'Document upload failed')); };
+    xhr.onerror = () => reject(new Error('Network error — check your connection'));
+    xhr.send(JSON.stringify(payload));
+  });
 }
 
 function imageFileToDataUrl(file) {

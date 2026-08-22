@@ -386,6 +386,11 @@ textarea.support-input{resize:vertical;min-height:85px}
           <img id="prev-cnic-b" class="photo-preview-img" style="display:none" src="">
           <input class="photo-file-input" type="file" id="r-cnic-back" accept="image/*" capture="environment" onchange="previewPhoto(this,'prev-cnic-b')">
         </div>
+        <div class="photo-upload-group">
+          <span class="photo-upload-lbl">Vehicle Registration Book / Documents <span class="req">*</span></span>
+          <img id="prev-vehicle-reg" class="photo-preview-img" style="display:none" src="">
+          <input class="photo-file-input" type="file" id="r-vehicle-reg" accept="image/*" capture="environment" onchange="previewPhoto(this,'prev-vehicle-reg')">
+        </div>
         <div style="display:flex;gap:.5rem;margin-top:.5rem">
           <button class="btn-primary" style="flex:.4;background:#1a1a28;color:#888;border:1px solid #333;margin-top:0" onclick="prevRegStep()">← Back</button>
           <button class="btn-primary" id="reg-submit-btn" style="flex:1;margin-top:0" onclick="doRegister()">Create Driver Account</button>
@@ -942,13 +947,14 @@ async function doRegister() {
   if (submitBtn) { submitBtn.disabled = true; submitBtn.textContent = '⏳ Preparing…'; }
 
   // Phase 1: compress photos client-side (before showing progress screen)
-  let profilePhoto, licensePhoto, cnicFront, cnicBack;
+  let profilePhoto, licensePhoto, cnicFront, cnicBack, vehicleRegPhoto;
   try {
-    [profilePhoto, licensePhoto, cnicFront, cnicBack] = await Promise.all([
+    [profilePhoto, licensePhoto, cnicFront, cnicBack, vehicleRegPhoto] = await Promise.all([
       getPhoto('r-profile-photo', 'Profile photo'),
       getPhoto('r-license-photo', 'Driving license photo'),
       getPhoto('r-cnic-front',    'CNIC Front photo'),
       getPhoto('r-cnic-back',     'CNIC Back photo'),
+      getPhoto('r-vehicle-reg',   'Vehicle registration document'),
     ]);
   } catch (e) { errEl.textContent = e.message; resetBtn(); return; }
 
@@ -991,7 +997,7 @@ async function doRegister() {
 
   xhr.send(JSON.stringify({
     name, phone, password: pass, role: 'driver', vehicleType: vehicle,
-    vehicleModel, vehiclePlate, profilePhoto, licensePhoto, cnicFront, cnicBack
+    vehicleModel, vehiclePlate, profilePhoto, licensePhoto, cnicFront, cnicBack, vehicleRegPhoto
   }));
 }
 

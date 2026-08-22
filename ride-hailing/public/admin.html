@@ -1337,12 +1337,13 @@ async function loadPassengers(status = 'all') {
     tbody.innerHTML = passengers.map(p => `<tr>
       <td><div style="font-weight:700;color:#e2e8f0">${p.name}</div></td>
       <td>${p.phone||p.email||'—'}</td>
-      <td style="font-size:.75rem;color:#94a3b8;font-family:monospace">${p.cnicNumber||'—'}</td>
+      <td style="font-size:.75rem;color:#94a3b8;font-family:monospace">${p.nationalIdLast4 ? `••••${p.nationalIdLast4}` : '—'}</td>
       <td>${p.rideCount||p.totalRides||0} rides</td>
       <td>${badgeHtml(p.accountStatus||'active')}</td>
       <td style="font-size:.72rem;color:#475569">${fmtDate(p.createdAt)}</td>
       <td><div style="display:flex;gap:.3rem">
         <button class="btn btn-blue" onclick="viewUser('${p._id}','customer')">👁</button>
+        ${p.accountStatus==='pending' ? `<button class="btn btn-green" onclick="userAction('${p._id}','approve','customer')">✓ Approve</button><button class="btn btn-red" onclick="userAction('${p._id}','reject','customer')">✕ Reject</button>` : ''}
         ${(isSuperAdmin||adminPerms.blockCustomers) ? ((p.accountStatus==='blocked')
           ? `<button class="btn btn-green" onclick="userAction('${p._id}','unblock','customer')">▶ Unblock</button>`
           : `<button class="btn btn-red"   onclick="userAction('${p._id}','block','customer')">⛔ Block</button>`) : ''}
@@ -1498,11 +1499,12 @@ async function resolveSOS(id) {
 
 // ── User Actions ──────────────────────────────────────────────────────────────
 function userAction(userId, action, role) {
-  const labels = { approve:'Approve Driver', suspend:'Temporarily Suspend', block:'Permanently Block', unblock:'Unblock / Activate' };
-  const colors = { approve:'btn-green', suspend:'btn-yellow', block:'btn-red', unblock:'btn-green' };
+  const labels = { approve:'Approve Account', reject:'Reject Verification', suspend:'Temporarily Suspend', block:'Permanently Block', unblock:'Unblock / Activate' };
+  const colors = { approve:'btn-green', reject:'btn-red', suspend:'btn-yellow', block:'btn-red', unblock:'btn-green' };
   document.getElementById('am-title').textContent = labels[action] || action;
   document.getElementById('am-msg').textContent   =
     action === 'approve'  ? `Grant this ${role} active access to the platform?` :
+    action === 'reject'   ? 'Reject this identity submission and block booking access?' :
     action === 'suspend'  ? `Temporarily suspend this ${role}? They will be forced offline immediately.` :
     action === 'block'    ? `Permanently block this ${role}? They will lose all access.` :
     action === 'unblock'  ? `Restore full platform access to this ${role}?` : '';
@@ -1531,6 +1533,24 @@ async function confirmAction() {
     loadStats();
   } catch (e) { showToast(e.message, 'error'); }
   pendingAction = null;
+}
+
+async function openCustomerIdentityReview(userId) {
+  if (!isSuperAdmin) return showToast('Only Super Admin can view private identity documents.', 'error');
+  openModal('doc-modal');
+  document.getElementById('doc-driver-info').innerHTML = '<strong>Customer identity documents</strong><div style="font-size:.72rem;color:#64748b;margin-top:.25rem">Private files — available only during this authenticated review.</div>';
+  const grid = document.getElementById('doc-grid');
+  grid.innerHTML = '<div class="loading-row">Loading protected documents…</div>';
+  try {
+    const fetchDocument = async side => {
+      const response = await fetch(`/api/admin/customer-identity/${userId}/${side}`, { headers: { Authorization: `Bearer ${adminToken}` } });
+      if (!response.ok) throw new Error('Unable to load identity document');
+      return URL.createObjectURL(await response.blob());
+    };
+    const [front, back] = await Promise.all([fetchDocument('front'), fetchDocument('back')]);
+    grid.innerHTML = `<div class="doc-item"><img src="${front}" alt="Customer ID front"><div class="doc-label">National ID Front</div></div><div class="doc-item"><img src="${back}" alt="Customer ID back"><div class="doc-label">National ID Back</div></div>`;
+  } catch (e) { grid.innerHTML = `<div class="empty-state">${e.message}</div>`; }
+  document.getElementById('doc-footer').innerHTML = `<button class="btn btn-gray" onclick="closeModal('doc-modal')">Close</button>`;
 }
 
 // ── User Detail Modal ─────────────────────────────────────────────────────────
@@ -1579,6 +1599,8 @@ async function viewUser(userId, role) {
     const canActCust = isSuperAdmin || adminPerms.blockCustomers;
     const canAct     = role === 'driver' ? canActDrv : canActCust;
     if (u.accountStatus === 'pending'   && canApprove) btns.push(`<button class="btn btn-green"  onclick="closeModal('user-modal');userAction('${u._id}','approve','${role}')">✓ Approve</button>`);
+    if (role === 'customer' && u.accountStatus === 'pending' && isSuperAdmin) btns.push(`<button class="btn btn-red" onclick="closeModal('user-modal');userAction('${u._id}','reject','customer')">✕ Reject ID</button>`);
+    if (role === 'customer' && isSuperAdmin) btns.push(`<button class="btn btn-blue" onclick="openCustomerIdentityReview('${u._id}')">📄 Review ID Documents</button>`);
     if (u.accountStatus === 'active'    && canAct)     btns.push(`<button class="btn btn-yellow" onclick="closeModal('user-modal');userAction('${u._id}','suspend','${role}')">⏸ Suspend</button><button class="btn btn-red" onclick="closeModal('user-modal');userAction('${u._id}','block','${role}')">⛔ Block</button>`);
     if (u.accountStatus === 'suspended' && canAct)     btns.push(`<button class="btn btn-green"  onclick="closeModal('user-modal');userAction('${u._id}','unblock','${role}')">▶ Activate</button>`);
     if (u.accountStatus === 'blocked'   && canAct)     btns.push(`<button class="btn btn-green"  onclick="closeModal('user-modal');userAction('${u._id}','unblock','${role}')">▶ Unblock</button>`);

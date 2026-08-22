@@ -587,7 +587,8 @@ const userSchema = new mongoose.Schema({
   nationalIdLast4: { type: String, default: '' },
   customerIdFront: { type: String, default: '', select: false },
   customerIdBack:  { type: String, default: '', select: false },
-  identityVerifiedAt: { type: Date, default: null }
+  identityVerifiedAt: { type: Date, default: null },
+  identityVerificationStatus: { type: String, enum: ['pending', 'approved', 'rejected'], default: null }
 }, { timestamps: true });
 
 const rideSchema = new mongoose.Schema({
@@ -873,6 +874,22 @@ function customerOnly(req, res, next) {
   next();
 }
 
+async function customerCanBook(req, res, next) {
+  // The focused unit suite runs without MongoDB; production always checks the
+  // current persisted state so approval changes take effect immediately.
+  if (!dbConnected) {
+    if (req.user.accountStatus && req.user.accountStatus !== 'active') {
+      return res.status(403).json({ error: 'Your account is pending verification. Booking will be available after approval.' });
+    }
+    return next();
+  }
+  const customer = await User.findById(req.user.id).select('accountStatus identityVerificationStatus').lean();
+  if (!customer || customer.accountStatus !== 'active' || customer.identityVerificationStatus === 'rejected') {
+    return res.status(403).json({ error: 'Your account is pending verification. Booking will be available after approval.' });
+  }
+  next();
+}
+
 // Legacy: used by /api/payments/* routes (needs authMiddleware first)
 async function adminMiddleware(req, res, next) {
   try {
@@ -925,7 +942,7 @@ function requirePerm(permName) {
 app.post('/api/auth/register', async (req, res) => {
   try {
     const { name, email, password, phone, role, vehicleType, vehicleModel, vehiclePlate,
-            profilePhoto, licensePhoto, cnicFront, cnicBack, cnicNumber } = req.body;
+             profilePhoto, licensePhoto, cnicFront, cnicBack, cnicNumber, vehicleRegPhoto } = req.body;
     if (!name || !password) return res.status(400).json({ error: 'Name and password are required' });
     if (!phone)             return res.status(400).json({ error: 'Phone number is required' });
     const resolvedRoleEarly = role || 'customer';
@@ -937,6 +954,9 @@ app.post('/api/auth/register', async (req, res) => {
       if (!/^\d{13}$/.test(normalizedCustomerId)) {
         return res.status(400).json({ error: 'Enter a valid 13-digit CNIC / NIC number' });
       }
+    }
+    if (resolvedRoleEarly === 'driver' && (!profilePhoto || !licensePhoto || !cnicFront || !cnicBack || !vehicleRegPhoto)) {
+      return res.status(400).json({ error: 'Profile photo, CNIC front/back, driving license, and vehicle registration documents are required' });
     }
 
     const resolvedEmail = email ? email.toLowerCase().trim() : null;
@@ -976,12 +996,13 @@ app.post('/api/auth/register', async (req, res) => {
       phone:         phone?.trim()  || '',
       password:      hash,
       role:          resolvedRole,
-      accountStatus: resolvedRole === 'driver' ? 'pending' : 'active',
+      accountStatus: 'pending',
       vehicleType:   vehicleType    || '',
       vehicleModel:  vehicleModel   || '',
       vehiclePlate:  vehiclePlate   || '',
       profilePhoto:  await saveDocToDisk(profilePhoto, 'profile'),
       licensePhoto:  await saveDocToDisk(licensePhoto, 'license'),
+      vehicleRegPhoto: resolvedRole === 'driver' ? await saveDocToDisk(vehicleRegPhoto, 'vehicleReg') : '',
       cnicFront:     resolvedRole === 'driver' ? await saveDocToDisk(cnicFront, 'cnicFront') : '',
       cnicBack:      resolvedRole === 'driver' ? await saveDocToDisk(cnicBack, 'cnicBack') : '',
       cnicNumber:    resolvedRole === 'driver' ? (cnicNumber || '') : '',
@@ -989,7 +1010,8 @@ app.post('/api/auth/register', async (req, res) => {
       nationalIdLast4: resolvedRole === 'customer' ? normalizedCustomerId.slice(-4) : '',
       customerIdFront: customerFrontFile,
       customerIdBack: customerBackFile,
-      identityVerifiedAt: resolvedRole === 'customer' ? new Date() : null
+      identityVerifiedAt: resolvedRole === 'customer' ? new Date() : null,
+      identityVerificationStatus: resolvedRole === 'customer' ? 'pending' : null
     });
     await Wallet.create({ user: user._id, balance: 0, transactions: [] });
 
@@ -998,14 +1020,14 @@ app.post('/api/auth/register', async (req, res) => {
     await User.updateOne({ _id: user._id }, { activeSessionToken: sessionToken });
 
     const token = jwt.sign(
-      { id: user._id, email: user.email || '', role: user.role, name: user.name },
+        { id: user._id, email: user.email || '', role: user.role, name: user.name, accountStatus: user.accountStatus },
       JWT_SECRET, { expiresIn: '7d' }
     );
     res.status(201).json({
       token,
       sessionToken,
       user: { id: user._id, name: user.name, email: user.email || '', phone: user.phone,
-              role: user.role, accountStatus: user.accountStatus,
+               role: user.role, accountStatus: user.accountStatus, identityVerificationStatus: user.identityVerificationStatus,
               vehicleType: user.vehicleType,
               vehicleModel: user.vehicleModel, vehiclePlate: user.vehiclePlate,
                lastDailyFeePaidAt: null, dailyFeeAmount: await getDailyFeeForVehicle(user.vehicleType),
@@ -1045,14 +1067,14 @@ app.post('/api/auth/login', async (req, res) => {
     await User.updateOne({ _id: user._id }, { activeSessionToken: sessionToken });
 
     const token = jwt.sign(
-      { id: user._id, email: user.email || '', role: user.role, name: user.name },
+       { id: user._id, email: user.email || '', role: user.role, name: user.name, accountStatus: user.accountStatus },
       JWT_SECRET, { expiresIn: '7d' }
     );
     res.json({
       token,
       sessionToken,
       user: { id: user._id, name: user.name, email: user.email || '', phone: user.phone,
-              role: user.role, accountStatus: user.accountStatus,
+               role: user.role, accountStatus: user.accountStatus, identityVerificationStatus: user.identityVerificationStatus,
               profilePhoto: user.profilePhoto || '',
               vehicleType: user.vehicleType,
               vehicleModel: user.vehicleModel, vehiclePlate: user.vehiclePlate, rating: user.rating,
@@ -1179,7 +1201,7 @@ app.get('/api/fare-settings', async (req, res) => {
 // Ride Routes
 // ─────────────────────────────────────────────────────────────────────────────
 
-app.post('/api/rides', authMiddleware, async (req, res) => {
+app.post('/api/rides', authMiddleware, customerOnly, customerCanBook, async (req, res) => {
   try {
     const { pickupLocation, dropoffLocation, dropoffLocations, distance, vehicleType, notes, paymentMethod, mobileAccount } = req.body;
     if (!pickupLocation) {
@@ -2261,13 +2283,12 @@ app.get('/api/admin/drivers', adminJwt, async (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-// GET /api/admin/passengers?status=all|active|blocked
+// GET /api/admin/passengers?status=all|pending|active|blocked
 app.get('/api/admin/passengers', adminJwt, async (req, res) => {
   try {
     const { status } = req.query;
     const filter = { role: 'customer' };
-    if (status === 'blocked') filter.accountStatus = 'blocked';
-    else if (status === 'active') filter.accountStatus = { $ne: 'blocked' };
+    if (['pending', 'active', 'blocked', 'suspended'].includes(status)) filter.accountStatus = status;
     const passengers = await User.find(filter)
       .select('-password -otpCode -otpExpiry')
       .sort('-createdAt').limit(200);
@@ -2293,16 +2314,17 @@ app.patch('/api/admin/users/:id/status', adminJwt, async (req, res) => {
         return res.status(403).json({ error: 'Permission denied: approveDrivers required' });
       if (['suspend','block','unblock'].includes(action) && target.role === 'driver' && !req.admin.permissions?.blockDrivers)
         return res.status(403).json({ error: 'Permission denied: blockDrivers required' });
-      if (['block','unblock'].includes(action) && target.role === 'customer' && !req.admin.permissions?.blockCustomers)
+      if (['block','unblock','reject'].includes(action) && target.role === 'customer' && !req.admin.permissions?.blockCustomers)
         return res.status(403).json({ error: 'Permission denied: blockCustomers required' });
     }
 
     let update = {};
-    if      (action === 'approve')          update = { accountStatus: 'active',    suspendReason: '', suspendedAt: null };
+    if      (action === 'approve')          update = { accountStatus: 'active', identityVerificationStatus: 'approved', suspendReason: '', suspendedAt: null };
     else if (action === 'suspend')          update = { accountStatus: 'suspended', suspendReason: reason || 'Temporary suspension', suspendedAt: new Date() };
     else if (action === 'block')            update = { accountStatus: 'blocked',   suspendReason: reason || 'Permanently blocked',  suspendedAt: new Date() };
     else if (action === 'unblock')          update = { accountStatus: 'active',    suspendReason: '', suspendedAt: null };
     else if (action === 'reject-deletion')  update = { accountStatus: 'active',    suspendReason: '', suspendedAt: null };
+    else if (action === 'reject')           update = { accountStatus: 'blocked', identityVerificationStatus: 'rejected', suspendReason: reason || 'Identity documents rejected', suspendedAt: new Date() };
     else return res.status(400).json({ error: 'Invalid action' });
 
     const user = await User.findByIdAndUpdate(req.params.id, { ...update, isOnline: false }, { new: true }).select('-password');
@@ -2420,11 +2442,11 @@ app.put('/api/auth/profile/photos', authMiddleware, async (req, res) => {
   try {
     const { profilePhoto, licensePhoto, cnicFront, cnicBack, vehicleRegPhoto } = req.body;
     const update = {};
-    if (profilePhoto    !== undefined) update.profilePhoto    = saveDocToDisk(profilePhoto,    'profile');
-    if (licensePhoto    !== undefined) update.licensePhoto    = saveDocToDisk(licensePhoto,    'license');
-    if (cnicFront       !== undefined) update.cnicFront       = saveDocToDisk(cnicFront,       'cnicFront');
-    if (cnicBack        !== undefined) update.cnicBack        = saveDocToDisk(cnicBack,        'cnicBack');
-    if (vehicleRegPhoto !== undefined) update.vehicleRegPhoto = saveDocToDisk(vehicleRegPhoto, 'vehicleReg');
+    if (profilePhoto    !== undefined) update.profilePhoto    = await saveDocToDisk(profilePhoto,    'profile');
+    if (licensePhoto    !== undefined) update.licensePhoto    = await saveDocToDisk(licensePhoto,    'license');
+    if (cnicFront       !== undefined) update.cnicFront       = await saveDocToDisk(cnicFront,       'cnicFront');
+    if (cnicBack        !== undefined) update.cnicBack        = await saveDocToDisk(cnicBack,        'cnicBack');
+    if (vehicleRegPhoto !== undefined) update.vehicleRegPhoto = await saveDocToDisk(vehicleRegPhoto, 'vehicleReg');
     await User.updateOne({ _id: req.user.id }, update);
     res.json({ success: true });
   } catch (err) { res.status(500).json({ error: err.message }); }
