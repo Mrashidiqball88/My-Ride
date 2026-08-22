@@ -1194,9 +1194,17 @@ async function subAdminLogin() {
 }
 
 // ── Boot ──────────────────────────────────────────────────────────────────────
-function bootAdmin() {
+async function bootAdmin() {
   document.getElementById('auth-overlay').style.display = 'none';
   document.getElementById('admin-app').style.display    = 'flex';
+  try {
+    const session = await api('/api/admin/session');
+    isSuperAdmin = !!session.isSuperAdmin;
+    adminEmail = session.email || adminEmail;
+    adminPerms = session.permissions || {};
+  } catch (e) {
+    console.warn('Admin session refresh unavailable:', e.message);
+  }
   document.getElementById('admin-email-lbl').textContent = adminEmail;
   applyPermissions();
   connectSocket();
@@ -1427,7 +1435,7 @@ async function loadPayments(status = 'pending') {
         </div>
         <div class="pay-amount">Rs ${(p.amount||0).toLocaleString()}</div>
         <div class="pay-actions" style="display:flex;align-items:center;gap:.5rem;flex-wrap:wrap">
-          ${p.proofScreenshot ? `<a href="${p.proofScreenshot}" target="_blank" rel="noopener" class="btn btn-gray" style="text-decoration:none">🖼 View Proof</a>` : '<span class="badge badge-red">Proof hidden or unavailable</span>'}
+          ${hasPermission('viewPaymentProofs') && p.proofScreenshot ? `<a href="${p.proofScreenshot}" target="_blank" rel="noopener" class="btn btn-gray" style="text-decoration:none">🖼 View Proof</a>` : '<span class="badge badge-red">Proof hidden or unavailable</span>'}
           ${isPending && hasPermission('approveWalletTopups') ? `<button class="btn btn-green" onclick="approvePayment('${p._id}')">✓ Approve</button><button class="btn btn-red" onclick="rejectPayment('${p._id}')">✕ Reject</button>` : ''}
         </div>
       </div>`;

@@ -2521,6 +2521,15 @@ app.post('/api/admin/sub-user/login', async (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
+// GET /api/admin/session — refresh the current Admin identity and permissions.
+app.get('/api/admin/session', adminJwt, async (req, res) => {
+  res.json({
+    isSuperAdmin: !!req.admin.isSuperAdmin,
+    email: req.admin.email || req.admin.username || '',
+    permissions: req.admin.isSuperAdmin ? {} : normalizeSubAdminPermissions(req.admin.permissions)
+  });
+});
+
 // POST /api/admin/sub-users/create — super-admin only; enforces 50-user cap
 app.post('/api/admin/sub-users/create', adminJwt, requireSuperAdmin, async (req, res) => {
   try {
