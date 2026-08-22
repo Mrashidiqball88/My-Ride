@@ -1,24 +1,24 @@
 {
-  "name": "MyRide Customer",
-  "short_name": "MyRide",
-  "description": "Book rides instantly with MyRide — your smart ride-hailing app.",
+  "name": "My Ride",
+  "short_name": "My Ride",
+  "description": "Book rides instantly with My Ride — your smart ride-hailing app.",
   "start_url": "/customer",
   "scope": "/customer",
   "display": "standalone",
   "orientation": "portrait",
   "background_color": "#0a0a0f",
-  "theme_color": "#000000",
+  "theme_color": "#38bdf8",
   "icons": [
     {
-      "src": "/icon-192.png",
-      "sizes": "192x192",
-      "type": "image/png",
+      "src": "/logo-customer.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
       "purpose": "any maskable"
     },
     {
-      "src": "/icon-512.png",
-      "sizes": "512x512",
-      "type": "image/png",
+      "src": "/logo-customer.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
       "purpose": "any maskable"
     }
   ]

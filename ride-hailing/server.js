@@ -27,6 +27,7 @@ const { Server } = require('socket.io');
 const path     = require('path');
 const webpush  = require('web-push');
 const crypto   = require('crypto');
+const Tesseract = require('tesseract.js');
 
 // ── 2. APP & SERVER INITIALIZATION ───────────────────────────────────────
 const app    = express();
@@ -88,10 +89,27 @@ app.use(express.static(PUBLIC_DIR));
 // server refuses to start with a clear error rather than silently 500-ing.
 const fs = require('fs');
 
-// Persistent driver document storage — files survive restarts.
+// Driver files retain their existing public review path. Customer identity
+// documents are deliberately stored separately and are never exposed by static
+// middleware; only an authenticated super-admin can retrieve them.
 const UPLOADS_DIR = path.resolve(__dirname, 'uploads', 'driver_docs');
+const CUSTOMER_ID_UPLOADS_DIR = path.resolve(__dirname, 'uploads', 'customer_identity');
 fs.mkdirSync(UPLOADS_DIR, { recursive: true });
+fs.mkdirSync(CUSTOMER_ID_UPLOADS_DIR, { recursive: true });
 app.use('/uploads', express.static(path.resolve(__dirname, 'uploads')));
+
+const MAX_ID_DOCUMENT_BYTES = 6 * 1024 * 1024;
+const ID_DOCUMENT_DATA_URL = /^data:image\/(jpeg|jpg|png|webp);base64,([A-Za-z0-9+/=\s]+)$/s;
+
+function parseImageDataUrl(dataUrl) {
+  const match = String(dataUrl || '').match(ID_DOCUMENT_DATA_URL);
+  if (!match) throw new Error('ID document must be a JPEG, PNG, or WebP image');
+  const bytes = Buffer.from(match[2].replace(/\s/g, ''), 'base64');
+  if (!bytes.length || bytes.length > MAX_ID_DOCUMENT_BYTES) {
+    throw new Error('ID document must be between 1 byte and 6 MB');
+  }
+  return { ext: match[1] === 'jpeg' ? 'jpg' : match[1], bytes };
+}
 
 // Save a base64 data-URL to disk; return the public path.  If the value is
 // already a file path (not a data: URL) it is returned unchanged.
@@ -104,6 +122,19 @@ function saveDocToDisk(dataUrl, fieldName) {
   try { fs.writeFileSync(path.join(UPLOADS_DIR, fname), Buffer.from(m[2], 'base64')); }
   catch { return dataUrl; } // fallback — keep base64 if disk write fails
   return `/uploads/driver_docs/${fname}`;
+}
+
+function savePrivateIdentityDocument(dataUrl, label) {
+  const { ext, bytes } = parseImageDataUrl(dataUrl);
+  const filename = `${label}_${Date.now()}_${crypto.randomBytes(12).toString('hex')}.${ext}`;
+  fs.writeFileSync(path.join(CUSTOMER_ID_UPLOADS_DIR, filename), bytes, { mode: 0o600 });
+  return filename;
+}
+
+function deletePrivateIdentityDocuments(filenames = []) {
+  for (const filename of filenames.filter(Boolean)) {
+    try { fs.unlinkSync(path.join(CUSTOMER_ID_UPLOADS_DIR, path.basename(filename))); } catch {}
+  }
 }
 function loadPage(file) {
   const full = path.resolve(PUBLIC_DIR, file);
@@ -539,7 +570,12 @@ const userSchema = new mongoose.Schema({
   cnicBack:        { type: String, default: '' },
   licensePhoto:    { type: String, default: '' },
   vehicleRegPhoto: { type: String, default: '' },
-  cnicNumber:      { type: String, default: '' }       // customer identity number
+  cnicNumber:      { type: String, default: '' },      // retained for existing driver records only
+  nationalIdHash:  { type: String, unique: true, sparse: true, default: '', select: false },
+  nationalIdLast4: { type: String, default: '' },
+  customerIdFront: { type: String, default: '', select: false },
+  customerIdBack:  { type: String, default: '', select: false },
+  identityVerifiedAt: { type: Date, default: null }
 }, { timestamps: true });
 
 const rideSchema = new mongoose.Schema({
@@ -694,6 +730,84 @@ const Ticket   = mongoose.model('Ticket',   ticketSchema);
 const Settings = mongoose.model('Settings', settingsSchema);
 const PushSub  = mongoose.model('PushSub',  pushSubSchema);
 
+const ADMIN_SECURITY_KEY = 'admin_security';
+const ADMIN_RECOVERY_ATTEMPTS = new Map();
+const ADMIN_RECOVERY_WINDOW_MS = 15 * 60 * 1000;
+const ADMIN_RECOVERY_MAX_ATTEMPTS = 5;
+
+function normalizeNationalId(value) {
+  return String(value || '').replace(/\D/g, '');
+}
+
+function normalizeNameForMatch(value) {
+  return String(value || '').toUpperCase().replace(/[^A-Z]/g, '');
+}
+
+function validateStrongPassword(value) {
+  return typeof value === 'string' && value.length >= 10;
+}
+
+function validateRecoveryKey(value) {
+  return typeof value === 'string' && value.trim().length >= 12;
+}
+
+function throttleAdminRecovery(req) {
+  const key = `${req.ip}:${String(req.body?.email || '').trim().toLowerCase()}`;
+  const now = Date.now();
+  const current = ADMIN_RECOVERY_ATTEMPTS.get(key) || { attempts: 0, resetAt: now + ADMIN_RECOVERY_WINDOW_MS };
+  if (current.resetAt <= now) {
+    current.attempts = 0;
+    current.resetAt = now + ADMIN_RECOVERY_WINDOW_MS;
+  }
+  current.attempts += 1;
+  ADMIN_RECOVERY_ATTEMPTS.set(key, current);
+  return current.attempts <= ADMIN_RECOVERY_MAX_ATTEMPTS;
+}
+
+function clearAdminRecoveryThrottle(req) {
+  ADMIN_RECOVERY_ATTEMPTS.delete(`${req.ip}:${String(req.body?.email || '').trim().toLowerCase()}`);
+}
+
+async function getAdminSecurity() {
+  const doc = await Settings.findOne({ key: ADMIN_SECURITY_KEY }).lean();
+  return {
+    passwordHash: doc?.value?.passwordHash || '',
+    recoveryKeyHash: doc?.value?.recoveryKeyHash || '',
+    sessionVersion: Number.isInteger(doc?.value?.sessionVersion) ? doc.value.sessionVersion : 0
+  };
+}
+
+async function saveAdminSecurity(security) {
+  await Settings.findOneAndUpdate(
+    { key: ADMIN_SECURITY_KEY },
+    { key: ADMIN_SECURITY_KEY, value: security },
+    { upsert: true, new: true, setDefaultsOnInsert: true }
+  );
+}
+
+async function verifySuperAdminPassword(candidate, security = null) {
+  const current = security || await getAdminSecurity();
+  if (current.passwordHash) return bcrypt.compare(String(candidate || ''), current.passwordHash);
+  return constantTimeEqual(candidate, process.env.ADMIN_PASSWORD || 'admin1234');
+}
+
+async function verifyCustomerIdentityDocuments({ name, nationalId, front, back }) {
+  const expectedId = normalizeNationalId(nationalId);
+  const expectedName = normalizeNameForMatch(name);
+  if (!/^\d{13}$/.test(expectedId) || expectedName.length < 4) return false;
+  const [frontImage, backImage] = [parseImageDataUrl(front), parseImageDataUrl(back)];
+  const [frontOcr, backOcr] = await Promise.all([
+    Tesseract.recognize(frontImage.bytes, 'eng'),
+    Tesseract.recognize(backImage.bytes, 'eng')
+  ]);
+  const text = `${frontOcr.data?.text || ''}\n${backOcr.data?.text || ''}`;
+  const normalizedText = normalizeNameForMatch(text);
+  const digits = normalizeNationalId(text);
+  const idMatched = digits.includes(expectedId);
+  const nameMatched = normalizedText.includes(expectedName);
+  return idMatched && nameMatched;
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Auth Middleware
 // ─────────────────────────────────────────────────────────────────────────────
@@ -757,12 +871,19 @@ async function adminMiddleware(req, res, next) {
 }
 
 // New: accepts both super-admin JWTs (isAdmin:true) and sub-admin JWTs (isSubAdmin:true)
-function adminJwt(req, res, next) {
+async function adminJwt(req, res, next) {
   const auth = req.headers.authorization;
   if (!auth?.startsWith('Bearer ')) return res.status(401).json({ error: 'Admin token required' });
   try {
     const payload = jwt.verify(auth.slice(7), JWT_SECRET);
-    if (payload.isAdmin)    { req.admin = { ...payload, isSuperAdmin: true  }; return next(); }
+    if (payload.isAdmin) {
+      const security = await getAdminSecurity();
+      if (Number(payload.adminSessionVersion || 0) !== security.sessionVersion) {
+        return res.status(401).json({ error: 'Your session has expired. Please sign in again.' });
+      }
+      req.admin = { ...payload, isSuperAdmin: true };
+      return next();
+    }
     if (payload.isSubAdmin) { req.admin = { ...payload, isSuperAdmin: false }; return next(); }
     return res.status(403).json({ error: 'Admin access required' });
   } catch { return res.status(401).json({ error: 'Invalid or expired admin token' }); }
@@ -796,8 +917,15 @@ app.post('/api/auth/register', async (req, res) => {
     if (!name || !password) return res.status(400).json({ error: 'Name and password are required' });
     if (!phone)             return res.status(400).json({ error: 'Phone number is required' });
     const resolvedRoleEarly = role || 'customer';
-    if (resolvedRoleEarly === 'customer' && !cnicNumber)
-      return res.status(400).json({ error: 'CNIC / Identity Card Number is required' });
+    const normalizedCustomerId = normalizeNationalId(cnicNumber);
+    if (resolvedRoleEarly === 'customer') {
+      if (!cnicNumber || !cnicFront || !cnicBack) {
+        return res.status(400).json({ error: 'Full Name, CNIC/NIC, and both ID document images are required' });
+      }
+      if (!/^\d{13}$/.test(normalizedCustomerId)) {
+        return res.status(400).json({ error: 'Enter a valid 13-digit CNIC / NIC number' });
+      }
+    }
 
     const resolvedEmail = email ? email.toLowerCase().trim() : null;
 
@@ -805,9 +933,31 @@ app.post('/api/auth/register', async (req, res) => {
       return res.status(409).json({ error: 'Email already registered' });
     if (phone && await User.findOne({ phone: phone.trim() }))
       return res.status(409).json({ error: 'Phone number already registered' });
+    const nationalIdHash = resolvedRoleEarly === 'customer'
+      ? crypto.createHmac('sha256', JWT_SECRET).update(normalizedCustomerId).digest('hex')
+      : '';
+    if (nationalIdHash && await User.findOne({ nationalIdHash }).select('_id').lean()) {
+      return res.status(409).json({ error: 'This CNIC / NIC is already registered' });
+    }
+
+    if (resolvedRoleEarly === 'customer') {
+      let identityVerified = false;
+      try {
+        identityVerified = await verifyCustomerIdentityDocuments({
+          name, nationalId: normalizedCustomerId, front: cnicFront, back: cnicBack
+        });
+      } catch (err) {
+        console.warn(`[identity-verification] Unable to read submitted customer ID: ${err.message}`);
+      }
+      if (!identityVerified) {
+        return res.status(422).json({ error: 'Wrong Documents / Document Verification Failed' });
+      }
+    }
 
     const hash = await bcrypt.hash(password, 12);
     const resolvedRole = role || 'customer';
+    const customerFrontFile = resolvedRole === 'customer' ? savePrivateIdentityDocument(cnicFront, 'customer_id_front') : '';
+    const customerBackFile = resolvedRole === 'customer' ? savePrivateIdentityDocument(cnicBack, 'customer_id_back') : '';
     const user = await User.create({
       name,
       email:         resolvedEmail  || undefined,
@@ -820,9 +970,14 @@ app.post('/api/auth/register', async (req, res) => {
       vehiclePlate:  vehiclePlate   || '',
       profilePhoto:  saveDocToDisk(profilePhoto, 'profile'),
       licensePhoto:  saveDocToDisk(licensePhoto, 'license'),
-      cnicFront:     saveDocToDisk(cnicFront,    'cnicFront'),
-      cnicBack:      saveDocToDisk(cnicBack,      'cnicBack'),
-      cnicNumber:    cnicNumber     || ''
+      cnicFront:     resolvedRole === 'driver' ? saveDocToDisk(cnicFront, 'cnicFront') : '',
+      cnicBack:      resolvedRole === 'driver' ? saveDocToDisk(cnicBack, 'cnicBack') : '',
+      cnicNumber:    resolvedRole === 'driver' ? (cnicNumber || '') : '',
+      nationalIdHash,
+      nationalIdLast4: resolvedRole === 'customer' ? normalizedCustomerId.slice(-4) : '',
+      customerIdFront: customerFrontFile,
+      customerIdBack: customerBackFile,
+      identityVerifiedAt: resolvedRole === 'customer' ? new Date() : null
     });
     await Wallet.create({ user: user._id, balance: 0, transactions: [] });
 
@@ -1847,15 +2002,108 @@ app.get('/api/geocode', async (req, res) => {
 // Admin Routes  (/api/admin/*)
 // ─────────────────────────────────────────────────────────────────────────────
 
-// POST /api/admin/login — env-credential login, returns admin JWT
-app.post('/api/admin/login', (req, res) => {
-  const { email, password } = req.body;
-  const ADMIN_EMAIL = process.env.ADMIN_EMAIL    || 'admin@myride.com';
-  const ADMIN_PASS  = process.env.ADMIN_PASSWORD || 'admin1234';
-  if (!email || !password || email !== ADMIN_EMAIL || password !== ADMIN_PASS)
-    return res.status(401).json({ error: 'Invalid admin credentials' });
-  const token = jwt.sign({ isAdmin: true, email }, JWT_SECRET, { expiresIn: '12h' });
-  res.json({ token, admin: { email } });
+// POST /api/admin/login — password is persisted only as a hash after setup.
+app.post('/api/admin/login', async (req, res) => {
+  try {
+    const { email, password } = req.body;
+    const adminEmail = process.env.ADMIN_EMAIL || 'admin@myride.com';
+    if (!email || !password || String(email).trim().toLowerCase() !== adminEmail.toLowerCase()) {
+      return res.status(401).json({ error: 'Invalid admin credentials' });
+    }
+    const security = await getAdminSecurity();
+    if (!(await verifySuperAdminPassword(password, security))) {
+      return res.status(401).json({ error: 'Invalid admin credentials' });
+    }
+    const token = jwt.sign(
+      { isAdmin: true, email: adminEmail, adminSessionVersion: security.sessionVersion },
+      JWT_SECRET, { expiresIn: '12h' }
+    );
+    res.json({ token, admin: { email: adminEmail, recoveryKeyConfigured: !!security.recoveryKeyHash } });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.get('/api/admin/security/status', adminJwt, requireSuperAdmin, async (_req, res) => {
+  try {
+    const security = await getAdminSecurity();
+    res.json({ recoveryKeyConfigured: !!security.recoveryKeyHash, passwordManaged: !!security.passwordHash });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.patch('/api/admin/security/password', adminJwt, requireSuperAdmin, async (req, res) => {
+  try {
+    const { currentPassword, newPassword } = req.body || {};
+    if (!validateStrongPassword(newPassword)) {
+      return res.status(422).json({ error: 'New password must be at least 10 characters' });
+    }
+    const security = await getAdminSecurity();
+    if (!(await verifySuperAdminPassword(currentPassword, security))) {
+      return res.status(401).json({ error: 'Current password is incorrect' });
+    }
+    await saveAdminSecurity({
+      ...security,
+      passwordHash: await bcrypt.hash(newPassword, 12),
+      sessionVersion: security.sessionVersion + 1
+    });
+    res.json({ success: true, message: 'Password changed. Please sign in again.' });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.put('/api/admin/security/recovery-key', adminJwt, requireSuperAdmin, async (req, res) => {
+  try {
+    const { currentPassword, recoveryKey } = req.body || {};
+    if (!validateRecoveryKey(recoveryKey)) {
+      return res.status(422).json({ error: 'Secret Recovery Key must be at least 12 characters' });
+    }
+    const security = await getAdminSecurity();
+    if (!(await verifySuperAdminPassword(currentPassword, security))) {
+      return res.status(401).json({ error: 'Current password is incorrect' });
+    }
+    await saveAdminSecurity({
+      ...security,
+      recoveryKeyHash: await bcrypt.hash(recoveryKey.trim(), 12)
+    });
+    res.json({ success: true, recoveryKeyConfigured: true });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.post('/api/admin/forgot-password', async (req, res) => {
+  try {
+    const genericError = 'Unable to reset the password with those recovery details';
+    if (!throttleAdminRecovery(req)) return res.status(429).json({ error: 'Too many recovery attempts. Try again later.' });
+    const { email, recoveryKey, newPassword } = req.body || {};
+    const adminEmail = process.env.ADMIN_EMAIL || 'admin@myride.com';
+    if (!validateStrongPassword(newPassword) || !validateRecoveryKey(recoveryKey) ||
+        String(email || '').trim().toLowerCase() !== adminEmail.toLowerCase()) {
+      return res.status(401).json({ error: genericError });
+    }
+    const security = await getAdminSecurity();
+    if (!security.recoveryKeyHash || !(await bcrypt.compare(recoveryKey.trim(), security.recoveryKeyHash))) {
+      return res.status(401).json({ error: genericError });
+    }
+    await saveAdminSecurity({
+      ...security,
+      passwordHash: await bcrypt.hash(newPassword, 12),
+      sessionVersion: security.sessionVersion + 1
+    });
+    clearAdminRecoveryThrottle(req);
+    res.json({ success: true, message: 'Password reset. Sign in with your new password.' });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// Customer identity files are private. They are intentionally not under /uploads.
+app.get('/api/admin/customer-identity/:userId/:side', adminJwt, requireSuperAdmin, async (req, res) => {
+  try {
+    const field = req.params.side === 'front' ? 'customerIdFront' : req.params.side === 'back' ? 'customerIdBack' : '';
+    if (!field) return res.status(400).json({ error: 'Document side must be front or back' });
+    const customer = await User.findOne({ _id: req.params.userId, role: 'customer' })
+      .select(`${field} identityVerifiedAt`);
+    const filename = customer?.[field];
+    if (!filename) return res.status(404).json({ error: 'Identity document not found' });
+    const filePath = path.join(CUSTOMER_ID_UPLOADS_DIR, path.basename(filename));
+    if (!fs.existsSync(filePath)) return res.status(404).json({ error: 'Identity document not found' });
+    res.setHeader('Cache-Control', 'private, no-store');
+    res.sendFile(filePath);
+  } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
 // POST /api/admin/sub-user/login — sub-admin credential login

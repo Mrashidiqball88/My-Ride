@@ -5,7 +5,7 @@ const assert = require('node:assert/strict');
 const jwt = require('jsonwebtoken');
 
 const fare = require('../server');
-const { app, io, models, FARE_VEHICLE_CATEGORIES } = fare;
+const { app, io, models, FARE_VEHICLE_CATEGORIES, DEFAULT_PER_KM_RATES } = fare;
 
 const JWT_SECRET = 'ride-hailing-secret-fallback';
 const originalSettings = {
@@ -101,7 +101,9 @@ test('Admin fare settings persist every vehicle category and reject gaps or over
 
 test('ride creation uses the server-calculated fare, not a client amount', async () => {
   const settings = settingsFor(300, 125);
-  models.Settings.findOne = () => ({ lean: async () => ({ value: settings }) });
+  models.Settings.findOne = ({ key }) => ({
+    lean: async () => ({ value: key === 'per_km_rates' ? DEFAULT_PER_KM_RATES : settings })
+  });
   let created;
   models.Ride.create = async input => {
     created = {
@@ -128,9 +130,9 @@ test('ride creation uses the server-calculated fare, not a client amount', async
       })
     });
     assert.equal(result.response.status, 201);
-    assert.equal(created.fare, 425);
-    assert.equal(created.fareQuote.totalFare, 425);
-    assert.equal(result.body.fare, 425);
+    assert.equal(created.fare, 650);
+    assert.equal(created.fareQuote.totalFare, 650);
+    assert.equal(result.body.fare, 650);
   } finally {
     await new Promise(resolve => server.close(resolve));
   }
@@ -148,13 +150,16 @@ test('refreshing a pending ride emits the new fare to its customer and normalize
     save: async function save() { return this; }
   };
   models.Ride.find = async () => [ride];
+  models.Settings.findOne = ({ key }) => ({
+    lean: async () => ({ value: key === 'per_km_rates' ? DEFAULT_PER_KM_RATES : null })
+  });
   const emissions = [];
   io.to = room => ({ emit: (event, payload) => emissions.push({ room, event, payload }) });
 
   await fare.refreshPendingRideFares(settingsFor(300, 125));
 
-  assert.equal(ride.fare, 425);
+  assert.equal(ride.fare, 580);
   assert.deepEqual(emissions.map(item => item.room), ['drivers:Riksha', 'ride:ride-2']);
   assert.ok(emissions.every(item => item.event === 'ride:fare-updated'));
-  assert.ok(emissions.every(item => item.payload.fare === 425));
+  assert.ok(emissions.every(item => item.payload.fare === 580));
 });

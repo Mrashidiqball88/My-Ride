@@ -20,6 +20,7 @@
     "mongodb-memory-server": "^10.4.3",
     "mongoose": "^9.9.3",
     "socket.io": "4.7.5",
+    "tesseract.js": "^7.0.0",
     "vite": "7.3.2",
     "web-push": "3.6.7"
   },

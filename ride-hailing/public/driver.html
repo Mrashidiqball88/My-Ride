@@ -4,15 +4,15 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
 <!-- PWA -->
-<meta name="theme-color" content="#000000">
+<meta name="theme-color" content="#38bdf8">
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-<meta name="apple-mobile-web-app-title" content="MyRide Driver">
+<meta name="apple-mobile-web-app-title" content="My Ride - Driver">
 <link rel="manifest" href="/driver-manifest.json">
-<link rel="apple-touch-icon" href="/apple-touch-icon.png">
-<link rel="icon" type="image/png" sizes="192x192" href="/icon-192.png">
-<title>MyRide — Driver</title>
+<link rel="apple-touch-icon" href="/logo-driver.svg">
+<link rel="icon" type="image/svg+xml" href="/logo-driver.svg">
+<title>My Ride - Driver</title>
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <script src="/socket.io/socket.io.js"></script>
@@ -22,7 +22,7 @@ body{font-family:'Segoe UI',sans-serif;background:#0a0a0f;color:#fff;height:100d
 
 /* ── Auth ── */
 #auth-screen{position:fixed;inset:0;z-index:1000;background:#0a0a0f;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:1.5rem}
-.auth-logo{font-size:2rem;font-weight:800;margin-bottom:.25rem}.auth-logo span{color:#f5c518}
+.auth-logo{font-size:2rem;font-weight:800;margin-bottom:.25rem}.auth-logo span{color:#38bdf8}
 .auth-subtitle{color:#555;font-size:.85rem;margin-bottom:2rem}
 .auth-card{background:#13131a;border:1px solid #222;border-radius:20px;padding:1.5rem;width:100%;max-width:360px}
 .auth-tabs{display:flex;gap:.5rem;margin-bottom:1.5rem;background:#0a0a0f;border-radius:10px;padding:.25rem}
@@ -43,7 +43,7 @@ body{font-family:'Segoe UI',sans-serif;background:#0a0a0f;color:#fff;height:100d
 
 /* ── Header ── */
 .header{background:#0d1117;border-bottom:1px solid #1e3a5f;padding:.6rem 1rem;display:flex;align-items:center;justify-content:space-between;z-index:10;flex-shrink:0}
-.header-logo{font-size:1.1rem;font-weight:800}.header-logo span{color:#f5c518}
+.header-logo{font-size:1.1rem;font-weight:800}.header-logo span{color:#38bdf8}
 .header-right{display:flex;align-items:center;gap:.75rem}
 .earnings-badge{background:#1a2a0a;border:1px solid #2d5a2d;border-radius:100px;padding:.3rem .75rem;font-size:.8rem;color:#4caf50;font-weight:600}
 .btn-logout{background:none;border:1px solid #333;color:#888;border-radius:8px;padding:.3rem .6rem;font-size:.7rem;cursor:pointer}
@@ -298,7 +298,7 @@ textarea.support-input{resize:vertical;min-height:85px}
 
 <!-- ── AUTH ── -->
 <div id="auth-screen">
-  <div class="auth-logo">My<span>Ride</span></div>
+  <div class="auth-logo">My <span>Ride</span> - Driver</div>
   <p class="auth-subtitle">Driver Portal</p>
   <div class="auth-card">
     <div class="auth-tabs">
@@ -432,7 +432,7 @@ textarea.support-input{resize:vertical;min-height:85px}
   <div class="header">
     <div class="header-logo" style="display:flex;align-items:center;gap:.5rem">
       <div id="driver-avatar-header" class="driver-avatar-init">D</div>
-      <span>My<span style="color:#f5c518">Ride</span> <span style="font-size:.7rem;color:#555;font-weight:400">Driver</span></span>
+      <span>My <span style="color:#38bdf8">Ride</span> <span style="font-size:.7rem;color:#555;font-weight:400">- Driver</span></span>
     </div>
     <div class="header-right">
       <div class="earnings-badge">💰 Rs <span id="earnings-val">0</span></div>

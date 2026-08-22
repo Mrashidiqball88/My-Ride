@@ -1,24 +1,24 @@
 {
-  "name": "MyRide Driver",
-  "short_name": "Driver",
-  "description": "Accept rides and manage your earnings with MyRide Driver.",
+  "name": "My Ride - Driver",
+  "short_name": "My Ride Driver",
+  "description": "Accept rides and manage your earnings with My Ride - Driver.",
   "start_url": "/driver",
   "scope": "/driver",
   "display": "standalone",
   "orientation": "portrait",
   "background_color": "#0a0a0f",
-  "theme_color": "#000000",
+  "theme_color": "#38bdf8",
   "icons": [
     {
-      "src": "/icon-192.png",
-      "sizes": "192x192",
-      "type": "image/png",
+      "src": "/logo-driver.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
       "purpose": "any maskable"
     },
     {
-      "src": "/icon-512.png",
-      "sizes": "512x512",
-      "type": "image/png",
+      "src": "/logo-driver.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
       "purpose": "any maskable"
     }
   ]

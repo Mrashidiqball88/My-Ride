@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>MyRide Admin Panel</title>
+<title>My Ride Admin Panel</title>
 <script src="/socket.io/socket.io.js"></script>
 <style>
 *{margin:0;padding:0;box-sizing:border-box}
@@ -12,7 +12,7 @@ body{font-family:'Segoe UI',system-ui,sans-serif;background:#06060e;color:#e2e8f
 /* ── Auth Overlay ── */
 #auth-overlay{position:fixed;inset:0;z-index:1000;background:#06060e;display:flex;align-items:center;justify-content:center}
 .auth-box{background:#0f0f1e;border:1px solid #1e1e3a;border-radius:20px;padding:2.5rem;width:100%;max-width:380px;text-align:center}
-.auth-logo{font-size:1.8rem;font-weight:900;margin-bottom:.25rem}.auth-logo span{color:#f5c518}
+.auth-logo{font-size:1.8rem;font-weight:900;margin-bottom:.25rem}.auth-logo span{color:#38bdf8}
 .auth-subtitle{color:#475569;font-size:.85rem;margin-bottom:2rem}
 .auth-box .form-group{margin-bottom:1rem;text-align:left}
 .auth-box label{display:block;font-size:.75rem;color:#64748b;margin-bottom:.35rem;font-weight:600;text-transform:uppercase;letter-spacing:.05em}
@@ -224,7 +224,7 @@ input[type=date]:focus{border-color:#f5c518}
 <!-- ── Auth Overlay ── -->
 <div id="auth-overlay">
   <div class="auth-box">
-    <div class="auth-logo">My<span>Ride</span></div>
+    <div class="auth-logo">My <span>Ride</span></div>
     <p class="auth-subtitle">Admin Control Panel</p>
     <div class="auth-tabs">
       <button class="auth-tab active" id="tab-superadmin" onclick="switchAuthTab('superadmin')">Super Admin</button>
@@ -232,15 +232,24 @@ input[type=date]:focus{border-color:#f5c518}
     </div>
     <!-- Super-admin form -->
     <div id="auth-form-superadmin">
-      <div class="form-group"><label>Admin Email</label><input type="email" id="a-email" placeholder="admin@myride.com" value="admin@myride.com"></div>
-      <div class="form-group"><label>Password</label><input type="password" id="a-pass" placeholder="••••••••" value="admin1234"></div>
+      <div class="form-group"><label>Admin Email</label><input type="email" id="a-email" placeholder="admin@myride.com" autocomplete="username"></div>
+      <div class="form-group"><label>Password</label><input type="password" id="a-pass" placeholder="••••••••" autocomplete="current-password"></div>
       <button class="btn-admin-login" onclick="adminLogin()">Sign In as Super Admin</button>
+      <button class="btn-text-link" style="color:#38bdf8" onclick="showRecoveryForm()">Forgot Password?</button>
     </div>
     <!-- Sub-admin form -->
     <div id="auth-form-subadmin" style="display:none">
       <div class="form-group"><label>Username</label><input type="text" id="sa-username" placeholder="sub_admin_1"></div>
       <div class="form-group"><label>Password</label><input type="password" id="sa-pass" placeholder="••••••••"></div>
       <button class="btn-admin-login" onclick="subAdminLogin()">Sign In as Sub-Admin</button>
+    </div>
+    <div id="auth-form-recovery" style="display:none">
+      <p style="font-size:.8rem;color:#94a3b8;margin-bottom:1rem">Reset the Super Admin password with your Secret Recovery Key.</p>
+      <div class="form-group"><label>Admin Email</label><input type="email" id="recovery-email" placeholder="admin@myride.com"></div>
+      <div class="form-group"><label>Secret Recovery Key</label><input type="password" id="recovery-key" autocomplete="off"></div>
+      <div class="form-group"><label>New Password</label><input type="password" id="recovery-new-password" placeholder="At least 10 characters" autocomplete="new-password"></div>
+      <button class="btn-admin-login" onclick="recoverAdminPassword()">Reset Password</button>
+      <button class="btn-text-link" style="color:#38bdf8" onclick="switchAuthTab('superadmin')">← Back to sign in</button>
     </div>
     <div class="auth-err" id="a-err"></div>
   </div>
@@ -450,6 +459,22 @@ input[type=date]:focus{border-color:#f5c518}
         <p style="font-size:.8rem;color:#475569;margin-bottom:1.25rem">
           Configure driver-facing payment accounts and gateway verification. Credentials are encrypted on the server and never shown again after saving.
         </p>
+        <div id="admin-security-card" style="background:#0f0f1e;border:1px solid #38bdf8;border-radius:14px;padding:1.2rem;margin-bottom:1rem">
+          <div style="display:flex;align-items:center;gap:.5rem;margin-bottom:.4rem">
+            <span style="font-size:1.2rem">🔐</span><span style="font-size:.9rem;font-weight:700;color:#38bdf8">Super Admin Security</span>
+          </div>
+          <p id="recovery-key-status" style="font-size:.76rem;color:#94a3b8;margin:0 0 .9rem">Checking recovery-key setup…</p>
+          <div class="field-row">
+            <div class="field-item"><div class="field-label">Current Password</div><input class="modal-input" id="security-current-password" type="password" autocomplete="current-password"></div>
+            <div class="field-item"><div class="field-label">New Password</div><input class="modal-input" id="security-new-password" type="password" placeholder="At least 10 characters" autocomplete="new-password"></div>
+          </div>
+          <button class="btn btn-primary" type="button" onclick="saveAdminPassword()">Change Password</button>
+          <div class="field-row" style="margin-top:1rem">
+            <div class="field-item"><div class="field-label">Secret Recovery Key</div><input class="modal-input" id="security-recovery-key" type="password" placeholder="At least 12 characters" autocomplete="off"></div>
+          </div>
+          <button class="btn btn-blue" type="button" onclick="saveRecoveryKey()">Set / Replace Secret Recovery Key</button>
+          <div id="security-feedback" style="margin-top:.65rem;font-size:.78rem;min-height:1.1rem"></div>
+        </div>
 
         <!-- Dynamic Daily Fee Settings -->
         <div style="background:#0f0f1e;border:1px solid #f5c518;border-radius:14px;padding:1.2rem;margin-bottom:1rem">
@@ -973,7 +998,29 @@ function switchAuthTab(type) {
   document.getElementById('tab-subadmin').classList.toggle('active', type === 'subadmin');
   document.getElementById('auth-form-superadmin').style.display = type === 'superadmin' ? '' : 'none';
   document.getElementById('auth-form-subadmin').style.display   = type === 'subadmin'   ? '' : 'none';
+  document.getElementById('auth-form-recovery').style.display   = type === 'recovery'   ? '' : 'none';
   document.getElementById('a-err').textContent = '';
+}
+function showRecoveryForm() { switchAuthTab('recovery'); }
+async function recoverAdminPassword() {
+  const email = document.getElementById('recovery-email').value.trim();
+  const recoveryKey = document.getElementById('recovery-key').value;
+  const newPassword = document.getElementById('recovery-new-password').value;
+  try {
+    const res = await fetch('/api/admin/forgot-password', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email, recoveryKey, newPassword })
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.error || 'Unable to reset password');
+    document.getElementById('a-err').style.color = '#22c55e';
+    document.getElementById('a-err').textContent = data.message;
+    ['recovery-key','recovery-new-password'].forEach(id => document.getElementById(id).value = '');
+    switchAuthTab('superadmin');
+  } catch (e) {
+    document.getElementById('a-err').style.color = '#ef4444';
+    document.getElementById('a-err').textContent = e.message;
+  }
 }
 
 async function subAdminLogin() {
@@ -1007,11 +1054,44 @@ function bootAdmin() {
   connectSocket();
   loadOverview();
   loadStats();
+  if (isSuperAdmin) loadAdminSecurity();
   // Populate deletion requests badge on startup
   api('/api/admin/account-deletion-requests').then(users => {
     const el = document.getElementById('del-cnt');
     if (el && users.length) { el.textContent = users.length; el.style.display = 'inline-flex'; }
   }).catch(() => {});
+}
+
+async function loadAdminSecurity() {
+  if (!isSuperAdmin) return;
+  try {
+    const status = await api('/api/admin/security/status');
+    document.getElementById('recovery-key-status').textContent = status.recoveryKeyConfigured
+      ? 'Secret Recovery Key configured. Keep it offline and never share it.'
+      : 'Action required: set a Secret Recovery Key now so you can recover this Super Admin account.';
+    if (!status.recoveryKeyConfigured) showToast('Set your Secret Recovery Key in Payment Settings.', 'error');
+  } catch (e) { console.warn('Security status unavailable:', e.message); }
+}
+async function saveAdminPassword() {
+  const currentPassword = document.getElementById('security-current-password').value;
+  const newPassword = document.getElementById('security-new-password').value;
+  const feedback = document.getElementById('security-feedback');
+  try {
+    const result = await api('/api/admin/security/password', 'PATCH', { currentPassword, newPassword });
+    feedback.style.color = '#22c55e'; feedback.textContent = result.message;
+    setTimeout(adminLogout, 900);
+  } catch (e) { feedback.style.color = '#ef4444'; feedback.textContent = e.message; }
+}
+async function saveRecoveryKey() {
+  const currentPassword = document.getElementById('security-current-password').value;
+  const recoveryKey = document.getElementById('security-recovery-key').value;
+  const feedback = document.getElementById('security-feedback');
+  try {
+    await api('/api/admin/security/recovery-key', 'PUT', { currentPassword, recoveryKey });
+    feedback.style.color = '#22c55e'; feedback.textContent = 'Secret Recovery Key saved securely.';
+    document.getElementById('security-recovery-key').value = '';
+    loadAdminSecurity();
+  } catch (e) { feedback.style.color = '#ef4444'; feedback.textContent = e.message; }
 }
 
 // ── Socket.io ─────────────────────────────────────────────────────────────────
