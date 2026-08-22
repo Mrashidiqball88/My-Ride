@@ -3845,6 +3845,8 @@ async function seedDemoAccounts() {
         password: customerPassword,
         role: 'customer',
         accountStatus: 'active',
+        nationalIdHash: crypto.createHmac('sha256', JWT_SECRET).update('demo-customer-national-id').digest('hex'),
+        nationalIdLast4: '0001',
         identityVerificationStatus: 'approved',
         identityVerifiedAt: now
       }
@@ -3860,6 +3862,8 @@ async function seedDemoAccounts() {
         password: driverPassword,
         role: 'driver',
         accountStatus: 'active',
+        nationalIdHash: crypto.createHmac('sha256', JWT_SECRET).update('demo-driver-national-id').digest('hex'),
+        nationalIdLast4: '0002',
         vehicleType: 'Car Mini',
         vehicleModel: 'Toyota Corolla',
         vehiclePlate: 'DEMO-2026',

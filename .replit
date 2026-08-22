@@ -24,13 +24,13 @@ args = "Ride Hailing App"
 name = "Ride Hailing App"
 author = "agent"
 
-[[workflows.workflow.tasks]]
-task = "shell.exec"
-args = "cd ride-hailing && pnpm dev"
-waitForPort = 8080
-
 [workflows.workflow.metadata]
 outputType = "webview"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "cd ride-hailing && DEMO_ACCOUNTS_ENABLED=true pnpm dev"
+waitForPort = 8080
 
 [agent]
 stack = "PNPM_WORKSPACE"
