@@ -80,16 +80,17 @@ behaviour works. The supporting implementation and automated contract evidence
 make the remaining hands-on work reproducible.
 
 **Recorded:** 2026-08-22
-**Validation attempt:** 2026-08-22T15:31:49Z
+**Validation attempt:** 2026-08-22T15:35:32Z
 **Tester:** Replit workspace (physical-device access unavailable)
 **Available device inventory:** Expo reported zero attached devices
 (`artifacts/myride-driver-mobile/.expo/devices.json`).
 **Automated evidence:** driver app typecheck passed; Android and iOS Expo
 bundles/manifests built successfully from SDK 54; resolved config includes
-Android background location/foreground service permissions and iOS location
-usage descriptions; the 20 native availability/location/fare contract tests
-passed. This build output is an Expo Go/static bundle, not an approved native
-device build, and cannot satisfy the scenarios below.
+Android background location/foreground service permissions, iOS location usage
+descriptions, and the iOS background-location flag; the 20 native
+availability/location/fare contract tests passed. The running workflow is
+Expo Go, and the build output is an Expo Go/static bundle, not an approved
+native device build, so it cannot satisfy the scenarios below.
 
 | Scenario | Device / OS / build | Evidence (timestamp, ride ID, screenshot/log) | Pass/Fail | Tester |
 | --- | --- | --- | --- | --- |

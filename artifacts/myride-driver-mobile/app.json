@@ -47,6 +47,7 @@
         {
           "isAndroidBackgroundLocationEnabled": true,
           "isAndroidForegroundServiceEnabled": true,
+          "isIosBackgroundLocationEnabled": true,
           "locationAlwaysAndWhenInUsePermission": "My Ride keeps your location updated while you are online so riders can receive reliable driver tracking."
         }
       ],
