@@ -535,7 +535,7 @@ textarea.support-input{resize:vertical;min-height:85px}
       <span class="dfb-icon">⚠️</span>
       <div class="dfb-body">
         <div class="dfb-title">Daily Fee Unpaid — Accept Button Locked</div>
-        <div class="dfb-msg">Pay <strong id="daily-fee-banner-amount" style="color:#f5c518">Rs 220</strong> to unlock the Accept button. Enter your TRX ID in the form below.</div>
+        <div class="dfb-msg">Pay <strong id="daily-fee-banner-amount" style="color:#f5c518">Loading…</strong> to unlock the Accept button. Enter your TRX ID in the form below.</div>
       </div>
     </div>
     <!-- Wallet & Subscription Summary -->
@@ -589,7 +589,7 @@ textarea.support-input{resize:vertical;min-height:85px}
           </div>
         </div>
         <input class="trx-input" id="trx-id-input" type="text" placeholder="TRX / Reference ID (e.g. T20240801ABCD…)">
-        <input class="trx-input" id="trx-amount-input" type="number" min="1" placeholder="Amount paid (PKR)">
+        <input class="trx-input" id="trx-amount-input" type="number" min="0.01" step="0.01" placeholder="Loading Daily Fee…" readonly>
         <div>
           <span class="trx-screenshot-label">📸 Screenshot (optional)</span>
           <input class="trx-screenshot-input" id="trx-screenshot" type="file" accept="image/*">
@@ -675,6 +675,7 @@ let alertAudioCtx = null;   // Web Audio context for ride alert
 let alertInterval = null;   // repeating beep interval
 let dailyFeeDue   = false;  // true when driver hasn't submitted today's platform fee
 let driverFareSettings = {};
+let dailyFeeSettings = {};
 
 // ── Toast ──────────────────────────────────────────────────────────────────
 function showToast(msg, type = 'info') {
@@ -1085,6 +1086,7 @@ function bootApp() {
   loadStats();
   checkUnreadDriverTickets();
   checkDailyFee();
+  loadDailyFeeSettings();
   initTodayFareWidget();
   loadDriverFareSettings();
   // Request notification permission then register Web Push subscription
@@ -1341,6 +1343,19 @@ function connectSocket() {
     showToast('🧮 Fare rules updated by Admin. Today’s Fare has refreshed.', 'info');
   });
 
+  socket.on('daily-fee:updated', ({ settings }) => {
+    if (settings) {
+      dailyFeeSettings = settings;
+      if (user) {
+        user.dailyFeeRate = getCurrentDailyFeeRate();
+        localStorage.setItem('rh_user', JSON.stringify(user));
+      }
+    }
+    checkDailyFee();
+    updateDailyFeeBanner();
+    showToast('📅 Admin updated Daily Fees. Your current fee has refreshed.', 'info');
+  });
+
   // Account suspended / balance too low
   socket.on('account:suspended', ({ reason }) => {
     showToast(reason, 'error');
@@ -1496,9 +1511,11 @@ function showRideRequest(ride) {
   const acceptBtn = document.querySelector('.btn-accept');
   if (acceptBtn) {
     if (dailyFeeDue) {
-      const _rate = user?.dailyFeeRate || DAILY_FEE_RATES[user?.vehicleType] || 220;
+      const _rate = getCurrentDailyFeeRate();
       acceptBtn.disabled = false; // keep clickable so tapping redirects to Payments
-      acceptBtn.textContent = `Pay Rs ${_rate} Daily Fee to Accept`;
+      acceptBtn.textContent = _rate
+        ? `Pay Rs ${_rate.toLocaleString()} Daily Fee to Accept`
+        : 'Daily Fee not configured — contact Admin';
       acceptBtn.style.opacity = '0.6';
       acceptBtn.style.cursor  = 'pointer';
       acceptBtn.onclick = (e) => { e.stopPropagation(); goToPayFee(_rate); };
@@ -1815,6 +1832,15 @@ async function loadAdminPaymentAccounts() {
   try {
     const r = await fetch('/api/settings/payment');
     const accts = await r.json();
+    if (accts.dailyFeeSettings) {
+      dailyFeeSettings = accts.dailyFeeSettings;
+      if (user) {
+        user.dailyFeeRate = getCurrentDailyFeeRate();
+        localStorage.setItem('rh_user', JSON.stringify(user));
+      }
+      checkDailyFee();
+      updateDailyFeeBanner();
+    }
     const cards = [];
 
     if (accts.jazzcash?.number) {
@@ -2045,9 +2071,10 @@ async function loadPaymentHistory() {
 
 async function submitTrxPayment() {
   const trxId  = document.getElementById('trx-id-input').value.trim();
-  const amount = document.getElementById('trx-amount-input').value;
+  const configuredFee = getCurrentDailyFeeRate();
+  const amount = configuredFee;
   if (!trxId)  return showToast('Enter a TRX / Reference ID', 'error');
-  if (!amount || Number(amount) <= 0) return showToast('Enter a valid amount', 'error');
+  if (!amount || Number(amount) <= 0) return showToast('Daily Fee is not configured for your vehicle. Contact Admin.', 'error');
 
   const btn = document.getElementById('submit-trx-btn');
   btn.disabled = true;
@@ -2343,11 +2370,37 @@ function setUploadProgress(pct) {
 }
 
 // ── Daily Platform Fee ─────────────────────────────────────────────────────
-const DAILY_FEE_RATES = { 'Bike': 70, 'Rickshaw': 130, 'Car Mini': 220, 'Car AC': 270 };
+function dailyFeeCategoryForDriver(vehicleType) {
+  return ({ Rickshaw: 'Riksha', 'Car AC': 'Car Sedan' }[vehicleType] || vehicleType);
+}
+
+function getCurrentDailyFeeRate() {
+  const rate = dailyFeeSettings?.[dailyFeeCategoryForDriver(user?.vehicleType)];
+  if (Number.isFinite(Number(rate)) && Number(rate) > 0) return Number(rate);
+  const loginRate = Number(user?.dailyFeeRate);
+  return Number.isFinite(loginRate) && loginRate > 0 ? loginRate : null;
+}
+
+async function loadDailyFeeSettings() {
+  try {
+    const response = await fetch('/api/daily-fee-settings');
+    if (!response.ok) throw new Error('Could not load Daily Fee Settings');
+    dailyFeeSettings = await response.json();
+    if (user) {
+      user.dailyFeeRate = getCurrentDailyFeeRate();
+      localStorage.setItem('rh_user', JSON.stringify(user));
+    }
+  } catch (e) {
+    dailyFeeSettings = {};
+  } finally {
+    checkDailyFee();
+    updateDailyFeeBanner();
+  }
+}
 
 function checkDailyFee() {
   if (!user || user.role !== 'driver') return;
-  const feeRate   = user.dailyFeeRate || DAILY_FEE_RATES[user.vehicleType] || 220;
+  const feeRate   = getCurrentDailyFeeRate();
   const paidUntil = user.paidUntilDate ? new Date(user.paidUntilDate) : null;
   dailyFeeDue     = !paidUntil || paidUntil < new Date();
 
@@ -2358,10 +2411,16 @@ function checkDailyFee() {
   const vehicleEl = document.getElementById('fee-vehicle-text');
   if (barEl)     barEl.style.display   = 'flex';
   if (vehicleEl) vehicleEl.textContent = user.vehicleType || 'Vehicle';
-  if (rateEl)    rateEl.textContent    = `Daily Fee: Rs ${feeRate}`;
+  if (rateEl)    rateEl.textContent    = feeRate ? `Daily Fee: Rs ${feeRate.toLocaleString()}` : 'Daily Fee: Not configured';
+  const amountInput = document.getElementById('trx-amount-input');
+  if (amountInput) {
+    amountInput.value = feeRate || '';
+    amountInput.readOnly = true;
+    amountInput.placeholder = feeRate ? 'Daily Fee (PKR)' : 'Daily Fee not configured';
+  }
   if (statusEl) {
     if (dailyFeeDue) {
-      statusEl.textContent = '⚠ Fee unpaid — Accept disabled';
+      statusEl.textContent = feeRate ? '⚠ Fee unpaid — Accept disabled' : '⚠ Daily Fee not configured — contact Admin';
       statusEl.style.color = '#f59e0b';
     } else if (user.isFreeTrial) {
       const ds = paidUntil ? paidUntil.toLocaleDateString('en-PK', { day: 'numeric', month: 'short', year: 'numeric' }) : '';
@@ -2410,8 +2469,8 @@ function updateDailyFeeBanner() {
   const amountEl  = document.getElementById('daily-fee-banner-amount');
   if (!banner) return;
   if (dailyFeeDue) {
-    const feeRate = user?.dailyFeeRate || DAILY_FEE_RATES[user?.vehicleType] || 220;
-    if (amountEl) amountEl.textContent = `Rs ${feeRate}`;
+    const feeRate = getCurrentDailyFeeRate();
+    if (amountEl) amountEl.textContent = feeRate ? `Rs ${feeRate.toLocaleString()}` : 'Not configured';
     banner.style.display = 'flex';
   } else {
     banner.style.display = 'none';
@@ -2424,11 +2483,11 @@ function goToPayFee(rate) {
   hideRideRequest();
 
   switchBottomTab('payments');
-  const feeRate = rate || user?.dailyFeeRate || DAILY_FEE_RATES[user?.vehicleType] || 220;
+  const feeRate = rate || getCurrentDailyFeeRate();
   const banner   = document.getElementById('daily-fee-banner');
   const amountEl = document.getElementById('daily-fee-banner-amount');
   if (banner)   banner.style.display = 'flex';
-  if (amountEl) amountEl.textContent = `Rs ${feeRate}`;
+  if (amountEl) amountEl.textContent = feeRate ? `Rs ${feeRate.toLocaleString()}` : 'Not configured';
   // Scroll TRX form into view then focus the TRX input
   setTimeout(() => {
     const trxSection = document.getElementById('trx-form-section');

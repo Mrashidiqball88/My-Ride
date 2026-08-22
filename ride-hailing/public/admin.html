@@ -451,6 +451,34 @@ input[type=date]:focus{border-color:#f5c518}
           Configure driver-facing payment accounts and gateway verification. Credentials are encrypted on the server and never shown again after saving.
         </p>
 
+        <!-- Dynamic Daily Fee Settings -->
+        <div style="background:#0f0f1e;border:1px solid #f5c518;border-radius:14px;padding:1.2rem;margin-bottom:1rem">
+          <div style="display:flex;align-items:center;gap:.5rem;margin-bottom:.4rem">
+            <span style="font-size:1.2rem">📅</span>
+            <span style="font-size:.9rem;font-weight:700;color:#f5c518">Update Daily Fee</span>
+          </div>
+          <p style="font-size:.76rem;color:#94a3b8;margin:0 0 .9rem">
+            Set the live Daily Fee in PKR for every driver category. These values are used for fee payments, wallet deductions, and ride-access prompts.
+          </p>
+          <div class="field-row">
+            <div class="field-item"><div class="field-label">Car Sedan Daily Fee (PKR)</div><input class="modal-input daily-fee-input" data-category="Car Sedan" type="number" min="0.01" step="0.01" placeholder="Enter fee"></div>
+            <div class="field-item"><div class="field-label">Car Mini Daily Fee (PKR)</div><input class="modal-input daily-fee-input" data-category="Car Mini" type="number" min="0.01" step="0.01" placeholder="Enter fee"></div>
+          </div>
+          <div class="field-row">
+            <div class="field-item"><div class="field-label">Riksha Daily Fee (PKR)</div><input class="modal-input daily-fee-input" data-category="Riksha" type="number" min="0.01" step="0.01" placeholder="Enter fee"></div>
+            <div class="field-item"><div class="field-label">Bike Daily Fee (PKR)</div><input class="modal-input daily-fee-input" data-category="Bike" type="number" min="0.01" step="0.01" placeholder="Enter fee"></div>
+          </div>
+          <div class="field-row">
+            <div class="field-item"><div class="field-label">Car SUV Daily Fee (PKR)</div><input class="modal-input daily-fee-input" data-category="Car SUV" type="number" min="0.01" step="0.01" placeholder="Enter fee"></div>
+            <div class="field-item"><div class="field-label">Van Seven Seats Daily Fee (PKR)</div><input class="modal-input daily-fee-input" data-category="Van Seven Seats" type="number" min="0.01" step="0.01" placeholder="Enter fee"></div>
+          </div>
+          <div class="field-row">
+            <div class="field-item"><div class="field-label">Cary Dibba Daily Fee (PKR)</div><input class="modal-input daily-fee-input" data-category="Cary Dibba" type="number" min="0.01" step="0.01" placeholder="Enter fee"></div>
+          </div>
+          <button class="btn btn-primary" type="button" style="padding:.65rem 1.25rem;font-size:.82rem" onclick="saveDailyFeeSettings()">💾 Update Fees</button>
+          <div id="daily-fee-feedback" style="margin-top:.65rem;font-size:.78rem;min-height:1.1rem"></div>
+        </div>
+
         <!-- JazzCash -->
         <div style="background:#0f0f1e;border:1px solid #1e1e2e;border-radius:14px;padding:1.2rem;margin-bottom:1rem">
           <div style="display:flex;align-items:center;gap:.5rem;margin-bottom:.9rem">
@@ -1137,18 +1165,21 @@ async function loadDrivers(status = 'all') {
   const tbody = document.getElementById('drivers-tbody');
   tbody.innerHTML = '<tr><td colspan="9" class="loading-row">Loading…</td></tr>';
   try {
-    const drivers = await api(`/api/admin/drivers?status=${status}`);
+    const [drivers, dailyFees] = await Promise.all([
+      api(`/api/admin/drivers?status=${status}`),
+      api('/api/admin/daily-fee-settings')
+    ]);
+    dailyFeeSettingsState = dailyFees;
     if (!drivers.length) { tbody.innerHTML = '<tr><td colspan="9" class="empty-state"><span class="empty-icon">🚗</span>No drivers found</td></tr>'; return; }
     document.getElementById('select-all-chk').checked = false;
     selectedDriverIds.clear(); updateBulkGrantBtn();
-    const FEE_RATES = { 'Bike': 70, 'Rickshaw': 130, 'Car Mini': 220, 'Car AC': 270 };
     tbody.innerHTML = drivers.map(d => {
       const lowRating  = (d.rating||5) < 3;
       const hasPhoto   = d.profilePhoto && d.profilePhoto.startsWith('data:');
       const avatarHtml = hasPhoto
         ? `<img src="${d.profilePhoto}" style="width:30px;height:30px;border-radius:50%;object-fit:cover;border:1px solid #2a2a38;vertical-align:middle;margin-right:.4rem">`
         : `<span style="display:inline-flex;align-items:center;justify-content:center;width:30px;height:30px;border-radius:50%;background:#1a1a28;color:#f5c518;font-size:.75rem;font-weight:700;vertical-align:middle;margin-right:.4rem">${(d.name||'D')[0].toUpperCase()}</span>`;
-      const dailyRate  = FEE_RATES[d.vehicleType] || 220;
+      const dailyRate  = dailyFeeForVehicle(d.vehicleType);
       const paidUntil  = d.paidUntilDate ? new Date(d.paidUntilDate) : null;
       const feePaid    = paidUntil && paidUntil > new Date();
       const ds         = feePaid ? paidUntil.toLocaleDateString('en-PK', { day:'2-digit', month:'short' }) : '';
@@ -1158,7 +1189,8 @@ async function loadDrivers(status = 'all') {
       } else if (feePaid) {
         feeCell = `<div style="font-size:.73rem"><span style="color:#22c55e;font-weight:700">✅ Fee Paid</span><br><span style="color:#64748b;font-size:.65rem">(Until ${ds})</span></div>`;
       } else {
-        feeCell = `<div style="font-size:.73rem"><span style="color:#f59e0b;font-weight:700">⚠️ Unpaid</span><br><span style="color:#64748b;font-size:.65rem">(Rs ${dailyRate}/day)</span></div>`;
+        const feeLabel = dailyRate ? `Rs ${dailyRate.toLocaleString()}/day` : 'Fee not configured';
+        feeCell = `<div style="font-size:.73rem"><span style="color:#f59e0b;font-weight:700">⚠️ Unpaid</span><br><span style="color:#64748b;font-size:.65rem">(${feeLabel})</span></div>`;
       }
       return `<tr>
         <td><input type="checkbox" class="driver-chk" value="${d._id}" style="cursor:pointer" onchange="toggleDriverSelect('${d._id}',this.checked)"></td>
@@ -1509,8 +1541,6 @@ function badgeHtml(status) {
 }
 
 // ── Daily Fee Compliance ──────────────────────────────────────────────────────
-const FEE_RATES_COMP = { 'Bike': 70, 'Rickshaw': 130, 'Car Mini': 220, 'Car AC': 270 };
-
 // Escape user-controlled strings before inserting into innerHTML
 function escHtml(str) {
   if (str == null) return '';
@@ -1524,12 +1554,13 @@ function escHtml(str) {
 
 // Build a compliance table row safely; bind the History button via data-fid (no inline onclick)
 function feeRow(d, dateCell) {
-  const rate = FEE_RATES_COMP[d.vehicleType] || 220;
+  const rate = dailyFeeForVehicle(d.vehicleType);
+  const rateLabel = rate ? `Rs ${rate.toLocaleString()}/day` : 'Fee not configured';
   const tr = document.createElement('tr');
   tr.innerHTML = `
     <td><span style="font-weight:600;color:#e2e8f0">${escHtml(d.name)}</span></td>
     <td style="font-size:.78rem;color:#94a3b8">${escHtml(d.phone) || '—'}</td>
-    <td><span style="font-size:.75rem;color:#818cf8">${escHtml(d.vehicleType) || '—'}</span><br><span style="font-size:.68rem;color:#f59e0b">Rs ${rate}/day</span></td>
+    <td><span style="font-size:.75rem;color:#818cf8">${escHtml(d.vehicleType) || '—'}</span><br><span style="font-size:.68rem;color:#f59e0b">${rateLabel}</span></td>
     <td style="font-size:.75rem;color:#64748b">${dateCell}</td>
     <td>${badgeHtml(d.accountStatus)}</td>
     <td><button class="btn btn-gray" data-fid="${escHtml(d._id)}" style="font-size:.72rem;padding:.25rem .6rem">📋 History</button></td>`;
@@ -1546,7 +1577,11 @@ async function loadFeeCompliance() {
   unpaidTbody.innerHTML = '<tr><td colspan="6" class="loading-row">Loading…</td></tr>';
   paidTbody.innerHTML   = '<tr><td colspan="6" class="loading-row">Loading…</td></tr>';
   try {
-    const data = await api('/api/admin/daily-fee-compliance');
+    const [data, dailyFees] = await Promise.all([
+      api('/api/admin/daily-fee-compliance'),
+      api('/api/admin/daily-fee-settings')
+    ]);
+    dailyFeeSettingsState = dailyFees;
     const { paid, unpaid } = data;
 
     // Update summary badges (counts are integers — safe to interpolate)
@@ -1621,8 +1656,12 @@ async function viewDriverFeeHistory(driverId, driverName) {
   body.innerHTML = '<div class="loading-row">Loading…</div>';
   openModal('fee-hist-modal');
   try {
-    const { driver, payments } = await api(`/api/admin/daily-fee-compliance/driver/${encodeURIComponent(driverId)}`);
-    const rate   = FEE_RATES_COMP[driver.vehicleType] || 220;
+    const [{ driver, payments }, dailyFees] = await Promise.all([
+      api(`/api/admin/daily-fee-compliance/driver/${encodeURIComponent(driverId)}`),
+      api('/api/admin/daily-fee-settings')
+    ]);
+    dailyFeeSettingsState = dailyFees;
+    const rate   = dailyFeeForVehicle(driver.vehicleType);
     const now    = new Date();
     const isPaid = driver.paidUntilDate && new Date(driver.paidUntilDate) >= now;
 
@@ -1631,7 +1670,7 @@ async function viewDriverFeeHistory(driverId, driverName) {
     card.style.cssText = 'background:#0f0f1e;border:1px solid #1e1e2e;border-radius:10px;padding:1rem;margin-bottom:1.2rem;display:flex;gap:1.25rem;flex-wrap:wrap';
     [
       ['Vehicle',      escHtml(driver.vehicleType) || '—',               '#818cf8'],
-      ['Daily Rate',   `Rs ${rate}`,                                      '#f5c518'],
+      ['Daily Rate',   rate ? `Rs ${rate.toLocaleString()}` : 'Not configured', '#f5c518'],
       ["Today's Status", isPaid ? '✓ Paid' : '⚠ Unpaid',                isPaid ? '#22c55e' : '#f59e0b'],
       ['Last Paid At', driver.lastDailyFeePaidAt ? escHtml(fmtDate(driver.lastDailyFeePaidAt)) : '<span style="color:#ef4444">Never</span>', '#94a3b8'],
       ['Paid Until',   driver.paidUntilDate ? escHtml(fmtDate(driver.paidUntilDate)) : '—', '#94a3b8'],
@@ -1920,10 +1959,54 @@ async function loadPaymentSettings() {
     setGatewayStatus('ep', s.gatewayStatus?.easypaisa);
     setGatewayStatus('bk', s.gatewayStatus?.bank);
     setGatewayStatus('sp', s.gatewayStatus?.sadapay);
+    renderDailyFeeSettings(s.dailyFeeSettings || {});
     document.getElementById('ps-feedback').textContent = '';
   } catch (e) {
     document.getElementById('ps-feedback').textContent = '⚠ ' + e.message;
     document.getElementById('ps-feedback').style.color = '#ef4444';
+  }
+}
+
+// ── Dynamic Daily Fee Settings ─────────────────────────────────────────────────
+const DAILY_FEE_CATEGORIES = ['Car Sedan', 'Car Mini', 'Riksha', 'Bike', 'Car SUV', 'Van Seven Seats', 'Cary Dibba'];
+let dailyFeeSettingsState = {};
+
+function dailyFeeForVehicle(vehicleType) {
+  const category = ({ Rickshaw: 'Riksha', 'Car AC': 'Car Sedan' }[vehicleType] || vehicleType);
+  const amount = Number(dailyFeeSettingsState?.[category]);
+  return Number.isFinite(amount) && amount > 0 ? amount : null;
+}
+
+function renderDailyFeeSettings(settings = {}) {
+  dailyFeeSettingsState = settings;
+  document.querySelectorAll('.daily-fee-input').forEach(input => {
+    const value = settings[input.dataset.category];
+    input.value = value === null || value === undefined ? '' : value;
+  });
+}
+
+function readDailyFeeSettings() {
+  return Object.fromEntries(
+    [...document.querySelectorAll('.daily-fee-input')].map(input => [input.dataset.category, input.value])
+  );
+}
+
+async function saveDailyFeeSettings() {
+  const feedback = document.getElementById('daily-fee-feedback');
+  feedback.textContent = 'Saving Daily Fees…'; feedback.style.color = '#64748b';
+  try {
+    const result = await api('/api/admin/daily-fee-settings', 'PATCH', {
+      dailyFeeSettings: readDailyFeeSettings()
+    });
+    renderDailyFeeSettings(result.settings);
+    feedback.textContent = '✓ Daily Fees saved and sent live to drivers.';
+    feedback.style.color = '#22c55e';
+    showToast('Daily Fees updated ✓', 'success');
+  } catch (e) {
+    const details = Array.isArray(e.errors) ? `: ${e.errors.join('; ')}` : '';
+    feedback.textContent = `✕ ${e.message || 'Could not save Daily Fees'}${details}`;
+    feedback.style.color = '#ef4444';
+    showToast(e.message || 'Could not save Daily Fees', 'error');
   }
 }
 

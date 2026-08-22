@@ -262,7 +262,10 @@ function emptyDailyFeeSettings() {
 function normalizeDailyFeeSettings(value = {}) {
   const result = emptyDailyFeeSettings();
   for (const category of FARE_VEHICLE_CATEGORIES) {
-    const source = value?.[category] ?? value?.[Object.keys(FARE_VEHICLE_ALIASES).find(alias => FARE_VEHICLE_ALIASES[alias] === category)];
+    const legacyAlias = Object.keys(FARE_VEHICLE_ALIASES).find(alias =>
+      FARE_VEHICLE_ALIASES[alias] === category && value?.[alias] !== undefined
+    );
+    const source = value?.[category] ?? (legacyAlias ? value[legacyAlias] : undefined);
     const amount = source && typeof source === 'object' ? source.amount : source;
     result[category] = amount === null || amount === undefined || amount === '' ? null : Number(amount);
   }
@@ -2937,16 +2940,19 @@ if (require.main === module) {
 // Daily Subscription Deduction (runs at UTC midnight every day)
 // ─────────────────────────────────────────────────────────────────────────────
 
-const DAILY_SUB_RATES = { 'Bike': 67, 'Rickshaw': 100, 'Car Mini': 150, 'Car AC': 217 };
-
 async function runDailyDeduction() {
   if (!dbConnected) return;
   console.log('⏰ Running daily subscription deduction…');
   try {
+    const dailyFeeSettings = await getDailyFeeSettings();
     const drivers = await User.find({ role: 'driver', accountStatus: 'active' }).select('_id vehicleType name');
     let count = 0;
     for (const driver of drivers) {
-      const rate = DAILY_SUB_RATES[driver.vehicleType] || 150;
+      const rate = await getDailyFeeForVehicle(driver.vehicleType, dailyFeeSettings);
+      if (!Number.isFinite(rate) || rate <= 0) {
+        console.warn(`⚠ Skipped daily deduction for ${driver.name || driver._id}: no Daily Fee configured for ${driver.vehicleType || 'vehicle category'}`);
+        continue;
+      }
       await Wallet.findOneAndUpdate(
         { user: driver._id },
         { $inc: { balance: -rate },
@@ -3000,12 +3006,15 @@ async function runDailyDeduction() {
           const expiredIds = expiredDrivers.map(d => d._id);
           const subs = await PushSub.find({ user: { $in: expiredIds } }).lean();
 
-          subs.forEach(sub => {
+          for (const sub of subs) {
             const vehicleType = vehicleTypeById[String(sub.user)] || '';
-            const feeAmount   = DAILY_FEE_RATES[vehicleType] || 220;
+            const feeAmount = await getDailyFeeForVehicle(vehicleType, dailyFeeSettings);
+            const amountText  = Number.isFinite(feeAmount) && feeAmount > 0
+              ? ` of Rs ${feeAmount.toLocaleString()}`
+              : '';
             const payload = JSON.stringify({
               title: '🔒 Daily Fee Expired',
-              body:  `Your daily platform fee of Rs ${feeAmount} is due. Pay now to unlock ride requests.`,
+              body:  `Your daily platform fee${amountText} is due. Pay now to unlock ride requests.`,
               url:   '/driver#payments'
             });
             webpush.sendNotification(
@@ -3015,7 +3024,7 @@ async function runDailyDeduction() {
             ).catch(err => {
               if (err.statusCode === 410) PushSub.deleteOne({ _id: sub._id }).catch(() => {});
             });
-          });
+          }
           console.log(`🔒 Fee-expiry notification sent to ${expiredDrivers.length} driver(s)`);
         }
       } catch (notifyErr) { console.warn('Fee-expiry notify error:', notifyErr.message); }
