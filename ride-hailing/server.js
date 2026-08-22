@@ -68,7 +68,14 @@ server.listen(PORT, '0.0.0.0', () => {
 
 // ── 5. MIDDLEWARES & STATIC FILES ─────────────────────────────────────────
 app.use(cors());
-app.use(express.json({ limit: '50mb' }));
+// Keep the exact bytes for gateway signature verification while still exposing
+// the normal parsed JSON body to every other route.
+app.use(express.json({
+  limit: '50mb',
+  verify: (req, _res, buf) => {
+    req.rawBody = Buffer.from(buf);
+  }
+}));
 app.use(express.urlencoded({ limit: '50mb', extended: true }));
 // Resolve the public directory absolutely — works in any CWD or spawn context.
 const PUBLIC_DIR = path.resolve(__dirname, 'public');
@@ -115,6 +122,94 @@ const PAGES = {
 
 const JWT_SECRET = process.env.JWT_SECRET || 'ride-hailing-secret-fallback';
 let dbConnected  = false;
+
+// Gateway credentials are encrypted before they are stored in MongoDB and are
+// never returned to browsers. Set PAYMENT_CONFIG_ENCRYPTION_KEY in production;
+// SESSION_SECRET is used only as a backwards-compatible local fallback.
+const PAYMENT_CONFIG_KEY = crypto
+  .createHash('sha256')
+  .update(process.env.PAYMENT_CONFIG_ENCRYPTION_KEY || process.env.SESSION_SECRET || '')
+  .digest();
+
+function encryptSecret(value) {
+  if (!value) return '';
+  if (!process.env.PAYMENT_CONFIG_ENCRYPTION_KEY && !process.env.SESSION_SECRET) {
+    throw new Error('PAYMENT_CONFIG_ENCRYPTION_KEY or SESSION_SECRET is required before storing gateway credentials');
+  }
+  const iv = crypto.randomBytes(12);
+  const cipher = crypto.createCipheriv('aes-256-gcm', PAYMENT_CONFIG_KEY, iv);
+  const ciphertext = Buffer.concat([cipher.update(String(value), 'utf8'), cipher.final()]);
+  return `${iv.toString('base64url')}.${cipher.getAuthTag().toString('base64url')}.${ciphertext.toString('base64url')}`;
+}
+
+function decryptSecret(value) {
+  if (!value) return '';
+  try {
+    const [iv, tag, ciphertext] = String(value).split('.');
+    const decipher = crypto.createDecipheriv('aes-256-gcm', PAYMENT_CONFIG_KEY, Buffer.from(iv, 'base64url'));
+    decipher.setAuthTag(Buffer.from(tag, 'base64url'));
+    return Buffer.concat([decipher.update(Buffer.from(ciphertext, 'base64url')), decipher.final()]).toString('utf8');
+  } catch {
+    return '';
+  }
+}
+
+const PAYMENT_GATEWAYS = ['jazzcash', 'easypaisa', 'bank', 'sadapay'];
+const PAYMENT_GATEWAY_DEFAULTS = {
+  jazzcash: { title: '', number: '' },
+  easypaisa: { title: '', number: '' },
+  bank: { name: '', title: '', iban: '' },
+  sadapay: { title: '', number: '' }
+};
+const PAYMENT_SUCCESS_STATUSES = new Set(['paid', 'approved', 'success', 'successful', 'completed', 'complete']);
+
+function normalizeGateway(value) {
+  const gateway = String(value || '').toLowerCase().trim();
+  return gateway === 'bank-transfer' ? 'bank' : gateway;
+}
+
+function constantTimeEqual(a, b) {
+  const left = Buffer.from(String(a || ''));
+  const right = Buffer.from(String(b || ''));
+  return left.length === right.length && crypto.timingSafeEqual(left, right);
+}
+
+function verifyWebhookSignature(req, secret) {
+  if (!secret || !req.rawBody) return false;
+  const provided = String(
+    req.get('x-webhook-signature') ||
+    req.get('x-signature') ||
+    req.get('x-signature-sha256') ||
+    req.get('x-hmac-signature') || ''
+  ).replace(/^sha256=/i, '').trim();
+  if (!provided) return false;
+  const digestHex = crypto.createHmac('sha256', secret).update(req.rawBody).digest('hex');
+  const digestBase64 = crypto.createHmac('sha256', secret).update(req.rawBody).digest('base64');
+  return constantTimeEqual(provided.toLowerCase(), digestHex.toLowerCase()) ||
+    constantTimeEqual(provided, digestBase64);
+}
+
+function readWebhookValue(payload, keys) {
+  const sources = [payload, payload?.data, payload?.transaction, payload?.payment, payload?.result];
+  for (const source of sources) {
+    if (!source || typeof source !== 'object') continue;
+    for (const key of keys) {
+      if (source[key] !== undefined && source[key] !== null && source[key] !== '') return source[key];
+    }
+  }
+  return undefined;
+}
+
+function publicGatewayConfig(value) {
+  return {
+    configured: !!(value?.apiKey || value?.accessToken || value?.merchantId || value?.secretKey || value?.webhookSecret),
+    apiKeyConfigured: !!value?.apiKey,
+    accessTokenConfigured: !!value?.accessToken,
+    merchantIdConfigured: !!value?.merchantId,
+    secretKeyConfigured: !!value?.secretKey,
+    webhookSecretConfigured: !!value?.webhookSecret
+  };
+}
 
 // Encode raw special characters in username/password without double-encoding
 // already-percent-encoded sequences (mirrors the existing api-server approach).
@@ -288,10 +383,14 @@ const paymentSchema = new mongoose.Schema({
   trxId:           { type: String, required: true, trim: true },
   amount:          { type: Number, required: true },
   vehicleCategory: { type: String, required: true },
-  paymentType:     { type: String, enum: ['jazzcash','easypaisa','bank'], default: 'jazzcash' },
+  paymentType:     { type: String, enum: ['jazzcash','easypaisa','bank','sadapay'], default: 'jazzcash' },
   status:          { type: String, enum: ['pending', 'approved', 'rejected'], default: 'pending' },
   adminNote:       { type: String, default: '' },
-  submittedDate:   { type: String, required: true }   // 'YYYY-MM-DD' UTC date, for uniqueness check
+  submittedDate:   { type: String, required: true },   // 'YYYY-MM-DD' UTC date, for uniqueness check
+  gatewayStatus:   { type: String, default: '' },
+  gatewayTransactionId: { type: String, default: '' },
+  gatewayVerifiedAt: { type: Date, default: null },
+  webhookEventId:  { type: String, default: '' }
 }, { timestamps: true });
 
 // One TRX submission per driver per calendar day
