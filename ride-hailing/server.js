@@ -363,7 +363,7 @@ async function chargeDailyFeeForOnlineDriver(driverId, driver) {
 
   const now = new Date();
   const activePassCutoff = new Date(now.getTime() - ACTIVE_FEE_PASS_MS);
-  if (driver.paidUntilDate && new Date(driver.paidUntilDate) >= now) {
+  if (driver.isFreeTrial && driver.paidUntilDate && new Date(driver.paidUntilDate) >= now) {
     return { allowed: true, charged: false, rate, alreadyPaid: true };
   }
 
@@ -739,7 +739,8 @@ const walletSchema = new mongoose.Schema({
   balance:        { type: Number, default: 0 },             // net spendable (all credits − debits)
   realCashWallet: { type: Number, default: 0 },             // deposits + ride earnings only
   bonusWallet:    { type: Number, default: 0 },             // promotional bonuses only
-  dailyFeeChargedDate: { type: String, default: '' },       // UTC date of the last automatic online fee
+  dailyFeeChargedDate: { type: String, default: '' },       // legacy calendar-day marker
+  fee_paid_at:      { type: Date, default: null },          // rolling 24-hour pass start
   transactions: [{
     amount:        Number,
     type:          { type: String, enum: ['credit', 'debit'] },
