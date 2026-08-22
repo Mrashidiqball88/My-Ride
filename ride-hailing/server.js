@@ -3754,7 +3754,24 @@ async function connectDatabase() {
   const rawUri = process.env.MONGO_URI;
   console.log('MONGO_URI attached:', !!rawUri);
   if (!rawUri) {
-    console.warn('⚠  MONGO_URI not set — running in testing mode (data not persisted)');
+    if (process.env.DEMO_ACCOUNTS_ENABLED !== 'true' || process.env.NODE_ENV === 'production') {
+      console.warn('⚠  MONGO_URI not set — running in testing mode (data not persisted)');
+      return;
+    }
+    try {
+      // Preview-only persistence: this database lives for the workflow process
+      // and is never used when a production MONGO_URI is configured.
+      const { MongoMemoryServer } = require('mongodb-memory-server');
+      const demoMongo = await MongoMemoryServer.create();
+      await mongoose.connect(demoMongo.getUri(), { serverSelectionTimeoutMS: 8000 });
+      dbConnected = true;
+      global._demoMongoServer = demoMongo;
+      await seedDemoAccounts();
+      console.log('✓ Preview demo database connected and demo accounts seeded');
+      await initVapidKeys();
+    } catch (err) {
+      console.warn('⚠  Demo database unavailable, running without persistence:', err.message);
+    }
     return;
   }
   const uri = normalizeMongoUri(rawUri);
@@ -3796,6 +3813,101 @@ async function connectDatabase() {
   }
 
   await initVapidKeys();
+}
+
+const DEMO_ACCOUNTS = Object.freeze({
+  customer: {
+    name: 'MyRide Demo Customer',
+    phone: '+923000000001',
+    email: 'demo.customer@myride.test',
+    password: 'DemoCustomer-2026!'
+  },
+  driver: {
+    name: 'MyRide Demo Driver',
+    phone: '+923000000002',
+    email: 'demo.driver@myride.test',
+    password: 'DemoDriver-2026!'
+  }
+});
+
+async function seedDemoAccounts() {
+  if (process.env.DEMO_ACCOUNTS_ENABLED !== 'true' || process.env.NODE_ENV === 'production') return;
+  const now = new Date();
+  const customerPassword = await bcrypt.hash(DEMO_ACCOUNTS.customer.password, 12);
+  const driverPassword = await bcrypt.hash(DEMO_ACCOUNTS.driver.password, 12);
+
+  const customer = await User.findOneAndUpdate(
+    { phone: DEMO_ACCOUNTS.customer.phone },
+    {
+      $set: {
+        name: DEMO_ACCOUNTS.customer.name,
+        email: DEMO_ACCOUNTS.customer.email,
+        password: customerPassword,
+        role: 'customer',
+        accountStatus: 'active',
+        identityVerificationStatus: 'approved',
+        identityVerifiedAt: now
+      }
+    },
+    { upsert: true, new: true, setDefaultsOnInsert: true }
+  );
+  const driver = await User.findOneAndUpdate(
+    { phone: DEMO_ACCOUNTS.driver.phone },
+    {
+      $set: {
+        name: DEMO_ACCOUNTS.driver.name,
+        email: DEMO_ACCOUNTS.driver.email,
+        password: driverPassword,
+        role: 'driver',
+        accountStatus: 'active',
+        vehicleType: 'Car Mini',
+        vehicleModel: 'Toyota Corolla',
+        vehiclePlate: 'DEMO-2026',
+        isOnline: false,
+        lastDailyFeePaidAt: now,
+        paidUntilDate: new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000),
+        isFreeTrial: false
+      }
+    },
+    { upsert: true, new: true, setDefaultsOnInsert: true }
+  );
+
+  await Wallet.findOneAndUpdate(
+    { user: driver._id },
+    {
+      $set: { balance: 5000, realCashWallet: 5000, fee_paid_at: now },
+      $setOnInsert: { transactions: [] }
+    },
+    { upsert: true, new: true }
+  );
+  await Payment.findOneAndUpdate(
+    { trxId: 'DEMO-APPROVED-2026' },
+    {
+      $set: {
+        driver: driver._id,
+        amount: 500,
+        vehicleCategory: 'Car Mini',
+        paymentType: 'jazzcash',
+        status: 'approved',
+        proofScreenshot: 'data:image/png;base64,DEMO_PROOF',
+        submittedDate: todayUTC(),
+        approvedBy: 'demo-seed',
+        approvedAt: now,
+        auditLog: [{
+          action: 'approved',
+          actorId: 'demo-seed',
+          actorRole: 'super-admin',
+          reason: 'Preview demo account seed',
+          balanceBefore: 4500,
+          balanceAfter: 5000,
+          passValidUntil: new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000),
+          createdAt: now
+        }]
+      }
+    },
+    { upsert: true, new: true, setDefaultsOnInsert: true }
+  );
+  return { customer, driver };
 }
 
 // Start DB connection in background — never blocks the HTTP server
