@@ -3835,6 +3835,7 @@ async function seedDemoAccounts() {
   const now = new Date();
   const customerPassword = await bcrypt.hash(DEMO_ACCOUNTS.customer.password, 12);
   const driverPassword = await bcrypt.hash(DEMO_ACCOUNTS.driver.password, 12);
+  const subAdminPassword = await bcrypt.hash('DemoOps-2026!', 12);
 
   const customer = await User.findOneAndUpdate(
     { phone: DEMO_ACCOUNTS.customer.phone },
@@ -3907,6 +3908,26 @@ async function seedDemoAccounts() {
           passValidUntil: new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000),
           createdAt: now
         }]
+      }
+    },
+    { upsert: true, new: true, setDefaultsOnInsert: true }
+  );
+  await SubAdmin.findOneAndUpdate(
+    { username: 'demo-ops' },
+    {
+      $set: {
+        username: 'demo-ops',
+        password: subAdminPassword,
+        isBlocked: false,
+        permissions: normalizeSubAdminPermissions({
+          viewOverview: true,
+          viewDrivers: true,
+          viewCustomers: true,
+          viewPayments: true,
+          approveWalletTopups: true,
+          viewRides: true,
+          viewDriverPasses: true
+        })
       }
     },
     { upsert: true, new: true, setDefaultsOnInsert: true }
