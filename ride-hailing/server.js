@@ -245,6 +245,14 @@ function normalizeFareVehicle(value) {
   return FARE_VEHICLE_CATEGORIES.includes(raw) ? raw : (FARE_VEHICLE_ALIASES[raw] || raw);
 }
 
+function storedVehicleTypesForFareCategory(category) {
+  const normalized = normalizeFareVehicle(category);
+  return [...new Set([
+    normalized,
+    ...Object.keys(FARE_VEHICLE_ALIASES).filter(key => FARE_VEHICLE_ALIASES[key] === normalized)
+  ])];
+}
+
 function emptyFareSettings() {
   return Object.fromEntries(FARE_VEHICLE_CATEGORIES.map(category => [category, {
     baseFare: null,
@@ -270,15 +278,17 @@ function normalizeFareSettings(input) {
         (slab.maxKm === null || (Number.isFinite(slab.maxKm) && slab.maxKm > slab.minKm)) &&
         Number.isFinite(slab.rate) && slab.rate >= 0
       ).sort((a, b) => a.minKm - b.minKm) : [],
-      peakRules: Array.isArray(source.peakRules) ? source.peakRules.map(rule => ({
-        start: String(rule.start || ''),
-        end: String(rule.end || ''),
-        adjustmentType: rule.adjustmentType === 'down' ? 'down' : 'up',
-        percentage: Number(rule.percentage ?? Math.abs(Number(rule.adjustmentPercent || 0))),
-        adjustmentPercent: rule.adjustmentType === 'down'
-          ? -Math.abs(Number(rule.percentage ?? rule.adjustmentPercent ?? 0))
-          : Math.abs(Number(rule.percentage ?? rule.adjustmentPercent ?? 0))
-      })).filter(rule =>
+      peakRules: Array.isArray(source.peakRules) ? source.peakRules.map(rule => {
+        const adjustmentType = rule.adjustmentType || (Number(rule.adjustmentPercent) < 0 ? 'down' : 'up');
+        const percentage = Number(rule.percentage ?? Math.abs(Number(rule.adjustmentPercent || 0)));
+        return {
+          start: String(rule.start || ''),
+          end: String(rule.end || ''),
+          adjustmentType: adjustmentType === 'down' ? 'down' : 'up',
+          percentage,
+          adjustmentPercent: adjustmentType === 'down' ? -Math.abs(percentage) : Math.abs(percentage)
+        };
+      }).filter(rule =>
         /^([01]\d|2[0-3]):[0-5]\d$/.test(rule.start) &&
         /^([01]\d|2[0-3]):[0-5]\d$/.test(rule.end) &&
         Number.isFinite(rule.percentage) && rule.percentage >= 0 &&
@@ -300,6 +310,9 @@ function validateFareSettings(input) {
       const next = rule.distanceSlabs[i + 1];
       if (next && slab.maxKm !== null && slab.maxKm > next.minKm) {
         errors.push(`${category}: distance slabs overlap`);
+      }
+      if (next && slab.maxKm !== null && Math.abs(slab.maxKm - next.minKm) > 0.000001) {
+        errors.push(`${category}: distance slabs must be continuous without gaps`);
       }
       if (i === 0 && slab.minKm !== 0) errors.push(`${category}: first distance slab must start at 0 km`);
       if (i === rule.distanceSlabs.length - 1 && slab.maxKm !== null) {
@@ -333,7 +346,16 @@ function calculateFareFromSettings(settings, vehicleType, distanceKm, at = new D
     distance >= item.minKm && (item.maxKm === null || distance <= item.maxKm)
   );
   if (!slab) return { error: `No distance slab covers ${distance} km for ${category}` };
-  const activeRules = rule.peakRules.filter(item => timeMatchesRule(item, at));
+  const activeRules = rule.peakRules
+    .filter(item => timeMatchesRule(item, at))
+    .map(item => {
+      const percentage = Number(item.percentage ?? Math.abs(Number(item.adjustmentPercent || 0)));
+      return {
+        ...item,
+        percentage,
+        adjustmentPercent: item.adjustmentType === 'down' ? -Math.abs(percentage) : Math.abs(percentage)
+      };
+    });
   const adjustmentPercent = activeRules.reduce((sum, item) => sum + item.adjustmentPercent, 0);
   const subtotal = rule.baseFare + slab.rate;
   const total = Math.max(0, Math.round(subtotal * (1 + adjustmentPercent / 100)));
@@ -348,6 +370,20 @@ function calculateFareFromSettings(settings, vehicleType, distanceKm, at = new D
     totalFare: total,
     calculatedAt: at.toISOString()
   };
+}
+
+async function refreshPendingRideFares(settings) {
+  const pendingRides = await Ride.find({ status: 'requested' });
+  for (const ride of pendingRides) {
+    const fareQuote = calculateFareFromSettings(settings, ride.vehicleType, ride.distance);
+    if (fareQuote.error || ride.fare === fareQuote.totalFare) continue;
+    ride.fare = fareQuote.totalFare;
+    ride.fareQuote = fareQuote;
+    await ride.save();
+    const payload = { id: ride._id, fare: ride.fare, fareQuote: ride.fareQuote };
+    io.to(`drivers:${ride.vehicleType || 'Car Mini'}`).emit('ride:fare-updated', payload);
+    io.to(`ride:${ride._id}`).emit('ride:fare-updated', payload);
+  }
 }
 
 // Encode raw special characters in username/password without double-encoding
@@ -948,7 +984,11 @@ app.post('/api/rides', authMiddleware, async (req, res) => {
       };
       // Fire-and-forget — don't block the HTTP response.
       // Only active drivers of the same vehicle category with non-negative wallet balance receive the push.
-      User.find({ role: 'driver', accountStatus: 'active', vehicleType: ride.vehicleType }).select('_id').lean()
+      User.find({
+        role: 'driver',
+        accountStatus: 'active',
+        vehicleType: { $in: storedVehicleTypesForFareCategory(ride.vehicleType) }
+      }).select('_id').lean()
         .then(async activeDrivers => {
           const activeIds = activeDrivers.map(d => String(d._id));
           // Filter out drivers with insufficient balance
@@ -1250,23 +1290,28 @@ app.patch('/api/rides/:id/accept-driver', authMiddleware, async (req, res) => {
   }
 });
 
-// PATCH /api/rides/:id/update-fare — customer raises their offer on a pending ride
+// PATCH /api/rides/:id/update-fare — refresh a pending ride using the current
+// Admin-controlled fare rules. Client supplied prices are deliberately ignored.
 app.patch('/api/rides/:id/update-fare', authMiddleware, async (req, res) => {
   try {
-    const { fare } = req.body;
-    if (!fare || fare < 1) return res.status(400).json({ error: 'Valid fare required' });
-
-    const ride = await Ride.findOneAndUpdate(
-      { _id: req.params.id, passenger: req.user.id, status: 'requested' },
-      { $set: { fare: Number(fare) } },
-      { new: true }
-    );
+    const ride = await Ride.findOne({ _id: req.params.id, passenger: req.user.id, status: 'requested' });
     if (!ride) return res.status(404).json({ error: 'Ride not found or already accepted' });
+    const settingsDoc = await Settings.findOne({ key: 'daily_fare_settings' }).lean();
+    const fareQuote = calculateFareFromSettings(
+      normalizeFareSettings(settingsDoc?.value),
+      ride.vehicleType,
+      ride.distance
+    );
+    if (fareQuote.error) return res.status(422).json({ error: fareQuote.error });
+    ride.fare = fareQuote.totalFare;
+    ride.fareQuote = fareQuote;
+    await ride.save();
 
     // Re-broadcast updated fare only to drivers of the same vehicle category
     io.to(`drivers:${ride.vehicleType || 'Car Mini'}`).emit('ride:fare-updated', {
       id:   ride._id,
-      fare: ride.fare
+      fare: ride.fare,
+      fareQuote: ride.fareQuote
     });
 
     res.json(ride);
@@ -2364,6 +2409,31 @@ app.get('/api/admin/settings', adminJwt, async (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
+app.get('/api/admin/fare-settings', adminJwt, async (req, res) => {
+  try {
+    const doc = await Settings.findOne({ key: 'daily_fare_settings' }).lean();
+    res.json(publicFareSettings(doc?.value));
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.patch('/api/admin/fare-settings', adminJwt, async (req, res) => {
+  try {
+    const validated = validateFareSettings(req.body?.dailyFareSettings);
+    if (validated.errors.length) {
+      return res.status(422).json({ error: 'Invalid Daily Fare Settings', errors: validated.errors });
+    }
+    await Settings.findOneAndUpdate(
+      { key: 'daily_fare_settings' },
+      { key: 'daily_fare_settings', value: validated.settings },
+      { upsert: true, new: true, setDefaultsOnInsert: true }
+    );
+    await refreshPendingRideFares(validated.settings);
+    const payload = { settings: validated.settings, updatedAt: new Date().toISOString() };
+    io.emit('fare:updated', payload);
+    res.json({ success: true, ...payload });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
 // PATCH /api/admin/settings — save public account details and encrypted gateway
 // credentials. Blank credential inputs mean "leave the existing value unchanged".
 app.patch('/api/admin/settings', adminJwt, async (req, res) => {
@@ -2411,6 +2481,7 @@ app.patch('/api/admin/settings', adminJwt, async (req, res) => {
         { key: 'daily_fare_settings', value: savedFareSettings },
         { upsert: true, new: true, setDefaultsOnInsert: true }
       );
+      await refreshPendingRideFares(savedFareSettings);
       io.emit('fare:updated', { settings: savedFareSettings, updatedAt: new Date().toISOString() });
     }
     const gatewayDoc = await Settings.findOne({ key: 'payment_gateway_configs' }).lean();
@@ -2611,7 +2682,7 @@ io.on('connection', (socket) => {
           .select('_id').lean().catch(() => null)
     ]).then(([driver, activeRide]) => {
       // Cache vehicle type on socket for fast room management
-      if (driver?.vehicleType) socket.vehicleType = driver.vehicleType;
+        if (driver?.vehicleType) socket.vehicleType = normalizeFareVehicle(driver.vehicleType);
       // Restore online rooms — only if DB says online and account is active
       if (driver?.isOnline && driver.accountStatus === 'active') {
         socket.join('drivers-online');
@@ -2661,7 +2732,7 @@ io.on('connection', (socket) => {
         return;
       }
       // Cache vehicle type on socket for room management
-      if (driver?.vehicleType) socket.vehicleType = driver.vehicleType;
+      if (driver?.vehicleType) socket.vehicleType = normalizeFareVehicle(driver.vehicleType);
     }
     await User.updateOne({ _id: id }, { isOnline }).catch(() => {});
     const vRoom = `drivers:${socket.vehicleType || 'Car Mini'}`;

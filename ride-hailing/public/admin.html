@@ -265,6 +265,7 @@ input[type=date]:focus{border-color:#f5c518}
       <div class="sb-item"        onclick="showSection('live-rides')"   data-sec="live-rides">  <span class="sb-icon">🗺️</span> Live Rides</div>
       <div class="sb-item"        onclick="showSection('sos')"          data-sec="sos">         <span class="sb-icon">🆘</span> SOS Monitor <span class="sb-badge-count" id="sos-cnt" style="display:none">0</span></div>
       <div class="sb-item"        onclick="showSection('fee-compliance')" data-sec="fee-compliance"><span class="sb-icon">📋</span> Fee Compliance <span class="sb-badge-count" id="fee-cnt" style="display:none">0</span></div>
+       <div class="sb-item"        onclick="showSection('fare-settings')" data-sec="fare-settings"><span class="sb-icon">🧮</span> Daily Fare Settings</div>
       <div class="sb-item"        onclick="showSection('pay-settings')" data-sec="pay-settings"><span class="sb-icon">⚙️</span> Payment Settings</div>
       <div class="sb-item"        onclick="showSection('ratings')"      data-sec="ratings">      <span class="sb-icon">⭐</span> Ratings & Feedback</div>
       <div class="sb-item"        onclick="showSection('support')"      data-sec="support">      <span class="sb-icon">🎫</span> Support Tickets <span class="sb-badge-count" id="sup-cnt" style="display:none">0</span></div>
@@ -567,7 +568,21 @@ input[type=date]:focus{border-color:#f5c518}
         <div id="ps-feedback" style="margin-top:.75rem;font-size:.8rem;min-height:1.2em"></div>
       </div>
 
-      <!-- ════ 11. RATINGS & FEEDBACK ════ -->
+      <!-- ════ 11. DAILY FARE SETTINGS ════ -->
+      <div class="section-panel" id="sec-fare-settings">
+        <div class="sec-hdr">
+          <h2>🧮 Daily Fare Settings</h2>
+          <div class="sec-hdr-actions"><button class="btn-refresh" onclick="loadFareSettings()">↻ Reload</button></div>
+        </div>
+        <p style="font-size:.8rem;color:#475569;margin-bottom:1.1rem">
+          Set every price, slab, time range, and percentage here. The fare engine has no fallback rates: each vehicle category needs a base fare and continuous distance slabs before customers can book it.
+        </p>
+        <div id="fare-settings-feedback" style="min-height:1.25rem;font-size:.8rem;margin-bottom:.8rem"></div>
+        <div id="fare-settings-list"></div>
+        <button class="btn btn-primary" style="padding:.75rem 2rem;font-size:.9rem" onclick="saveFareSettings()">💾 Save Daily Fare Settings</button>
+      </div>
+
+      <!-- ════ 12. RATINGS & FEEDBACK ════ -->
       <div class="section-panel" id="sec-ratings">
         <div class="sec-hdr">
           <h2>⭐ Ratings & Feedback</h2>
@@ -840,7 +855,11 @@ async function api(path, method = 'GET', body = null) {
   if (body) opts.body = JSON.stringify(body);
   const r = await fetch(API + path, opts);
   const data = await r.json().catch(() => ({}));
-  if (!r.ok) throw new Error(data.error || `HTTP ${r.status}`);
+  if (!r.ok) {
+    const error = new Error(data.error || `HTTP ${r.status}`);
+    error.errors = data.errors;
+    throw error;
+  }
   return data;
 }
 
@@ -1003,7 +1022,7 @@ const SECTION_TITLES = {
   'temp-blocked':'Temporarily Blocked Drivers', 'blk-pass':'Blocked Passengers',
   'live-rides':'Live Rides & History', sos:'SOS Alert Monitor',
   'fee-compliance':'Daily Fee Compliance',
-  'pay-settings':'Payment Settings', ratings:'Ratings & Feedback', support:'Support Tickets',
+  'fare-settings':'Daily Fare Settings', 'pay-settings':'Payment Settings', ratings:'Ratings & Feedback', support:'Support Tickets',
   'sub-admins':'Sub-Admin User Management'
 };
 function showSection(name) {
@@ -1021,7 +1040,7 @@ function showSection(name) {
     drivers: () => loadDrivers(currentDriverStatus), passengers: () => loadPassengers(currentPassStatus),
     'new-requests': loadNewRequests, 'temp-blocked': loadTempBlocked,
     'blk-pass': loadBlockedPass, 'live-rides': () => loadRides(currentRideStatus),
-    sos: () => loadSOS(currentSOSFilter), 'pay-settings': loadPaymentSettings,
+    sos: () => loadSOS(currentSOSFilter), 'fare-settings': loadFareSettings, 'pay-settings': loadPaymentSettings,
     'fee-compliance': loadFeeCompliance,
     ratings: loadRatings, support: () => loadSupportTickets(currentSupStatus),
     deletions: loadDeletionRequests,
@@ -1965,6 +1984,117 @@ async function savePaymentSettings() {
   }
 }
 
+// ── Daily Fare Settings ───────────────────────────────────────────────────────
+const FARE_CATEGORIES = ['Car Sedan', 'Car Mini', 'Riksha', 'Bike', 'Car SUV', 'Van Seven Seats', 'Cary Dibba'];
+let fareSettingsState = {};
+
+function fareCategoryCard(category, config = {}) {
+  const slabs = Array.isArray(config.distanceSlabs) ? config.distanceSlabs : [];
+  const peakRules = Array.isArray(config.peakRules) ? config.peakRules : [];
+  return `<div class="fare-category-card" data-category="${category}" style="background:#0f0f1e;border:1px solid #1e1e2e;border-radius:14px;padding:1rem;margin-bottom:1rem">
+    <div style="display:flex;justify-content:space-between;align-items:center;gap:.75rem;margin-bottom:.9rem">
+      <strong style="color:#e2e8f0">${category}</strong>
+      <span style="font-size:.7rem;color:#64748b">All values are required before this category can be booked.</span>
+    </div>
+    <div class="field-row"><div class="field-item" style="max-width:280px"><div class="field-label">Base Fare (Flat PKR)</div>
+      <input class="modal-input fare-base" type="number" min="0" step="0.01" placeholder="Enter starting fare" value="${config.baseFare ?? ''}"></div></div>
+    <div style="font-size:.78rem;font-weight:700;color:#cbd5e1;margin:.8rem 0 .45rem">Distance Slabs</div>
+    <div style="font-size:.69rem;color:#64748b;margin-bottom:.45rem">Set continuous ranges. The final slab must have a blank “To km” to cover all longer trips.</div>
+    <div class="fare-slabs">${slabs.map(s => fareSlabRow(s)).join('')}</div>
+    <button class="btn btn-secondary" type="button" style="font-size:.72rem;padding:.35rem .6rem;margin-top:.45rem" onclick="addFareSlab('${category}')">＋ Add Distance Slab</button>
+    <div style="font-size:.78rem;font-weight:700;color:#cbd5e1;margin:.95rem 0 .45rem">Peak Hours / Promo Rules</div>
+    <div style="font-size:.69rem;color:#64748b;margin-bottom:.45rem">Choose “Up Fare” for surge or “Down Fare” for discount, then enter the percentage.</div>
+    <div class="fare-rules">${peakRules.map(r => fareRuleRow(r)).join('')}</div>
+    <button class="btn btn-secondary" type="button" style="font-size:.72rem;padding:.35rem .6rem;margin-top:.45rem" onclick="addFareRule('${category}')">＋ Add Time Rule</button>
+  </div>`;
+}
+
+function fareSlabRow(slab = {}) {
+  return `<div class="fare-slab field-row" style="align-items:flex-end;margin-bottom:.4rem">
+    <div class="field-item"><div class="field-label">From km</div><input class="modal-input slab-min" type="number" min="0" step="0.01" placeholder="0" value="${slab.minKm ?? ''}"></div>
+    <div class="field-item"><div class="field-label">To km</div><input class="modal-input slab-max" type="number" min="0" step="0.01" placeholder="Blank = onwards" value="${slab.maxKm ?? ''}"></div>
+    <div class="field-item"><div class="field-label">Slab Price (PKR)</div><input class="modal-input slab-rate" type="number" min="0" step="0.01" placeholder="Enter price" value="${slab.rate ?? ''}"></div>
+    <button class="btn btn-red" type="button" style="padding:.55rem .65rem;margin-bottom:0" onclick="this.closest('.fare-slab').remove()">✕</button>
+  </div>`;
+}
+
+function fareRuleRow(rule = {}) {
+  const type = rule.adjustmentType === 'down' ? 'down' : 'up';
+  return `<div class="fare-rule field-row" style="align-items:flex-end;margin-bottom:.4rem">
+    <div class="field-item"><div class="field-label">Start Time</div><input class="modal-input rule-start" type="time" value="${rule.start || ''}"></div>
+    <div class="field-item"><div class="field-label">End Time</div><input class="modal-input rule-end" type="time" value="${rule.end || ''}"></div>
+    <div class="field-item"><div class="field-label">Adjustment Type</div><select class="modal-input rule-type"><option value="up" ${type === 'up' ? 'selected' : ''}>Up Fare (Surge +)</option><option value="down" ${type === 'down' ? 'selected' : ''}>Down Fare (Discount −)</option></select></div>
+    <div class="field-item"><div class="field-label">Percentage</div><input class="modal-input rule-percent" type="number" min="0" step="0.01" placeholder="Enter %" value="${rule.percentage ?? Math.abs(rule.adjustmentPercent ?? '')}"></div>
+    <button class="btn btn-red" type="button" style="padding:.55rem .65rem;margin-bottom:0" onclick="this.closest('.fare-rule').remove()">✕</button>
+  </div>`;
+}
+
+function getFareCategoryCard(category) {
+  return [...document.querySelectorAll('.fare-category-card')].find(card => card.dataset.category === category);
+}
+function addFareSlab(category) {
+  getFareCategoryCard(category)?.querySelector('.fare-slabs')?.insertAdjacentHTML('beforeend', fareSlabRow());
+}
+function addFareRule(category) {
+  getFareCategoryCard(category)?.querySelector('.fare-rules')?.insertAdjacentHTML('beforeend', fareRuleRow());
+}
+
+function readFareSettings() {
+  const data = {};
+  document.querySelectorAll('.fare-category-card').forEach(card => {
+    data[card.dataset.category] = {
+      baseFare: card.querySelector('.fare-base').value,
+      distanceSlabs: [...card.querySelectorAll('.fare-slab')].map(row => ({
+        minKm: row.querySelector('.slab-min').value,
+        maxKm: row.querySelector('.slab-max').value,
+        rate: row.querySelector('.slab-rate').value
+      })),
+      peakRules: [...card.querySelectorAll('.fare-rule')].map(row => ({
+        start: row.querySelector('.rule-start').value,
+        end: row.querySelector('.rule-end').value,
+        adjustmentType: row.querySelector('.rule-type').value,
+        percentage: row.querySelector('.rule-percent').value
+      }))
+    };
+  });
+  return data;
+}
+
+function renderFareSettings(settings = {}) {
+  fareSettingsState = settings;
+  document.getElementById('fare-settings-list').innerHTML = FARE_CATEGORIES
+    .map(category => fareCategoryCard(category, settings[category] || {})).join('');
+}
+
+async function loadFareSettings() {
+  const feedback = document.getElementById('fare-settings-feedback');
+  feedback.textContent = 'Loading…'; feedback.style.color = '#64748b';
+  try {
+    renderFareSettings(await api('/api/admin/fare-settings'));
+    feedback.textContent = '';
+  } catch (e) {
+    feedback.textContent = `⚠ ${e.message}`;
+    feedback.style.color = '#ef4444';
+  }
+}
+
+async function saveFareSettings() {
+  const feedback = document.getElementById('fare-settings-feedback');
+  feedback.textContent = 'Saving fare rules…'; feedback.style.color = '#64748b';
+  try {
+    const result = await api('/api/admin/fare-settings', 'PATCH', { dailyFareSettings: readFareSettings() });
+    renderFareSettings(result.settings);
+    feedback.textContent = '✓ Daily Fare Settings saved and broadcast to drivers.';
+    feedback.style.color = '#22c55e';
+    showToast('Daily Fare Settings saved ✓', 'success');
+  } catch (e) {
+    const details = Array.isArray(e?.errors) ? `: ${e.errors.join('; ')}` : '';
+    feedback.textContent = `✕ ${e.message || 'Could not save fare settings'}${details}`;
+    feedback.style.color = '#ef4444';
+    showToast(e.message || 'Could not save fare settings', 'error');
+  }
+}
+
 // ── Permission Enforcement ────────────────────────────────────────────────────
 function applyPermissions() {
   const sa = isSuperAdmin;
@@ -1977,6 +2107,8 @@ function applyPermissions() {
   // Payment settings tab — super-admin only
   const sbPS = document.querySelector('[data-sec="pay-settings"]');
   if (sbPS) sbPS.style.display = sa ? '' : 'none';
+  const sbFS = document.querySelector('[data-sec="fare-settings"]');
+  if (sbFS) sbFS.style.display = sa ? '' : 'none';
 
   // Payments tab — needs manageWallets
   const sbPay = document.querySelector('[data-sec="payments"]');

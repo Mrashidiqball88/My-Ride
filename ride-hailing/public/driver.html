@@ -345,9 +345,12 @@ textarea.support-input{resize:vertical;min-height:85px}
           <label>Vehicle Type <span style="color:#f5c518">*</span></label>
           <select id="r-vehicle">
             <option value="Bike">🛵 Bike</option>
-            <option value="Rickshaw">🛺 Rickshaw</option>
+            <option value="Riksha">🛺 Riksha</option>
             <option value="Car Mini" selected>🚙 Car Mini</option>
-            <option value="Car AC">🚗 Car AC (with AC)</option>
+            <option value="Car Sedan">🚗 Car Sedan</option>
+            <option value="Car SUV">🚘 Car SUV</option>
+            <option value="Van Seven Seats">🚐 Van Seven Seats</option>
+            <option value="Cary Dibba">🛻 Cary Dibba</option>
           </select>
         </div>
         <div class="form-group"><label>Vehicle Model <span style="color:#f5c518">*</span></label><input type="text" id="r-vehicle-model" placeholder="e.g. Suzuki Cultus 2020"></div>
@@ -644,6 +647,15 @@ textarea.support-input{resize:vertical;min-height:85px}
 
 <div class="toast" id="toast"></div>
 
+<!-- Draggable fare rules widget -->
+<div id="today-fare-widget" style="display:none;position:fixed;right:16px;top:155px;z-index:1800;touch-action:none">
+  <button type="button" id="today-fare-handle" aria-label="Open Today's Fare" onclick="toggleTodayFareWidget()" style="background:#f5c518;color:#111;border:2px solid #fff;border-radius:999px;padding:.62rem .85rem;font-size:.78rem;font-weight:800;box-shadow:0 7px 22px rgba(245,197,24,.36);cursor:grab">🧮 Today’s Fare</button>
+  <div id="today-fare-panel" style="display:none;width:270px;margin-top:.45rem;background:#10101b;border:1px solid #f5c518;border-radius:12px;padding:.8rem;color:#e2e8f0;box-shadow:0 12px 28px rgba(0,0,0,.48)">
+    <div style="display:flex;justify-content:space-between;gap:.5rem;align-items:center;margin-bottom:.45rem"><strong id="today-fare-title" style="font-size:.82rem;color:#f5c518">Today’s Fare</strong><button type="button" onclick="toggleTodayFareWidget()" style="border:0;background:transparent;color:#94a3b8;font-size:1rem;cursor:pointer">×</button></div>
+    <div id="today-fare-content" style="font-size:.72rem;line-height:1.5;color:#cbd5e1">Loading fare rules…</div>
+  </div>
+</div>
+
 <script>
 // ── State ──────────────────────────────────────────────────────────────────
 let token        = localStorage.getItem('rh_token');
@@ -662,12 +674,101 @@ let todayEarnings = 0;
 let alertAudioCtx = null;   // Web Audio context for ride alert
 let alertInterval = null;   // repeating beep interval
 let dailyFeeDue   = false;  // true when driver hasn't submitted today's platform fee
+let driverFareSettings = {};
 
 // ── Toast ──────────────────────────────────────────────────────────────────
 function showToast(msg, type = 'info') {
   const el = document.getElementById('toast');
   el.textContent = msg; el.className = `toast ${type} show`;
   setTimeout(() => el.className = 'toast', 3000);
+}
+
+// ── Draggable Today’s Fare Widget ───────────────────────────────────────────
+function fareCategoryForDriver(vehicleType) {
+  return ({ Rickshaw: 'Riksha', 'Car AC': 'Car Sedan' }[vehicleType] || vehicleType);
+}
+function fareRuleIsActive(rule) {
+  if (!rule?.start || !rule?.end) return false;
+  const now = new Date();
+  const minutes = now.getHours() * 60 + now.getMinutes();
+  const toMinutes = value => Number(value.slice(0, 2)) * 60 + Number(value.slice(3));
+  const start = toMinutes(rule.start), end = toMinutes(rule.end);
+  return start <= end ? minutes >= start && minutes <= end : minutes >= start || minutes <= end;
+}
+function renderTodayFareWidget() {
+  const widget = document.getElementById('today-fare-widget');
+  const title = document.getElementById('today-fare-title');
+  const content = document.getElementById('today-fare-content');
+  if (!widget || !content || !user) return;
+  widget.style.display = 'block';
+  const category = fareCategoryForDriver(user.vehicleType);
+  const rules = driverFareSettings?.[category];
+  title.textContent = `Today’s Fare · ${category || 'Vehicle'}`;
+  if (!rules || rules.baseFare === null || rules.baseFare === undefined || !rules.distanceSlabs?.length) {
+    content.innerHTML = '<span style="color:#f59e0b">Admin has not configured active fare slabs for this vehicle yet.</span>';
+    return;
+  }
+  const slabs = rules.distanceSlabs.map(s => {
+    const end = s.maxKm === null || s.maxKm === '' ? 'onwards' : `${s.maxKm} km`;
+    return `<div>• ${s.minKm}–${end}: <strong style="color:#fff">Rs ${Number(s.rate).toLocaleString()}</strong></div>`;
+  }).join('');
+  const timeRules = rules.peakRules?.length
+    ? rules.peakRules.map(r => `<div style="color:${fareRuleIsActive(r) ? '#f5c518' : '#94a3b8'}">• ${r.start}–${r.end}: ${r.adjustmentType === 'down' ? 'Down Fare −' : 'Up Fare +'}${r.percentage}%${fareRuleIsActive(r) ? ' (active)' : ''}</div>`).join('')
+    : '<div style="color:#64748b">No peak-hour or promo rules today.</div>';
+  content.innerHTML = `<div>Base fare: <strong style="color:#fff">Rs ${Number(rules.baseFare).toLocaleString()}</strong></div>
+    <div style="margin-top:.4rem;color:#f5c518;font-weight:700">Distance slabs</div>${slabs}
+    <div style="margin-top:.45rem;color:#f5c518;font-weight:700">Time rules</div>${timeRules}`;
+}
+async function loadDriverFareSettings() {
+  try {
+    driverFareSettings = await apiCall('/api/fare-settings');
+    renderTodayFareWidget();
+  } catch (e) {
+    renderTodayFareWidget();
+  }
+}
+function toggleTodayFareWidget() {
+  const widget = document.getElementById('today-fare-widget');
+  if (widget?._wasDragged) { widget._wasDragged = false; return; }
+  const panel = document.getElementById('today-fare-panel');
+  if (panel) panel.style.display = panel.style.display === 'block' ? 'none' : 'block';
+}
+function initTodayFareWidget() {
+  const widget = document.getElementById('today-fare-widget');
+  if (!widget || widget.dataset.dragReady) return;
+  widget.dataset.dragReady = 'true';
+  try {
+    const saved = JSON.parse(localStorage.getItem('rh_today_fare_widget') || 'null');
+    if (saved && Number.isFinite(saved.left) && Number.isFinite(saved.top)) {
+      widget.style.left = `${saved.left}px`; widget.style.top = `${saved.top}px`; widget.style.right = 'auto';
+    }
+  } catch {}
+  let originX, originY, startLeft, startTop, moved;
+  widget.addEventListener('pointerdown', event => {
+    if (event.target.closest('#today-fare-panel')) return;
+    originX = event.clientX; originY = event.clientY;
+    const rect = widget.getBoundingClientRect();
+    startLeft = rect.left; startTop = rect.top; moved = false;
+    widget.setPointerCapture?.(event.pointerId);
+  });
+  widget.addEventListener('pointermove', event => {
+    if (originX === undefined) return;
+    const left = Math.max(4, Math.min(window.innerWidth - 110, startLeft + event.clientX - originX));
+    const top = Math.max(4, Math.min(window.innerHeight - 50, startTop + event.clientY - originY));
+    if (Math.abs(event.clientX - originX) + Math.abs(event.clientY - originY) > 5) moved = true;
+    if (moved) {
+      widget.style.left = `${left}px`; widget.style.top = `${top}px`; widget.style.right = 'auto';
+    }
+  });
+  widget.addEventListener('pointerup', () => {
+    if (originX === undefined) return;
+    if (moved) {
+      widget._wasDragged = true;
+      const rect = widget.getBoundingClientRect();
+      localStorage.setItem('rh_today_fare_widget', JSON.stringify({ left: Math.round(rect.left), top: Math.round(rect.top) }));
+    }
+    originX = undefined;
+  });
 }
 
 // ── Auth ───────────────────────────────────────────────────────────────────
@@ -984,6 +1085,8 @@ function bootApp() {
   loadStats();
   checkUnreadDriverTickets();
   checkDailyFee();
+  initTodayFareWidget();
+  loadDriverFareSettings();
   // Request notification permission then register Web Push subscription
   if ('Notification' in window && Notification.permission === 'default') {
     Notification.requestPermission().then(perm => {
@@ -1232,6 +1335,12 @@ function connectSocket() {
     await loadPayments();
   });
 
+  socket.on('fare:updated', ({ settings }) => {
+    if (settings) driverFareSettings = settings;
+    renderTodayFareWidget();
+    showToast('🧮 Fare rules updated by Admin. Today’s Fare has refreshed.', 'info');
+  });
+
   // Account suspended / balance too low
   socket.on('account:suspended', ({ reason }) => {
     showToast(reason, 'error');
@@ -1250,12 +1359,12 @@ function connectSocket() {
     showRideRequest(ride);
   });
 
-  // Customer raised their offered fare on an existing ride
+  // Server recalculated a pending ride using the current Admin fare rules.
   socket.on('ride:fare-updated', ({ id, fare }) => {
     if (pendingRide && String(pendingRide.id) === String(id)) {
       pendingRide.fare = fare;
       document.getElementById('rr-fare').textContent = `Rs ${(fare || 0).toLocaleString()}`;
-      showToast(`Customer raised offer to Rs ${fare.toLocaleString()}!`, 'info');
+      showToast(`🧮 Fare recalculated to Rs ${fare.toLocaleString()} from Admin rules.`, 'info');
     }
   });
 

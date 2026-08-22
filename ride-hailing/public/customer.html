@@ -504,16 +504,25 @@ body{font-family:'Segoe UI',sans-serif;background:#0a0a0f;color:#fff;height:100d
       <!-- Vehicle type -->
       <div class="vehicle-grid">
         <button class="vehicle-btn active" data-type="Bike" onclick="selectVehicle(this)">
-          <div class="v-icon">🛵</div><div class="v-name">Bike</div><div class="v-fare">Rs 30/km</div>
+          <div class="v-icon">🛵</div><div class="v-name">Bike</div><div class="v-fare">Admin-set fare</div>
         </button>
-        <button class="vehicle-btn" data-type="Rickshaw" onclick="selectVehicle(this)">
-          <div class="v-icon">🛺</div><div class="v-name">Rickshaw</div><div class="v-fare">Rs 40/km</div>
+        <button class="vehicle-btn" data-type="Riksha" onclick="selectVehicle(this)">
+          <div class="v-icon">🛺</div><div class="v-name">Riksha</div><div class="v-fare">Admin-set fare</div>
         </button>
         <button class="vehicle-btn" data-type="Car Mini" onclick="selectVehicle(this)">
-          <div class="v-icon">🚙</div><div class="v-name">Car Mini</div><div class="v-fare">Rs 50/km</div>
+          <div class="v-icon">🚙</div><div class="v-name">Car Mini</div><div class="v-fare">Admin-set fare</div>
         </button>
-        <button class="vehicle-btn" data-type="Car AC" onclick="selectVehicle(this)">
-          <div class="v-icon">🚗</div><div class="v-name">Car AC</div><div class="v-fare">Rs 70/km</div>
+        <button class="vehicle-btn" data-type="Car Sedan" onclick="selectVehicle(this)">
+          <div class="v-icon">🚗</div><div class="v-name">Car Sedan</div><div class="v-fare">Admin-set fare</div>
+        </button>
+        <button class="vehicle-btn" data-type="Car SUV" onclick="selectVehicle(this)">
+          <div class="v-icon">🚘</div><div class="v-name">Car SUV</div><div class="v-fare">Admin-set fare</div>
+        </button>
+        <button class="vehicle-btn" data-type="Van Seven Seats" onclick="selectVehicle(this)">
+          <div class="v-icon">🚐</div><div class="v-name">Van Seven Seats</div><div class="v-fare">Admin-set fare</div>
+        </button>
+        <button class="vehicle-btn" data-type="Cary Dibba" onclick="selectVehicle(this)">
+          <div class="v-icon">🛻</div><div class="v-name">Cary Dibba</div><div class="v-fare">Admin-set fare</div>
         </button>
       </div>
 
@@ -522,31 +531,18 @@ body{font-family:'Segoe UI',sans-serif;background:#0a0a0f;color:#fff;height:100d
         <div class="fare-neg-top">
           <div class="fare-neg-left">
             <div class="fare-label-row">
-              <span class="fare-label">Your Offer</span>
-              <span class="fare-badge">MyRide</span>
+              <span class="fare-label">Calculated Total</span>
+              <span class="fare-badge">Admin Rules</span>
             </div>
             <div class="fare-meta" id="fare-meta"></div>
             <div style="margin-top:.25rem"><span class="dist-badge" id="dist-badge" style="display:none">📍 <span id="dist-km-val">0</span> km</span></div>
           </div>
           <div class="fare-suggested">
-            <div class="fare-suggested-lbl">Suggested</div>
+            <div class="fare-suggested-lbl">Final fare</div>
             <div class="fare-suggested-val" id="fare-suggested-val">—</div>
           </div>
         </div>
-        <!-- Stepper row -->
-        <div class="fare-stepper">
-          <button class="fare-adj-btn" onclick="adjustFare(-10)" title="Decrease by Rs 10">−</button>
-          <div class="fare-offered-val" id="fare-display">Rs 0</div>
-          <button class="fare-adj-btn" onclick="adjustFare(+10)" title="Increase by Rs 10">+</button>
-        </div>
-        <!-- Quick buttons -->
-        <div class="fare-quick-row">
-          <button class="fare-quick neg" onclick="adjustFare(-50)">−50</button>
-          <button class="fare-quick neg" onclick="adjustFare(-20)">−20</button>
-          <button class="fare-quick" onclick="adjustFare(+20)">+20</button>
-          <button class="fare-quick" onclick="adjustFare(+50)">+50</button>
-          <button class="fare-quick" onclick="adjustFare(+100)">+100</button>
-        </div>
+        <div class="fare-stepper"><div class="fare-offered-val" id="fare-display">Rs 0</div></div>
         <div class="fare-min-note" id="fare-min-note"></div>
       </div>
 
@@ -571,14 +567,8 @@ body{font-family:'Segoe UI',sans-serif;background:#0a0a0f;color:#fff;height:100d
     <!-- Live fare update strip -->
     <div class="ar-fare-strip">
       <div class="ar-fare-info">
-        <span class="ar-fare-label">Your Offer</span>
+        <span class="ar-fare-label">Calculated Fare</span>
         <span class="ar-fare-big" id="ar-live-fare">Rs 0</span>
-      </div>
-      <div class="ar-btns">
-        <button class="ar-adj" onclick="liveAdjustFare(-20)">−20</button>
-        <button class="ar-adj" onclick="liveAdjustFare(+20)">+20</button>
-        <button class="ar-adj" onclick="liveAdjustFare(+50)">+50</button>
-        <button class="ar-adj broadcast" onclick="broadcastFareUpdate()">📢 Raise</button>
       </div>
     </div>
 
@@ -714,8 +704,6 @@ body{font-family:'Segoe UI',sans-serif;background:#0a0a0f;color:#fff;height:100d
 <script>
 // ── Constants ─────────────────────────────────────────────────────────────
 const API = '';
-const FARE_RATES = { 'Bike': 30, 'Rickshaw': 40, 'Car Mini': 50, 'Car AC': 70 };
-const MIN_FARES  = { 'Bike': 50, 'Rickshaw': 70, 'Car Mini': 100, 'Car AC': 150 };
 const TILE_URL   = 'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png';
 const TILE_OPTS  = {
   attribution : '© <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
@@ -747,6 +735,8 @@ let driverOffers = [];
 let activeLiveFare = 0;
 let activeDriverInfo = null;
 let locTimer = {};                          // keyed by type string e.g. 'pickup','stop-0'
+let currentFareQuote = null;
+let fareQuoteRequest = 0;
 
 // ── Toast ─────────────────────────────────────────────────────────────────
 function showToast(msg, type = 'info') {
@@ -1005,7 +995,11 @@ function initMap() {
 }
 
 // ── Nearby Drivers ────────────────────────────────────────────────────────
-const _vehicleIcons = { 'Bike': '🛵', 'Rickshaw': '🛺', 'Car Mini': '🚗', 'Car AC': '🚙' };
+const _vehicleIcons = {
+  'Bike': '🛵', 'Riksha': '🛺', 'Rickshaw': '🛺', 'Car Mini': '🚙',
+  'Car Sedan': '🚗', 'Car AC': '🚗', 'Car SUV': '🚘',
+  'Van Seven Seats': '🚐', 'Cary Dibba': '🛻'
+};
 
 async function pollNearbyDrivers() {
   if (activeRide || !map || !token) return;
@@ -1312,7 +1306,7 @@ function haversine(lat1, lng1, lat2, lng2) {
 }
 
 // ── Fare Negotiation ──────────────────────────────────────────────────────
-function updateFare() {
+async function updateFare() {
   const activeDrop = dropoffs.slice(0, activeStops).find(d => d !== null);
   if (!pickup || !activeDrop) return;
 
@@ -1327,34 +1321,48 @@ function updateFare() {
       dist += haversine(pts[i].lat, pts[i].lng, pts[i+1].lat, pts[i+1].lng);
   }
 
-  const rate      = FARE_RATES[selectedVehicle] || 50;
-  const min       = MIN_FARES[selectedVehicle] || 100;
-  const suggested = Math.max(Math.round(dist * rate), min);
-  offeredFare = suggested;
-
-  const stopCount = dropoffs.slice(0, activeStops).filter(d => d).length;
-  const distLabel = stopCount > 1 ? `📍 ${dist.toFixed(1)} km total · ${stopCount} stops` : `📍 ${dist.toFixed(1)} km`;
-  document.getElementById('fare-meta').textContent = `Rs ${rate}/km`;
-  document.getElementById('fare-suggested-val').textContent = `Rs ${suggested.toLocaleString()}`;
-  document.getElementById('dist-km-val').textContent = dist.toFixed(1);
-  document.getElementById('dist-badge').style.display = 'inline-flex';
-  document.getElementById('dist-badge').title = distLabel;
-  renderOfferedFare();
-  document.getElementById('fare-row').style.display  = 'block';
-  document.getElementById('book-btn').style.display  = 'block';
-}
-
-function adjustFare(delta) {
-  const min = MIN_FARES[selectedVehicle] || 50;
-  offeredFare = Math.max(min, offeredFare + delta);
-  renderOfferedFare();
+  const requestId = ++fareQuoteRequest;
+  document.getElementById('fare-row').style.display = 'block';
+  document.getElementById('fare-meta').textContent = 'Calculating from Admin fare rules…';
+  document.getElementById('book-btn').style.display = 'none';
+  try {
+    const quote = await apiCall('/api/fare/calculate', 'POST', {
+      vehicleType: selectedVehicle,
+      distanceKm: +dist.toFixed(2)
+    });
+    if (requestId !== fareQuoteRequest) return;
+    currentFareQuote = quote;
+    offeredFare = quote.totalFare;
+    const stopCount = dropoffs.slice(0, activeStops).filter(d => d).length;
+    const distLabel = stopCount > 1 ? `📍 ${dist.toFixed(1)} km total · ${stopCount} stops` : `📍 ${dist.toFixed(1)} km`;
+    const adjustment = quote.adjustmentPercent
+      ? ` · ${quote.adjustmentPercent > 0 ? '+' : ''}${quote.adjustmentPercent}% ${quote.adjustmentPercent > 0 ? 'surge' : 'discount'}`
+      : '';
+    document.getElementById('fare-meta').textContent =
+      `Base Rs ${quote.baseFare.toLocaleString()} + slab Rs ${quote.slab.rate.toLocaleString()}${adjustment}`;
+    document.getElementById('fare-suggested-val').textContent = `Rs ${quote.totalFare.toLocaleString()}`;
+    document.getElementById('dist-km-val').textContent = dist.toFixed(1);
+    document.getElementById('dist-badge').style.display = 'inline-flex';
+    document.getElementById('dist-badge').title = distLabel;
+    renderOfferedFare();
+    document.getElementById('book-btn').style.display = 'block';
+  } catch (e) {
+    if (requestId !== fareQuoteRequest) return;
+    currentFareQuote = null;
+    offeredFare = 0;
+    document.getElementById('fare-meta').textContent = `Fare unavailable: ${e.message}`;
+    document.getElementById('fare-suggested-val').textContent = '—';
+    document.getElementById('fare-display').textContent = '—';
+    document.getElementById('fare-min-note').textContent = 'Ask Admin to configure this vehicle’s base fare and distance slabs.';
+  }
 }
 
 function renderOfferedFare() {
-  const min = MIN_FARES[selectedVehicle] || 50;
   document.getElementById('fare-display').textContent = `Rs ${offeredFare.toLocaleString()}`;
-  document.getElementById('fare-min-note').textContent =
-    offeredFare <= min ? `⚠ Minimum fare: Rs ${min}` : `Drivers see your offer · Min: Rs ${min}`;
+  const rules = currentFareQuote?.activeRules || [];
+  document.getElementById('fare-min-note').textContent = rules.length
+    ? `Active ${rules.map(r => `${r.adjustmentType === 'down' ? 'discount' : 'surge'} ${r.percentage}%`).join(', ')} applied by Admin rules.`
+    : 'Calculated from the active Admin fare rules.';
 }
 
 function selectVehicle(btn) {
@@ -1417,7 +1425,7 @@ function removeStop(idx) {
 async function bookRide() {
   if (!pickup)       return showToast('Set pickup location first', 'error');
   if (!dropoffs[0])  return showToast('Set at least one dropoff location', 'error');
-  if (!offeredFare || offeredFare < 1) return showToast('Invalid fare amount', 'error');
+  if (!currentFareQuote || !offeredFare) return showToast('Wait for the Admin-configured fare calculation', 'error');
 
   const activeDropoffsList = dropoffs.slice(0, activeStops).filter(d => d !== null);
 
@@ -1434,14 +1442,12 @@ async function bookRide() {
       pickupLocation:   { ...pickup },
       dropoffLocation:  { ...activeDropoffsList[0] },             // primary stop
       dropoffLocations: activeDropoffsList.map(d => ({ ...d })), // full list
-      fare:             offeredFare,
-      offeredFare:      offeredFare,
       distance:         +dist.toFixed(2),
       vehicleType:      selectedVehicle,
       paymentMethod:    'cash'
     });
     activeRide = ride;
-    activeLiveFare = offeredFare;
+    activeLiveFare = ride.fare;
     driverOffers = [];
     showWaitingPanel(ride);
     connectToRideRoom(ride._id);
@@ -1545,22 +1551,6 @@ async function acceptDriver(driverId, agreedFare) {
   } catch (e) { showToast(e.message, 'error'); }
 }
 
-// ── Live fare adjustment (during waiting) ─────────────────────────────────
-function liveAdjustFare(delta) {
-  const min = MIN_FARES[selectedVehicle] || 50;
-  activeLiveFare = Math.max(min, activeLiveFare + delta);
-  document.getElementById('ar-live-fare').textContent = `Rs ${activeLiveFare.toLocaleString()}`;
-}
-
-async function broadcastFareUpdate() {
-  if (!activeRide) return;
-  try {
-    await apiCall(`/api/rides/${activeRide._id}/update-fare`, 'PATCH', { fare: activeLiveFare });
-    activeRide.fare = activeLiveFare;
-    showToast(`Offer updated to Rs ${activeLiveFare.toLocaleString()} — drivers notified!`, 'success');
-  } catch (e) { showToast(e.message, 'error'); }
-}
-
 function statusLabel(s) {
   return { requested: 'Broadcasting offer…', accepted: 'Driver on the way!', arrived: 'Driver arrived!', 'in-progress': 'On the ride!', completed: 'Ride complete!', cancelled: 'Ride cancelled' }[s] || s;
 }
@@ -1657,6 +1647,10 @@ function connectSocket() {
     badge.style.display = 'inline';
     badge.textContent   = String((parseInt(badge.textContent) || 0) + 1);
   });
+  socket.on('fare:updated', () => {
+    if (pickup && dropoffs.slice(0, activeStops).some(Boolean)) updateFare();
+    showToast('Admin updated fare rules. Your quote has been refreshed.', 'info');
+  });
 }
 
 function connectToRideRoom(rideId) {
@@ -1668,6 +1662,15 @@ function connectToRideRoom(rideId) {
     renderOffers(offers);
     if (offers.length === 1) showToast(`A driver responded to your offer!`, 'info');
     else if (offers.length > 1) showToast(`${offers.length} drivers have responded!`, 'info');
+  });
+
+  socket.on('ride:fare-updated', ({ id, fare, fareQuote }) => {
+    if (!activeRide || String(activeRide._id) !== String(id)) return;
+    activeRide.fare = fare;
+    activeRide.fareQuote = fareQuote;
+    activeLiveFare = fare;
+    document.getElementById('ar-live-fare').textContent = `Rs ${Number(fare || 0).toLocaleString()}`;
+    showToast(`🧮 Fare updated to Rs ${Number(fare || 0).toLocaleString()} from the latest Admin rules.`, 'info');
   });
 
   // Customer selected a driver — full driver profile arrives here
