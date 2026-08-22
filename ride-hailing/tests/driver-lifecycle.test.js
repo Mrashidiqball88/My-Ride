@@ -12,6 +12,7 @@ const original = {
   walletFindOne: models.Wallet.findOne,
   walletFindOneAndUpdate: models.Wallet.findOneAndUpdate,
   settingsFindOne: models.Settings.findOne,
+  subAdminFindById: models.SubAdmin.findById,
 };
 
 afterEach(() => {
@@ -20,10 +21,25 @@ afterEach(() => {
   models.Wallet.findOne = original.walletFindOne;
   models.Wallet.findOneAndUpdate = original.walletFindOneAndUpdate;
   models.Settings.findOne = original.settingsFindOne;
+  models.SubAdmin.findById = original.subAdminFindById;
 });
 
 function driverToken() {
   return jwt.sign({ id: '507f1f77bcf86cd799439011', role: 'driver', accountStatus: 'active', name: 'Driver' }, 'ride-hailing-secret-fallback');
+}
+
+function subAdminToken() {
+  return jwt.sign({ isSubAdmin: true, subAdminId: '507f1f77bcf86cd799439012', username: 'ops' }, 'ride-hailing-secret-fallback');
+}
+
+async function adminRequest(server, path, token, method = 'GET') {
+  const response = await fetch(`http://127.0.0.1:${server.address().port}${path}`, {
+    method,
+    headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+  });
+  const raw = await response.text();
+  try { return { response, body: JSON.parse(raw) }; }
+  catch { return { response, body: { raw } }; }
 }
 
 function driverDocument(overrides = {}) {
@@ -218,6 +234,90 @@ test('payment webhooks cannot approve Driver recharge requests and TRX IDs have 
 
     const indexes = models.Payment.schema.indexes();
     assert.ok(indexes.some(([key, options]) => key.trxId === 1 && options.unique === true));
+  } finally {
+    await new Promise(resolve => server.close(resolve));
+  }
+});
+
+test('Sub-Admin permissions normalize to the full catalog and reject unknown legacy flags', () => {
+  const normalized = service.normalizeSubAdminPermissions({
+    viewOverview: true,
+    viewPaymentProofs: true,
+    manageWallets: true
+  });
+  assert.equal(Object.keys(normalized).length, service.SUB_ADMIN_PERMISSION_CATALOG.length);
+  assert.equal(normalized.viewOverview, true);
+  assert.equal(normalized.viewPaymentProofs, true);
+  assert.equal('manageWallets' in normalized, false);
+  assert.equal(normalized.manageFareSettings, false);
+});
+
+test('Sub-Admin revocation takes effect immediately and protected settings APIs fail closed', async () => {
+  let permissions = { manageRideSettings: true };
+  models.SubAdmin.findById = () => ({
+    select: () => ({
+      lean: async () => ({
+        _id: '507f1f77bcf86cd799439012',
+        username: 'ops',
+        isBlocked: false,
+        permissions
+      })
+    })
+  });
+  models.Settings.findOne = () => ({ lean: async () => null });
+  const server = app.listen(0);
+  try {
+    const token = subAdminToken();
+    const allowed = await adminRequest(server, '/api/admin/ride-settings', token);
+    assert.equal(allowed.response.status, 200);
+
+    permissions = {};
+    const revoked = await adminRequest(server, '/api/admin/ride-settings', token);
+    assert.equal(revoked.response.status, 403);
+    assert.match(revoked.body.error, /manageRideSettings/);
+
+    const payments = await adminRequest(server, '/api/admin/payments?status=pending', token);
+    assert.equal(payments.response.status, 403);
+    assert.match(payments.body.error, /viewPayments/);
+  } finally {
+    await new Promise(resolve => server.close(resolve));
+  }
+});
+
+test('a Sub-Admin with no permissions is denied every protected Admin module', async () => {
+  models.SubAdmin.findById = () => ({
+    select: () => ({
+      lean: async () => ({
+        _id: '507f1f77bcf86cd799439012',
+        username: 'readless',
+        isBlocked: false,
+        permissions: {}
+      })
+    })
+  });
+  const protectedRoutes = [
+    ['GET', '/api/admin/stats'], ['GET', '/api/admin/drivers'], ['GET', '/api/admin/passengers'],
+    ['GET', '/api/admin/rides'], ['GET', '/api/admin/sos'], ['GET', '/api/admin/payments?status=pending'],
+    ['GET', '/api/admin/audit-logs'], ['GET', '/api/admin/support'], ['GET', '/api/admin/ratings'],
+    ['GET', '/api/admin/daily-fee-compliance'], ['GET', '/api/admin/daily-fee-compliance/driver/507f1f77bcf86cd799439011'],
+    ['GET', '/api/admin/settings'], ['GET', '/api/admin/ride-settings'], ['GET', '/api/admin/fare-settings'],
+    ['GET', '/api/admin/per-km-rates'], ['GET', '/api/admin/daily-fee-settings'], ['GET', '/api/admin/daily-income'],
+    ['PATCH', '/api/admin/sos/507f1f77bcf86cd799439011/resolve'],
+    ['PATCH', '/api/admin/payments/507f1f77bcf86cd799439011/approve'],
+    ['PATCH', '/api/admin/payments/507f1f77bcf86cd799439011/reject'],
+    ['PATCH', '/api/admin/support/507f1f77bcf86cd799439011/resolve'],
+    ['POST', '/api/admin/drivers/grant-trial'], ['POST', '/api/admin/daily-fee-compliance/remind'],
+    ['POST', '/api/admin/drivers/grant-fee-waiver'], ['PATCH', '/api/admin/ride-settings'],
+    ['PATCH', '/api/admin/per-km-rates'], ['PATCH', '/api/admin/daily-fee-settings'],
+    ['PATCH', '/api/admin/fare-settings'], ['PATCH', '/api/admin/settings'],
+    ['GET', '/api/admin/account-deletion-requests']
+  ];
+  const server = app.listen(0);
+  try {
+    for (const [method, path] of protectedRoutes) {
+      const result = await adminRequest(server, path, subAdminToken(), method);
+      assert.equal(result.response.status, 403, `${method} ${path} should deny an unprivileged Sub-Admin`);
+    }
   } finally {
     await new Promise(resolve => server.close(resolve));
   }

@@ -751,18 +751,50 @@ const walletSchema = new mongoose.Schema({
   }]
 }, { timestamps: true });
 
+// Every dashboard surface and sensitive action has a named, fail-closed
+// Sub-Admin permission. Keep this list as the single source of truth for the
+// Admin UI, persisted accounts, and backend authorization.
+const SUB_ADMIN_PERMISSION_CATALOG = Object.freeze([
+  { key: 'viewOverview',          group: 'Dashboard',          label: 'View overview dashboard' },
+  { key: 'viewDrivers',           group: 'Drivers',            label: 'View drivers & vehicle categories' },
+  { key: 'manageDriverApprovals', group: 'Drivers',            label: 'Approve or reject driver applications' },
+  { key: 'manageDriverStatus',    group: 'Drivers',            label: 'Suspend, block, or restore drivers' },
+  { key: 'viewDriverPasses',      group: 'Driver passes',      label: 'View Driver Pass status & countdowns' },
+  { key: 'manageDriverPasses',    group: 'Driver passes',      label: 'Manage passes, waivers & reminders' },
+  { key: 'viewCustomers',         group: 'Customers',          label: 'View customer accounts' },
+  { key: 'manageCustomers',       group: 'Customers',          label: 'Block, restore, or reject customers' },
+  { key: 'viewRides',             group: 'Rides',              label: 'View live rides & ride history' },
+  { key: 'viewPayments',          group: 'Wallet recharges',   label: 'View Driver recharge requests' },
+  { key: 'viewPaymentProofs',     group: 'Wallet recharges',   label: 'View recharge proof screenshots' },
+  { key: 'approveWalletTopups',   group: 'Wallet recharges',   label: 'Approve or reject Driver recharges' },
+  { key: 'viewSOS',               group: 'Operations',         label: 'View SOS alerts' },
+  { key: 'manageSOS',             group: 'Operations',         label: 'Resolve SOS alerts' },
+  { key: 'viewRatings',           group: 'Operations',         label: 'View ratings & feedback' },
+  { key: 'viewSupport',           group: 'Operations',         label: 'View support tickets' },
+  { key: 'manageSupport',         group: 'Operations',         label: 'Reply to and resolve support tickets' },
+  { key: 'manageRideSettings',    group: 'System configuration', label: 'Manage ride broadcast settings' },
+  { key: 'manageFareSettings',    group: 'System configuration', label: 'Manage fare rates & pricing rules' },
+  { key: 'managePaymentSettings', group: 'System configuration', label: 'Manage receiving account settings' },
+  { key: 'viewAuditLogs',         group: 'System configuration', label: 'View payment and pass audit logs' }
+]);
+const SUB_ADMIN_PERMISSION_DEFAULTS = Object.freeze(
+  Object.fromEntries(SUB_ADMIN_PERMISSION_CATALOG.map(({ key }) => [key, false]))
+);
+
+function normalizeSubAdminPermissions(permissions) {
+  return Object.fromEntries(SUB_ADMIN_PERMISSION_CATALOG.map(({ key }) => [key, !!permissions?.[key]]));
+}
+
+function hasAdminPermission(admin, permission) {
+  return !!admin?.isSuperAdmin || !!admin?.permissions?.[permission];
+}
+
 // Sub-Admin schema — granular-permission secondary admin accounts (max 50)
 const subAdminSchema = new mongoose.Schema({
   username:  { type: String, required: true, unique: true, trim: true },
   password:  { type: String, required: true },
   isBlocked: { type: Boolean, default: false },
-  permissions: {
-    approveDrivers: { type: Boolean, default: false },
-    blockDrivers:   { type: Boolean, default: false },
-    blockCustomers: { type: Boolean, default: false },
-    manageWallets:  { type: Boolean, default: false },
-    viewRides:      { type: Boolean, default: true  }
-  }
+  permissions: { type: mongoose.Schema.Types.Mixed, default: () => ({ ...SUB_ADMIN_PERMISSION_DEFAULTS }) }
 }, { timestamps: true });
 const SubAdmin = mongoose.model('SubAdmin', subAdminSchema);
 
@@ -1120,7 +1152,20 @@ async function adminJwt(req, res, next) {
       req.admin = { ...payload, isSuperAdmin: true };
       return next();
     }
-    if (payload.isSubAdmin) { req.admin = { ...payload, isSuperAdmin: false }; return next(); }
+    if (payload.isSubAdmin) {
+      const sub = await SubAdmin.findById(payload.subAdminId).select('username permissions isBlocked').lean();
+      if (!sub || sub.isBlocked) return res.status(401).json({ error: 'This Sub-Admin session is no longer active.' });
+      // Reload from the database on every request so permission grants and
+      // revocations take effect immediately instead of waiting for JWT expiry.
+      req.admin = {
+        isSubAdmin: true,
+        isSuperAdmin: false,
+        subAdminId: String(sub._id),
+        username: sub.username,
+        permissions: normalizeSubAdminPermissions(sub.permissions)
+      };
+      return next();
+    }
     return res.status(403).json({ error: 'Admin access required' });
   } catch { return res.status(401).json({ error: 'Invalid or expired admin token' }); }
 }
@@ -1136,7 +1181,7 @@ function requirePerm(permName) {
   return (req, res, next) => {
     if (!req.admin) return res.status(401).json({ error: 'Admin token required' });
     if (req.admin.isSuperAdmin) return next();
-    if (!req.admin.permissions?.[permName])
+    if (!hasAdminPermission(req.admin, permName))
       return res.status(403).json({ error: `Permission denied: ${permName} required` });
     next();
   };
@@ -2467,11 +2512,12 @@ app.post('/api/admin/sub-user/login', async (req, res) => {
     const match = await bcrypt.compare(password, sub.password);
     if (!match) return res.status(401).json({ error: 'Invalid credentials' });
     if (sub.isBlocked) return res.status(403).json({ error: 'Your sub-admin account is currently blocked by Super Admin.' });
+    const permissions = normalizeSubAdminPermissions(sub.permissions);
     const token = jwt.sign(
-      { isSubAdmin: true, subAdminId: sub._id, username: sub.username, permissions: sub.permissions },
+      { isSubAdmin: true, subAdminId: sub._id, username: sub.username },
       JWT_SECRET, { expiresIn: '8h' }
     );
-    res.json({ token, subAdmin: { id: sub._id, username: sub.username, permissions: sub.permissions } });
+    res.json({ token, subAdmin: { id: sub._id, username: sub.username, permissions } });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
@@ -2487,13 +2533,7 @@ app.post('/api/admin/sub-users/create', adminJwt, requireSuperAdmin, async (req,
     const hashed = await bcrypt.hash(password, 10);
     const sub = await SubAdmin.create({
       username: username.trim(), password: hashed,
-      permissions: {
-        approveDrivers: !!permissions?.approveDrivers,
-        blockDrivers:   !!permissions?.blockDrivers,
-        blockCustomers: !!permissions?.blockCustomers,
-        manageWallets:  !!permissions?.manageWallets,
-        viewRides:      permissions?.viewRides !== false
-      }
+      permissions: normalizeSubAdminPermissions(permissions)
     });
     res.json({ success: true, subAdmin: { id: sub._id, username: sub.username, permissions: sub.permissions, createdAt: sub.createdAt } });
   } catch (err) { res.status(500).json({ error: err.message }); }
@@ -2514,13 +2554,7 @@ app.put('/api/admin/sub-users/update', adminJwt, requireSuperAdmin, async (req, 
     if (!id) return res.status(400).json({ error: 'id required' });
     const setFields = {};
     if (permissions) {
-      setFields.permissions = {
-        approveDrivers: !!permissions.approveDrivers,
-        blockDrivers:   !!permissions.blockDrivers,
-        blockCustomers: !!permissions.blockCustomers,
-        manageWallets:  !!permissions.manageWallets,
-        viewRides:      permissions.viewRides !== false
-      };
+      setFields.permissions = normalizeSubAdminPermissions(permissions);
     }
     if (typeof isBlocked === 'boolean') setFields.isBlocked = isBlocked;
     if (password && password.trim()) setFields.password = await bcrypt.hash(password.trim(), 10);
@@ -2537,13 +2571,7 @@ app.put('/api/admin/sub-users/update-permissions', adminJwt, requireSuperAdmin, 
   if (!id || !permissions) return res.status(400).json({ error: 'id and permissions required' });
   try {
     const sub = await SubAdmin.findByIdAndUpdate(id,
-      { $set: { permissions: {
-        approveDrivers: !!permissions.approveDrivers,
-        blockDrivers:   !!permissions.blockDrivers,
-        blockCustomers: !!permissions.blockCustomers,
-        manageWallets:  !!permissions.manageWallets,
-        viewRides:      permissions.viewRides !== false
-      }}}, { new: true }
+      { $set: { permissions: normalizeSubAdminPermissions(permissions) }}, { new: true }
     ).select('-password');
     if (!sub) return res.status(404).json({ error: 'Sub-admin not found' });
     res.json({ success: true, subAdmin: sub });
@@ -2560,7 +2588,7 @@ app.delete('/api/admin/sub-users/delete/:id', adminJwt, requireSuperAdmin, async
 });
 
 // GET /api/admin/stats — overview dashboard numbers
-app.get('/api/admin/stats', adminJwt, async (req, res) => {
+app.get('/api/admin/stats', adminJwt, requirePerm('viewOverview'), async (req, res) => {
   try {
     const today = new Date(); today.setUTCHours(0, 0, 0, 0);
     const [totalDrivers, pendingDrivers, suspendedDrivers, totalPassengers,
@@ -2588,7 +2616,7 @@ app.get('/api/admin/stats', adminJwt, async (req, res) => {
 });
 
 // GET /api/admin/drivers?status=all|pending|approved|suspended|blocked
-app.get('/api/admin/drivers', adminJwt, async (req, res) => {
+app.get('/api/admin/drivers', adminJwt, requirePerm('viewDrivers'), async (req, res) => {
   try {
     const { status } = req.query;
     const filter = { role: 'driver' };
@@ -2601,7 +2629,7 @@ app.get('/api/admin/drivers', adminJwt, async (req, res) => {
 });
 
 // GET /api/admin/passengers?status=all|pending|active|blocked
-app.get('/api/admin/passengers', adminJwt, async (req, res) => {
+app.get('/api/admin/passengers', adminJwt, requirePerm('viewCustomers'), async (req, res) => {
   try {
     const { status } = req.query;
     const filter = { role: 'customer' };
@@ -2625,14 +2653,19 @@ app.patch('/api/admin/users/:id/status', adminJwt, async (req, res) => {
 
     // Sub-admin permission enforcement per action + target role
     if (!req.admin.isSuperAdmin) {
+      if (action === 'reject-deletion') {
+        return res.status(403).json({ error: 'Permission denied: Super Admin required for deletion requests' });
+      }
       const target = await User.findById(req.params.id).select('role');
       if (!target) return res.status(404).json({ error: 'User not found' });
-      if (action === 'approve' && !req.admin.permissions?.approveDrivers)
-        return res.status(403).json({ error: 'Permission denied: approveDrivers required' });
-      if (['suspend','block','unblock'].includes(action) && target.role === 'driver' && !req.admin.permissions?.blockDrivers)
-        return res.status(403).json({ error: 'Permission denied: blockDrivers required' });
-      if (['block','unblock','reject'].includes(action) && target.role === 'customer' && !req.admin.permissions?.blockCustomers)
-        return res.status(403).json({ error: 'Permission denied: blockCustomers required' });
+      if (action === 'approve' && target.role === 'driver' && !hasAdminPermission(req.admin, 'manageDriverApprovals'))
+        return res.status(403).json({ error: 'Permission denied: manageDriverApprovals required' });
+      if (action === 'approve' && target.role === 'customer' && !hasAdminPermission(req.admin, 'manageCustomers'))
+        return res.status(403).json({ error: 'Permission denied: manageCustomers required' });
+      if (['suspend','block','unblock'].includes(action) && target.role === 'driver' && !hasAdminPermission(req.admin, 'manageDriverStatus'))
+        return res.status(403).json({ error: 'Permission denied: manageDriverStatus required' });
+      if (['block','unblock','reject'].includes(action) && target.role === 'customer' && !hasAdminPermission(req.admin, 'manageCustomers'))
+        return res.status(403).json({ error: 'Permission denied: manageCustomers required' });
     }
 
     let update = {};
@@ -2657,7 +2690,7 @@ app.patch('/api/admin/users/:id/status', adminJwt, async (req, res) => {
 });
 
 // GET /api/admin/account-deletion-requests
-app.get('/api/admin/account-deletion-requests', adminJwt, async (req, res) => {
+app.get('/api/admin/account-deletion-requests', adminJwt, requireSuperAdmin, async (req, res) => {
   try {
     const users = await User.find({ accountStatus: 'pending_deletion' })
       .select('name phone email role vehicleType createdAt updatedAt')
@@ -2700,7 +2733,7 @@ app.get('/api/admin/rides', adminJwt, requirePerm('viewRides'), async (req, res)
 });
 
 // GET /api/admin/sos?resolved=false|true|all
-app.get('/api/admin/sos', adminJwt, async (req, res) => {
+app.get('/api/admin/sos', adminJwt, requirePerm('viewSOS'), async (req, res) => {
   try {
     const { resolved } = req.query;
     const filter = {};
@@ -2714,7 +2747,7 @@ app.get('/api/admin/sos', adminJwt, async (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-app.patch('/api/admin/sos/:id/resolve', adminJwt, async (req, res) => {
+app.patch('/api/admin/sos/:id/resolve', adminJwt, requirePerm('manageSOS'), async (req, res) => {
   try {
     await SOS.updateOne({ _id: req.params.id }, { resolved: true });
     res.json({ success: true });
@@ -2722,20 +2755,21 @@ app.patch('/api/admin/sos/:id/resolve', adminJwt, async (req, res) => {
 });
 
 // GET /api/admin/payments?status=pending|approved|rejected|all
-app.get('/api/admin/payments', adminJwt, async (req, res) => {
+app.get('/api/admin/payments', adminJwt, requirePerm('viewPayments'), async (req, res) => {
   try {
     const { status } = req.query;
     const filter = {};
     if (status && status !== 'all') filter.status = status;
+    const selectFields = hasAdminPermission(req.admin, 'viewPaymentProofs') ? '+proofScreenshot' : '';
     const payments = await Payment.find(filter)
-      .select('+proofScreenshot')
+      .select(selectFields)
       .populate('driver', 'name phone vehicleType vehiclePlate')
       .sort('-createdAt').limit(100);
     res.json(payments);
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-app.patch('/api/admin/payments/:id/approve', adminJwt, requirePerm('manageWallets'), async (req, res) => {
+app.patch('/api/admin/payments/:id/approve', adminJwt, requirePerm('approveWalletTopups'), async (req, res) => {
   try {
     const approved = await approveDriverPayment(req.params.id, req.admin, req.body?.note);
     if (!approved) return res.status(409).json({ error: 'Payment is no longer pending and cannot be approved again.' });
@@ -2758,13 +2792,36 @@ app.patch('/api/admin/payments/:id/approve', adminJwt, requirePerm('manageWallet
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-app.patch('/api/admin/payments/:id/reject', adminJwt, requirePerm('manageWallets'), async (req, res) => {
+app.patch('/api/admin/payments/:id/reject', adminJwt, requirePerm('approveWalletTopups'), async (req, res) => {
   try {
     const { reason } = req.body;
     const payment = await rejectDriverPayment(req.params.id, req.admin, reason);
     if (!payment) return res.status(409).json({ error: 'Payment is no longer pending and cannot be rejected.' });
     io.to(`user:${payment.driver}`).emit('payment:rejected', { reason: reason || 'Rejected' });
     res.json({ success: true, payment });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// Read-only operational audit view. Private proof images are never included
+// here; they remain behind the separate viewPaymentProofs permission.
+app.get('/api/admin/audit-logs', adminJwt, requirePerm('viewAuditLogs'), async (_req, res) => {
+  try {
+    const payments = await Payment.find({ 'auditLog.0': { $exists: true } })
+      .select('driver trxId amount status paymentType auditLog approvedAt rejectedAt')
+      .populate('driver', 'name phone vehicleType')
+      .sort('-updatedAt')
+      .limit(200)
+      .lean();
+    const entries = payments.flatMap(payment => (payment.auditLog || []).map(entry => ({
+      ...entry,
+      paymentId: String(payment._id),
+      trxId: payment.trxId,
+      amount: payment.amount,
+      paymentType: payment.paymentType,
+      paymentStatus: payment.status,
+      driver: payment.driver
+    }))).sort((a, b) => new Date(b.createdAt || 0) - new Date(a.createdAt || 0)).slice(0, 300);
+    res.json(entries);
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
@@ -2904,7 +2961,7 @@ app.post('/api/support/ticket', authMiddleware, async (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-app.get('/api/admin/support', adminJwt, async (req, res) => {
+app.get('/api/admin/support', adminJwt, requirePerm('viewSupport'), async (req, res) => {
   try {
     const { status } = req.query;
     const filter = {};
@@ -2916,7 +2973,7 @@ app.get('/api/admin/support', adminJwt, async (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-app.patch('/api/admin/support/:id/resolve', adminJwt, async (req, res) => {
+app.patch('/api/admin/support/:id/resolve', adminJwt, requirePerm('manageSupport'), async (req, res) => {
   try {
     const { adminReply } = req.body;
     const ticket = await Ticket.findById(req.params.id).select('user subject');
@@ -2939,7 +2996,7 @@ app.patch('/api/admin/support/:id/resolve', adminJwt, async (req, res) => {
 // Ratings & Reviews (admin)
 // ─────────────────────────────────────────────────────────────────────────────
 
-app.get('/api/admin/ratings', adminJwt, async (req, res) => {
+app.get('/api/admin/ratings', adminJwt, requirePerm('viewRatings'), async (req, res) => {
   try {
     const rides = await Ride.find({ driverRating: { $ne: null } })
       .populate('passenger', 'name phone')
@@ -2956,7 +3013,7 @@ app.get('/api/admin/ratings', adminJwt, async (req, res) => {
 
 const TRIAL_AMOUNTS = { 'Bike': 2000, 'Rickshaw': 3000, 'Car Mini': 4500, 'Car AC': 6500 };
 
-app.post('/api/admin/drivers/grant-trial', adminJwt, requirePerm('manageWallets'), async (req, res) => {
+app.post('/api/admin/drivers/grant-trial', adminJwt, requirePerm('manageDriverPasses'), async (req, res) => {
   try {
     const { driverIds, days } = req.body;
     if (!Array.isArray(driverIds) || !driverIds.length)
@@ -2992,7 +3049,7 @@ app.post('/api/admin/drivers/grant-trial', adminJwt, requirePerm('manageWallets'
 });
 
 // GET /api/admin/daily-fee-compliance — active drivers grouped by paid / unpaid for today
-app.get('/api/admin/daily-fee-compliance', adminJwt, requirePerm('manageWallets'), async (req, res) => {
+app.get('/api/admin/daily-fee-compliance', adminJwt, requirePerm('viewDriverPasses'), async (req, res) => {
   try {
     const now = new Date();
     const drivers = await User.find({ role: 'driver', accountStatus: 'active' })
@@ -3011,7 +3068,7 @@ app.get('/api/admin/daily-fee-compliance', adminJwt, requirePerm('manageWallets'
 });
 
 // GET /api/admin/daily-fee-compliance/driver/:id — individual driver fee & TRX history
-app.get('/api/admin/daily-fee-compliance/driver/:id', adminJwt, requirePerm('manageWallets'), async (req, res) => {
+app.get('/api/admin/daily-fee-compliance/driver/:id', adminJwt, requirePerm('viewDriverPasses'), async (req, res) => {
   try {
     const driver = await User.findOne({ _id: req.params.id, role: 'driver' })
       .select('name phone vehicleType paidUntilDate lastDailyFeePaidAt accountStatus rating totalRides')
@@ -3025,7 +3082,7 @@ app.get('/api/admin/daily-fee-compliance/driver/:id', adminJwt, requirePerm('man
 });
 
 // POST /api/admin/daily-fee-compliance/remind — push reminder to all unpaid active drivers
-app.post('/api/admin/daily-fee-compliance/remind', adminJwt, requirePerm('manageWallets'), async (req, res) => {
+app.post('/api/admin/daily-fee-compliance/remind', adminJwt, requirePerm('manageDriverPasses'), async (req, res) => {
   try {
     if (!global._vapidPublicKey) return res.status(503).json({ error: 'Push notifications not configured' });
     const now = new Date();
@@ -3076,7 +3133,7 @@ app.get('/api/drivers/nearby', authMiddleware, async (req, res) => {
 });
 
 // POST /api/admin/drivers/grant-fee-waiver — set paidUntilDate for selected drivers (waiver / advance pay)
-app.post('/api/admin/drivers/grant-fee-waiver', adminJwt, requirePerm('manageWallets'), async (req, res) => {
+app.post('/api/admin/drivers/grant-fee-waiver', adminJwt, requirePerm('manageDriverPasses'), async (req, res) => {
   try {
     const { driverIds, paidUntilDate } = req.body;
     if (!Array.isArray(driverIds) || !driverIds.length)
@@ -3135,7 +3192,7 @@ app.get('/api/settings/payment', authMiddleware, driverOnly, async (req, res) =>
 
 // GET /api/admin/settings — admin: return account details and credential
 // presence only. Plaintext secrets are never sent back after saving.
-app.get('/api/admin/settings', adminJwt, async (req, res) => {
+app.get('/api/admin/settings', adminJwt, requirePerm('managePaymentSettings'), async (req, res) => {
   try {
     const doc = await Settings.findOne({ key: 'payment_accounts' });
     const accounts = { ...defaultPaymentAccounts(), ...(doc?.value || {}) };
@@ -3154,13 +3211,13 @@ app.get('/api/admin/settings', adminJwt, async (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-app.get('/api/admin/ride-settings', adminJwt, async (req, res) => {
+app.get('/api/admin/ride-settings', adminJwt, requirePerm('manageRideSettings'), async (req, res) => {
   try {
     res.json(await getRideBroadcastSettings());
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-app.patch('/api/admin/ride-settings', adminJwt, async (req, res) => {
+app.patch('/api/admin/ride-settings', adminJwt, requirePerm('manageRideSettings'), async (req, res) => {
   try {
     const validated = validateRideBroadcastSettings(req.body?.rideBroadcastSettings);
     if (validated.errors.length) {
@@ -3177,7 +3234,7 @@ app.patch('/api/admin/ride-settings', adminJwt, async (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-app.get('/api/admin/fare-settings', adminJwt, async (req, res) => {
+app.get('/api/admin/fare-settings', adminJwt, requirePerm('manageFareSettings'), async (req, res) => {
   try {
     const doc = await Settings.findOne({ key: 'daily_fare_settings' }).lean();
     res.json(publicFareSettings(doc?.value));
@@ -3191,14 +3248,14 @@ app.get('/api/per-km-rates', async (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-app.get('/api/admin/per-km-rates', adminJwt, async (req, res) => {
+app.get('/api/admin/per-km-rates', adminJwt, requirePerm('manageFareSettings'), async (req, res) => {
   try {
     const doc = await Settings.findOne({ key: 'per_km_rates' }).lean();
     res.json(normalizePerKmRates(doc?.value));
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-app.patch('/api/admin/per-km-rates', adminJwt, async (req, res) => {
+app.patch('/api/admin/per-km-rates', adminJwt, requirePerm('manageFareSettings'), async (req, res) => {
   try {
     const validated = validatePerKmRates(req.body?.perKmRates);
     if (validated.errors.length) {
@@ -3224,14 +3281,14 @@ app.get('/api/daily-fee-settings', async (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-app.get('/api/admin/daily-fee-settings', adminJwt, async (req, res) => {
+app.get('/api/admin/daily-fee-settings', adminJwt, requirePerm('viewDriverPasses'), async (req, res) => {
   try {
     const doc = await Settings.findOne({ key: 'daily_fee_settings' }).lean();
     res.json(publicDailyFeeSettings(doc?.value));
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-app.patch('/api/admin/daily-fee-settings', adminJwt, async (req, res) => {
+app.patch('/api/admin/daily-fee-settings', adminJwt, requirePerm('manageDriverPasses'), async (req, res) => {
   try {
     const validated = validateDailyFeeSettings(req.body?.dailyFeeSettings);
     if (validated.errors.length) {
@@ -3248,7 +3305,7 @@ app.patch('/api/admin/daily-fee-settings', adminJwt, async (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-app.patch('/api/admin/fare-settings', adminJwt, async (req, res) => {
+app.patch('/api/admin/fare-settings', adminJwt, requirePerm('manageFareSettings'), async (req, res) => {
   try {
     const validated = validateFareSettings(req.body?.dailyFareSettings);
     if (validated.errors.length) {
@@ -3268,9 +3325,12 @@ app.patch('/api/admin/fare-settings', adminJwt, async (req, res) => {
 
 // PATCH /api/admin/settings — save public account details and encrypted gateway
 // credentials. Blank credential inputs mean "leave the existing value unchanged".
-app.patch('/api/admin/settings', adminJwt, async (req, res) => {
+app.patch('/api/admin/settings', adminJwt, requirePerm('managePaymentSettings'), async (req, res) => {
   try {
     const { jazzcash, easypaisa, bank, sadapay, gatewayConfigs, dailyFareSettings } = req.body;
+    if (dailyFareSettings !== undefined && !hasAdminPermission(req.admin, 'manageFareSettings')) {
+      return res.status(403).json({ error: 'Permission denied: manageFareSettings required to change pricing rules' });
+    }
     const value = {
       jazzcash:  { title: jazzcash?.title  || '', number: jazzcash?.number || '' },
       easypaisa: { title: easypaisa?.title || '', number: easypaisa?.number || '' },
@@ -3331,7 +3391,7 @@ app.patch('/api/admin/settings', adminJwt, async (req, res) => {
 });
 
 // GET /api/admin/daily-income — last 30 days grouped by date
-app.get('/api/admin/daily-income', adminJwt, async (req, res) => {
+app.get('/api/admin/daily-income', adminJwt, requirePerm('viewOverview'), async (req, res) => {
   try {
     const since = new Date(); since.setDate(since.getDate() - 30); since.setUTCHours(0,0,0,0);
     const payments = await Payment.find({ status: 'approved', updatedAt: { $gte: since } })
@@ -3820,5 +3880,8 @@ module.exports = {
   findRideBroadcastDrivers,
   emitRideRequestToDrivers,
   refreshPendingRideFares,
-  models: { User, Ride, Wallet, Payment, Settings }
+  SUB_ADMIN_PERMISSION_CATALOG,
+  normalizeSubAdminPermissions,
+  hasAdminPermission,
+  models: { User, Ride, Wallet, Payment, Settings, SubAdmin }
 };

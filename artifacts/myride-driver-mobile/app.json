@@ -4,12 +4,12 @@
     "slug": "myride-driver-mobile",
     "version": "1.0.0",
     "orientation": "portrait",
-    "icon": "./assets/images/icon.png",
+    "icon": "./assets/images/myride-driver-icon.png",
     "scheme": "myride-driver-mobile",
     "userInterfaceStyle": "automatic",
     "newArchEnabled": true,
     "splash": {
-      "image": "./assets/images/icon.png",
+        "image": "./assets/images/myride-driver-icon.png",
       "resizeMode": "contain",
       "backgroundColor": "#07111f"
     },
@@ -31,7 +31,7 @@
       ]
     },
     "web": {
-      "favicon": "./assets/images/icon.png"
+      "favicon": "./assets/images/myride-driver-icon.png"
     },
     "plugins": [
       [

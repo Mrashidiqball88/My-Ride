@@ -22,7 +22,7 @@ body{font-family:'Segoe UI',sans-serif;background:#0a0a0f;color:#fff;height:100d
 
 /* ── Auth ── */
 #auth-screen{position:fixed;inset:0;z-index:1000;background:#0a0a0f;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:1.5rem}
-.auth-logo{font-size:2rem;font-weight:800;margin-bottom:.25rem}.auth-logo span{color:#38bdf8}
+.auth-logo{font-size:2rem;font-weight:800;margin-bottom:.25rem}.auth-logo span{color:#38bdf8}.brand-lockup{display:flex;align-items:center;gap:.55rem}.brand-mark{width:34px;height:34px;border-radius:10px}.brand-role{font-size:.58rem;color:#64748b;font-weight:800;letter-spacing:.1em;margin-left:.3rem}
 .auth-subtitle{color:#555;font-size:.85rem;margin-bottom:2rem}
 .auth-card{background:#13131a;border:1px solid #222;border-radius:20px;padding:1.5rem;width:100%;max-width:360px}
 .auth-tabs{display:flex;gap:.5rem;margin-bottom:1.5rem;background:#0a0a0f;border-radius:10px;padding:.25rem}
@@ -288,7 +288,7 @@ body{font-family:'Segoe UI',sans-serif;background:#0a0a0f;color:#fff;height:100d
 
 <!-- ── AUTH ── -->
 <div id="auth-screen">
-  <div class="auth-logo">My <span>Ride</span></div>
+  <div class="auth-logo brand-lockup"><img class="brand-mark" src="/logo-customer.svg" alt="My Ride"><span>My <span>Ride</span><small class="brand-role">CUSTOMER</small></span></div>
   <p class="auth-subtitle">Customer Portal</p>
   <div class="auth-card">
     <div class="auth-tabs" id="auth-tabs-row">
@@ -377,7 +377,7 @@ body{font-family:'Segoe UI',sans-serif;background:#0a0a0f;color:#fff;height:100d
 <!-- ── APP ── -->
 <div id="app">
   <div class="header">
-    <div class="header-logo">My <span>Ride</span></div>
+    <div class="header-logo brand-lockup"><img class="brand-mark" src="/logo-customer.svg" alt="My Ride"><span>My <span>Ride</span></span></div>
     <div class="header-user">
       <div class="avatar" id="avatar-init">?</div>
       <div class="header-name" id="header-name">Loading…</div>

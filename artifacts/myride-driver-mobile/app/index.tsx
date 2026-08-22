@@ -31,7 +31,7 @@ function DriverHome() {
   if (!runtime.ready) return <View style={[styles.center, { backgroundColor: colors.background }]}><ActivityIndicator color={colors.primary} /></View>;
   if (!runtime.user) {
     return <View style={[styles.auth, { paddingTop: (isWeb ? 67 : insets.top) + 36, paddingBottom: isWeb ? 34 : insets.bottom, backgroundColor: colors.background }]}>
-      <View style={[styles.brandMark, { backgroundColor: colors.primary }]}><Ionicons name="navigate" size={30} color={colors.primaryForeground} /></View>
+      <View style={[styles.brandMark, { backgroundColor: colors.primary }]}><Ionicons name="car-sport" size={31} color={colors.primaryForeground} /></View>
       <Text style={[styles.brand, { color: colors.foreground }]}>My Ride <Text style={{ color: colors.primary }}>Driver</Text></Text>
       <Text style={[styles.subtle, { color: colors.mutedForeground }]}>The reliable driver companion</Text>
       <View style={[styles.authCard, { backgroundColor: colors.card, borderColor: colors.border, borderRadius: colors.radius + 10 }]}>
