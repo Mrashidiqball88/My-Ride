@@ -560,6 +560,11 @@ const userSchema = new mongoose.Schema({
     lat: { type: Number, default: 0 },
     lng: { type: Number, default: 0 }
   },
+  // Availability is persisted separately from a transient Socket.io connection.
+  // Native foreground services reconnect after radio/process changes, so a
+  // disconnect must not silently make an otherwise approved driver unavailable.
+  lastOnlineHeartbeat: { type: Date, default: null },
+  expoPushToken:       { type: String, default: '' },
   rating:       { type: Number, default: 5.0 },
   totalRides:   { type: Number, default: 0 },
   emergencyContacts: [{
@@ -745,6 +750,25 @@ const Payment  = mongoose.model('Payment',  paymentSchema);
 const Ticket   = mongoose.model('Ticket',   ticketSchema);
 const Settings = mongoose.model('Settings', settingsSchema);
 const PushSub  = mongoose.model('PushSub',  pushSubSchema);
+// A foreground-location task posts at least every 15 seconds. The grace window
+// absorbs OS/radio jitter while failing closed after a force-stop or prolonged
+// connectivity loss.
+const DRIVER_HEARTBEAT_MAX_AGE_MS = 90 * 1000;
+
+async function sendExpoPush(tokens, message) {
+  const recipients = [...new Set(tokens.filter(token => /^ExponentPushToken\[.+\]$|^ExpoPushToken\[.+\]$/.test(String(token || ''))))];
+  if (!recipients.length) return;
+  try {
+    const response = await fetch('https://exp.host/--/api/v2/push/send', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+      body: JSON.stringify(recipients.map(to => ({ to, sound: 'default', priority: 'high', ...message })))
+    });
+    if (!response.ok) console.warn(`[expo-push] delivery request failed: ${response.status}`);
+  } catch (err) {
+    console.warn(`[expo-push] delivery request failed: ${err.message}`);
+  }
+}
 
 const ADMIN_SECURITY_KEY = 'admin_security';
 const ADMIN_RECOVERY_ATTEMPTS = new Map();
@@ -1305,6 +1329,27 @@ app.post('/api/rides', authMiddleware, customerOnly, customerCanBook, async (req
         .catch(() => {});
     }
 
+    // Native Driver installs do not rely on a browser tab or service worker.
+    // Send a high-priority platform notification too, so Android/iOS can wake
+    // the driver with an actionable alert while the UI is backgrounded.
+    if (dbConnected) {
+      User.find({
+        role: 'driver',
+        isOnline: true,
+        accountStatus: 'active',
+        vehicleType: { $in: storedVehicleTypesForFareCategory(ride.vehicleType) },
+        lastOnlineHeartbeat: { $gte: new Date(Date.now() - DRIVER_HEARTBEAT_MAX_AGE_MS) },
+        expoPushToken: { $ne: '' }
+      }).select('expoPushToken').lean()
+        .then(drivers => sendExpoPush(drivers.map(driver => driver.expoPushToken), {
+          title: 'New ride request',
+          body: `${ride.pickupLocation?.address || 'Nearby pickup'} · Rs ${(ride.fare || 0).toLocaleString()}`,
+          data: { type: 'ride:new', ride: ridePayload, rideId: String(ride._id) },
+          categoryId: 'ride-request'
+        }))
+        .catch(() => {});
+    }
+
     res.status(201).json(ride);
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -1313,13 +1358,100 @@ app.post('/api/rides', authMiddleware, customerOnly, customerCanBook, async (req
 
 app.get('/api/rides/available', authMiddleware, driverOnly, async (req, res) => {
   try {
-    const rides = await Ride.find({ status: 'requested' })
+    const driver = await User.findById(req.user.id).select('vehicleType accountStatus isOnline lastOnlineHeartbeat').lean();
+    const hasFreshHeartbeat = driver?.lastOnlineHeartbeat &&
+      new Date(driver.lastOnlineHeartbeat).getTime() >= Date.now() - DRIVER_HEARTBEAT_MAX_AGE_MS;
+    if (!driver || driver.accountStatus !== 'active' || !driver.isOnline || !hasFreshHeartbeat) {
+      return res.status(403).json({ error: 'You must be an approved online driver to receive rides' });
+    }
+    const rides = await Ride.find({
+      status: 'requested',
+      vehicleType: { $in: storedVehicleTypesForFareCategory(driver.vehicleType) }
+    })
       .populate('passenger', 'name phone rating')
       .sort({ createdAt: -1 });
     res.json(rides);
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
+});
+
+// Native driver runtime endpoints. Background location tasks use REST because
+// mobile operating systems may wake them without restoring the JS Socket.io app.
+app.post('/api/driver/availability', authMiddleware, driverOnly, async (req, res) => {
+  try {
+    const isOnline = req.body?.isOnline === true;
+    const driver = await User.findById(req.user.id).select('accountStatus vehicleType').lean();
+    if (!driver || driver.accountStatus !== 'active') {
+      return res.status(403).json({ error: 'Your driver account is not approved for online availability' });
+    }
+    if (isOnline) {
+      const wallet = await Wallet.findOne({ user: req.user.id }).select('balance').lean();
+      if (wallet && wallet.balance < 0) {
+        return res.status(403).json({ error: `Insufficient wallet balance (Rs ${Math.abs(wallet.balance).toFixed(0)} due). Please recharge to go online.` });
+      }
+    }
+    const update = isOnline
+      ? { isOnline: true, lastOnlineHeartbeat: new Date() }
+      : { isOnline: false };
+    await User.updateOne({ _id: req.user.id }, update);
+    res.json({ isOnline, vehicleType: normalizeFareVehicle(driver.vehicleType || 'Car Mini') });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/driver/heartbeat', authMiddleware, driverOnly, async (req, res) => {
+  try {
+    const driver = await User.findById(req.user.id).select('accountStatus isOnline').lean();
+    if (!driver || driver.accountStatus !== 'active' || !driver.isOnline) {
+      return res.status(403).json({ error: 'Driver availability is no longer active' });
+    }
+    await User.updateOne({ _id: req.user.id }, { lastOnlineHeartbeat: new Date() });
+    res.json({ ok: true, serverTime: new Date().toISOString() });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/driver/location', authMiddleware, driverOnly, async (req, res) => {
+  try {
+    const lat = Number(req.body?.lat);
+    const lng = Number(req.body?.lng);
+    const rideId = req.body?.rideId;
+    if (!Number.isFinite(lat) || lat < -90 || lat > 90 || !Number.isFinite(lng) || lng < -180 || lng > 180) {
+      return res.status(422).json({ error: 'A valid GPS location is required' });
+    }
+    const driver = await User.findById(req.user.id).select('accountStatus isOnline').lean();
+    if (!driver || driver.accountStatus !== 'active' || !driver.isOnline) {
+      return res.status(403).json({ error: 'Driver availability is no longer active' });
+    }
+    const updates = { 'currentLocation.lat': lat, 'currentLocation.lng': lng, lastOnlineHeartbeat: new Date() };
+    await User.updateOne({ _id: req.user.id }, updates);
+    if (rideId) {
+      const ride = await Ride.findOne({
+        _id: rideId,
+        driver: req.user.id,
+        status: { $in: ['accepted', 'arrived', 'in-progress'] }
+      }).select('_id').lean();
+      if (ride) {
+        await Ride.updateOne({ _id: rideId }, { 'driverLocation.lat': lat, 'driverLocation.lng': lng });
+        io.to(`ride:${rideId}`).emit('driver:location', { lat, lng });
+      }
+    }
+    res.json({ ok: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/driver/push-token', authMiddleware, driverOnly, async (req, res) => {
+  const token = String(req.body?.token || '').trim();
+  if (!/^ExponentPushToken\[.+\]$|^ExpoPushToken\[.+\]$/.test(token)) {
+    return res.status(422).json({ error: 'A valid Expo push token is required' });
+  }
+  await User.updateOne({ _id: req.user.id }, { expoPushToken: token });
+  res.json({ ok: true });
 });
 
 app.get('/api/rides/my', authMiddleware, async (req, res) => {
@@ -2734,6 +2866,7 @@ app.get('/api/drivers/nearby', authMiddleware, async (req, res) => {
     }
     const drivers = await User.find({
       role: 'driver', isOnline: true, accountStatus: 'active',
+      lastOnlineHeartbeat: { $gte: new Date(Date.now() - DRIVER_HEARTBEAT_MAX_AGE_MS) },
       'currentLocation.lat': { $ne: 0 }, 'currentLocation.lng': { $ne: 0 }
     }).select('vehicleType currentLocation').lean();
     const nearby = drivers
@@ -3123,7 +3256,7 @@ io.use((socket, next) => {
   }
 });
 
-io.on('connection', (socket) => {
+io.on('connection', async (socket) => {
   const user = socket.user;
 
   // ── Admin socket ───────────────────────────────────────────────────────────
@@ -3149,13 +3282,15 @@ io.on('connection', (socket) => {
       User.findById(id).select('isOnline accountStatus vehicleType').lean().catch(() => null),
       Ride.findOne({ driver: id, status: { $in: ['accepted', 'arrived', 'in-progress'] } })
           .select('_id').lean().catch(() => null)
-    ]).then(([driver, activeRide]) => {
+    ]).then(async ([driver, activeRide]) => {
       // Cache vehicle type on socket for fast room management
         if (driver?.vehicleType) socket.vehicleType = normalizeFareVehicle(driver.vehicleType);
       // Restore online rooms — only if DB says online and account is active
       if (driver?.isOnline && driver.accountStatus === 'active') {
+        await User.updateOne({ _id: id }, { lastOnlineHeartbeat: new Date() }).catch(() => {});
         socket.join('drivers-online');
         socket.join(`drivers:${normalizeFareVehicle(driver.vehicleType || 'Car Mini')}`);
+        socket.emit('driver:rehydrate', { isOnline: true, vehicleType: normalizeFareVehicle(driver.vehicleType || 'Car Mini') });
       }
       // Re-join the active ride room so location updates reach the passenger
       if (activeRide) {
@@ -3171,11 +3306,16 @@ io.on('connection', (socket) => {
   // Driver sends location updates during a ride
   socket.on('driver:location', async ({ rideId, lat, lng }) => {
     if (role !== 'driver') return;
+    if (!Number.isFinite(Number(lat)) || !Number.isFinite(Number(lng))) return;
     if (rideId) {
       io.to(`ride:${rideId}`).emit('driver:location', { lat, lng });
       await Ride.updateOne({ _id: rideId }, { 'driverLocation.lat': lat, 'driverLocation.lng': lng }).catch(() => {});
     }
-    await User.updateOne({ _id: id }, { 'currentLocation.lat': lat, 'currentLocation.lng': lng }).catch(() => {});
+    await User.updateOne({ _id: id }, {
+      'currentLocation.lat': lat,
+      'currentLocation.lng': lng,
+      lastOnlineHeartbeat: new Date()
+    }).catch(() => {});
   });
 
   // Driver toggles online/offline
@@ -3203,10 +3343,27 @@ io.on('connection', (socket) => {
       // Cache vehicle type on socket for room management
       if (driver?.vehicleType) socket.vehicleType = normalizeFareVehicle(driver.vehicleType);
     }
-    await User.updateOne({ _id: id }, { isOnline }).catch(() => {});
+    await User.updateOne({ _id: id }, isOnline
+      ? { isOnline: true, lastOnlineHeartbeat: new Date() }
+      : { isOnline: false }
+    ).catch(() => {});
     const vRoom = `drivers:${socket.vehicleType || 'Car Mini'}`;
     if (isOnline) { socket.join('drivers-online'); socket.join(vRoom); }
     else          { socket.leave('drivers-online'); socket.leave(vRoom); }
+  });
+
+  // Native clients explicitly heartbeat while their foreground service is
+  // active. This lets the server detect policy/account changes without treating
+  // short radio reconnects as an offline transition.
+  socket.on('driver:heartbeat', async () => {
+    if (role !== 'driver') return;
+    const driver = await User.findById(id).select('accountStatus isOnline').lean().catch(() => null);
+    if (!driver || driver.accountStatus !== 'active' || !driver.isOnline) {
+      socket.emit('account:suspended', { reason: 'Driver availability is no longer active.' });
+      return;
+    }
+    await User.updateOne({ _id: id }, { lastOnlineHeartbeat: new Date() }).catch(() => {});
+    socket.emit('driver:heartbeat:ack', { serverTime: new Date().toISOString() });
   });
 
   // Share live location (customer)
@@ -3216,9 +3373,9 @@ io.on('connection', (socket) => {
 
   socket.on('disconnect', async () => {
     console.log(`Socket disconnected: ${name}`);
-    if (role === 'driver') {
-      await User.updateOne({ _id: id }, { isOnline: false }).catch(() => {});
-    }
+    // Do not set a driver offline here. A native foreground service can suffer
+    // a brief Socket.io/radio disconnect while still being actively online and
+    // tracking GPS; its persisted availability and heartbeat are authoritative.
   });
 });
 
