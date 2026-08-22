@@ -1,0 +1,1 @@
+- [Socket.io browser tests](socketio-browser-tests.md) — live Socket.io assertions must listen on the HTTP server instance that owns the Socket.io attachment.

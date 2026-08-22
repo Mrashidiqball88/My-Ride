@@ -21,6 +21,7 @@
     "web-push": "^3.6.7"
   },
   "devDependencies": {
-    "@playwright/test": "^1.62.1"
+    "@playwright/test": "^1.62.1",
+    "mongodb-memory-server": "^10.4.3"
   }
 }
