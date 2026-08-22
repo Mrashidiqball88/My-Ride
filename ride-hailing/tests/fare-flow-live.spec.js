@@ -41,6 +41,20 @@ async function openBrowserSocket(page, baseURL, authToken, room) {
   await page.waitForFunction(() => window.__fareSocket?.connected === true);
 }
 
+async function openAuthenticatedClient(page, baseURL, path, user, authToken) {
+  await page.addInitScript(({ user: storedUser, token: storedToken }) => {
+    localStorage.setItem('rh_token', storedToken);
+    localStorage.setItem('rh_user', JSON.stringify(storedUser));
+  }, { user, token: authToken });
+  await page.goto(`${baseURL}${path}`);
+  await page.waitForFunction(() => document.getElementById('app')?.style.display !== 'none');
+  await page.waitForFunction(() => typeof socket !== 'undefined' && socket?.connected === true);
+  await page.evaluate(() => {
+    window.__fareEvents = [];
+    socket.on('ride:fare-updated', payload => window.__fareEvents.push(payload));
+  });
+}
+
 async function fareEvents(page) {
   return page.evaluate(() => window.__fareEvents || []);
 }
@@ -117,6 +131,15 @@ test.describe('live Mongo fare refresh', () => {
       expect((await models.Settings.findOne({ key: 'daily_fare_settings' }).lean()).value['Car Mini'].baseFare)
         .toBe(200);
 
+      await Promise.all([
+        openAuthenticatedClient(customerPage, baseURL, '/customer', customer, customerToken),
+        openAuthenticatedClient(matchingPage, baseURL, '/driver', matchingDriver, matchingToken),
+        openBrowserSocket(otherPage, baseURL, otherToken)
+      ]);
+
+      await matchingPage.evaluate(() => toggleOnline(true));
+      await expect.poll(async () => (await models.User.findById(matchingDriver._id).lean()).isOnline).toBe(true);
+
       const rideResponse = await request.post('/api/rides', {
         headers: { authorization: `Bearer ${customerToken}` },
         data: {
@@ -131,11 +154,17 @@ test.describe('live Mongo fare refresh', () => {
       const ride = await rideResponse.json();
       expect(ride.fare).toBe(300);
 
-      await Promise.all([
-        openBrowserSocket(matchingPage, baseURL, matchingToken),
-        openBrowserSocket(otherPage, baseURL, otherToken),
-        openBrowserSocket(customerPage, baseURL, customerToken, ride._id)
-      ]);
+      await customerPage.evaluate(({ ride: createdRide }) => {
+        activeRide = createdRide;
+        activeLiveFare = createdRide.fare;
+        showWaitingPanel(createdRide);
+        connectToRideRoom(createdRide._id);
+      }, { ride });
+
+      await expect(customerPage.locator('#active-ride')).toBeVisible();
+      await expect(customerPage.locator('#ar-live-fare')).toHaveText('Rs 300');
+      await expect(matchingPage.locator('#ride-request')).toBeVisible();
+      await expect(matchingPage.locator('#rr-fare')).toHaveText('Rs 300');
 
       const refreshed = settingsFor(500, 125);
       const savedRefresh = await request.patch('/api/admin/fare-settings', {
@@ -152,6 +181,9 @@ test.describe('live Mongo fare refresh', () => {
       const matchingEvents = await fareEvents(matchingPage);
       expect(customerEvents[0]).toMatchObject({ id: ride._id, fare: 625 });
       expect(matchingEvents[0]).toMatchObject({ id: ride._id, fare: 625 });
+      await expect(customerPage.locator('#ar-live-fare')).toHaveText('Rs 625');
+      await expect(matchingPage.locator('#rr-fare')).toHaveText('Rs 625');
+      await expect(otherPage.locator('body')).not.toContainText('Rs 625');
       expect((await models.Ride.findById(ride._id).lean()).fare).toBe(625);
       expect((await models.Settings.findOne({ key: 'daily_fare_settings' }).lean()).value['Car Mini'])
         .toMatchObject({ baseFare: 500 });

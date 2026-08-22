@@ -1,1 +1,2 @@
 - [Socket.io browser tests](socketio-browser-tests.md) — live Socket.io assertions must listen on the HTTP server instance that owns the Socket.io attachment.
+- [Live fare UI tests](live-fare-ui-tests.md) — exercise the authenticated customer and driver pages so fare assertions cover rendered UI, not only socket payloads.
