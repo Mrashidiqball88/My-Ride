@@ -32,6 +32,8 @@ body{font-family:'Segoe UI',system-ui,sans-serif;background:#06060e;color:#e2e8f
 .sb-logo-text{font-size:1.1rem;font-weight:900}.sb-logo-text span{color:#f5c518}
 .sb-badge{font-size:.58rem;background:#1a1a0a;color:#f5c518;border:1px solid #2a2a10;border-radius:4px;padding:.1rem .35rem;font-weight:700;margin-left:.3rem;vertical-align:middle}
 .sb-nav{flex:1;padding:.6rem 0}
+.sb-group-label{color:#334155;font-size:.62rem;font-weight:800;letter-spacing:.11em;padding:1rem 1.1rem .3rem;text-transform:uppercase}
+.sb-group-label:first-of-type{padding-top:.45rem}
 .sb-item{display:flex;align-items:center;gap:.65rem;padding:.6rem 1.1rem;cursor:pointer;transition:all .15s;border-left:3px solid transparent;color:#64748b;font-size:.82rem;font-weight:500;position:relative}
 .sb-item:hover{color:#cbd5e1;background:#0f0f1e}
 .sb-item.active{color:#f5c518;background:#0f0f18;border-left-color:#f5c518}
@@ -55,6 +57,20 @@ body{font-family:'Segoe UI',system-ui,sans-serif;background:#06060e;color:#e2e8f
 
 /* ── Section Panels ── */
 .section-panel{display:none}.section-panel.active{display:block}
+.section-intro{font-size:.8rem;color:#64748b;line-height:1.55;margin:-.25rem 0 1rem}
+.management-shortcuts{display:grid;grid-template-columns:repeat(auto-fit,minmax(175px,1fr));gap:.7rem;margin:0 0 1.2rem}
+.management-shortcut{appearance:none;text-align:left;background:#0f0f1e;border:1px solid #1e1e2e;border-radius:12px;padding:.85rem;cursor:pointer;color:#cbd5e1;transition:transform .15s,border-color .15s,background .15s}
+.management-shortcut:hover{border-color:#f5c518;background:#12121f;transform:translateY(-1px)}
+.management-shortcut strong{display:block;font-size:.8rem;color:#e2e8f0;margin-bottom:.18rem}
+.management-shortcut span{display:block;font-size:.7rem;color:#64748b;line-height:1.35}
+.settings-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:.85rem;max-width:980px}
+.settings-card{background:#0f0f1e;border:1px solid #1e1e2e;border-radius:14px;padding:1rem;display:flex;flex-direction:column;align-items:flex-start;gap:.65rem;min-height:155px}
+.settings-card .settings-icon{font-size:1.25rem}
+.settings-card h3{font-size:.85rem;color:#e2e8f0}
+.settings-card p{font-size:.72rem;color:#64748b;line-height:1.45;flex:1}
+.radius-control{display:flex;align-items:center;gap:.8rem;max-width:460px}
+.radius-control input[type=range]{flex:1;accent-color:#f5c518}
+.radius-control .modal-input{width:105px;flex:0 0 105px}
 
 /* ── Stats Cards ── */
 .stats-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:.9rem;margin-bottom:1.5rem}
@@ -266,17 +282,18 @@ input[type=date]:focus{border-color:#f5c518}
     <div class="sb-nav">
       <div class="sb-item active" onclick="showSection('overview')"     data-sec="overview">    <span class="sb-icon">📊</span> Overview</div>
       <div class="sb-item"        onclick="showSection('payments')"     data-sec="payments">    <span class="sb-icon">💰</span> Payments <span class="sb-badge-count" id="pay-cnt" style="display:none">0</span></div>
-      <div class="sb-item"        onclick="showSection('drivers')"      data-sec="drivers">     <span class="sb-icon">🚗</span> Drivers</div>
-      <div class="sb-item"        onclick="showSection('passengers')"   data-sec="passengers">  <span class="sb-icon">👥</span> Passengers</div>
-      <div class="sb-item"        onclick="showSection('new-requests')" data-sec="new-requests"><span class="sb-icon">🆕</span> New Requests <span class="sb-badge-count" id="req-cnt" style="display:none">0</span></div>
-      <div class="sb-item"        onclick="showSection('temp-blocked')" data-sec="temp-blocked"><span class="sb-icon">⏸️</span> Temp Blocked</div>
-      <div class="sb-item"        onclick="showSection('blk-pass')"     data-sec="blk-pass">    <span class="sb-icon">🚫</span> Blocked Users</div>
+      <div class="sb-group-label">Driver Management</div>
+      <div class="sb-item"        onclick="showSection('drivers')"      data-sec="drivers">     <span class="sb-icon">🚗</span> Drivers & Wallets</div>
+      <div class="sb-item"        onclick="showSection('new-requests')" data-sec="new-requests"><span class="sb-icon">🆕</span> Approvals & Documents <span class="sb-badge-count" id="req-cnt" style="display:none">0</span></div>
+      <div class="sb-item"        onclick="showSection('fee-compliance')" data-sec="fee-compliance"><span class="sb-icon">📋</span> Driver Fees <span class="sb-badge-count" id="fee-cnt" style="display:none">0</span></div>
+      <div class="sb-item"        onclick="showSection('temp-blocked')" data-sec="temp-blocked"><span class="sb-icon">⏸️</span> Driver Status</div>
+      <div class="sb-group-label">Customer Management</div>
+      <div class="sb-item"        onclick="showSection('passengers')"   data-sec="passengers">  <span class="sb-icon">👥</span> Customer Accounts & IDs</div>
+      <div class="sb-item"        onclick="showSection('blk-pass')"     data-sec="blk-pass">    <span class="sb-icon">🚫</span> Blocked Customers</div>
+      <div class="sb-group-label">System & Pricing</div>
+      <div class="sb-item"        onclick="showSection('app-settings')" data-sec="app-settings"><span class="sb-icon">⚙️</span> App Settings / Pricing</div>
       <div class="sb-item"        onclick="showSection('live-rides')"   data-sec="live-rides">  <span class="sb-icon">🗺️</span> Live Rides</div>
       <div class="sb-item"        onclick="showSection('sos')"          data-sec="sos">         <span class="sb-icon">🆘</span> SOS Monitor <span class="sb-badge-count" id="sos-cnt" style="display:none">0</span></div>
-      <div class="sb-item"        onclick="showSection('fee-compliance')" data-sec="fee-compliance"><span class="sb-icon">📋</span> Fee Compliance <span class="sb-badge-count" id="fee-cnt" style="display:none">0</span></div>
-       <div class="sb-item"        onclick="showSection('ride-settings')" data-sec="ride-settings"><span class="sb-icon">📡</span> Ride Settings</div>
-       <div class="sb-item"        onclick="showSection('fare-settings')" data-sec="fare-settings"><span class="sb-icon">🧮</span> Daily Fare Settings</div>
-      <div class="sb-item"        onclick="showSection('pay-settings')" data-sec="pay-settings"><span class="sb-icon">⚙️</span> Payment Settings</div>
       <div class="sb-item"        onclick="showSection('ratings')"      data-sec="ratings">      <span class="sb-icon">⭐</span> Ratings & Feedback</div>
       <div class="sb-item"        onclick="showSection('support')"      data-sec="support">      <span class="sb-icon">🎫</span> Support Tickets <span class="sb-badge-count" id="sup-cnt" style="display:none">0</span></div>
       <div class="sb-item" onclick="showSection('deletions')" data-sec="deletions"><span class="sb-icon">🗑️</span> Deletion Requests <span class="sb-badge-count" id="del-cnt" style="display:none">0</span></div>
@@ -333,7 +350,7 @@ input[type=date]:focus{border-color:#f5c518}
       <!-- ════ 3. DRIVERS ════ -->
       <div class="section-panel" id="sec-drivers">
         <div class="sec-hdr">
-          <h2>🚗 Drivers Directory</h2>
+          <h2>🚗 Driver Management</h2>
           <div class="sec-hdr-actions">
             <div class="filter-tabs">
               <div class="ftab active" onclick="loadDrivers('all');setFTab(this)">All</div>
@@ -348,6 +365,12 @@ input[type=date]:focus{border-color:#f5c518}
             <button class="btn-refresh" onclick="loadDrivers(currentDriverStatus)">↻</button>
           </div>
         </div>
+        <p class="section-intro">Manage approved drivers, active status, wallet-related actions, and daily-fee access from one place.</p>
+        <div class="management-shortcuts">
+          <button class="management-shortcut" onclick="showSection('new-requests')"><strong>Approvals & 5 documents</strong><span>Review new driver submissions and required documents.</span></button>
+          <button class="management-shortcut" onclick="showSection('fee-compliance')"><strong>Wallets & daily fees</strong><span>Check paid status, reminders, and transaction history.</span></button>
+          <button class="management-shortcut" onclick="showSection('temp-blocked')"><strong>Driver active status</strong><span>Review temporarily blocked or suspended driver accounts.</span></button>
+        </div>
         <div class="table-wrap"><table class="data-table">
           <thead><tr>
             <th style="width:32px"><input type="checkbox" id="select-all-chk" onchange="toggleSelectAll(this.checked)" style="cursor:pointer"></th>
@@ -360,7 +383,7 @@ input[type=date]:focus{border-color:#f5c518}
       <!-- ════ 4. PASSENGERS ════ -->
       <div class="section-panel" id="sec-passengers">
         <div class="sec-hdr">
-          <h2>👥 Passengers Directory</h2>
+          <h2>👥 Customer Management</h2>
           <div class="sec-hdr-actions">
             <div class="filter-tabs">
               <div class="ftab active" onclick="loadPassengers('all');setFTab(this)">All</div>
@@ -369,6 +392,11 @@ input[type=date]:focus{border-color:#f5c518}
             </div>
             <button class="btn-refresh" onclick="loadPassengers(currentPassStatus)">↻</button>
           </div>
+        </div>
+        <p class="section-intro">View customer accounts, identity status, and review actions in a single customer-focused workspace.</p>
+        <div class="management-shortcuts">
+          <button class="management-shortcut" onclick="loadPassengers('all')"><strong>Customer accounts & verification</strong><span>Open a customer record to see the current CNIC and identity outcome.</span></button>
+          <button class="management-shortcut" onclick="showSection('blk-pass')"><strong>Restricted accounts</strong><span>Review blocked customer accounts and restore access when appropriate.</span></button>
         </div>
         <div class="table-wrap"><table class="data-table">
           <thead><tr><th>Passenger</th><th>Phone</th><th>CNIC</th><th>Rides</th><th>Status</th><th>Joined</th><th>Actions</th></tr></thead>
@@ -650,19 +678,54 @@ input[type=date]:focus{border-color:#f5c518}
         <div id="ps-feedback" style="margin-top:.75rem;font-size:.8rem;min-height:1.2em"></div>
       </div>
 
-      <!-- ════ 11. RIDE SETTINGS ════ -->
+      <!-- ════ 11. APP SETTINGS / PRICING ════ -->
+      <div class="section-panel" id="sec-app-settings">
+        <div class="sec-hdr"><h2>⚙️ App Settings / Pricing</h2></div>
+        <p class="section-intro">Keep the core daily controls in one place. Each card opens one focused form, so settings stay simple and quick to update.</p>
+        <div class="settings-grid">
+          <article class="settings-card">
+            <div class="settings-icon">📡</div>
+            <h3>Ride Broadcast Radius</h3>
+            <p>Set the maximum distance for nearby-driver map markers and ride alerts.</p>
+            <button class="btn btn-primary" onclick="showSection('ride-settings')">Open ride settings</button>
+          </article>
+          <article class="settings-card" id="fare-settings-card">
+            <div class="settings-icon">🧮</div>
+            <h3>Fare Rates</h3>
+            <p>Manage base fares, distance slabs, and time-based rules for each vehicle type.</p>
+            <button class="btn btn-primary" onclick="showSection('fare-settings')">Manage fare rates</button>
+          </article>
+          <article class="settings-card" id="driver-fees-card">
+            <div class="settings-icon">📋</div>
+            <h3>Daily Driver Fees</h3>
+            <p>See paid and unpaid drivers, send reminders, and review fee history.</p>
+            <button class="btn btn-primary" onclick="showSection('fee-compliance')">Open driver fees</button>
+          </article>
+          <article class="settings-card" id="payment-settings-card">
+            <div class="settings-icon">💳</div>
+            <h3>Payment Methods</h3>
+            <p>Control the customer-facing payment channels and account details.</p>
+            <button class="btn btn-primary" onclick="showSection('pay-settings')">Manage payments</button>
+          </article>
+        </div>
+      </div>
+
+      <!-- ════ 12. RIDE SETTINGS ════ -->
       <div class="section-panel" id="sec-ride-settings">
         <div class="sec-hdr">
           <h2>📡 Ride Settings</h2>
           <div class="sec-hdr-actions"><button class="btn-refresh" onclick="loadRideSettings()">↻ Reload</button></div>
         </div>
         <p style="font-size:.8rem;color:#475569;margin-bottom:1.1rem">
-          Control how far from a passenger pickup point drivers can receive a ride request. The same limit is used for the customer map, browser alerts, and native Driver notifications.
+          Choose how far from a pickup point a driver can receive a ride request. This also controls the nearby-driver map and driver alerts.
         </p>
         <div style="background:#0f0f1e;border:1px solid #1e1e2e;border-radius:14px;padding:1rem;max-width:520px">
-          <div class="field-item" style="max-width:300px">
+          <div class="field-item">
             <div class="field-label">Maximum Ride Broadcast Radius (km)</div>
-            <input class="modal-input" id="ride-broadcast-radius-km" type="number" min="0.5" max="100" step="0.1" inputmode="decimal" placeholder="5">
+            <div class="radius-control">
+              <input id="ride-broadcast-radius-slider" type="range" min="0.5" max="100" step="0.5" value="5" oninput="syncRideRadiusFromSlider()">
+              <input class="modal-input" id="ride-broadcast-radius-km" type="number" min="0.5" max="100" step="0.1" inputmode="decimal" placeholder="5" oninput="syncRideRadiusFromInput()">
+            </div>
           </div>
           <p style="font-size:.72rem;color:#64748b;line-height:1.5;margin-top:.7rem">Drivers outside this straight-line distance from the pickup point will not receive the request. Allowed range: 0.5–100 km.</p>
         </div>
@@ -670,14 +733,14 @@ input[type=date]:focus{border-color:#f5c518}
         <button class="btn btn-primary" style="padding:.75rem 2rem;font-size:.9rem" onclick="saveRideSettings()">💾 Save Ride Settings</button>
       </div>
 
-      <!-- ════ 12. DAILY FARE SETTINGS ════ -->
+      <!-- ════ 13. DAILY FARE SETTINGS ════ -->
       <div class="section-panel" id="sec-fare-settings">
         <div class="sec-hdr">
           <h2>🧮 Daily Fare Settings</h2>
           <div class="sec-hdr-actions"><button class="btn-refresh" onclick="loadFareSettings()">↻ Reload</button></div>
         </div>
         <p style="font-size:.8rem;color:#475569;margin-bottom:1.1rem">
-          Set every price, slab, time range, and percentage here. The fare engine has no fallback rates: each vehicle category needs a base fare and continuous distance slabs before customers can book it.
+          Set a clear base fare, distance rates, and time-based adjustments for each vehicle category.
         </p>
         <div id="fare-settings-feedback" style="min-height:1.25rem;font-size:.8rem;margin-bottom:.8rem"></div>
         <div id="fare-settings-list"></div>
@@ -715,16 +778,16 @@ input[type=date]:focus{border-color:#f5c518}
         <div id="support-list"><div class="loading-row">Loading…</div></div>
       </div>
 
-      <!-- ════ 13. DAILY FEE COMPLIANCE ════ -->
+      <!-- ════ DRIVER FEES ════ -->
       <div class="section-panel" id="sec-fee-compliance">
         <div class="sec-hdr">
-          <h2>📋 Daily Fee Compliance</h2>
+          <h2>📋 Driver Wallets & Daily Fees</h2>
           <div class="sec-hdr-actions">
             <button class="btn btn-yellow" id="remind-btn" onclick="sendFeeReminder()">🔔 Send Reminder to Unpaid</button>
             <button class="btn-refresh" onclick="loadFeeCompliance()">↻ Refresh</button>
           </div>
         </div>
-        <p style="font-size:.78rem;color:#475569;margin-bottom:1rem">Drivers who have paid today's platform fee vs those who haven't. Click a driver to view their TRX history.</p>
+        <p style="font-size:.78rem;color:#475569;margin-bottom:1rem">See which drivers have paid today’s platform fee, send reminders, and open a driver’s transaction history.</p>
 
         <!-- Summary badges -->
         <div id="fee-summary" style="display:flex;gap:.75rem;margin-bottom:1.25rem;flex-wrap:wrap"></div>
@@ -1174,11 +1237,12 @@ function showToast(msg, type = 'info') {
 
 // ── Section Navigation ────────────────────────────────────────────────────────
 const SECTION_TITLES = {
-  overview:'Overview Dashboard', payments:'Payments Management', drivers:'Drivers Directory',
-  passengers:'Passengers Directory', 'new-requests':'New Driver Requests',
-  'temp-blocked':'Temporarily Blocked Drivers', 'blk-pass':'Blocked Passengers',
+  overview:'Overview Dashboard', payments:'Payments Management', drivers:'Driver Management',
+  passengers:'Customer Management', 'new-requests':'Driver Approvals & Documents',
+  'temp-blocked':'Driver Status', 'blk-pass':'Blocked Customers',
   'live-rides':'Live Rides & History', sos:'SOS Alert Monitor',
-  'fee-compliance':'Daily Fee Compliance',
+  'fee-compliance':'Driver Wallets & Daily Fees',
+  'app-settings':'App Settings / Pricing',
   'ride-settings':'Ride Settings', 'fare-settings':'Daily Fare Settings', 'pay-settings':'Payment Settings', ratings:'Ratings & Feedback', support:'Support Tickets',
   'sub-admins':'Sub-Admin User Management'
 };
@@ -2099,7 +2163,7 @@ async function loadRideSettings() {
   feedback.textContent = 'Loading…'; feedback.style.color = '#64748b';
   try {
     const settings = await api('/api/admin/ride-settings');
-    document.getElementById('ride-broadcast-radius-km').value = settings.maximumRideBroadcastRadiusKm ?? 5;
+    setRideRadiusValue(settings.maximumRideBroadcastRadiusKm ?? 5);
     feedback.textContent = '';
   } catch (e) {
     feedback.textContent = `⚠ ${e.message}`;
@@ -2115,7 +2179,7 @@ async function saveRideSettings() {
     const result = await api('/api/admin/ride-settings', 'PATCH', {
       rideBroadcastSettings: { maximumRideBroadcastRadiusKm: radius }
     });
-    document.getElementById('ride-broadcast-radius-km').value = result.settings.maximumRideBroadcastRadiusKm;
+    setRideRadiusValue(result.settings.maximumRideBroadcastRadiusKm);
     feedback.textContent = `✓ Ride broadcast radius saved: ${result.settings.maximumRideBroadcastRadiusKm} km.`;
     feedback.style.color = '#22c55e';
     showToast('Ride broadcast radius updated ✓', 'success');
@@ -2124,6 +2188,23 @@ async function saveRideSettings() {
     feedback.textContent = `✕ ${e.message || 'Could not save Ride Settings'}${details}`;
     feedback.style.color = '#ef4444';
     showToast(e.message || 'Could not save Ride Settings', 'error');
+  }
+}
+
+function setRideRadiusValue(value) {
+  const numericValue = Number(value);
+  const input = document.getElementById('ride-broadcast-radius-km');
+  const slider = document.getElementById('ride-broadcast-radius-slider');
+  input.value = Number.isFinite(numericValue) ? numericValue : 5;
+  slider.value = Math.min(100, Math.max(0.5, Number.isFinite(numericValue) ? numericValue : 5));
+}
+function syncRideRadiusFromSlider() {
+  document.getElementById('ride-broadcast-radius-km').value = document.getElementById('ride-broadcast-radius-slider').value;
+}
+function syncRideRadiusFromInput() {
+  const numericValue = Number(document.getElementById('ride-broadcast-radius-km').value);
+  if (Number.isFinite(numericValue) && numericValue >= 0.5 && numericValue <= 100) {
+    document.getElementById('ride-broadcast-radius-slider').value = numericValue;
   }
 }
 
@@ -2408,6 +2489,10 @@ function applyPermissions() {
   if (sbPS) sbPS.style.display = sa ? '' : 'none';
   const sbFS = document.querySelector('[data-sec="fare-settings"]');
   if (sbFS) sbFS.style.display = sa ? '' : 'none';
+  const paymentSettingsCard = document.getElementById('payment-settings-card');
+  if (paymentSettingsCard) paymentSettingsCard.style.display = sa ? '' : 'none';
+  const fareSettingsCard = document.getElementById('fare-settings-card');
+  if (fareSettingsCard) fareSettingsCard.style.display = sa ? '' : 'none';
 
   // Payments tab — needs manageWallets
   const sbPay = document.querySelector('[data-sec="payments"]');
@@ -2416,6 +2501,8 @@ function applyPermissions() {
   // Fee Compliance tab — needs manageWallets (shows driver contact + TRX data and sends push reminders)
   const sbFee = document.querySelector('[data-sec="fee-compliance"]');
   if (sbFee) sbFee.style.display = (sa || p.manageWallets) ? '' : 'none';
+  const driverFeesCard = document.getElementById('driver-fees-card');
+  if (driverFeesCard) driverFeesCard.style.display = (sa || p.manageWallets) ? '' : 'none';
 
   // Live rides tab — needs viewRides
   const sbRides = document.querySelector('[data-sec="live-rides"]');
