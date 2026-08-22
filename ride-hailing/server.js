@@ -787,20 +787,32 @@ const ticketSchema = new mongoose.Schema({
 
 const paymentSchema = new mongoose.Schema({
   driver:          { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
-  trxId:           { type: String, required: true, trim: true },
+  trxId:           { type: String, required: true, trim: true, uppercase: true },
   amount:          { type: Number, required: true },
   vehicleCategory: { type: String, required: true },
   paymentType:     { type: String, enum: ['jazzcash','easypaisa','bank','sadapay'], default: 'jazzcash' },
   status:          { type: String, enum: ['pending', 'approved', 'rejected'], default: 'pending' },
+  proofScreenshot: { type: String, required: true, select: false },
   adminNote:       { type: String, default: '' },
+  approvedBy:      { type: String, default: '' },
+  approvedAt:      { type: Date, default: null },
+  rejectedBy:      { type: String, default: '' },
+  rejectedAt:      { type: Date, default: null },
   submittedDate:   { type: String, required: true },   // 'YYYY-MM-DD' UTC date, for uniqueness check
-  gatewayStatus:   { type: String, default: '' },
-  gatewayTransactionId: { type: String, default: '' },
-  gatewayVerifiedAt: { type: Date, default: null },
-  webhookEventId:  { type: String, default: '' }
+  auditLog: [{
+    action:        { type: String, enum: ['pending', 'approved', 'rejected'], required: true },
+    actorId:       { type: String, default: '' },
+    actorRole:     { type: String, default: '' },
+    reason:        { type: String, default: '' },
+    balanceBefore: { type: Number, default: null },
+    balanceAfter:  { type: Number, default: null },
+    passValidUntil:{ type: Date, default: null },
+    createdAt:     { type: Date, default: Date.now }
+  }]
 }, { timestamps: true });
 
-// One TRX submission per driver per calendar day
+// Database-enforced protections against repeated payment references and daily spam.
+paymentSchema.index({ trxId: 1 }, { unique: true });
 paymentSchema.index({ driver: 1, submittedDate: 1 }, { unique: true });
 
 // Key-value settings store
@@ -1205,7 +1217,9 @@ app.post('/api/auth/register', async (req, res) => {
       identityVerifiedAt: resolvedRole === 'customer' ? new Date() : null,
       identityVerificationStatus: resolvedRole === 'customer' ? (identityVerified ? 'approved' : 'rejected') : null
     });
-    await Wallet.create({ user: user._id, balance: 0, transactions: [] });
+    if (user.role === 'driver') {
+      await Wallet.create({ user: user._id, balance: 0, transactions: [] });
+    }
 
     // Single-device session token
     const sessionToken = crypto.randomBytes(32).toString('hex');
@@ -1948,6 +1962,9 @@ app.post('/api/user/update-profile', authMiddleware, async (req, res) => {
 
 app.get('/api/wallet', authMiddleware, async (req, res) => {
   try {
+    if (req.user.role !== 'driver') {
+      return res.status(410).json({ error: 'Customer wallets are not available. Pay drivers directly by cash or your own mobile-money account.' });
+    }
     let wallet = await Wallet.findOne({ user: req.user.id });
     if (!wallet) wallet = await Wallet.create({ user: req.user.id, balance: 0, transactions: [] });
     res.json(wallet);
@@ -1957,27 +1974,9 @@ app.get('/api/wallet', authMiddleware, async (req, res) => {
 });
 
 app.post('/api/wallet/add-funds', authMiddleware, async (req, res) => {
-  try {
-    const amount = Number(req.body.amount);
-    if (!amount || amount <= 0) return res.status(400).json({ error: 'Valid amount required' });
-    const { paymentMethod, mobileAccount } = req.body;
-    const PM_LABELS = { easypaisa: 'EasyPaisa', jazzcash: 'JazzCash', bank: 'Bank Transfer', cash: 'Cash' };
-    const pmLabel = PM_LABELS[paymentMethod] || 'Wallet top-up';
-    const wallet = await Wallet.findOneAndUpdate(
-      { user: req.user.id },
-      { $inc: { balance: amount, realCashWallet: amount },   // deposits → realCashWallet
-        $push: { transactions: {
-          amount, type: 'credit',
-          description: `Top-up via ${pmLabel}`,
-          paymentMethod: paymentMethod || '',
-          mobileAccount: mobileAccount || ''
-        } } },
-      { new: true, upsert: true }
-    );
-    res.json(wallet);
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
+  return res.status(410).json({
+    error: 'Customer wallet top-ups have been removed. Customers pay drivers directly by cash or their own mobile-money account.'
+  });
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1997,8 +1996,8 @@ app.post('/api/payments/submit', authMiddleware, async (req, res) => {
     if (req.user.role !== 'driver') {
       return res.status(403).json({ error: 'Only drivers can submit payments' });
     }
-    const { trxId, amount, paymentType } = req.body;
-    const cleanTrx = (trxId || '').trim();
+    const { trxId, amount, paymentType, proofScreenshot } = req.body;
+    const cleanTrx = (trxId || '').trim().toUpperCase();
 
     // ── Format validation ──────────────────────────────────────────────────
     if (!cleanTrx) {
@@ -2017,6 +2016,11 @@ app.post('/api/payments/submit', authMiddleware, async (req, res) => {
     }
     if (!amount || Number(amount) <= 0) {
       return res.status(400).json({ error: 'A valid amount is required' });
+    }
+    try {
+      parseImageDataUrl(proofScreenshot);
+    } catch {
+      return res.status(422).json({ error: 'A valid payment proof screenshot (JPEG, PNG, or WebP; max 6 MB) is required' });
     }
 
     const driver = await User.findById(req.user.id).select('vehicleType');
@@ -2049,96 +2053,130 @@ app.post('/api/payments/submit', authMiddleware, async (req, res) => {
       amount:          configuredFee,
       paymentType:     validTypes.includes(paymentType) ? paymentType : 'jazzcash',
       vehicleCategory: driver.vehicleType || 'Car Mini',
-      submittedDate:   dateStr
+      submittedDate:   dateStr,
+      proofScreenshot,
+      auditLog: [{
+        action: 'pending',
+        actorId: String(req.user.id),
+        actorRole: 'driver',
+        reason: 'Driver submitted payment proof'
+      }]
     });
 
     res.status(201).json(payment);
   } catch (err) {
     if (err.code === 11000) {
-      return res.status(409).json({ error: 'You have already submitted a payment for today.' });
+      return res.status(409).json({ error: 'This TRX ID or today’s payment submission already exists.' });
     }
     res.status(500).json({ error: err.message });
   }
 });
 
-// Shared signed callback processor used by the generic verification endpoint
-// and each provider-specific webhook URL.
-async function processGatewayWebhook(req, res, requestedGateway) {
-  const gateway = normalizeGateway(requestedGateway);
-  if (!PAYMENT_GATEWAYS.includes(gateway)) {
-    return res.status(404).json({ error: 'Unsupported payment gateway' });
-  }
-  try {
-    const gatewayDoc = await Settings.findOne({ key: 'payment_gateway_configs' }).lean();
-    const config = gatewayDoc?.value?.[gateway] || {};
-    const webhookSecret = decryptSecret(config.webhookSecret);
-    if (!verifyWebhookSignature(req, webhookSecret)) {
-      return res.status(401).json({ error: 'Invalid webhook signature' });
-    }
+// Gateway callbacks are intentionally disabled. Every Driver recharge remains
+// pending until an authorized Admin reviews the submitted proof and approves it.
+function disabledPaymentWebhook(_req, res) {
+  return res.status(410).json({
+    error: 'Gateway auto-approval is disabled. Driver payments require manual Admin approval.'
+  });
+}
+app.post('/api/payments/verify', disabledPaymentWebhook);
+app.post('/api/v1/payments/webhook/:gateway', disabledPaymentWebhook);
 
-    const payload = req.body || {};
-    const trxId = String(readWebhookValue(payload, [
-      'trxId', 'trx_id', 'transactionId', 'transaction_id', 'reference', 'referenceNumber', 'merchantReference'
-    ]) || '').trim();
-    const amount = Number(readWebhookValue(payload, ['amount', 'paidAmount', 'transactionAmount', 'grossAmount']));
-    const gatewayStatus = String(readWebhookValue(payload, ['status', 'paymentStatus', 'transactionStatus', 'resultCode']) || '').toLowerCase();
-    const eventId = String(readWebhookValue(payload, ['eventId', 'event_id', 'webhookId', 'id']) || '').trim();
-
-    if (!trxId || !Number.isFinite(amount) || amount <= 0) {
-      return res.status(202).json({ received: true, verified: false, reason: 'Incomplete payment payload; payment remains pending' });
-    }
-
-    const payment = await Payment.findOne({ trxId, paymentType: gateway });
-    if (!payment || payment.status !== 'pending' || Number(payment.amount) !== amount || !isSuccessfulWebhookStatus(gatewayStatus)) {
-      return res.status(202).json({ received: true, verified: false, reason: 'Payment did not match a pending transaction' });
-    }
-
-    // Idempotent state transition: duplicate gateway retries cannot credit twice.
-    payment.status = 'approved';
-    payment.gatewayStatus = gatewayStatus;
-    payment.gatewayTransactionId = trxId;
-    payment.gatewayVerifiedAt = new Date();
-    payment.webhookEventId = eventId;
-    payment.adminNote = `Automatically verified by ${gateway}`;
-    await payment.save();
-
-    const paidAt = new Date();
-    const paidUntilDate = new Date(paidAt.getTime() + ACTIVE_FEE_PASS_MS);
-    await User.updateOne(
-      { _id: payment.driver },
-      { lastDailyFeePaidAt: paidAt, paidUntilDate }
-    );
-    const notification = {
-      paymentId: String(payment._id),
-      trxId: payment.trxId,
-      amount: payment.amount,
-      paymentType: gateway,
-      status: 'approved',
-      paidUntilDate: paidUntilDate.toISOString()
-    };
-    io.to(`user:${payment.driver}`).emit('payment:approved', notification);
-    io.to('admin-room').emit('payment:approved', notification);
-    return res.json({ received: true, verified: true, status: 'approved' });
-  } catch (err) {
-    console.error('[payment webhook] processing failed:', err.message);
-    return res.status(500).json({ error: 'Webhook processing failed; payment remains pending' });
-  }
+function paymentAdminActor(admin) {
+  return {
+    id: String(admin?.email || admin?.id || admin?.sub || 'unknown-admin'),
+    role: admin?.isSuperAdmin ? 'super-admin' : 'sub-admin'
+  };
 }
 
-// POST /api/payments/verify supports gateways that only allow one callback URL.
-// Send x-payment-gateway: jazzcash|easypaisa|sadapay|bank with the signed body.
-app.post('/api/payments/verify', async (req, res) =>
-  processGatewayWebhook(req, res, req.get('x-payment-gateway') || req.body?.gateway)
-);
+async function approveDriverPayment(paymentId, admin, adminNote = '') {
+  const now = new Date();
+  const actor = paymentAdminActor(admin);
+  const payment = await Payment.findOneAndUpdate(
+    { _id: paymentId, status: 'pending' },
+    {
+      $set: {
+        status: 'approved',
+        adminNote: String(adminNote || '').trim(),
+        approvedBy: actor.id,
+        approvedAt: now
+      }
+    },
+    { new: true }
+  );
+  if (!payment) return null;
 
-// Provider-specific callback URL. Configure gateway callbacks as:
-// POST /api/v1/payments/webhook/jazzcash
-// POST /api/v1/payments/webhook/easypaisa
-// POST /api/v1/payments/webhook/sadapay
-// POST /api/v1/payments/webhook/bank
-app.post('/api/v1/payments/webhook/:gateway', async (req, res) =>
-  processGatewayWebhook(req, res, req.params.gateway)
-);
+  const passValidUntil = new Date(now.getTime() + ACTIVE_FEE_PASS_MS);
+  const wallet = await Wallet.findOneAndUpdate(
+    { user: payment.driver },
+    {
+      $inc: { balance: payment.amount, realCashWallet: payment.amount },
+      $set: { fee_paid_at: now },
+      $push: {
+        transactions: {
+          amount: payment.amount,
+          type: 'credit',
+          description: `Approved driver recharge (TRX ${payment.trxId})`,
+          paymentMethod: payment.paymentType,
+          mobileAccount: payment.trxId
+        }
+      }
+    },
+    { new: true, upsert: true }
+  );
+  await User.updateOne(
+    { _id: payment.driver },
+    { lastDailyFeePaidAt: now, paidUntilDate: passValidUntil, isFreeTrial: false }
+  );
+  await Payment.updateOne(
+    { _id: payment._id },
+    {
+      $push: {
+        auditLog: {
+          action: 'approved',
+          actorId: actor.id,
+          actorRole: actor.role,
+          reason: String(adminNote || '').trim(),
+          balanceBefore: Number(wallet.balance) - Number(payment.amount),
+          balanceAfter: Number(wallet.balance),
+          passValidUntil,
+          createdAt: now
+        }
+      }
+    }
+  );
+  return { payment, wallet, passValidUntil, actor };
+}
+
+async function rejectDriverPayment(paymentId, admin, reason = '') {
+  const actor = paymentAdminActor(admin);
+  const wallet = await Wallet.findOne({ user: (await Payment.findById(paymentId).select('driver'))?.driver })
+    .select('balance').lean();
+  const balance = Number(wallet?.balance || 0);
+  return Payment.findOneAndUpdate(
+    { _id: paymentId, status: 'pending' },
+    {
+      $set: {
+        status: 'rejected',
+        adminNote: String(reason || '').trim(),
+        rejectedBy: actor.id,
+        rejectedAt: new Date()
+      },
+      $push: {
+        auditLog: {
+          action: 'rejected',
+          actorId: actor.id,
+          actorRole: actor.role,
+          reason: String(reason || '').trim(),
+          balanceBefore: balance,
+          balanceAfter: balance,
+          createdAt: new Date()
+        }
+      }
+    },
+    { new: true }
+  );
+}
 
 // GET /api/payments/my — driver's own payment history
 app.get('/api/payments/my', authMiddleware, driverOnly, async (req, res) => {
@@ -2212,24 +2250,12 @@ app.get('/api/payments/pending', authMiddleware, adminMiddleware, async (req, re
 
 // PATCH /api/payments/:id/approve — admin
 app.patch('/api/payments/:id/approve', authMiddleware, adminMiddleware, async (req, res) => {
-  return res.status(403).json({ error: 'Manual approval is disabled. Payments are approved only after a verified gateway webhook.' });
+  return res.status(410).json({ error: 'Use the Admin Panel payment approval workflow so the decision is fully audited.' });
 });
 
 // PATCH /api/payments/:id/reject — admin
 app.patch('/api/payments/:id/reject', authMiddleware, adminMiddleware, async (req, res) => {
-  try {
-    const payment = await Payment.findById(req.params.id);
-    if (!payment) return res.status(404).json({ error: 'Payment not found' });
-    if (payment.status !== 'pending') {
-      return res.status(400).json({ error: `Payment is already ${payment.status}` });
-    }
-    payment.status    = 'rejected';
-    payment.adminNote = req.body.adminNote || '';
-    await payment.save();
-    res.json(payment);
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
+  return res.status(410).json({ error: 'Use the Admin Panel payment rejection workflow so the decision is fully audited.' });
 });
 
 // GET /api/payments/history — admin: recently approved/rejected submissions
@@ -2702,6 +2728,7 @@ app.get('/api/admin/payments', adminJwt, async (req, res) => {
     const filter = {};
     if (status && status !== 'all') filter.status = status;
     const payments = await Payment.find(filter)
+      .select('+proofScreenshot')
       .populate('driver', 'name phone vehicleType vehiclePlate')
       .sort('-createdAt').limit(100);
     res.json(payments);
@@ -2709,19 +2736,35 @@ app.get('/api/admin/payments', adminJwt, async (req, res) => {
 });
 
 app.patch('/api/admin/payments/:id/approve', adminJwt, requirePerm('manageWallets'), async (req, res) => {
-  return res.status(403).json({ error: 'Manual approval is disabled. Payments are approved only after a verified gateway webhook.' });
+  try {
+    const approved = await approveDriverPayment(req.params.id, req.admin, req.body?.note);
+    if (!approved) return res.status(409).json({ error: 'Payment is no longer pending and cannot be approved again.' });
+    const notification = {
+      paymentId: String(approved.payment._id),
+      trxId: approved.payment.trxId,
+      amount: approved.payment.amount,
+      status: 'approved',
+      paidUntilDate: approved.passValidUntil.toISOString()
+    };
+    io.to(`user:${approved.payment.driver}`).emit('payment:approved', notification);
+    io.to('admin-room').emit('payment:approved', notification);
+    res.json({
+      success: true,
+      payment: approved.payment,
+      balanceBefore: Number(approved.wallet.balance) - Number(approved.payment.amount),
+      balanceAfter: approved.wallet.balance,
+      passValidUntil: approved.passValidUntil
+    });
+  } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
 app.patch('/api/admin/payments/:id/reject', adminJwt, requirePerm('manageWallets'), async (req, res) => {
   try {
     const { reason } = req.body;
-    const payment = await Payment.findById(req.params.id);
-    if (!payment) return res.status(404).json({ error: 'Not found' });
-    if (payment.status !== 'pending') return res.status(400).json({ error: `Already ${payment.status}` });
-    payment.status = 'rejected'; payment.adminNote = reason || '';
-    await payment.save();
+    const payment = await rejectDriverPayment(req.params.id, req.admin, reason);
+    if (!payment) return res.status(409).json({ error: 'Payment is no longer pending and cannot be rejected.' });
     io.to(`user:${payment.driver}`).emit('payment:rejected', { reason: reason || 'Rejected' });
-    res.json({ success: true });
+    res.json({ success: true, payment });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
@@ -3069,9 +3112,9 @@ function publicRideBroadcastSettings(value) {
   return normalizeRideBroadcastSettings(value);
 }
 
-// GET /api/settings/payment — public: drivers/customers read account details,
-// never gateway credentials or webhook secrets.
-app.get('/api/settings/payment', async (req, res) => {
+// Driver-only receiving account details. Never return gateway credentials or
+// webhook secrets to browsers.
+app.get('/api/settings/payment', authMiddleware, driverOnly, async (req, res) => {
   try {
     const doc = await Settings.findOne({ key: 'payment_accounts' });
     const accounts = { ...defaultPaymentAccounts(), ...(doc?.value || {}) };
@@ -3777,5 +3820,5 @@ module.exports = {
   findRideBroadcastDrivers,
   emitRideRequestToDrivers,
   refreshPendingRideFares,
-  models: { User, Ride, Wallet, Settings }
+  models: { User, Ride, Wallet, Payment, Settings }
 };

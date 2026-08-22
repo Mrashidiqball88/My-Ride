@@ -596,12 +596,12 @@ textarea.support-input{resize:vertical;min-height:85px}
         <input class="trx-input" id="trx-id-input" type="text" placeholder="TRX / Reference ID (e.g. T20240801ABCD…)">
         <input class="trx-input" id="trx-amount-input" type="number" min="0.01" step="0.01" placeholder="Loading Daily Fee…" readonly>
         <div>
-          <span class="trx-screenshot-label">📸 Screenshot (optional)</span>
-          <input class="trx-screenshot-input" id="trx-screenshot" type="file" accept="image/*">
+          <span class="trx-screenshot-label">📸 Payment proof screenshot (required)</span>
+          <input class="trx-screenshot-input" id="trx-screenshot" type="file" accept="image/jpeg,image/png,image/webp" required>
         </div>
         <button class="btn-submit-trx" id="submit-trx-btn" onclick="submitTrxPayment()">Submit Payment</button>
       </div>
-        <div style="font-size:.72rem;color:#555;margin-top:.5rem">Your submission remains pending until the gateway sends a verified payment callback.</div>
+        <div style="font-size:.72rem;color:#555;margin-top:.5rem">Your payment remains pending until an Admin verifies your TRX ID and screenshot, then approves it.</div>
     </div>
 
     <!-- Payment History -->
@@ -1850,8 +1850,7 @@ async function loadAdminPaymentAccounts() {
   const el = document.getElementById('pay-accounts-list');
   if (!el) return;
   try {
-    const r = await fetch('/api/settings/payment');
-    const accts = await r.json();
+    const accts = await apiCall('/api/settings/payment');
     if (accts.dailyFeeSettings) {
       dailyFeeSettings = accts.dailyFeeSettings;
       if (user) {
@@ -2095,17 +2094,29 @@ async function submitTrxPayment() {
   const amount = configuredFee;
   if (!trxId)  return showToast('Enter a TRX / Reference ID', 'error');
   if (!amount || Number(amount) <= 0) return showToast('Daily Fee is not configured for your vehicle. Contact Admin.', 'error');
+  const proofFile = document.getElementById('trx-screenshot')?.files?.[0];
+  if (!proofFile) return showToast('Upload the payment proof screenshot', 'error');
+  if (!['image/jpeg', 'image/png', 'image/webp'].includes(proofFile.type) || proofFile.size > 6 * 1024 * 1024) {
+    return showToast('Use a JPEG, PNG, or WebP screenshot up to 6 MB', 'error');
+  }
 
   const btn = document.getElementById('submit-trx-btn');
   btn.disabled = true;
   btn.textContent = 'Submitting…';
   try {
+    const proofScreenshot = await new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onerror = () => reject(new Error('Could not read the screenshot'));
+      reader.onload = () => resolve(reader.result);
+      reader.readAsDataURL(proofFile);
+    });
     await apiCall('/api/payments/submit', 'POST', {
       trxId,
       amount:      Number(amount),
-      paymentType: selectedPayType || 'jazzcash'
+      paymentType: selectedPayType || 'jazzcash',
+      proofScreenshot
     });
-    showToast('⏳ Payment submitted and is pending gateway verification.', 'info');
+    showToast('⏳ Payment submitted for Admin verification.', 'info');
     document.getElementById('trx-id-input').value     = '';
     document.getElementById('trx-amount-input').value = '';
     const ss = document.getElementById('trx-screenshot');

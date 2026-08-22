@@ -1345,14 +1345,41 @@ async function loadPayments(status = 'pending') {
         <div class="pay-info">
           <div class="pay-name">🧑 ${drv.name||'Unknown Driver'}${isPending?'<span class="new-notif">NEW</span>':''}</div>
           <div class="pay-meta">📱 ${drv.phone||'—'} · 🚗 ${drv.vehicleType||'—'} · TRX: <code style="color:#818cf8">${p.trxId}</code></div>
-          <div class="pay-meta">📅 ${p.submittedDate} · ${badgeHtml(p.status)}</div>
+          <div class="pay-meta">📅 ${fmtDate(p.createdAt)} · ${badgeHtml(p.status)}</div>
           ${p.adminNote ? `<div class="pay-meta" style="color:#64748b;margin-top:.2rem">💬 ${p.adminNote}</div>` : ''}
+          ${p.approvedBy ? `<div class="pay-meta" style="color:#64748b;margin-top:.2rem">✓ Approved by ${p.approvedBy} · ${fmtDate(p.approvedAt)}</div>` : ''}
+          ${p.rejectedBy ? `<div class="pay-meta" style="color:#64748b;margin-top:.2rem">✕ Rejected by ${p.rejectedBy} · ${fmtDate(p.rejectedAt)}</div>` : ''}
         </div>
         <div class="pay-amount">Rs ${(p.amount||0).toLocaleString()}</div>
-        ${isPending ? `<div class="pay-actions"><span class="badge badge-pending">Waiting for verified gateway webhook</span></div>` : ''}
+        <div class="pay-actions" style="display:flex;align-items:center;gap:.5rem;flex-wrap:wrap">
+          ${p.proofScreenshot ? `<a href="${p.proofScreenshot}" target="_blank" rel="noopener" class="btn btn-gray" style="text-decoration:none">🖼 View Proof</a>` : '<span class="badge badge-red">No proof</span>'}
+          ${isPending && (isSuperAdmin||adminPerms.manageWallets) ? `<button class="btn btn-green" onclick="approvePayment('${p._id}')">✓ Approve</button><button class="btn btn-red" onclick="rejectPayment('${p._id}')">✕ Reject</button>` : ''}
+        </div>
       </div>`;
     }).join('');
   } catch (e) { el.innerHTML = `<div class="empty-state">Error: ${e.message}</div>`; }
+}
+
+async function approvePayment(paymentId) {
+  const note = prompt('Optional verification note for the Driver:', '');
+  if (note === null) return;
+  if (!confirm('Approve this verified Driver recharge? This credits the Driver wallet and starts the 24-hour pass.')) return;
+  try {
+    await api(`/api/admin/payments/${paymentId}/approve`, 'PATCH', { note });
+    showToast('Driver recharge approved and credited.', 'success');
+    loadPayments(currentPayStatus); loadStats();
+  } catch (e) { showToast(e.message, 'error'); }
+}
+
+async function rejectPayment(paymentId) {
+  const reason = prompt('Reason for rejecting this payment:', '');
+  if (reason === null) return;
+  if (!confirm('Reject this Driver recharge request? The wallet will not be credited.')) return;
+  try {
+    await api(`/api/admin/payments/${paymentId}/reject`, 'PATCH', { reason });
+    showToast('Driver recharge rejected.', 'success');
+    loadPayments(currentPayStatus); loadStats();
+  } catch (e) { showToast(e.message, 'error'); }
 }
 
 // ── 3. DRIVERS ────────────────────────────────────────────────────────────────
@@ -2386,7 +2413,7 @@ async function savePaymentSettings() {
         if (input.type === 'password') input.value = '';
       });
     });
-    fb.textContent = '✓ Settings saved. Gateway credentials are encrypted and webhook verification is ready.';
+    fb.textContent = '✓ Official receiving-account details saved. Driver recharges require manual Admin approval.';
     fb.style.color = '#22c55e';
     showToast('Payment settings saved ✓', 'success');
   } catch (e) {

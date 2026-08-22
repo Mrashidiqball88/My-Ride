@@ -177,3 +177,48 @@ test('background GPS location rejects invalid coordinates and only accepts a val
     await new Promise(resolve => server.close(resolve));
   }
 });
+
+test('customer wallet deposits are disabled and driver submissions require proof', async () => {
+  const customerToken = jwt.sign(
+    { id: '507f1f77bcf86cd799439012', role: 'customer', accountStatus: 'active', name: 'Customer' },
+    'ride-hailing-secret-fallback'
+  );
+  const server = app.listen(0);
+  try {
+    const topUpResponse = await fetch(`http://127.0.0.1:${server.address().port}/api/wallet/add-funds`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${customerToken}` },
+      body: JSON.stringify({ amount: 1000 })
+    });
+    assert.equal(topUpResponse.status, 410);
+
+    const noProof = await request(server, '/api/payments/submit', {
+      trxId: 'PAYMENT-1234',
+      amount: 100,
+      paymentType: 'jazzcash'
+    });
+    assert.equal(noProof.response.status, 422);
+    assert.match(noProof.body.error, /proof screenshot/i);
+  } finally {
+    await new Promise(resolve => server.close(resolve));
+  }
+});
+
+test('payment webhooks cannot approve Driver recharge requests and TRX IDs have a unique database index', async () => {
+  const server = app.listen(0);
+  try {
+    const webhookResponse = await fetch(`http://127.0.0.1:${server.address().port}/api/payments/verify`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ trxId: 'PAYMENT-1234', status: 'success' })
+    });
+    assert.equal(webhookResponse.status, 410);
+    const body = await webhookResponse.json();
+    assert.match(body.error, /manual Admin approval/i);
+
+    const indexes = models.Payment.schema.indexes();
+    assert.ok(indexes.some(([key, options]) => key.trxId === 1 && options.unique === true));
+  } finally {
+    await new Promise(resolve => server.close(resolve));
+  }
+});
