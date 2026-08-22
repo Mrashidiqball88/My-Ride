@@ -1248,6 +1248,88 @@ app.post('/api/payments/submit', authMiddleware, async (req, res) => {
   }
 });
 
+// POST /api/payments/verify — internal/manual verification probe. This never
+// approves a payment from client-supplied fields; it only reports the current
+// persisted state. Approval can happen only through a valid signed webhook.
+app.post('/api/payments/verify', authMiddleware, async (req, res) => {
+  try {
+    const trxId = String(req.body?.trxId || '').trim();
+    if (!trxId) return res.status(400).json({ error: 'TRX ID is required' });
+    const payment = await Payment.findOne({ trxId }).lean();
+    if (!payment) return res.status(404).json({ error: 'Payment not found' });
+    if (String(payment.driver) !== String(req.user.id) && req.user.role !== 'admin') {
+      return res.status(403).json({ error: 'You can only verify your own payment' });
+    }
+    res.json({ success: true, status: payment.status, payment });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// Gateway callback endpoint. Configure each provider with:
+// POST /api/v1/payments/webhook/:gateway
+// Signature: HMAC-SHA256(raw request body, stored webhook secret), sent in
+// x-webhook-signature (sha256=... is also accepted).
+app.post('/api/v1/payments/webhook/:gateway', async (req, res) => {
+  const gateway = normalizeGateway(req.params.gateway);
+  if (!PAYMENT_GATEWAYS.includes(gateway)) {
+    return res.status(404).json({ error: 'Unsupported payment gateway' });
+  }
+  try {
+    const gatewayDoc = await Settings.findOne({ key: 'payment_gateway_configs' }).lean();
+    const config = gatewayDoc?.value?.[gateway] || {};
+    const webhookSecret = decryptSecret(config.webhookSecret);
+    if (!verifyWebhookSignature(req, webhookSecret)) {
+      return res.status(401).json({ error: 'Invalid webhook signature' });
+    }
+
+    const payload = req.body || {};
+    const trxId = String(readWebhookValue(payload, [
+      'trxId', 'trx_id', 'transactionId', 'transaction_id', 'reference', 'referenceNumber', 'merchantReference'
+    ]) || '').trim();
+    const amount = Number(readWebhookValue(payload, ['amount', 'paidAmount', 'transactionAmount', 'grossAmount']));
+    const gatewayStatus = String(readWebhookValue(payload, ['status', 'paymentStatus', 'transactionStatus', 'resultCode']) || '').toLowerCase();
+    const eventId = String(readWebhookValue(payload, ['eventId', 'event_id', 'webhookId', 'id']) || '').trim();
+
+    if (!trxId || !Number.isFinite(amount) || amount <= 0) {
+      return res.status(202).json({ received: true, verified: false, reason: 'Incomplete payment payload; payment remains pending' });
+    }
+
+    const payment = await Payment.findOne({ trxId, paymentType: gateway });
+    if (!payment || payment.status !== 'pending' || Number(payment.amount) !== amount || !PAYMENT_SUCCESS_STATUSES.has(gatewayStatus)) {
+      return res.status(202).json({ received: true, verified: false, reason: 'Payment did not match a pending transaction' });
+    }
+
+    // Idempotent state transition: duplicate gateway retries cannot credit twice.
+    payment.status = 'approved';
+    payment.gatewayStatus = gatewayStatus;
+    payment.gatewayTransactionId = trxId;
+    payment.gatewayVerifiedAt = new Date();
+    payment.webhookEventId = eventId;
+    payment.adminNote = `Automatically verified by ${gateway}`;
+    await payment.save();
+
+    const paidUntilDate = new Date();
+    paidUntilDate.setUTCHours(23, 59, 59, 999);
+    await User.updateOne(
+      { _id: payment.driver },
+      { lastDailyFeePaidAt: new Date(), paidUntilDate }
+    );
+    const notification = {
+      paymentId: String(payment._id),
+      trxId: payment.trxId,
+      amount: payment.amount,
+      paymentType: gateway,
+      status: 'approved',
+      paidUntilDate: paidUntilDate.toISOString()
+    };
+    io.to(`user:${payment.driver}`).emit('payment:approved', notification);
+    io.to('admin-room').emit('payment:approved', notification);
+    return res.json({ received: true, verified: true, status: 'approved' });
+  } catch (err) {
+    console.error('[payment webhook] processing failed:', err.message);
+    return res.status(500).json({ error: 'Webhook processing failed; payment remains pending' });
+  }
+});
+
 // GET /api/payments/my — driver's own payment history
 app.get('/api/payments/my', authMiddleware, driverOnly, async (req, res) => {
   try {
