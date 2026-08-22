@@ -365,6 +365,7 @@ input[type=date]:focus{border-color:#f5c518}
   <!-- Main Area -->
   <div id="main">
     <div id="top-header">
+      <button id="global-back" type="button" onclick="backToDashboard()">← Back to Dashboard</button>
       <div id="section-title">Overview</div>
       <div class="header-badges">
         <span class="hbadge green" id="hb-rides">● 0 active</span>
@@ -1262,6 +1263,8 @@ async function bootAdmin() {
   }
   document.getElementById('admin-email-lbl').textContent = adminEmail;
   applyPermissions();
+  ensureSectionControls();
+  ensureModalBackControls();
   connectSocket();
   const requestedSection = window.location.hash.slice(1);
   if (requestedSection && SECTION_TITLES[requestedSection]) {
@@ -1380,8 +1383,96 @@ const SECTION_TITLES = {
   'fee-compliance':'Driver Wallets & Daily Fees',
   'app-settings':'App Settings / Pricing',
   'ride-settings':'Ride Settings', 'fare-settings':'Daily Fare Settings', 'pay-settings':'Payment Settings', ratings:'Ratings & Feedback', support:'Support Tickets', 'audit-logs':'Payment & Pass Audit Logs',
-  'sub-admins':'Sub-Admin User Management'
+  deletions:'Account Deletion Requests', 'sub-admins':'Sub-Admin User Management'
 };
+const SECTION_SAVE_HANDLERS = {
+  'pay-settings': 'savePaymentSettings',
+  'ride-settings': 'saveRideSettings',
+  'fare-settings': 'saveFareSettings'
+};
+
+function backToDashboard() {
+  if (!hasSectionAccess('overview')) {
+    const fallback = [...document.querySelectorAll('.sb-item')].find(el => el.dataset.sec && hasSectionAccess(el.dataset.sec));
+    if (fallback?.dataset.sec) return showSection(fallback.dataset.sec);
+    return;
+  }
+  showSection('overview');
+}
+
+function saveViewState(section) {
+  const selectedTabs = [...document.querySelectorAll(`#sec-${section} .filter-tabs`)].map(group =>
+    [...group.querySelectorAll('.ftab')].findIndex(tab => tab.classList.contains('active'))
+  );
+  localStorage.setItem(`myride_admin_view_${section}`, JSON.stringify({ selectedTabs, savedAt: Date.now() }));
+  showToast('View saved successfully ✓', 'success');
+}
+
+async function saveSectionChanges(section) {
+  const handlerName = SECTION_SAVE_HANDLERS[section];
+  const handler = handlerName && window[handlerName];
+  if (typeof handler === 'function') {
+    await handler();
+    return;
+  }
+  saveViewState(section);
+}
+
+function ensureSectionControls() {
+  document.querySelectorAll('.section-panel[id^="sec-"]').forEach(panel => {
+    const section = panel.id.slice(4);
+    if (panel.querySelector('.section-action-bar')) return;
+    const bar = document.createElement('div');
+    bar.className = 'section-action-bar';
+    bar.innerHTML = `
+      ${section === 'overview' ? '<span style="font-size:.76rem;color:#64748b">Dashboard preferences are saved only on this device.</span>' : '<button type="button" class="btn section-back-inline" onclick="backToDashboard()">← Back to Dashboard</button>'}
+      <button type="button" class="btn btn-primary section-save" data-section-save="${section}">${SECTION_SAVE_HANDLERS[section] ? 'Save Changes' : 'Save View'}</button>
+    `;
+    bar.querySelector('[data-section-save]').addEventListener('click', async (event) => {
+      const button = event.currentTarget;
+      if (button.disabled) return;
+      button.disabled = true;
+      const label = button.textContent;
+      button.textContent = 'Saving…';
+      try {
+        await saveSectionChanges(section);
+      } finally {
+        button.disabled = false;
+        button.textContent = label;
+      }
+    });
+    panel.appendChild(bar);
+  });
+}
+
+function ensureModalBackControls() {
+  document.querySelectorAll('.modal-backdrop').forEach(modal => {
+    const header = modal.querySelector('.modal-header');
+    if (!header || header.querySelector('.modal-back-inline')) return;
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'btn btn-gray modal-back-inline';
+    button.textContent = '← Back';
+    button.addEventListener('click', () => closeModal(modal.id));
+    header.insertBefore(button, header.firstChild);
+  });
+  [
+    ['delete-modal', 'closeDeleteModal'],
+    ['trial-modal', 'closeTrialModal']
+  ].forEach(([id, closeName]) => {
+    const modal = document.getElementById(id);
+    const box = modal?.firstElementChild;
+    if (!box || box.querySelector('.inner-modal-back')) return;
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'btn btn-gray inner-modal-back';
+    button.style.marginBottom = '.75rem';
+    button.textContent = '← Back';
+    button.addEventListener('click', () => window[closeName]?.());
+    box.insertBefore(button, box.firstChild);
+  });
+}
+
 function showSection(name) {
   if (!hasSectionAccess(name)) {
     showToast('You do not have access to this section.', 'error');
@@ -1395,6 +1486,14 @@ function showSection(name) {
   document.querySelectorAll('.section-panel').forEach(el => el.classList.remove('active'));
   document.getElementById(`sec-${name}`)?.classList.add('active');
   document.getElementById('section-title').textContent = SECTION_TITLES[name] || name;
+  document.getElementById('global-back')?.classList.toggle('visible', name !== 'overview');
+  ensureSectionControls();
+  ensureModalBackControls();
+  const dashboardAvailable = hasSectionAccess('overview');
+  document.getElementById('global-back').textContent = dashboardAvailable ? '← Back to Dashboard' : '← Back';
+  document.querySelectorAll('.section-back-inline').forEach(button => {
+    button.textContent = dashboardAvailable ? '← Back to Dashboard' : '← Back';
+  });
 
   // Reset SOS badge when opening monitor
   if (name === 'sos') { document.getElementById('sos-cnt').style.display = 'none'; document.getElementById('sos-cnt').textContent = '0'; }

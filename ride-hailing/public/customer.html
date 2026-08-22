@@ -72,6 +72,9 @@ body{font-family:'Segoe UI',sans-serif;background:#0a0a0f;color:#fff;height:100d
 .pw-eye:hover{color:#f5c518}
 /* ── Rating & Support modals ── */
 #rating-modal.open,#support-modal.open,#my-tickets-modal.open{display:flex!important}
+.modal-card,.support-modal{position:relative}
+.inner-back-button{display:inline-flex;align-items:center;gap:.35rem;background:transparent;border:0;color:#f5c518;font-size:.8rem;font-weight:700;cursor:pointer;padding:.15rem 0;margin:0 0 .75rem}
+.inner-back-button:hover{color:#fff}
 .star-btn{background:none;border:none;font-size:1.8rem;color:#334155;cursor:pointer;transition:color .15s;line-height:1}
 .star-btn:hover,.star-btn.selected{color:#f5c518}
 /* ── Ticket badge ── */
@@ -2313,6 +2316,37 @@ async function doDeleteAccount() {
     btn.disabled = false; btn.textContent = 'Delete My Account';
   }
 }
+</script>
+
+<script>
+// Keep every customer detail surface one tap away from the booking map.
+const CUSTOMER_SURFACE_CLOSE = {
+  'rating-modal': 'skipRating',
+  'my-tickets-modal': 'closeMyTickets',
+  'support-modal': 'closeSupportModal',
+  'ec-modal': 'closeEcModal',
+  'change-phone-modal': 'closeChangePhoneModal',
+  'change-password-modal': 'closeChangePasswordModal',
+  'delete-account-modal': 'closeDeleteAccountModal'
+};
+function installCustomerBackControls() {
+  Object.entries(CUSTOMER_SURFACE_CLOSE).forEach(([id, closeName]) => {
+    const surface = document.getElementById(id);
+    const card = surface?.firstElementChild;
+    if (!card || card.querySelector('.inner-back-button')) return;
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'inner-back-button';
+    button.textContent = '← Back';
+    button.addEventListener('click', () => {
+      const close = window[closeName];
+      if (typeof close === 'function') close();
+    });
+    card.insertBefore(button, card.firstChild);
+  });
+}
+if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', installCustomerBackControls);
+else installCustomerBackControls();
 </script>
 </body>
 </html>

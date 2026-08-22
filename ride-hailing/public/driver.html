@@ -262,6 +262,9 @@ body{font-family:'Segoe UI',sans-serif;background:#0a0a0f;color:#fff;height:100d
 .support-overlay{position:fixed;inset:0;background:rgba(0,0,0,.8);z-index:800;display:none;align-items:center;justify-content:center;padding:1rem}
 .support-overlay.open{display:flex}
 .support-modal{background:#0f0f18;border:1px solid #2a2a38;border-radius:16px;width:100%;max-width:380px;padding:1.25rem}
+.support-modal,.driver-inner-card{position:relative}
+.inner-back-button{display:inline-flex;align-items:center;gap:.35rem;background:transparent;border:0;color:#f5c518;font-size:.8rem;font-weight:700;cursor:pointer;padding:.15rem 0;margin:0 0 .75rem}
+.inner-back-button:hover{color:#fff}
 .support-modal h3{font-size:.95rem;font-weight:700;margin-bottom:.9rem;color:#e2e8f0}
 .support-input{width:100%;background:#06060e;border:1px solid #2a2a38;border-radius:8px;padding:.6rem .8rem;color:#e2e8f0;font-size:.85rem;outline:none;margin-bottom:.55rem}
 .support-input:focus{border-color:#f5c518}
@@ -2123,6 +2126,7 @@ async function submitTrxPayment() {
     const ss = document.getElementById('trx-screenshot');
     if (ss) ss.value = '';
     await loadPayments();
+    switchBottomTab('home');
   } catch (e) {
     showToast(e.message, 'error');
     btn.disabled = false;
@@ -2659,6 +2663,39 @@ if ('serviceWorker' in navigator) {
       .catch(err => console.warn('[SW] Registration failed:', err));
   });
 }
+</script>
+
+<script>
+// Every driver overlay gets a consistent route back to the live dashboard.
+const DRIVER_SURFACE_CLOSE = {
+  'pin-entry-modal': 'closePinModal',
+  'driver-rating-modal': 'skipDriverRating',
+  'support-overlay': 'closeSupportModal',
+  'my-tickets-overlay': 'closeMyTickets',
+  'change-phone-modal': 'closeChangePhoneModal',
+  'change-password-modal': 'closeChangePasswordModal',
+  'change-vehicle-modal': 'closeChangeVehicleModal',
+  'delete-account-modal': 'closeDeleteAccountModal'
+};
+function installDriverBackControls() {
+  Object.entries(DRIVER_SURFACE_CLOSE).forEach(([id, closeName]) => {
+    const surface = document.getElementById(id);
+    const card = surface?.firstElementChild;
+    if (!card || card.querySelector('.inner-back-button')) return;
+    card.classList.add('driver-inner-card');
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'inner-back-button';
+    button.textContent = '← Back';
+    button.addEventListener('click', () => {
+      const close = window[closeName];
+      if (typeof close === 'function') close();
+    });
+    card.insertBefore(button, card.firstChild);
+  });
+}
+if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', installDriverBackControls);
+else installDriverBackControls();
 </script>
 </body>
 </html>
