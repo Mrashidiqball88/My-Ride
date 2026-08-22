@@ -111,7 +111,7 @@ body{font-family:'Segoe UI',sans-serif;background:#0a0a0f;color:#fff;height:100d
 .loc-secondary{font-size:.72rem;color:#555;margin-top:.1rem}
 .loc-loading{padding:.6rem .85rem;font-size:.8rem;color:#555;text-align:center}
 .location-sheet{position:fixed;left:0;right:0;bottom:0;z-index:40;display:flex;flex-direction:column;max-height:min(72vh,620px);min-height:260px;background:#13131a;border-top:1px solid #3a3a4a;border-radius:20px 20px 0 0;box-shadow:0 -12px 35px rgba(0,0,0,.5);transform:translateY(110%);transition:transform .22s ease;pointer-events:none;touch-action:none}
-.location-sheet.open{transform:translateY(0);pointer-events:auto}
+.location-sheet.open{transform:translateY(0);pointer-events:auto}.location-sheet.expanded{max-height:min(88vh,760px)}
 .location-sheet.dragging{transition:none}
 .sheet-grabber{width:52px;height:5px;border-radius:99px;background:#555;margin:.7rem auto .4rem;cursor:grab;flex:0 0 auto}
 .sheet-header{display:flex;align-items:center;gap:.65rem;padding:.35rem 1rem .75rem;border-bottom:1px solid #252535;flex:0 0 auto}
@@ -1309,7 +1309,16 @@ document.getElementById('location-sheet-grabber')?.addEventListener('pointerup',
   const sheet = document.getElementById('location-sheet');
   sheet.classList.remove('dragging');
   if (delta > 130) closeLocationSheet();
-  else sheet.style.transform = '';
+  else {
+    sheet.classList.toggle('expanded', delta < -45);
+    sheet.style.transform = '';
+  }
+});
+document.getElementById('location-sheet-grabber')?.addEventListener('pointercancel', () => {
+  locationSheetDrag = null;
+  const sheet = document.getElementById('location-sheet');
+  sheet.classList.remove('dragging');
+  sheet.style.transform = '';
 });
 
 function closeDropdown(type) {
