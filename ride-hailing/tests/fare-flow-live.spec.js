@@ -300,13 +300,28 @@ test.describe('live Mongo fare refresh', () => {
       }).toBe(true);
 
       const cases = [
-        { category: 'Toyota Highroof', driverPage: highroofPage, expectedFare: 1540 },
-        { category: 'Toyota Saloon Coaster', driverPage: coasterPage, expectedFare: 1880 }
+        {
+          category: 'Toyota Highroof',
+          driverPage: highroofPage,
+          unrelatedPages: [coasterPage, otherPage],
+          expectedFare: 1540
+        },
+        {
+          category: 'Toyota Saloon Coaster',
+          driverPage: coasterPage,
+          unrelatedPages: [highroofPage, otherPage],
+          expectedFare: 1880
+        }
       ];
-      for (const [index, { category, driverPage, expectedFare }] of cases.entries()) {
+      for (const [index, { category, driverPage, unrelatedPages, expectedFare }] of cases.entries()) {
         if (index > 0) {
           await openAuthenticatedClient(customerPage, baseURL, '/customer', customer, customerToken);
         }
+        await Promise.all([
+          highroofPage.evaluate(() => hideRideRequest()),
+          coasterPage.evaluate(() => hideRideRequest()),
+          otherPage.evaluate(() => hideRideRequest())
+        ]);
         await expect.poll(() => driverPage.evaluate(() => ({
           isOnline, activeRide: !!activeRide, sentOffer: !!sentOffer, pendingRide: !!pendingRide
         }))).toEqual({ isOnline: true, activeRide: false, sentOffer: false, pendingRide: false });
@@ -345,6 +360,15 @@ test.describe('live Mongo fare refresh', () => {
           .sort({ createdAt: -1 }).lean();
         expect(ride).toBeTruthy();
         expect(ride.fare).toBe(expectedFare);
+
+        // Assert the real Socket.io notification opened the production request
+        // card and rendered the category-specific fare on the matching page.
+        await expect(driverPage.locator('#ride-request')).toBeVisible();
+        await expect(driverPage.locator('#rr-vehicle')).toHaveText(category);
+        await expect(driverPage.locator('#rr-fare')).toHaveText(`Rs ${expectedFare.toLocaleString()}`);
+        await Promise.all(unrelatedPages.map(page =>
+          expect(page.locator('#ride-request')).toBeHidden()
+        ));
       }
     } finally {
       await Promise.all([
