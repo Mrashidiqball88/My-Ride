@@ -121,6 +121,47 @@ test('Admin fare settings persist every vehicle category and reject gaps or over
   }
 });
 
+test('Admin can save one vehicle fare without completing other categories', async () => {
+  let stored = null;
+  models.Settings.findOne = ({ key }) => ({
+    lean: async () => key === 'daily_fare_settings' ? { value: stored } : null
+  });
+  models.Settings.findOneAndUpdate = async (_query, update) => {
+    stored = update.value;
+    return { value: stored };
+  };
+  models.Ride.find = async () => [];
+
+  const server = app.listen(0);
+  try {
+    const result = await request(server, '/api/admin/fare-settings', {
+      method: 'PATCH',
+      headers: { authorization: `Bearer ${adminToken()}` },
+      body: JSON.stringify({
+        category: 'Bike',
+        dailyFareSettings: {
+          Bike: {
+            baseFare: 50,
+            distanceSlabs: [{ minKm: 0, maxKm: null, rate: 25 }],
+            peakRules: []
+          }
+        }
+      })
+    });
+    assert.equal(result.response.status, 200);
+    assert.equal(result.body.category, 'Bike');
+    assert.deepEqual(stored.Bike, {
+      baseFare: 50,
+      distanceSlabs: [{ minKm: 0, maxKm: null, rate: 25 }],
+      peakRules: []
+    });
+    assert.equal(stored.Riksha.baseFare, null);
+    assert.deepEqual(stored.Riksha.distanceSlabs, []);
+  } finally {
+    await new Promise(resolve => server.close(resolve));
+  }
+});
+
 test('Customer and Driver terms stay independent and publish role-specific reads', async () => {
   let stored = { customer: 'Customer v1', driver: 'Driver v1' };
   models.Settings.findOne = () => ({ lean: async () => ({ value: stored }) });

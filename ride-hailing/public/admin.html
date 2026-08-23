@@ -875,7 +875,7 @@ input[type=date]:focus{border-color:#f5c518}
         </p>
         <div id="fare-settings-feedback" style="min-height:1.25rem;font-size:.8rem;margin-bottom:.8rem"></div>
         <div id="fare-settings-list"></div>
-        <button class="btn btn-primary" style="padding:.75rem 2rem;font-size:.9rem" onclick="saveFareSettings()">💾 Save Daily Fare Settings</button>
+        <button class="btn btn-primary" style="padding:.75rem 2rem;font-size:.9rem" onclick="saveFareSettings()">💾 Save All Daily Fare Settings</button>
       </div>
       <div class="section-panel" id="sec-long-range-settings">
         <div class="sec-hdr"><h2>🛣️ Long Range Ride Settings</h2><div class="sec-hdr-actions"><button class="btn-refresh" onclick="loadLongRangeSettings()">↻ Reload</button></div></div>
@@ -2942,6 +2942,8 @@ function fareCategoryCard(category, config = {}) {
     <div style="font-size:.69rem;color:#64748b;margin-bottom:.45rem">Choose “Up Fare” for surge or “Down Fare” for discount, then enter the percentage.</div>
     <div class="fare-rules">${peakRules.map(r => fareRuleRow(r)).join('')}</div>
     <button class="btn btn-secondary" type="button" style="font-size:.72rem;padding:.35rem .6rem;margin-top:.45rem" onclick="addFareRule('${category}')">＋ Add Time Rule</button>
+    <div class="fare-category-feedback" style="min-height:1.15rem;font-size:.76rem;margin-top:.8rem"></div>
+    <button class="btn btn-primary" type="button" style="margin-top:.2rem" onclick="saveFareCategory('${category}')">💾 Save ${category} Fare</button>
   </div>`;
 }
 
@@ -2978,22 +2980,26 @@ function addFareRule(category) {
 function readFareSettings() {
   const data = {};
   document.querySelectorAll('.fare-category-card').forEach(card => {
-    data[card.dataset.category] = {
-      baseFare: card.querySelector('.fare-base').value,
-      distanceSlabs: [...card.querySelectorAll('.fare-slab')].map(row => ({
-        minKm: row.querySelector('.slab-min').value,
-        maxKm: row.querySelector('.slab-max').value,
-        rate: row.querySelector('.slab-rate').value
-      })),
-      peakRules: [...card.querySelectorAll('.fare-rule')].map(row => ({
-        start: row.querySelector('.rule-start').value,
-        end: row.querySelector('.rule-end').value,
-        adjustmentType: row.querySelector('.rule-type').value,
-        percentage: row.querySelector('.rule-percent').value
-      }))
-    };
+    data[card.dataset.category] = readFareCategory(card);
   });
   return data;
+}
+
+function readFareCategory(card) {
+  return {
+    baseFare: card.querySelector('.fare-base').value,
+    distanceSlabs: [...card.querySelectorAll('.fare-slab')].map(row => ({
+      minKm: row.querySelector('.slab-min').value,
+      maxKm: row.querySelector('.slab-max').value,
+      rate: row.querySelector('.slab-rate').value
+    })),
+    peakRules: [...card.querySelectorAll('.fare-rule')].map(row => ({
+      start: row.querySelector('.rule-start').value,
+      end: row.querySelector('.rule-end').value,
+      adjustmentType: row.querySelector('.rule-type').value,
+      percentage: row.querySelector('.rule-percent').value
+    }))
+  };
 }
 
 function renderFareSettings(settings = {}) {
@@ -3028,6 +3034,33 @@ async function saveFareSettings() {
     feedback.textContent = `✕ ${e.message || 'Could not save fare settings'}${details}`;
     feedback.style.color = '#ef4444';
     showToast(e.message || 'Could not save fare settings', 'error');
+  }
+}
+
+async function saveFareCategory(category) {
+  const card = getFareCategoryCard(category);
+  const feedback = card?.querySelector('.fare-category-feedback');
+  if (!card || !feedback) return;
+  feedback.textContent = `Saving ${category} fare…`; feedback.style.color = '#64748b';
+  try {
+    const result = await api('/api/admin/fare-settings', 'PATCH', {
+      category,
+      dailyFareSettings: { [category]: readFareCategory(card) }
+    });
+    fareSettingsState = result.settings;
+    card.outerHTML = fareCategoryCard(category, result.settings[category]);
+    const updatedCard = getFareCategoryCard(category);
+    const updatedFeedback = updatedCard?.querySelector('.fare-category-feedback');
+    if (updatedFeedback) {
+      updatedFeedback.textContent = `✓ ${category} fare saved and published live.`;
+      updatedFeedback.style.color = '#22c55e';
+    }
+    showToast(`${category} fare saved ✓`, 'success');
+  } catch (e) {
+    const details = Array.isArray(e?.errors) ? `: ${e.errors.join('; ')}` : '';
+    feedback.textContent = `✕ ${e.message || `Could not save ${category} fare`}${details}`;
+    feedback.style.color = '#ef4444';
+    showToast(e.message || `Could not save ${category} fare`, 'error');
   }
 }
 
