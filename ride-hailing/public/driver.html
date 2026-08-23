@@ -1396,6 +1396,24 @@ function connectSocket() {
     showToast('🎉 Your account has been approved! You can now go online.', 'success');
   });
 
+  socket.on('account:vehicle-review', ({ reason }) => {
+    user.accountStatus = 'pending';
+    user.isOnline = false;
+    user.longRangeEnabled = false;
+    localStorage.setItem('rh_user', JSON.stringify(user));
+    isOnline = false;
+    pendingRide = null;
+    sentOffer = null;
+    hideRideRequest();
+    const toggle = document.getElementById('online-toggle');
+    if (toggle) toggle.checked = false;
+    const pendingCard = document.getElementById('pending-card');
+    const onlineBar = document.querySelector('.online-bar');
+    if (pendingCard) pendingCard.style.display = 'block';
+    if (onlineBar) onlineBar.style.display = 'none';
+    showToast(reason || 'Vehicle documents are under Admin review. You are offline until approval.', 'info');
+  });
+
   // Admin granted a fee waiver or free trial — instantly unlock Accept button
   socket.on('fee:waived', ({ paidUntilDate, isFreeTrial, trialStartDate }) => {
     if (paidUntilDate)             user.paidUntilDate  = paidUntilDate;
@@ -2510,10 +2528,14 @@ if (token && user && user.role === 'driver') {
 <!-- ── Change Vehicle Info Modal ──────────────────────────────────────────── -->
 <div id="change-vehicle-modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.8);z-index:2100;align-items:center;justify-content:center">
   <div style="background:#1a1a2a;border:1px solid #2a2a4a;border-radius:16px;padding:1.5rem;max-width:340px;width:90%;margin:auto">
-    <h3 style="color:#f5c518;margin:0 0 1rem;font-size:1rem">🚗 Change Vehicle Info</h3>
+     <h3 style="color:#f5c518;margin:0 0 .45rem;font-size:1rem">🚗 Change Vehicle Info</h3>
+     <p style="color:#94a3b8;font-size:.75rem;line-height:1.45;margin:0 0 .9rem">A new registration or ownership document is required. Your account will be under review and unavailable for rides until Admin approval.</p>
     <input type="password" id="cv-current" placeholder="Current password" style="width:100%;padding:.7rem;border-radius:8px;border:1px solid #333;background:#0d0d1a;color:#fff;margin-bottom:.5rem;box-sizing:border-box;font-size:.875rem">
     <input type="text" id="cv-model" placeholder="Vehicle model (e.g. Suzuki Cultus 2022)" style="width:100%;padding:.7rem;border-radius:8px;border:1px solid #333;background:#0d0d1a;color:#fff;margin-bottom:.5rem;box-sizing:border-box;font-size:.875rem">
     <input type="text" id="cv-plate" placeholder="Number plate (e.g. LHR-1234)" style="width:100%;padding:.7rem;border-radius:8px;border:1px solid #333;background:#0d0d1a;color:#fff;margin-bottom:.4rem;box-sizing:border-box;font-size:.875rem;text-transform:uppercase">
+     <label for="cv-vehicle-reg" style="display:block;color:#cbd5e1;font-size:.76rem;font-weight:700;margin:.7rem 0 .35rem">Vehicle Registration / Ownership Document <span style="color:#f5c518">*</span></label>
+     <input class="photo-file-input" type="file" id="cv-vehicle-reg" accept="image/*" capture="environment" onchange="previewPhoto(this,'cv-vehicle-preview')">
+     <img id="cv-vehicle-preview" class="photo-preview-img" style="display:none;margin:.55rem 0 0" src="" alt="New vehicle document preview">
     <p id="cv-err" style="color:#ff4444;font-size:.78rem;min-height:1em;margin-bottom:.5rem"></p>
     <div style="display:flex;gap:.5rem">
       <button onclick="closeChangeVehicleModal()" style="flex:1;padding:.7rem;border-radius:8px;border:1px solid #333;background:#1a1a2a;color:#aaa;cursor:pointer;font-size:.85rem">Cancel</button>
@@ -2719,6 +2741,11 @@ function openChangeVehicleModal() {
   document.getElementById('cv-current').value = '';
   document.getElementById('cv-model').value   = user?.vehicleModel || '';
   document.getElementById('cv-plate').value   = user?.vehiclePlate || '';
+  const documentInput = document.getElementById('cv-vehicle-reg');
+  const documentPreview = document.getElementById('cv-vehicle-preview');
+  if (documentInput) documentInput.value = '';
+  delete _photos['cv-vehicle-reg'];
+  if (documentPreview) { documentPreview.removeAttribute('src'); documentPreview.style.display = 'none'; }
   document.getElementById('cv-err').textContent = '';
   const btn = document.getElementById('cv-btn'); if (btn) { btn.disabled = false; btn.textContent = 'Update'; }
   document.getElementById('change-vehicle-modal').style.display = 'flex';
@@ -2727,15 +2754,45 @@ function closeChangeVehicleModal() { document.getElementById('change-vehicle-mod
 async function submitChangeVehicle() {
   const currentPassword = document.getElementById('cv-current').value;
   const vehicleModel    = document.getElementById('cv-model').value.trim();
-  const vehiclePlate    = document.getElementById('cv-plate').value.trim();
+  const vehiclePlate    = document.getElementById('cv-plate').value.trim().toUpperCase();
+  const documentInput   = document.getElementById('cv-vehicle-reg');
   const errEl = document.getElementById('cv-err');
   const btn   = document.getElementById('cv-btn');
   if (!currentPassword) { errEl.textContent = 'Current password is required'; return; }
   if (!vehicleModel)    { errEl.textContent = 'Vehicle model is required';     return; }
   if (!vehiclePlate)    { errEl.textContent = 'Number plate is required';      return; }
-  btn.disabled = true; btn.textContent = 'Updating…'; errEl.textContent = '';
-  const err = await profileUpdate({ currentPassword, vehicleModel, vehiclePlate }, 'change-vehicle-modal');
-  if (err) { errEl.textContent = err; btn.disabled = false; btn.textContent = 'Update'; }
+  const file = documentInput?.files?.[0];
+  if (!file) { errEl.textContent = 'Upload the new vehicle registration or ownership document'; return; }
+  btn.disabled = true; btn.textContent = 'Preparing document…'; errEl.textContent = '';
+  try {
+    const vehicleRegPhoto = _photos['cv-vehicle-reg'] || await compressImage(file);
+    _photos['cv-vehicle-reg'] = vehicleRegPhoto;
+    showUploadProgress(); setUploadProgress(45);
+    const res = await apiCall('/api/user/update-profile', 'POST', {
+      currentPassword, vehicleModel, vehiclePlate, vehicleRegPhoto
+    });
+    setUploadProgress(100);
+    user = { ...user, ...res.user, accountStatus: 'pending', isOnline: false, longRangeEnabled: false };
+    localStorage.setItem('rh_user', JSON.stringify(user));
+    isOnline = false;
+    pendingRide = null;
+    sentOffer = null;
+    hideRideRequest();
+    socket?.emit('driver:status', { isOnline: false });
+    const onlineToggle = document.getElementById('online-toggle');
+    if (onlineToggle) onlineToggle.checked = false;
+    const pendingCard = document.getElementById('pending-card');
+    const onlineBar = document.querySelector('.online-bar');
+    if (pendingCard) pendingCard.style.display = 'block';
+    if (onlineBar) onlineBar.style.display = 'none';
+    document.getElementById('change-vehicle-modal').style.display = 'none';
+    showToast('Vehicle update submitted. You are offline until Admin approves the new document.', 'info');
+  } catch (e) {
+    errEl.textContent = e.message || 'Could not submit the vehicle update';
+    btn.disabled = false; btn.textContent = 'Update';
+  } finally {
+    hideUploadProgress();
+  }
 }
 </script>
 

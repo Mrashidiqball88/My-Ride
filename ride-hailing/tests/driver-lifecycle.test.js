@@ -3,12 +3,15 @@
 const { test, afterEach } = require('node:test');
 const assert = require('node:assert/strict');
 const jwt = require('jsonwebtoken');
+const bcrypt = require('bcryptjs');
 const service = require('../server');
 
 const { app, models } = service;
 const original = {
   userFindById: models.User.findById,
   userUpdateOne: models.User.updateOne,
+  userFindOne: models.User.findOne,
+  userFindByIdAndUpdate: models.User.findByIdAndUpdate,
   walletFindOne: models.Wallet.findOne,
   walletFindOneAndUpdate: models.Wallet.findOneAndUpdate,
   settingsFindOne: models.Settings.findOne,
@@ -18,6 +21,8 @@ const original = {
 afterEach(() => {
   models.User.findById = original.userFindById;
   models.User.updateOne = original.userUpdateOne;
+  models.User.findOne = original.userFindOne;
+  models.User.findByIdAndUpdate = original.userFindByIdAndUpdate;
   models.Wallet.findOne = original.walletFindOne;
   models.Wallet.findOneAndUpdate = original.walletFindOneAndUpdate;
   models.Settings.findOne = original.settingsFindOne;
@@ -30,6 +35,10 @@ function driverToken() {
 
 function subAdminToken() {
   return jwt.sign({ isSubAdmin: true, subAdminId: '507f1f77bcf86cd799439012', username: 'ops' }, 'ride-hailing-secret-fallback');
+}
+
+function superAdminToken() {
+  return jwt.sign({ isAdmin: true, username: 'admin' }, 'ride-hailing-secret-fallback');
 }
 
 async function adminRequest(server, path, token, method = 'GET') {
@@ -198,6 +207,115 @@ test('background GPS location rejects invalid coordinates and only accepts a val
     assert.equal(updates[0]['currentLocation.lat'], 31.5204);
     assert.equal(updates[0]['currentLocation.lng'], 74.3587);
     assert.ok(updates[0].lastOnlineHeartbeat instanceof Date);
+  } finally {
+    await new Promise(resolve => server.close(resolve));
+  }
+});
+
+test('vehicle document replacement requires an image and immediately returns the driver to approval review', async () => {
+  const password = await bcrypt.hash('current-password', 4);
+  const record = {
+    _id: '507f1f77bcf86cd799439011',
+    role: 'driver',
+    password,
+    vehicleModel: 'Old Model',
+    vehiclePlate: 'OLD-123',
+    vehicleRegPhoto: '/uploads/driver_docs/old.jpg',
+    accountStatus: 'active',
+    isOnline: true,
+    longRangeEnabled: true
+  };
+  let persisted;
+  models.User.findById = () => Object.assign(record, {
+    select: async () => ({ ...record, ...persisted })
+  });
+  models.User.updateOne = async (_query, update) => {
+    persisted = update;
+    return { acknowledged: true };
+  };
+
+  const server = app.listen(0);
+  try {
+    const missingDocument = await request(server, '/api/user/update-profile', {
+      currentPassword: 'current-password',
+      vehicleModel: 'New Model',
+      vehiclePlate: 'NEW-456'
+    });
+    assert.equal(missingDocument.response.status, 400);
+    assert.match(missingDocument.body.error, /document/i);
+
+    const submitted = await request(server, '/api/user/update-profile', {
+      currentPassword: 'current-password',
+      vehicleModel: 'New Model',
+      vehiclePlate: 'new-456',
+      vehicleRegPhoto: 'data:image/png;base64,aGVsbG8='
+    });
+    assert.equal(submitted.response.status, 200);
+    assert.equal(persisted.vehicleModel, 'New Model');
+    assert.equal(persisted.vehiclePlate, 'NEW-456');
+    assert.equal(persisted.accountStatus, 'pending');
+    assert.equal(persisted.identityVerificationStatus, 'pending');
+    assert.equal(persisted.isOnline, false);
+    assert.equal(persisted.longRangeEnabled, false);
+    assert.ok(persisted.vehicleReviewRequestedAt instanceof Date);
+    assert.match(persisted.vehicleRegPhoto, /^data:image\/png;base64,/);
+  } finally {
+    await new Promise(resolve => server.close(resolve));
+  }
+});
+
+test('a Driver awaiting vehicle re-approval cannot reactivate availability', async () => {
+  models.User.findById = () => ({
+    select: () => ({
+      lean: async () => driverDocument({ accountStatus: 'pending', isOnline: false })
+    })
+  });
+  const server = app.listen(0);
+  try {
+    const result = await request(server, '/api/driver/availability', { isOnline: true });
+    assert.equal(result.response.status, 403);
+    assert.match(result.body.error, /not approved/i);
+  } finally {
+    await new Promise(resolve => server.close(resolve));
+  }
+});
+
+test('Admin approval restores a changed-vehicle Driver and rejection leaves them unavailable', async () => {
+  const updates = [];
+  models.Settings.findOne = () => ({ lean: async () => null });
+  models.User.findById = id => ({
+    select: async () => ({ _id: id, role: 'driver' })
+  });
+  models.User.findByIdAndUpdate = (_id, update) => {
+    updates.push(update);
+    return { select: async () => ({ _id, ...update }) };
+  };
+  const server = app.listen(0);
+  try {
+    const approval = await adminJsonRequest(
+      server,
+      '/api/admin/users/507f1f77bcf86cd799439011/status',
+      superAdminToken(),
+      'PATCH',
+      { action: 'approve' }
+    );
+    assert.equal(approval.response.status, 200);
+    assert.equal(updates[0].accountStatus, 'active');
+    assert.equal(updates[0].identityVerificationStatus, 'approved');
+    assert.equal(updates[0].vehicleReviewRequestedAt, null);
+    assert.equal(updates[0].isOnline, false);
+
+    const rejection = await adminJsonRequest(
+      server,
+      '/api/admin/users/507f1f77bcf86cd799439011/status',
+      superAdminToken(),
+      'PATCH',
+      { action: 'reject', reason: 'Document does not match the number plate' }
+    );
+    assert.equal(rejection.response.status, 200);
+    assert.equal(updates[1].accountStatus, 'blocked');
+    assert.equal(updates[1].identityVerificationStatus, 'rejected');
+    assert.equal(updates[1].isOnline, false);
   } finally {
     await new Promise(resolve => server.close(resolve));
   }

@@ -462,7 +462,7 @@ input[type=date]:focus{border-color:#f5c518}
         </div>
         <p class="section-intro">Manage approved drivers, active status, wallet-related actions, and daily-fee access from one place.</p>
         <div class="management-shortcuts">
-          <button class="management-shortcut" onclick="showSection('new-requests')"><strong>Approvals & 5 documents</strong><span>Review new driver submissions and required documents.</span></button>
+        <button class="management-shortcut" onclick="showSection('new-requests')"><strong>Approvals & documents</strong><span>Review new registrations and changed-vehicle document submissions.</span></button>
           <button class="management-shortcut" onclick="showSection('fee-compliance')"><strong>Wallets & daily fees</strong><span>Check paid status, reminders, and transaction history.</span></button>
           <button class="management-shortcut" onclick="showSection('temp-blocked')"><strong>Driver active status</strong><span>Review temporarily blocked or suspended driver accounts.</span></button>
         </div>
@@ -502,7 +502,7 @@ input[type=date]:focus{border-color:#f5c518}
       <!-- ════ 5. NEW REQUESTS ════ -->
       <div class="section-panel" id="sec-new-requests">
         <div class="sec-hdr">
-          <h2>🆕 New Driver Requests</h2>
+          <h2>🆕 Driver Approvals & Documents</h2>
           <button class="btn-refresh" onclick="loadNewRequests()">↻ Refresh</button>
         </div>
         <div class="table-wrap"><table class="data-table">
@@ -1897,12 +1897,12 @@ async function loadNewRequests() {
     tbody.innerHTML = drivers.map(d => `<tr>
       <td><div style="font-weight:700;color:#e2e8f0">${d.name}</div></td>
       <td>${d.phone||'—'}</td>
-      <td>${d.vehicleType||'—'} — ${d.vehicleModel||''} ${d.vehiclePlate||''}</td>
+      <td>${d.vehicleType||'—'} — ${d.vehicleModel||''} ${d.vehiclePlate||''}<br><span style="font-size:.68rem;color:${d.vehicleReviewRequestedAt ? '#f5c518' : '#64748b'}">${d.vehicleReviewRequestedAt ? 'Vehicle update — new documents' : 'New driver registration'}</span></td>
       <td style="font-size:.72rem;color:#475569">${fmtDate(d.createdAt)}</td>
       <td><button class="btn btn-blue" onclick="viewDocs('${d._id}','${encodeURIComponent(JSON.stringify({name:d.name,phone:d.phone||'',vehicleType:d.vehicleType||'',vehicleModel:d.vehicleModel||'',vehiclePlate:d.vehiclePlate||''}))}')">📄 View Docs</button></td>
       <td><div style="display:flex;gap:.3rem">
         ${hasPermission('manageDriverApprovals') ? `<button class="btn btn-green" onclick="userAction('${d._id}','approve','driver')">✓ Approve</button>` : ''}
-        ${hasPermission('manageDriverStatus')   ? `<button class="btn btn-red"   onclick="userAction('${d._id}','block','driver')">✕ Reject</button>` : ''}
+        ${hasPermission('manageDriverApprovals') ? `<button class="btn btn-red" onclick="userAction('${d._id}','reject','driver')">✕ Reject</button>` : ''}
       </div></td>
     </tr>`).join('');
   } catch (e) { tbody.innerHTML = `<tr><td colspan="6" style="text-align:center;color:#ef4444;padding:1rem">${e.message}</td></tr>`; }

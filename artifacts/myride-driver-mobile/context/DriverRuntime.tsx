@@ -166,6 +166,11 @@ export function DriverRuntimeProvider({ children }: { children: ReactNode }) {
       setError(reason || 'Your driver account can no longer be online.');
       void setOnlineState(false);
     });
+    nextSocket.on('account:vehicle-review', ({ reason }: { reason?: string }) => {
+      setError(reason || 'Your vehicle documents are under Admin review. You are offline until approval.');
+      setPendingRide(null);
+      void setOnlineState(false);
+    });
     nextSocket.on('long-range:updated', (data: { enabled: boolean; settings: LongRangeState['settings'] }) => {
       setLongRangeState(current => current ? { ...current, enabled: data.enabled, settings: data.settings || current.settings } : current);
     });

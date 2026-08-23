@@ -757,6 +757,7 @@ const userSchema = new mongoose.Schema({
   cnicBack:        { type: String, default: '' },
   licensePhoto:    { type: String, default: '' },
   vehicleRegPhoto: { type: String, default: '' },
+  vehicleReviewRequestedAt: { type: Date, default: null },
   cnicNumber:      { type: String, default: '' },      // retained for existing driver records only
   nationalIdHash:  { type: String, unique: true, sparse: true, default: '', select: false },
   nationalIdLast4: { type: String, default: '' },
@@ -1290,7 +1291,7 @@ async function authMiddleware(req, res, next) {
 
 // ── driverOnly — must follow authMiddleware ───────────────────────────────
 // Rejects any caller that is not a driver with an active (approved) account.
-function driverOnly(req, res, next) {
+async function driverOnly(req, res, next) {
   if (!req.user || req.user.role !== 'driver') {
     return res.status(403).json({ error: 'Access denied: driver accounts only' });
   }
@@ -1298,7 +1299,20 @@ function driverOnly(req, res, next) {
   if (req.user.accountStatus && req.user.accountStatus !== 'active') {
     return res.status(403).json({ error: 'Your driver account is not yet approved or has been suspended' });
   }
-  next();
+  // A vehicle-document replacement can revoke approval after a token was
+  // issued. When the database is available, its current status is authoritative
+  // so a stale token cannot keep a driver eligible for rides or availability.
+  if (dbConnected) {
+    try {
+      const driver = await User.findById(req.user.id).select('accountStatus').lean();
+      if (!driver || driver.accountStatus !== 'active') {
+        return res.status(403).json({ error: 'Your driver account is pending verification. Availability returns after Admin approval.' });
+      }
+    } catch (err) {
+      return next(err);
+    }
+  }
+  return next();
 }
 
 // ── customerOnly — must follow authMiddleware ─────────────────────────────
@@ -1827,8 +1841,11 @@ app.get('/api/rides/available', authMiddleware, driverOnly, async (req, res) => 
 
 // Native driver runtime endpoints. Background location tasks use REST because
 // mobile operating systems may wake them without restoring the JS Socket.io app.
-app.post('/api/driver/availability', authMiddleware, driverOnly, async (req, res) => {
+app.post('/api/driver/availability', authMiddleware, async (req, res) => {
   try {
+    if (req.user.role !== 'driver') {
+      return res.status(403).json({ error: 'Access denied: driver accounts only' });
+    }
     const isOnline = req.body?.isOnline === true;
     const driver = await User.findById(req.user.id)
       .select('accountStatus vehicleType paidUntilDate lastDailyFeePaidAt isFreeTrial longRangeEnabled').lean();
@@ -2274,7 +2291,7 @@ app.patch('/api/rides/:id/update-fare', authMiddleware, async (req, res) => {
 // ── Profile Update (phone, password, vehicle) with current-password verification ─
 app.post('/api/user/update-profile', authMiddleware, async (req, res) => {
   try {
-    const { currentPassword, newPhone, newPassword, vehicleModel, vehiclePlate } = req.body;
+    const { currentPassword, newPhone, newPassword, vehicleModel, vehiclePlate, vehicleRegPhoto } = req.body;
     if (!currentPassword) return res.status(400).json({ error: 'Current password is required' });
 
     const user = await User.findById(req.user.id);
@@ -2293,16 +2310,53 @@ app.post('/api/user/update-profile', authMiddleware, async (req, res) => {
       if (newPassword.length < 6) return res.status(400).json({ error: 'New password must be at least 6 characters' });
       updates.password = await bcrypt.hash(newPassword, 10);
     }
-    if (vehicleModel) updates.vehicleModel = vehicleModel.trim();
-    if (vehiclePlate) updates.vehiclePlate = vehiclePlate.trim().toUpperCase();
+    const vehicleChangeRequested = vehicleModel !== undefined || vehiclePlate !== undefined || vehicleRegPhoto !== undefined;
+    if (vehicleChangeRequested) {
+      if (user.role !== 'driver') return res.status(403).json({ error: 'Only Drivers can change vehicle information' });
+      const model = String(vehicleModel || '').trim();
+      const plate = String(vehiclePlate || '').trim().toUpperCase();
+      if (!model || !plate || !vehicleRegPhoto) {
+        return res.status(400).json({ error: 'Vehicle model, number plate, and a new vehicle registration or ownership document are required' });
+      }
+      // A vehicle document must be a freshly supplied image. Validate before
+      // writing the file or changing any persisted driver state.
+      parseImageDataUrl(vehicleRegPhoto);
+      const replacementDocument = await saveDocToDisk(vehicleRegPhoto, 'vehicleReg');
+      if (!replacementDocument) return res.status(422).json({ error: 'Could not save the vehicle document' });
+      Object.assign(updates, {
+        vehicleModel: model,
+        vehiclePlate: plate,
+        vehicleRegPhoto: replacementDocument,
+        accountStatus: 'pending',
+        identityVerificationStatus: 'pending',
+        identityVerifiedAt: null,
+        vehicleReviewRequestedAt: new Date(),
+        isOnline: false,
+        longRangeEnabled: false,
+        suspendReason: 'Vehicle details and registration document require Admin review',
+        suspendedAt: null
+      });
+    }
 
     if (!Object.keys(updates).length) return res.status(400).json({ error: 'No changes provided' });
 
     await User.updateOne({ _id: user._id }, updates);
-    const updated = await User.findById(user._id).select('name phone email vehicleModel vehiclePlate vehicleType');
-    res.json({ message: 'Profile updated successfully', user: updated });
+    const updated = await User.findById(user._id)
+      .select('name phone email vehicleModel vehiclePlate vehicleType vehicleRegPhoto accountStatus identityVerificationStatus isOnline longRangeEnabled');
+    if (vehicleChangeRequested) {
+      io.to(`user:${user._id}`).emit('account:vehicle-review', {
+        reason: 'Your new vehicle details are under Admin review. You cannot go online or receive rides until approval.'
+      });
+    }
+    res.json({
+      message: vehicleChangeRequested
+        ? 'Vehicle details and document submitted for Admin review. You are offline until approval.'
+        : 'Profile updated successfully',
+      user: updated
+    });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    const status = /ID document must|ID document must be between/.test(err.message) ? 422 : 500;
+    res.status(status).json({ error: err.message });
   }
 });
 
@@ -3037,7 +3091,7 @@ app.patch('/api/admin/users/:id/status', adminJwt, async (req, res) => {
     }
 
     let update = {};
-    if      (action === 'approve')          update = { accountStatus: 'active', identityVerificationStatus: 'approved', suspendReason: '', suspendedAt: null };
+    if      (action === 'approve')          update = { accountStatus: 'active', identityVerificationStatus: 'approved', vehicleReviewRequestedAt: null, suspendReason: '', suspendedAt: null };
     else if (action === 'suspend')          update = { accountStatus: 'suspended', suspendReason: reason || 'Temporary suspension', suspendedAt: new Date() };
     else if (action === 'block')            update = { accountStatus: 'blocked',   suspendReason: reason || 'Permanently blocked',  suspendedAt: new Date() };
     else if (action === 'unblock')          update = { accountStatus: 'active',    suspendReason: '', suspendedAt: null };
@@ -3047,7 +3101,7 @@ app.patch('/api/admin/users/:id/status', adminJwt, async (req, res) => {
 
     const user = await User.findByIdAndUpdate(target._id, { ...update, isOnline: false }, { new: true }).select('-password');
 
-    if (action === 'suspend' || action === 'block')
+    if (action === 'suspend' || action === 'block' || action === 'reject')
       io.to(`user:${req.params.id}`).emit('account:suspended', { reason: reason || 'Account suspended' });
     if (action === 'approve' || action === 'unblock' || action === 'reject-deletion')
       io.to(`user:${req.params.id}`).emit('account:activated', {});

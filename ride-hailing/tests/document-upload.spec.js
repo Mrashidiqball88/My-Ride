@@ -251,6 +251,63 @@ test.describe('Document upload flow — large photos (~1.7 MB each)', () => {
 
   // ---------------------------------------------------------------------------
   test(
+    'changing vehicle requires a replacement document and immediately shows pending review',
+    async ({ page }) => {
+      let submittedBody;
+      await page.route('**/api/user/update-profile', async (route) => {
+        submittedBody = route.request().postDataJSON();
+        await route.fulfill({
+          status: 200,
+          contentType: 'application/json',
+          body: JSON.stringify({
+            message: 'Vehicle details and document submitted for Admin review. You are offline until approval.',
+            user: {
+              ...MOCK_REGISTER_RESPONSE.user,
+              vehicleModel: 'Toyota Yaris 2024',
+              vehiclePlate: 'LHR-2024',
+              accountStatus: 'pending',
+              identityVerificationStatus: 'pending',
+              isOnline: false,
+              longRangeEnabled: false,
+            },
+          }),
+        });
+      });
+
+      await page.evaluate((session) => window.saveSession(session), {
+        ...MOCK_REGISTER_RESPONSE,
+        user: { ...MOCK_REGISTER_RESPONSE.user, accountStatus: 'active' },
+      });
+      await expect(page.locator('#app')).toBeVisible();
+
+      await page.evaluate(() => window.openChangeVehicleModal());
+      await page.locator('#cv-current').fill('password123');
+      await page.locator('#cv-model').fill('Toyota Yaris 2024');
+      await page.locator('#cv-plate').fill('lhr-2024');
+      await page.locator('#cv-btn').click();
+      await expect(page.locator('#cv-err')).toContainText(/Upload the new vehicle registration/i);
+
+      await page.locator('#cv-vehicle-reg').setInputFiles(FIXTURES.license);
+      await page.locator('#cv-btn').click();
+      await expect.poll(() => submittedBody).toBeTruthy();
+      expect(submittedBody.vehicleModel).toBe('Toyota Yaris 2024');
+      expect(submittedBody.vehiclePlate).toBe('LHR-2024');
+      expect(submittedBody.vehicleRegPhoto).toMatch(/^data:image\/jpeg;base64,/);
+      await expect(page.locator('#change-vehicle-modal')).toBeHidden();
+
+      const renderedState = await page.evaluate(() => ({
+        accountStatus: JSON.parse(localStorage.getItem('rh_user')).accountStatus,
+        pendingDisplay: getComputedStyle(document.getElementById('pending-card')).display,
+        onlineDisplay: getComputedStyle(document.querySelector('.online-bar')).display,
+      }));
+      expect(renderedState.accountStatus).toBe('pending');
+      expect(renderedState.pendingDisplay).not.toBe('none');
+      expect(renderedState.onlineDisplay).toBe('none');
+    }
+  );
+
+  // ---------------------------------------------------------------------------
+  test(
     'upload overlay remains visible during transfer, then hides on success',
     async ({ page }) => {
       // Use a longer hold so we can assert the in-flight state explicitly.
