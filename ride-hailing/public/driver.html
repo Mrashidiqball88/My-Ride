@@ -473,6 +473,10 @@ textarea.support-input{resize:vertical;min-height:85px}
       <label for="online-toggle" class="toggle-label"></label>
     </div>
   </div>
+  <div id="long-range-bar" style="display:none;background:#101827;border-bottom:1px solid #1e3a5f;padding:.55rem 1rem;align-items:center;justify-content:space-between;gap:.8rem">
+    <div><div style="font-size:.8rem;font-weight:700;color:#dbeafe">🛣️ Long Range Rides</div><div id="long-range-sub" style="font-size:.7rem;color:#94a3b8">Loading eligibility…</div></div>
+    <div class="toggle-wrap"><input type="checkbox" id="long-range-toggle" class="toggle-input" onchange="toggleLongRange(this.checked)"><label for="long-range-toggle" class="toggle-label"></label></div>
+  </div>
 
   <!-- Daily Fee Info Bar -->
   <div id="fee-info-bar" style="display:none;background:#0d0d1a;border-bottom:1px solid #1e1a0a;padding:.4rem 1rem;font-size:.75rem;color:#888;flex-wrap:wrap;align-items:center;gap:.6rem">
@@ -686,6 +690,7 @@ let dailyFeeDue   = false;  // true when driver hasn't submitted today's platfor
 let driverFareSettings = {};
 let dailyFeeSettings = {};
 let driverPerKmRates = {};
+let longRangeState = { enabled: false, walletBalance: 0, settings: {} };
 
 // ── Toast ──────────────────────────────────────────────────────────────────
 function showToast(msg, type = 'info') {
@@ -743,6 +748,40 @@ async function loadDriverFareSettings() {
     renderTodayFareWidget();
   } catch (e) {
     renderTodayFareWidget();
+  }
+}
+function renderLongRangeState() {
+  const bar = document.getElementById('long-range-bar');
+  const toggle = document.getElementById('long-range-toggle');
+  const sub = document.getElementById('long-range-sub');
+  if (!bar || !toggle || !sub) return;
+  const settings = longRangeState.settings || {};
+  bar.style.display = 'flex';
+  toggle.checked = !!longRangeState.enabled;
+  toggle.disabled = !settings.enabled;
+  if (!settings.enabled) sub.textContent = 'Long Range rides are currently disabled by Admin.';
+  else sub.textContent = `Opt in for trips of ${Number(settings.distanceCutoffKm || 0).toLocaleString()} km+ · wallet minimum Rs ${Number(settings.minimumWalletBalance || 0).toLocaleString()}`;
+}
+async function loadLongRangeState() {
+  try {
+    longRangeState = await apiCall('/api/driver/long-range');
+    renderLongRangeState();
+  } catch (e) {
+    const bar = document.getElementById('long-range-bar');
+    if (bar) bar.style.display = 'none';
+  }
+}
+async function toggleLongRange(enabled) {
+  const toggle = document.getElementById('long-range-toggle');
+  try {
+    const result = await apiCall('/api/driver/long-range', 'PATCH', { enabled });
+    longRangeState.enabled = result.enabled; longRangeState.settings = result.settings || longRangeState.settings;
+    renderLongRangeState();
+    showToast(result.message, 'success');
+  } catch (e) {
+    if (toggle) toggle.checked = !enabled;
+    showToast(e.message, 'error');
+    await loadLongRangeState();
   }
 }
 function toggleTodayFareWidget() {
@@ -1107,6 +1146,7 @@ function bootApp() {
   loadDailyFeeSettings();
   initTodayFareWidget();
   loadDriverFareSettings();
+  loadLongRangeState();
   // Request notification permission then register Web Push subscription
   if ('Notification' in window && Notification.permission === 'default') {
     Notification.requestPermission().then(perm => {
@@ -1379,6 +1419,16 @@ function connectSocket() {
     renderTodayFareWidget();
     showToast('🛣️ Admin updated /km rates. Today’s Fare has refreshed.', 'info');
   });
+  socket.on('long-range:updated', ({ enabled, settings }) => {
+    longRangeState.enabled = !!enabled; longRangeState.settings = settings || longRangeState.settings;
+    renderLongRangeState();
+  });
+  socket.on('long-range:settings-updated', ({ settings }) => {
+    longRangeState.settings = settings || longRangeState.settings;
+    if (!settings?.enabled) longRangeState.enabled = false;
+    renderLongRangeState();
+    showToast('🛣️ Long Range settings updated by Admin.', 'info');
+  });
 
   // Account suspended / balance too low
   socket.on('account:suspended', ({ reason }) => {
@@ -1504,7 +1554,9 @@ function showRideRequest(ride) {
 
   document.getElementById('rr-fare').textContent    = `Rs ${(ride.fare || 0).toLocaleString()}`;
   document.getElementById('rr-dist').textContent    = ride.distance ? `${ride.distance.toFixed(1)} km` : '—';
-  document.getElementById('rr-vehicle').textContent = ride.vehicleType || '—';
+  document.getElementById('rr-vehicle').textContent = `${ride.vehicleType || '—'}${ride.isLongRange ? ' · Long Range' : ''}`;
+  const title = document.querySelector('#ride-request .rr-title');
+  if (title) title.textContent = ride.isLongRange ? '🛣️ New Long Range Ride' : '🚗 New Ride Request';
 
   // Payment method badge
   const pm = ride.paymentMethod || 'cash';

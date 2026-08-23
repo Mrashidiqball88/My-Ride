@@ -8,7 +8,8 @@ const fare = require('../server');
 const {
   app, io, models, FARE_VEHICLE_CATEGORIES, DEFAULT_PER_KM_RATES,
   DEFAULT_RIDE_BROADCAST_RADIUS_KM, normalizeRideBroadcastSettings,
-  validateRideBroadcastSettings, findRideBroadcastDrivers, emitRideRequestToDrivers
+  validateRideBroadcastSettings, findRideBroadcastDrivers, emitRideRequestToDrivers, chargeLongRangeCommission,
+  normalizeLongRangeSettings, validateLongRangeSettings, calculateRideFare
 } = fare;
 
 const JWT_SECRET = 'ride-hailing-secret-fallback';
@@ -18,21 +19,27 @@ const originalSettings = {
 };
 const originalRide = {
   create: models.Ride.create,
-  find: models.Ride.find
+  find: models.Ride.find,
+  updateOne: models.Ride.updateOne
 };
 const originalIoTo = io.to;
 const originalUserFind = models.User.find;
 const originalUserFindById = models.User.findById;
 const originalWalletFind = models.Wallet.find;
+const originalWalletUpdate = models.Wallet.findOneAndUpdate;
+const originalWalletExists = models.Wallet.exists;
 
 afterEach(() => {
   models.Settings.findOne = originalSettings.findOne;
   models.Settings.findOneAndUpdate = originalSettings.findOneAndUpdate;
   models.Ride.create = originalRide.create;
   models.Ride.find = originalRide.find;
+  models.Ride.updateOne = originalRide.updateOne;
   models.User.find = originalUserFind;
   models.User.findById = originalUserFindById;
   models.Wallet.find = originalWalletFind;
+  models.Wallet.findOneAndUpdate = originalWalletUpdate;
+  models.Wallet.exists = originalWalletExists;
   io.to = originalIoTo;
 });
 
@@ -111,6 +118,41 @@ test('Admin fare settings persist every vehicle category and reject gaps or over
   } finally {
     await new Promise(resolve => server.close(resolve));
   }
+});
+
+test('Long Range fares begin at the configured cutoff and use vehicle-specific rates', () => {
+  const longRange = normalizeLongRangeSettings({
+    enabled: true, distanceCutoffKm: 50, minimumWalletBalance: 750, broadcastRadiusKm: 35,
+    commissionPercent: 12.5, commissionTiming: 'started',
+    perKmRates: Object.fromEntries(FARE_VEHICLE_CATEGORIES.map(category => [category, 210]))
+  });
+  assert.equal(validateLongRangeSettings(longRange).errors.length, 0);
+  const local = calculateRideFare(settingsFor(300, 100), longRange, 'Car Mini', 49.99, new Date(), DEFAULT_PER_KM_RATES);
+  const long = calculateRideFare(settingsFor(300, 100), longRange, 'Car Mini', 50, new Date(), DEFAULT_PER_KM_RATES);
+  assert.equal(local.isLongRange, undefined);
+  assert.equal(long.isLongRange, true);
+  assert.equal(long.longRangeRatePerKm, 210);
+  assert.equal(long.totalFare, 10500);
+  const invalid = validateLongRangeSettings({ enabled: true, perKmRates: {} });
+  assert.equal(invalid.errors.length, FARE_VEHICLE_CATEGORIES.length);
+});
+
+test('Long Range commission uses one wallet debit when the charge is retried', async () => {
+  const updates = [];
+  let debitAttempt = 0;
+  models.Wallet.findOneAndUpdate = async () => {
+    debitAttempt++;
+    return debitAttempt === 1 ? { balance: 900 } : null;
+  };
+  models.Wallet.exists = async () => debitAttempt > 1;
+  models.Ride.updateOne = async (_query, update) => { updates.push(update); };
+  const ride = { _id: 'long-range-ride', isLongRange: true, fare: 1000, longRangeCommissionChargedAt: null };
+  const settings = { commissionTiming: 'accepted', commissionPercent: 10 };
+  assert.equal((await chargeLongRangeCommission(ride, 'driver-1', 'accepted', settings)).ok, true);
+  assert.equal((await chargeLongRangeCommission(ride, 'driver-1', 'accepted', settings)).ok, true);
+  assert.equal(debitAttempt, 2);
+  assert.equal(updates.length, 2);
+  assert.equal(updates[0].$set.longRangeCommissionAmount, 100);
 });
 
 test('ride creation uses the server-calculated fare, not a client amount', async () => {

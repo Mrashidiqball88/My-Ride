@@ -22,16 +22,23 @@ export type DriverUser = {
 };
 export type RideRequest = {
   id: string; fare: number; distance?: number; vehicleType?: string;
+  isLongRange?: boolean;
   pickupLocation?: { address?: string; lat: number; lng: number };
   dropoffLocation?: { address?: string; lat: number; lng: number };
+};
+export type LongRangeState = {
+  enabled: boolean; walletBalance: number;
+  settings: { enabled?: boolean; distanceCutoffKm?: number; minimumWalletBalance?: number };
 };
 
 type RuntimeContext = {
   ready: boolean; user: DriverUser | null; isOnline: boolean; connection: 'connected' | 'connecting' | 'offline';
   pendingRide: RideRequest | null; activeRideId: string | null; error: string | null;
+  longRange: LongRangeState | null;
   signIn(identifier: string, password: string): Promise<void>;
   signOut(): Promise<void>;
   setOnline(next: boolean): Promise<void>;
+  setLongRange(next: boolean): Promise<string>;
   acceptRide(): Promise<void>;
   dismissRide(): void;
   clearError(): void;
@@ -84,6 +91,7 @@ export function DriverRuntimeProvider({ children }: { children: ReactNode }) {
   const [pendingRide, setPendingRide] = useState<RideRequest | null>(null);
   const [activeRideId, setActiveRideId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [longRange, setLongRangeState] = useState<LongRangeState | null>(null);
   const socket = useRef<Socket | null>(null);
   const tokenRef = useRef<string | null>(null);
   const sessionRef = useRef<string | null>(null);
@@ -95,6 +103,12 @@ export function DriverRuntimeProvider({ children }: { children: ReactNode }) {
       if (Array.isArray(rides) && rides.length) setPendingRide(rides[0] as RideRequest);
     } catch { /* A reconnect can race the availability change; socket retry continues. */ }
   }, [isOnline]);
+
+  const loadLongRange = useCallback(async () => {
+    if (!tokenRef.current) return;
+    const data = await api('/api/driver/long-range', tokenRef.current, sessionRef.current || undefined);
+    setLongRangeState(data as LongRangeState);
+  }, []);
 
   const connectSocket = useCallback(() => {
     if (!tokenRef.current || socket.current) return;
@@ -151,6 +165,12 @@ export function DriverRuntimeProvider({ children }: { children: ReactNode }) {
     nextSocket.on('account:suspended', ({ reason }: { reason?: string }) => {
       setError(reason || 'Your driver account can no longer be online.');
       void setOnlineState(false);
+    });
+    nextSocket.on('long-range:updated', (data: { enabled: boolean; settings: LongRangeState['settings'] }) => {
+      setLongRangeState(current => current ? { ...current, enabled: data.enabled, settings: data.settings || current.settings } : current);
+    });
+    nextSocket.on('long-range:settings-updated', ({ settings }: { settings: LongRangeState['settings'] }) => {
+      setLongRangeState(current => current ? { ...current, enabled: settings?.enabled ? current.enabled : false, settings } : current);
     });
   // setOnlineState is stable through declaration below at execution time.
   // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -257,6 +277,10 @@ export function DriverRuntimeProvider({ children }: { children: ReactNode }) {
   }, [connectSocket, ready, registerExpoToken, user]);
 
   useEffect(() => {
+    if (ready && user && tokenRef.current) void loadLongRange().catch(() => undefined);
+  }, [loadLongRange, ready, user]);
+
+  useEffect(() => {
     if (!isOnline) return;
     const interval = setInterval(() => {
       socket.current?.emit('driver:heartbeat');
@@ -302,10 +326,19 @@ export function DriverRuntimeProvider({ children }: { children: ReactNode }) {
     setPendingRide(null);
   }, [pendingRide]);
 
+  const setLongRange = useCallback(async (enabled: boolean) => {
+    if (!tokenRef.current) throw new Error('Sign in is required.');
+    const result = await api('/api/driver/long-range', tokenRef.current, sessionRef.current || undefined, {
+      method: 'PATCH', body: JSON.stringify({ enabled }),
+    });
+    setLongRangeState(current => ({ ...(current || { walletBalance: 0, settings: result.settings || {} }), enabled: result.enabled, settings: result.settings || current?.settings || {} }));
+    return String(result.message || '');
+  }, []);
+
   const value = useMemo<RuntimeContext>(() => ({
-    ready, user, isOnline, connection, pendingRide, activeRideId, error,
-    signIn, signOut, setOnline: setOnlineState, acceptRide, dismissRide: () => setPendingRide(null), clearError: () => setError(null),
-  }), [acceptRide, activeRideId, error, isOnline, pendingRide, ready, setOnlineState, signIn, signOut, user, connection]);
+    ready, user, isOnline, connection, pendingRide, activeRideId, error, longRange,
+    signIn, signOut, setOnline: setOnlineState, setLongRange, acceptRide, dismissRide: () => setPendingRide(null), clearError: () => setError(null),
+  }), [acceptRide, activeRideId, error, isOnline, pendingRide, ready, setOnlineState, setLongRange, signIn, signOut, user, connection, longRange]);
   return <DriverContext.Provider value={value}>{children}</DriverContext.Provider>;
 }
 

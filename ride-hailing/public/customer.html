@@ -1552,8 +1552,9 @@ async function updateFare() {
     const adjustment = quote.adjustmentPercent
       ? ` · ${quote.adjustmentPercent > 0 ? '+' : ''}${quote.adjustmentPercent}% ${quote.adjustmentPercent > 0 ? 'surge' : 'discount'}`
       : '';
-    document.getElementById('fare-meta').textContent =
-      `Base Rs ${quote.baseFare.toLocaleString()} + ${quote.distanceKm} km × Rs ${quote.perKmRate.toLocaleString()}/km${adjustment}`;
+    document.getElementById('fare-meta').textContent = quote.isLongRange
+      ? `🛣️ Long Range Ride · ${quote.distanceKm} km × Rs ${quote.longRangeRatePerKm.toLocaleString()}/km`
+      : `Base Rs ${quote.baseFare.toLocaleString()} + ${quote.distanceKm} km × Rs ${quote.perKmRate.toLocaleString()}/km${adjustment}`;
     document.getElementById('fare-suggested-val').textContent = `Rs ${quote.totalFare.toLocaleString()}`;
     document.getElementById('dist-km-val').textContent = dist.toFixed(1);
     document.getElementById('dist-badge').style.display = 'inline-flex';
@@ -1576,7 +1577,9 @@ function renderOfferedFare() {
   const rules = currentFareQuote?.activeRules || [];
   document.getElementById('fare-min-note').textContent = rules.length
     ? `Active ${rules.map(r => `${r.adjustmentType === 'down' ? 'discount' : 'surge'} ${r.percentage}%`).join(', ')} applied by Admin rules.`
-    : 'Calculated from the active Admin fare rules.';
+    : currentFareQuote?.isLongRange
+      ? 'Long Range fare calculated from the active Admin rate for this vehicle.'
+      : 'Calculated from the active Admin fare rules.';
 }
 
 function selectVehicle(btn) {

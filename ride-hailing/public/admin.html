@@ -813,6 +813,12 @@ input[type=date]:focus{border-color:#f5c518}
             <p>Manage base fares, distance slabs, and time-based rules for each vehicle type.</p>
             <button class="btn btn-primary" onclick="showSection('fare-settings')">Manage fare rates</button>
           </article>
+          <article class="settings-card" id="long-range-settings-card">
+            <div class="settings-icon">🛣️</div>
+            <h3>Long Range Rides</h3>
+            <p>Set the opt-in distance cutoff, Driver eligibility, dispatch radius, pricing, and commission.</p>
+            <button class="btn btn-primary" onclick="showSection('long-range-settings')">Manage Long Range</button>
+          </article>
           <article class="settings-card" id="driver-fees-card">
             <div class="settings-icon">📋</div>
             <h3>Daily Driver Fees</h3>
@@ -863,6 +869,25 @@ input[type=date]:focus{border-color:#f5c518}
         <div id="fare-settings-feedback" style="min-height:1.25rem;font-size:.8rem;margin-bottom:.8rem"></div>
         <div id="fare-settings-list"></div>
         <button class="btn btn-primary" style="padding:.75rem 2rem;font-size:.9rem" onclick="saveFareSettings()">💾 Save Daily Fare Settings</button>
+      </div>
+      <div class="section-panel" id="sec-long-range-settings">
+        <div class="sec-hdr"><h2>🛣️ Long Range Ride Settings</h2><div class="sec-hdr-actions"><button class="btn-refresh" onclick="loadLongRangeSettings()">↻ Reload</button></div></div>
+        <p style="font-size:.8rem;color:#475569;margin-bottom:1.1rem">Long Range rides use dedicated per-kilometre rates and are sent only to eligible Drivers who opt in.</p>
+        <div style="background:#0f0f1e;border:1px solid #1e1e2e;border-radius:14px;padding:1rem;max-width:760px">
+          <label style="display:flex;align-items:center;gap:.65rem;font-weight:700;color:#e2e8f0;margin-bottom:1rem"><input id="lr-enabled" type="checkbox"> Enable Long Range Ride mode</label>
+          <div class="field-row">
+            <div class="field-item"><div class="field-label">Distance cutoff (km)</div><input class="modal-input" id="lr-cutoff" type="number" min="1" step=".1"></div>
+            <div class="field-item"><div class="field-label">Minimum Driver wallet balance (Rs)</div><input class="modal-input" id="lr-min-wallet" type="number" min="0" step="1"></div>
+          </div>
+          <div class="field-row">
+            <div class="field-item"><div class="field-label">Long Range broadcast radius (km)</div><input class="modal-input" id="lr-radius" type="number" min=".5" step=".1"></div>
+            <div class="field-item"><div class="field-label">Commission (%)</div><input class="modal-input" id="lr-commission" type="number" min="0" max="100" step=".1"></div>
+          </div>
+          <div class="field-item" style="max-width:360px"><div class="field-label">Deduct commission</div><select class="modal-input" id="lr-timing"><option value="accepted">When ride is accepted</option><option value="started">When ride starts</option></select></div>
+          <div class="field-label" style="margin-top:1rem">Long Range /km rate by vehicle</div><div id="lr-rates" class="field-row"></div>
+        </div>
+        <div id="long-range-settings-feedback" style="min-height:1.25rem;font-size:.8rem;margin:.8rem 0"></div>
+        <button class="btn btn-primary" style="padding:.75rem 2rem;font-size:.9rem" onclick="saveLongRangeSettings()">💾 Save Long Range Settings</button>
       </div>
 
       <!-- ════ 12. RATINGS & FEEDBACK ════ -->
@@ -1158,7 +1183,7 @@ const SECTION_PERMISSION = {
   'temp-blocked': 'manageDriverStatus', passengers: 'viewCustomers',
   'blk-pass': 'manageCustomers', 'live-rides': 'viewRides', sos: 'viewSOS',
   ratings: 'viewRatings', support: 'viewSupport', 'audit-logs': 'viewAuditLogs',
-  'ride-settings': 'manageRideSettings', 'fare-settings': 'manageFareSettings',
+  'ride-settings': 'manageRideSettings', 'fare-settings': 'manageFareSettings', 'long-range-settings': 'manageFareSettings',
   'pay-settings': 'managePaymentSettings'
 };
 function hasSectionAccess(name) {
@@ -1442,13 +1467,14 @@ const SECTION_TITLES = {
   'live-rides':'Live Rides & History', sos:'SOS Alert Monitor',
   'fee-compliance':'Driver Wallets & Daily Fees',
   'app-settings':'App Settings / Pricing',
-  'ride-settings':'Ride Settings', 'fare-settings':'Daily Fare Settings', 'pay-settings':'Payment Settings', 'ride-retention':'Rides Data Retention', ratings:'Ratings & Feedback', support:'Support Tickets', 'audit-logs':'Payment & Pass Audit Logs',
+  'ride-settings':'Ride Settings', 'fare-settings':'Daily Fare Settings', 'long-range-settings':'Long Range Ride Settings', 'pay-settings':'Payment Settings', 'ride-retention':'Rides Data Retention', ratings:'Ratings & Feedback', support:'Support Tickets', 'audit-logs':'Payment & Pass Audit Logs',
   deletions:'Account Deletion Requests', 'sub-admins':'Sub-Admin User Management'
 };
 const SECTION_SAVE_HANDLERS = {
   'pay-settings': 'savePaymentSettings',
   'ride-settings': 'saveRideSettings',
   'fare-settings': 'saveFareSettings',
+  'long-range-settings': 'saveLongRangeSettings',
   'ride-retention': 'saveRideRetention'
 };
 
@@ -1566,7 +1592,7 @@ function showSection(name) {
     'new-requests': loadNewRequests, 'temp-blocked': loadTempBlocked,
     'blk-pass': loadBlockedPass, 'live-rides': () => loadRides(currentRideStatus),
     'ride-retention': loadRideRetention,
-    sos: () => loadSOS(currentSOSFilter), 'ride-settings': loadRideSettings, 'fare-settings': loadFareSettings, 'pay-settings': loadPaymentSettings,
+    sos: () => loadSOS(currentSOSFilter), 'ride-settings': loadRideSettings, 'fare-settings': loadFareSettings, 'long-range-settings': loadLongRangeSettings, 'pay-settings': loadPaymentSettings,
     'fee-compliance': loadFeeCompliance,
     ratings: loadRatings, support: () => loadSupportTickets(currentSupStatus),
     deletions: loadDeletionRequests,
@@ -2973,6 +2999,51 @@ async function saveFareSettings() {
   }
 }
 
+const LONG_RANGE_CATEGORIES = ['Car Sedan', 'Car Mini', 'Riksha', 'Bike', 'Car SUV', 'Van Seven Seats', 'Cary Dibba'];
+function renderLongRangeRates(rates = {}) {
+  document.getElementById('lr-rates').innerHTML = LONG_RANGE_CATEGORIES.map(category =>
+    `<div class="field-item" style="min-width:180px"><div class="field-label">${category} (Rs /km)</div><input class="modal-input lr-rate" data-category="${category}" type="number" min=".01" step=".01" value="${rates[category] ?? ''}"></div>`
+  ).join('');
+}
+async function loadLongRangeSettings() {
+  const feedback = document.getElementById('long-range-settings-feedback');
+  feedback.textContent = 'Loading…'; feedback.style.color = '#64748b';
+  try {
+    const settings = await api('/api/admin/long-range-settings');
+    document.getElementById('lr-enabled').checked = !!settings.enabled;
+    document.getElementById('lr-cutoff').value = settings.distanceCutoffKm;
+    document.getElementById('lr-min-wallet').value = settings.minimumWalletBalance;
+    document.getElementById('lr-radius').value = settings.broadcastRadiusKm;
+    document.getElementById('lr-commission').value = settings.commissionPercent;
+    document.getElementById('lr-timing').value = settings.commissionTiming || 'accepted';
+    renderLongRangeRates(settings.perKmRates);
+    feedback.textContent = '';
+  } catch (e) { feedback.textContent = `⚠ ${e.message}`; feedback.style.color = '#ef4444'; }
+}
+async function saveLongRangeSettings() {
+  const feedback = document.getElementById('long-range-settings-feedback');
+  const perKmRates = Object.fromEntries([...document.querySelectorAll('.lr-rate')].map(input => [input.dataset.category, input.value]));
+  const longRangeSettings = {
+    enabled: document.getElementById('lr-enabled').checked,
+    distanceCutoffKm: document.getElementById('lr-cutoff').value,
+    minimumWalletBalance: document.getElementById('lr-min-wallet').value,
+    broadcastRadiusKm: document.getElementById('lr-radius').value,
+    commissionPercent: document.getElementById('lr-commission').value,
+    commissionTiming: document.getElementById('lr-timing').value,
+    perKmRates
+  };
+  feedback.textContent = 'Saving Long Range settings…'; feedback.style.color = '#64748b';
+  try {
+    const result = await api('/api/admin/long-range-settings', 'PATCH', { longRangeSettings });
+    feedback.textContent = '✓ Long Range Ride settings saved and broadcast to Drivers.'; feedback.style.color = '#22c55e';
+    renderLongRangeRates(result.settings.perKmRates); showToast('Long Range settings saved ✓', 'success');
+  } catch (e) {
+    const details = Array.isArray(e?.errors) ? `: ${e.errors.join('; ')}` : '';
+    feedback.textContent = `✕ ${e.message || 'Could not save Long Range settings'}${details}`; feedback.style.color = '#ef4444';
+    showToast(e.message || 'Could not save Long Range settings', 'error');
+  }
+}
+
 // ── Permission Enforcement ────────────────────────────────────────────────────
 function applyPermissions() {
   Object.entries(SECTION_PERMISSION).forEach(([section, permission]) => {
@@ -2985,6 +3056,7 @@ function applyPermissions() {
   const settingsCardVisibility = {
     'ride-settings-card': 'manageRideSettings',
     'fare-settings-card': 'manageFareSettings',
+    'long-range-settings-card': 'manageFareSettings',
     'driver-fees-card': 'viewDriverPasses',
     'payment-settings-card': 'managePaymentSettings'
   };

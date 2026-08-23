@@ -524,6 +524,79 @@ function validateFareSettings(input) {
   return { settings, errors };
 }
 
+const LONG_RANGE_SETTINGS_KEY = 'long_range_ride_settings';
+const DEFAULT_LONG_RANGE_SETTINGS = Object.freeze({
+  enabled: false,
+  distanceCutoffKm: 50,
+  minimumWalletBalance: 500,
+  broadcastRadiusKm: 30,
+  commissionPercent: 10,
+  commissionTiming: 'accepted',
+  perKmRates: Object.fromEntries(FARE_VEHICLE_CATEGORIES.map(category => [category, null]))
+});
+
+function normalizeLongRangeSettings(input = {}) {
+  const source = input && typeof input === 'object' ? input : {};
+  const numberInRange = (value, fallback, min, max) => {
+    const number = Number(value);
+    return Number.isFinite(number) && number >= min && number <= max ? Number(number.toFixed(2)) : fallback;
+  };
+  return {
+    enabled: source.enabled === true,
+    distanceCutoffKm: numberInRange(source.distanceCutoffKm, DEFAULT_LONG_RANGE_SETTINGS.distanceCutoffKm, 1, 2000),
+    minimumWalletBalance: numberInRange(source.minimumWalletBalance, DEFAULT_LONG_RANGE_SETTINGS.minimumWalletBalance, 0, 1000000),
+    broadcastRadiusKm: numberInRange(source.broadcastRadiusKm, DEFAULT_LONG_RANGE_SETTINGS.broadcastRadiusKm, 0.5, 500),
+    commissionPercent: numberInRange(source.commissionPercent, DEFAULT_LONG_RANGE_SETTINGS.commissionPercent, 0, 100),
+    commissionTiming: source.commissionTiming === 'started' ? 'started' : 'accepted',
+    perKmRates: Object.fromEntries(FARE_VEHICLE_CATEGORIES.map(category => {
+      const rate = Number(source.perKmRates?.[category]);
+      return [category, Number.isFinite(rate) && rate > 0 ? Number(rate.toFixed(2)) : null];
+    }))
+  };
+}
+
+function validateLongRangeSettings(input) {
+  const settings = normalizeLongRangeSettings(input);
+  const errors = [];
+  if (input?.enabled === true) {
+    for (const category of FARE_VEHICLE_CATEGORIES) {
+      if (!settings.perKmRates[category]) errors.push(`${category}: Long Range /km rate must be greater than zero`);
+    }
+  }
+  return { settings, errors };
+}
+
+async function getLongRangeSettings() {
+  const doc = await Settings.findOne({ key: LONG_RANGE_SETTINGS_KEY }).lean();
+  return normalizeLongRangeSettings(doc?.value);
+}
+
+function isLongRangeDistance(distanceKm, settings) {
+  return settings.enabled && Number(distanceKm) >= settings.distanceCutoffKm;
+}
+
+function calculateRideFare(fareSettings, longRangeSettings, vehicleType, distanceKm, at, perKmRates) {
+  if (!isLongRangeDistance(distanceKm, longRangeSettings)) {
+    return calculateFareFromSettings(fareSettings, vehicleType, distanceKm, at, perKmRates);
+  }
+  const category = normalizeFareVehicle(vehicleType);
+  const distance = Number(distanceKm);
+  const rate = Number(longRangeSettings.perKmRates[category]);
+  if (!Number.isFinite(distance) || distance < 0 || !Number.isFinite(rate) || rate <= 0) {
+    return { error: `Long Range fare settings are not configured for ${category}` };
+  }
+  const totalFare = Math.round(distance * rate);
+  return {
+    vehicleType: category,
+    distanceKm: Number(distance.toFixed(2)),
+    isLongRange: true,
+    longRangeRatePerKm: rate,
+    subtotal: totalFare,
+    totalFare,
+    calculatedAt: at
+  };
+}
+
 function timeMatchesRule(rule, date = new Date()) {
   const current = date.getHours() * 60 + date.getMinutes();
   const parse = value => Number(value.slice(0, 2)) * 60 + Number(value.slice(3));
@@ -581,9 +654,10 @@ function calculateFareFromSettings(settings, vehicleType, distanceKm, at = new D
 
 async function refreshPendingRideFares(settings, perKmRates = null) {
   const currentPerKmRates = perKmRates || await getPerKmRates();
+  const longRangeSettings = await getLongRangeSettings();
   const pendingRides = await Ride.find({ status: 'requested' });
   for (const ride of pendingRides) {
-    const fareQuote = calculateFareFromSettings(settings, ride.vehicleType, ride.distance, new Date(), currentPerKmRates);
+    const fareQuote = calculateRideFare(settings, longRangeSettings, ride.vehicleType, ride.distance, new Date(), currentPerKmRates);
     if (fareQuote.error || ride.fare === fareQuote.totalFare) continue;
     ride.fare = fareQuote.totalFare;
     ride.fareQuote = fareQuote;
@@ -629,6 +703,7 @@ const userSchema = new mongoose.Schema({
   vehicleModel: { type: String, default: '' },
   vehiclePlate: { type: String, default: '' },
   isOnline: { type: Boolean, default: false },
+  longRangeEnabled: { type: Boolean, default: false },
   isAdmin:  { type: Boolean, default: false },
   currentLocation: {
     lat: { type: Number, default: 0 },
@@ -703,6 +778,9 @@ const rideSchema = new mongoose.Schema({
     totalFare: Number,
     calculatedAt: Date
   },
+  isLongRange: { type: Boolean, default: false },
+  longRangeCommissionAmount: { type: Number, default: 0 },
+  longRangeCommissionChargedAt: { type: Date, default: null },
   distance:    { type: Number, default: 0 },
   status: {
     type: String,
@@ -747,6 +825,7 @@ const walletSchema = new mongoose.Schema({
     description:   String,
     paymentMethod: { type: String, default: '' },
     mobileAccount: { type: String, default: '' },
+    rideId: { type: String, default: '' },
     createdAt:     { type: Date, default: Date.now }
   }]
 }, { timestamps: true });
@@ -998,6 +1077,65 @@ async function findRideBroadcastDrivers(pickupLocation, vehicleType, settings = 
     }))
     .filter(driver => driver.distanceFromPickupKm <= radiusKm);
   return { drivers, radiusKm };
+}
+
+async function findLongRangeBroadcastDrivers(pickupLocation, vehicleType, longRangeSettings) {
+  const radiusKm = longRangeSettings.broadcastRadiusKm;
+  if (!hasValidCoordinates(pickupLocation)) return { drivers: [], radiusKm };
+  const candidates = await User.find({
+    role: 'driver', isOnline: true, longRangeEnabled: true, accountStatus: 'active',
+    vehicleType: { $in: storedVehicleTypesForFareCategory(vehicleType) },
+    lastOnlineHeartbeat: { $gte: new Date(Date.now() - DRIVER_HEARTBEAT_MAX_AGE_MS) },
+    'currentLocation.lat': { $ne: 0 }, 'currentLocation.lng': { $ne: 0 }
+  }).select('_id currentLocation expoPushToken').lean();
+  const eligibleWallets = await Wallet.find({
+    user: { $in: candidates.map(driver => driver._id) },
+    balance: { $gte: longRangeSettings.minimumWalletBalance }
+  }).select('user').lean();
+  const eligibleIds = new Set(eligibleWallets.map(wallet => String(wallet.user)));
+  const drivers = candidates.filter(driver => eligibleIds.has(String(driver._id)) && hasValidCoordinates(driver.currentLocation))
+    .map(driver => ({ ...driver, distanceFromPickupKm: haversineKm(
+      Number(pickupLocation.lat), Number(pickupLocation.lng),
+      Number(driver.currentLocation.lat), Number(driver.currentLocation.lng)
+    ) })).filter(driver => driver.distanceFromPickupKm <= radiusKm);
+  return { drivers, radiusKm };
+}
+
+async function chargeLongRangeCommission(ride, driverId, timing, longRangeSettings) {
+  if (!ride.isLongRange || longRangeSettings.commissionTiming !== timing || ride.longRangeCommissionChargedAt) {
+    return { ok: true, alreadyCharged: !!ride.longRangeCommissionChargedAt };
+  }
+  const amount = Number((Number(ride.fare) * longRangeSettings.commissionPercent / 100).toFixed(2));
+  if (!amount) {
+    await Ride.updateOne({ _id: ride._id, longRangeCommissionChargedAt: null }, {
+      $set: { longRangeCommissionAmount: 0, longRangeCommissionChargedAt: new Date() }
+    });
+    return { ok: true };
+  }
+  const debited = await Wallet.findOneAndUpdate({
+    user: driverId, balance: { $gte: amount },
+    transactions: { $not: { $elemMatch: { rideId: String(ride._id), description: 'Long Range commission' } } }
+  }, {
+    $inc: { balance: -amount },
+    $push: { transactions: { amount, type: 'debit', description: 'Long Range commission', rideId: String(ride._id) } }
+  }, { new: true });
+  if (!debited) {
+    const already = await Wallet.exists({ user: driverId, transactions: { $elemMatch: { rideId: String(ride._id), description: 'Long Range commission' } } });
+    if (!already) return { ok: false, error: 'Wallet balance is insufficient for the Long Range commission.' };
+  }
+  await Ride.updateOne({ _id: ride._id, longRangeCommissionChargedAt: null }, {
+    $set: { longRangeCommissionAmount: amount, longRangeCommissionChargedAt: new Date() }
+  });
+  return { ok: true };
+}
+
+async function validateLongRangeDriverEligibility(driverId, settings) {
+  const [driver, wallet] = await Promise.all([
+    User.findById(driverId).select('longRangeEnabled accountStatus').lean(),
+    Wallet.findOne({ user: driverId }).select('balance').lean()
+  ]);
+  return !!(settings.enabled && driver?.accountStatus === 'active' && driver.longRangeEnabled
+    && Number(wallet?.balance || 0) >= settings.minimumWalletBalance);
 }
 
 function emitRideRequestToDrivers(drivers, payload) {
@@ -1470,12 +1608,14 @@ app.get('/api/auth/me', authMiddleware, async (req, res) => {
 // calculated from the current Admin Settings document.
 app.post('/api/fare/calculate', async (req, res) => {
   try {
-    const [settingsDoc, ratesDoc] = await Promise.all([
+    const [settingsDoc, ratesDoc, longRangeDoc] = await Promise.all([
       Settings.findOne({ key: 'daily_fare_settings' }).lean(),
-      Settings.findOne({ key: 'per_km_rates' }).lean()
+      Settings.findOne({ key: 'per_km_rates' }).lean(),
+      Settings.findOne({ key: LONG_RANGE_SETTINGS_KEY }).lean()
     ]);
-    const result = calculateFareFromSettings(
+    const result = calculateRideFare(
       normalizeFareSettings(settingsDoc?.value),
+      normalizeLongRangeSettings(longRangeDoc?.value),
       req.body?.vehicleType,
       req.body?.distanceKm,
       new Date(),
@@ -1503,12 +1643,15 @@ app.post('/api/rides', authMiddleware, customerOnly, customerCanBook, async (req
     if (!pickupLocation) {
       return res.status(400).json({ error: 'Pickup is required' });
     }
-    const [settingsDoc, ratesDoc] = await Promise.all([
+    const [settingsDoc, ratesDoc, longRangeDoc] = await Promise.all([
       Settings.findOne({ key: 'daily_fare_settings' }).lean(),
-      Settings.findOne({ key: 'per_km_rates' }).lean()
+      Settings.findOne({ key: 'per_km_rates' }).lean(),
+      Settings.findOne({ key: LONG_RANGE_SETTINGS_KEY }).lean()
     ]);
-    const fareQuote = calculateFareFromSettings(
+    const longRangeSettings = normalizeLongRangeSettings(longRangeDoc?.value);
+    const fareQuote = calculateRideFare(
       normalizeFareSettings(settingsDoc?.value),
+      longRangeSettings,
       vehicleType,
       distance,
       new Date(),
@@ -1528,6 +1671,7 @@ app.post('/api/rides', authMiddleware, customerOnly, customerCanBook, async (req
       dropoffLocations: stops,
       fare:          fareQuote.totalFare,
       fareQuote,
+      isLongRange:       !!fareQuote.isLongRange,
       distance:      fareQuote.distanceKm,
       vehicleType:   fareQuote.vehicleType,
       notes:         notes         || '',
@@ -1543,6 +1687,7 @@ app.post('/api/rides', authMiddleware, customerOnly, customerCanBook, async (req
       fare:             ride.fare,
       distance:         ride.distance,
       fareQuote:        ride.fareQuote,
+      isLongRange:      ride.isLongRange,
       vehicleType:      ride.vehicleType,
       paymentMethod:    ride.paymentMethod,
       notes:            ride.notes,
@@ -1553,7 +1698,9 @@ app.post('/api/rides', authMiddleware, customerOnly, customerCanBook, async (req
     // driver set. This prevents a distant socket or push recipient from seeing
     // an offer that is outside the Admin-configured broadcast radius.
     const broadcast = dbConnected
-      ? await findRideBroadcastDrivers(ride.pickupLocation, ride.vehicleType)
+      ? (ride.isLongRange
+        ? await findLongRangeBroadcastDrivers(ride.pickupLocation, ride.vehicleType, longRangeSettings)
+        : await findRideBroadcastDrivers(ride.pickupLocation, ride.vehicleType))
       : { drivers: [], radiusKm: DEFAULT_RIDE_BROADCAST_RADIUS_KM };
     ridePayload.broadcastRadiusKm = broadcast.radiusKm;
     emitRideRequestToDrivers(broadcast.drivers, ridePayload);
@@ -1611,26 +1758,33 @@ app.post('/api/rides', authMiddleware, customerOnly, customerCanBook, async (req
 
 app.get('/api/rides/available', authMiddleware, driverOnly, async (req, res) => {
   try {
-    const driver = await User.findById(req.user.id).select('vehicleType accountStatus isOnline lastOnlineHeartbeat currentLocation').lean();
+    const driver = await User.findById(req.user.id).select('vehicleType accountStatus isOnline longRangeEnabled lastOnlineHeartbeat currentLocation').lean();
     const hasFreshHeartbeat = driver?.lastOnlineHeartbeat &&
       new Date(driver.lastOnlineHeartbeat).getTime() >= Date.now() - DRIVER_HEARTBEAT_MAX_AGE_MS;
     if (!driver || driver.accountStatus !== 'active' || !driver.isOnline || !hasFreshHeartbeat || !hasValidCoordinates(driver.currentLocation)) {
       return res.status(403).json({ error: 'You must be an approved online driver to receive rides' });
     }
-    const { maximumRideBroadcastRadiusKm: radiusKm } = await getRideBroadcastSettings();
+    const [{ maximumRideBroadcastRadiusKm: radiusKm }, longRangeSettings] = await Promise.all([
+      getRideBroadcastSettings(), getLongRangeSettings()
+    ]);
     const rides = await Ride.find({
       status: 'requested',
       vehicleType: { $in: storedVehicleTypesForFareCategory(driver.vehicleType) }
     })
       .populate('passenger', 'name phone rating')
       .sort({ createdAt: -1 });
+    const hasLongRangeRides = rides.some(ride => ride.isLongRange);
+    const wallet = hasLongRangeRides
+      ? await Wallet.findOne({ user: req.user.id }).select('balance').lean()
+      : null;
     res.json(rides.filter(ride => hasValidCoordinates(ride.pickupLocation)
+      && (!ride.isLongRange || (longRangeSettings.enabled && driver.longRangeEnabled && Number(wallet?.balance || 0) >= longRangeSettings.minimumWalletBalance))
       && haversineKm(
         Number(driver.currentLocation.lat),
         Number(driver.currentLocation.lng),
         Number(ride.pickupLocation.lat),
         Number(ride.pickupLocation.lng)
-      ) <= radiusKm));
+      ) <= (ride.isLongRange ? longRangeSettings.broadcastRadiusKm : radiusKm)));
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -1642,7 +1796,7 @@ app.post('/api/driver/availability', authMiddleware, driverOnly, async (req, res
   try {
     const isOnline = req.body?.isOnline === true;
     const driver = await User.findById(req.user.id)
-      .select('accountStatus vehicleType paidUntilDate lastDailyFeePaidAt isFreeTrial').lean();
+      .select('accountStatus vehicleType paidUntilDate lastDailyFeePaidAt isFreeTrial longRangeEnabled').lean();
     if (!driver || driver.accountStatus !== 'active') {
       return res.status(403).json({ error: 'Your driver account is not approved for online availability' });
     }
@@ -1658,10 +1812,40 @@ app.post('/api/driver/availability', authMiddleware, driverOnly, async (req, res
       ? { isOnline: true, lastOnlineHeartbeat: new Date() }
       : { isOnline: false };
     await User.updateOne({ _id: req.user.id }, update);
-    res.json({ isOnline, vehicleType: normalizeFareVehicle(driver.vehicleType || 'Car Mini') });
+    res.json({ isOnline, vehicleType: normalizeFareVehicle(driver.vehicleType || 'Car Mini'), longRangeEnabled: !!driver.longRangeEnabled });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
+});
+
+app.get('/api/driver/long-range', authMiddleware, driverOnly, async (req, res) => {
+  try {
+    const [driver, wallet, settings] = await Promise.all([
+      User.findById(req.user.id).select('longRangeEnabled').lean(),
+      Wallet.findOne({ user: req.user.id }).select('balance').lean(),
+      getLongRangeSettings()
+    ]);
+    res.json({ enabled: !!driver?.longRangeEnabled, walletBalance: Number(wallet?.balance || 0), settings });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.patch('/api/driver/long-range', authMiddleware, driverOnly, async (req, res) => {
+  try {
+    const enabled = req.body?.enabled === true;
+    const settings = await getLongRangeSettings();
+    if (enabled && !settings.enabled) return res.status(403).json({ error: 'Long Range rides are currently disabled by Admin.' });
+    if (enabled) {
+      const wallet = await Wallet.findOne({ user: req.user.id }).select('balance').lean();
+      if (Number(wallet?.balance || 0) < settings.minimumWalletBalance) {
+        return res.status(403).json({ error: `Recharge your wallet to activate this feature. Maintain wallet balance up to Rs. ${settings.minimumWalletBalance.toLocaleString()}.` });
+      }
+    }
+    await User.updateOne({ _id: req.user.id }, { longRangeEnabled: enabled });
+    io.to(`user:${req.user.id}`).emit('long-range:updated', { enabled, settings });
+    res.json({ enabled, settings, message: enabled
+      ? 'Active: You will now receive both local and long-range rides.'
+      : 'Deactivated: You will now receive local rides only.' });
+  } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
 app.post('/api/driver/heartbeat', authMiddleware, driverOnly, async (req, res) => {
@@ -1755,6 +1939,18 @@ app.patch('/api/rides/:id/accept', authMiddleware, async (req, res) => {
     ).populate('passenger', 'name phone');
 
     if (!ride) return res.status(409).json({ error: 'Ride no longer available' });
+    if (ride.isLongRange) {
+      const settings = await getLongRangeSettings();
+      if (!await validateLongRangeDriverEligibility(req.user.id, settings)) {
+        await Ride.updateOne({ _id: ride._id, driver: req.user.id, status: 'accepted' }, { $set: { driver: null, status: 'requested' } });
+        return res.status(403).json({ error: 'You are not currently eligible for Long Range rides.' });
+      }
+      const commission = await chargeLongRangeCommission(ride, req.user.id, 'accepted', settings);
+      if (!commission.ok) {
+        await Ride.updateOne({ _id: ride._id, driver: req.user.id, status: 'accepted' }, { $set: { driver: null, status: 'requested' } });
+        return res.status(403).json({ error: commission.error });
+      }
+    }
 
     // Generate 4-digit verification PIN for ride start
     const verificationPin = String(Math.floor(1000 + Math.random() * 9000));
@@ -1816,6 +2012,10 @@ app.patch('/api/rides/:id/status', authMiddleware, driverOnly, async (req, res) 
       }
     }
 
+    if (ride.status === 'arrived' && status === 'in-progress') {
+      const commission = await chargeLongRangeCommission(ride, req.user.id, 'started', await getLongRangeSettings());
+      if (!commission.ok) return res.status(403).json({ error: commission.error });
+    }
     ride.status = status;
     await ride.save();
 
@@ -1877,6 +2077,16 @@ app.patch('/api/rides/:id/counter', authMiddleware, async (req, res) => {
 
     const ride = await Ride.findOne({ _id: req.params.id, status: 'requested' });
     if (!ride) return res.status(404).json({ error: 'Ride not available' });
+    if (ride.isLongRange) {
+      const [driverLongRange, settings, wallet] = await Promise.all([
+        User.findById(req.user.id).select('longRangeEnabled').lean(),
+        getLongRangeSettings(),
+        Wallet.findOne({ user: req.user.id }).select('balance').lean()
+      ]);
+      if (!settings.enabled || !driverLongRange?.longRangeEnabled || Number(wallet?.balance || 0) < settings.minimumWalletBalance) {
+        return res.status(403).json({ error: 'You are not currently eligible for Long Range rides.' });
+      }
+    }
 
     // Prevent duplicate offers from same driver
     const already = ride.counterOffers.some(o => String(o.driver) === String(req.user.id));
@@ -1952,6 +2162,18 @@ app.patch('/api/rides/:id/accept-driver', authMiddleware, async (req, res) => {
     const verificationPin = String(Math.floor(1000 + Math.random() * 9000));
     ride.verificationPin = verificationPin;
     await ride.save();
+    if (ride.isLongRange) {
+      const settings = await getLongRangeSettings();
+      if (!await validateLongRangeDriverEligibility(driverId, settings)) {
+        await Ride.updateOne({ _id: ride._id, driver: driverId, status: 'accepted' }, { $set: { driver: null, status: 'requested', verificationPin: null } });
+        return res.status(403).json({ error: 'Selected Driver is no longer eligible for Long Range rides.' });
+      }
+      const commission = await chargeLongRangeCommission(ride, driverId, 'accepted', settings);
+      if (!commission.ok) {
+        await Ride.updateOne({ _id: ride._id, driver: driverId, status: 'accepted' }, { $set: { driver: null, status: 'requested', verificationPin: null } });
+        return res.status(403).json({ error: commission.error });
+      }
+    }
 
     const driverUser = await User.findById(driverId).select('name phone vehicleType vehicleModel vehiclePlate rating profilePhoto');
     io.to(`ride:${ride._id}`).emit('ride:accepted', {
@@ -1982,12 +2204,14 @@ app.patch('/api/rides/:id/update-fare', authMiddleware, async (req, res) => {
   try {
     const ride = await Ride.findOne({ _id: req.params.id, passenger: req.user.id, status: 'requested' });
     if (!ride) return res.status(404).json({ error: 'Ride not found or already accepted' });
-    const [settingsDoc, ratesDoc] = await Promise.all([
+    const [settingsDoc, ratesDoc, longRangeDoc] = await Promise.all([
       Settings.findOne({ key: 'daily_fare_settings' }).lean(),
-      Settings.findOne({ key: 'per_km_rates' }).lean()
+      Settings.findOne({ key: 'per_km_rates' }).lean(),
+      Settings.findOne({ key: LONG_RANGE_SETTINGS_KEY }).lean()
     ]);
-    const fareQuote = calculateFareFromSettings(
+    const fareQuote = calculateRideFare(
       normalizeFareSettings(settingsDoc?.value),
+      normalizeLongRangeSettings(longRangeDoc?.value),
       ride.vehicleType,
       ride.distance,
       new Date(),
@@ -3442,6 +3666,21 @@ app.get('/api/admin/daily-fee-settings', adminJwt, requirePerm('viewDriverPasses
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
+app.get('/api/admin/long-range-settings', adminJwt, requirePerm('manageFareSettings'), async (req, res) => {
+  try { res.json(await getLongRangeSettings()); }
+  catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.patch('/api/admin/long-range-settings', adminJwt, requirePerm('manageFareSettings'), async (req, res) => {
+  try {
+    const validated = validateLongRangeSettings(req.body?.longRangeSettings);
+    if (validated.errors.length) return res.status(422).json({ error: 'Invalid Long Range settings', errors: validated.errors });
+    await Settings.findOneAndUpdate({ key: LONG_RANGE_SETTINGS_KEY }, { key: LONG_RANGE_SETTINGS_KEY, value: validated.settings }, { upsert: true, new: true, setDefaultsOnInsert: true });
+    io.emit('long-range:settings-updated', { settings: validated.settings, updatedAt: new Date().toISOString() });
+    res.json({ success: true, settings: validated.settings });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
 app.patch('/api/admin/daily-fee-settings', adminJwt, requirePerm('manageDriverPasses'), async (req, res) => {
   try {
     const validated = validateDailyFeeSettings(req.body?.dailyFeeSettings);
@@ -4164,12 +4403,16 @@ module.exports = {
   normalizeFareSettings,
   validateFareSettings,
   calculateFareFromSettings,
+  normalizeLongRangeSettings,
+  validateLongRangeSettings,
+  calculateRideFare,
   normalizeFareVehicle,
   normalizeRideBroadcastSettings,
   validateRideBroadcastSettings,
   haversineKm,
   findRideBroadcastDrivers,
   emitRideRequestToDrivers,
+  chargeLongRangeCommission,
   refreshPendingRideFares,
   SUB_ADMIN_PERMISSION_CATALOG,
   normalizeSubAdminPermissions,
