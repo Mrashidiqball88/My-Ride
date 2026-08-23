@@ -169,13 +169,14 @@ test('Long Range fares begin at the configured cutoff and use vehicle-specific r
 });
 
 test('Customer fare quote uses active Long Range rates without daily fare slabs', async () => {
+  const expectedRates = {
+    Bike: 25, Riksha: 40, 'Car Mini': 80, 'Car Sedan': 100,
+    'Cary Dibba': 90, 'Car SUV': 120, 'Van Seven Seats': 150
+  };
   const longRangeSettings = {
     enabled: true,
     distanceCutoffKm: 50,
-    perKmRates: Object.fromEntries(FARE_VEHICLE_CATEGORIES.map(category => [category, {
-      Bike: 25, Riksha: 40, 'Car Mini': 80, 'Car Sedan': 100,
-      'Cary Dibba': 90, 'Car SUV': 120, 'Van Seven Seats': 150
-    }[category]]))
+    perKmRates: expectedRates
   };
   models.Settings.findOne = ({ key }) => ({
     lean: async () => ({
@@ -185,6 +186,10 @@ test('Customer fare quote uses active Long Range rates without daily fare slabs'
 
   const server = app.listen(0);
   try {
+    const config = await request(server, '/api/customer/fare-config');
+    assert.deepEqual(config.body.longRangeSettings.perKmRates, expectedRates);
+    assert.equal(config.body.longRangeSettings.enabled, true);
+
     const result = await request(server, '/api/fare/calculate', {
       method: 'POST',
       body: JSON.stringify({ vehicleType: 'Riksha', distanceKm: 293.3 })
@@ -192,6 +197,16 @@ test('Customer fare quote uses active Long Range rates without daily fare slabs'
     assert.equal(result.response.status, 200);
     assert.equal(result.body.longRangeRatePerKm, 40);
     assert.equal(result.body.totalFare, Math.round(293.3 * 40));
+
+    for (const [category, rate] of Object.entries(expectedRates)) {
+      const quote = await request(server, '/api/fare/calculate', {
+        method: 'POST',
+        body: JSON.stringify({ vehicleType: category, distanceKm: 293.3 })
+      });
+      assert.equal(quote.response.status, 200, `${category} quote should succeed`);
+      assert.equal(quote.body.longRangeRatePerKm, rate);
+      assert.equal(quote.body.totalFare, Math.round(293.3 * rate));
+    }
   } finally {
     await new Promise(resolve => server.close(resolve));
   }
