@@ -65,6 +65,7 @@ async function adminJsonRequest(server, path, token, method, body) {
 function driverDocument(overrides = {}) {
   return {
     accountStatus: 'active',
+    activeSessionToken: 'test-session',
     vehicleType: 'Car Mini',
     isOnline: true,
     ...overrides,
@@ -74,7 +75,7 @@ function driverDocument(overrides = {}) {
 async function request(server, path, body) {
   const response = await fetch(`http://127.0.0.1:${server.address().port}${path}`, {
     method: 'POST',
-    headers: { 'content-type': 'application/json', authorization: `Bearer ${driverToken()}` },
+    headers: { 'content-type': 'application/json', authorization: `Bearer ${driverToken()}`, 'x-session-token': 'test-session' },
     body: JSON.stringify(body),
   });
   return { response, body: await response.json() };
@@ -225,7 +226,7 @@ test('Long Range toggle checks the configured wallet minimum for the Driver vehi
   try {
     const blocked = await fetch(`http://127.0.0.1:${server.address().port}/api/driver/long-range`, {
       method: 'PATCH',
-      headers: { 'content-type': 'application/json', authorization: `Bearer ${driverToken()}` },
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${driverToken()}`, 'x-session-token': 'test-session' },
       body: JSON.stringify({ enabled: true })
     });
     assert.equal(blocked.status, 403);
@@ -234,7 +235,7 @@ test('Long Range toggle checks the configured wallet minimum for the Driver vehi
     balance = 4000;
     const allowed = await fetch(`http://127.0.0.1:${server.address().port}/api/driver/long-range`, {
       method: 'PATCH',
-      headers: { 'content-type': 'application/json', authorization: `Bearer ${driverToken()}` },
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${driverToken()}`, 'x-session-token': 'test-session' },
       body: JSON.stringify({ enabled: true })
     });
     assert.equal(allowed.status, 200);
@@ -323,7 +324,9 @@ test('vehicle document replacement requires an image and immediately returns the
   };
   let persisted;
   models.User.findById = () => Object.assign(record, {
-    select: async () => ({ ...record, ...persisted })
+    select: () => ({
+      lean: async () => ({ ...record, ...persisted, activeSessionToken: 'test-session' })
+    })
   });
   models.User.updateOne = async (_query, update) => {
     persisted = update;
@@ -425,11 +428,18 @@ test('customer wallet deposits are disabled and driver submissions require proof
     { id: '507f1f77bcf86cd799439012', role: 'customer', accountStatus: 'active', name: 'Customer' },
     'ride-hailing-secret-fallback'
   );
+  models.User.findById = id => ({
+    select: () => ({
+      lean: async () => String(id) === '507f1f77bcf86cd799439012'
+        ? { activeSessionToken: 'customer-session' }
+        : driverDocument()
+    })
+  });
   const server = app.listen(0);
   try {
     const topUpResponse = await fetch(`http://127.0.0.1:${server.address().port}/api/wallet/add-funds`, {
       method: 'POST',
-      headers: { 'content-type': 'application/json', authorization: `Bearer ${customerToken}` },
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${customerToken}`, 'x-session-token': 'customer-session' },
       body: JSON.stringify({ amount: 1000 })
     });
     assert.equal(topUpResponse.status, 410);

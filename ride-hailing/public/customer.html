@@ -61,9 +61,6 @@ body{font-family:'Segoe UI',sans-serif;background:#0a0a0f;color:#fff;height:100d
 .dots-item.danger{color:#ff5555}
 .dots-item.danger:hover{background:rgba(255,60,60,.1)}
 /* ── Forgot password ── */
-.fp-otp-box{background:#1a1a0a;border:2px solid #f5c518;border-radius:12px;padding:1rem;text-align:center;margin:.75rem 0}
-.fp-otp-code{font-size:2rem;font-weight:800;letter-spacing:.25em;color:#f5c518}
-.fp-otp-note{font-size:.7rem;color:#888;margin-top:.35rem}
 .btn-text-link{background:none;border:none;color:#f5c518;font-size:.8rem;cursor:pointer;text-decoration:underline;margin-top:.4rem;display:inline-block;padding:0}
 /* ── Password eye toggle ── */
 .pw-wrap{position:relative;display:block}
@@ -357,12 +354,8 @@ body{font-family:'Segoe UI',sans-serif;background:#0a0a0f;color:#fff;height:100d
       </div>
       <!-- Step 2: verify OTP -->
       <div id="fp-step2" style="display:none">
-        <p style="font-size:.82rem;color:#888;margin-bottom:.6rem">Enter the 4-digit code sent to your phone.</p>
-        <div class="fp-otp-box" id="fp-otp-display-box" style="display:none">
-          <div class="fp-otp-code" id="fp-otp-code"></div>
-          <div class="fp-otp-note">Demo mode — in production this is SMS only</div>
-        </div>
-        <div class="form-group"><label>OTP Code</label><input type="text" id="fp-otp" placeholder="4-digit code" maxlength="4" inputmode="numeric" style="letter-spacing:.3em;font-size:1.2rem;text-align:center"></div>
+        <p style="font-size:.82rem;color:#888;margin-bottom:.6rem">Enter the 6-digit code sent to your phone.</p>
+        <div class="form-group"><label>OTP Code</label><input type="text" id="fp-otp" placeholder="6-digit code" maxlength="6" inputmode="numeric" style="letter-spacing:.3em;font-size:1.2rem;text-align:center"></div>
         <button class="btn-primary" onclick="forgotVerifyOtp()">Verify OTP</button>
         <div style="text-align:center;margin-top:.5rem"><button class="btn-text-link" onclick="forgotSendOtp()">Resend OTP</button></div>
       </div>
@@ -769,6 +762,7 @@ const TILE_OPTS  = {
 
 // ── State ─────────────────────────────────────────────────────────────────
 let token = localStorage.getItem('rh_token');
+let sessionToken = localStorage.getItem('rh_session') || null;
 let user  = JSON.parse(localStorage.getItem('rh_user') || 'null');
 let map, pickupMarker, routeLine, driverMarker;
 let nearbyDriversLayer = [];
@@ -846,11 +840,18 @@ function switchTab(t) {
 }
 
 async function apiCall(path, method = 'GET', body = null) {
-  const opts = { method, headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) } };
+  const opts = { method, headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}), ...(sessionToken ? { 'X-Session-Token': sessionToken } : {}) } };
   if (body) opts.body = JSON.stringify(body);
   const r = await fetch(API + path, opts);
   const data = await r.json().catch(() => ({}));
-  if (!r.ok) throw new Error(data.error || 'Request failed');
+  if (!r.ok) {
+    if (r.status === 401 && data.error === 'LOGGED_IN_ELSEWHERE') {
+      doLogout();
+      alert('Your account was signed in on another device. You have been signed out here.');
+      throw new Error('Logged in on another device');
+    }
+    throw new Error(data.error || 'Request failed');
+  }
   return data;
 }
 
@@ -955,13 +956,8 @@ async function forgotSendOtp() {
   if (!phone) return (document.getElementById('auth-error').textContent = 'Enter your registered phone number');
   document.getElementById('auth-error').textContent = '';
   try {
-    const res = await apiCall('/api/auth/forgot-password', 'POST', { phone });
+    await apiCall('/api/auth/forgot-password', 'POST', { phone });
     _fpPhone = phone;
-    // Show OTP in UI (demo mode)
-    if (res.otp) {
-      document.getElementById('fp-otp-code').textContent = res.otp;
-      document.getElementById('fp-otp-display-box').style.display = 'block';
-    }
     document.getElementById('fp-step1').style.display = 'none';
     document.getElementById('fp-step2').style.display = 'block';
   } catch (e) { document.getElementById('auth-error').textContent = e.message; }
@@ -969,8 +965,7 @@ async function forgotSendOtp() {
 
 async function forgotVerifyOtp() {
   const otp = document.getElementById('fp-otp').value.trim();
-  if (otp.length !== 4) return (document.getElementById('auth-error').textContent = 'Enter the 4-digit OTP');
-  // Client-side: just compare with displayed OTP (server will re-verify on reset)
+  if (!/^\d{6}$/.test(otp)) return (document.getElementById('auth-error').textContent = 'Enter the 6-digit OTP');
   document.getElementById('auth-error').textContent = '';
   document.getElementById('fp-step2').style.display = 'none';
   document.getElementById('fp-step3').style.display = 'block';
@@ -992,7 +987,9 @@ async function forgotResetPassword() {
 
 function saveSession(res) {
   token = res.token; user = res.user;
+  sessionToken = res.sessionToken || null;
   localStorage.setItem('rh_token', token);
+  if (sessionToken) localStorage.setItem('rh_session', sessionToken);
   localStorage.setItem('rh_user', JSON.stringify(user));
   bootApp();
 }
@@ -1003,7 +1000,7 @@ function doLogout() {
   // 1. Wipe all auth state from memory and storage
   localStorage.clear();
   sessionStorage.clear();
-  token = null; user = null; activeRide = null;
+  token = null; sessionToken = null; user = null; activeRide = null;
 
   // 2. Disconnect live connections
   if (socket) { socket.disconnect(); socket = null; }
@@ -1903,7 +1900,7 @@ function endRide() {
 // ── Socket.io ─────────────────────────────────────────────────────────────
 function connectSocket() {
   if (socket) return;
-  socket = io({ auth: { token } });
+  socket = io({ auth: { token, sessionToken } });
   socket.on('connect_error', (e) => console.warn('Socket error:', e.message));
 
   // Fired on both initial connection AND every successful reconnect.

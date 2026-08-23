@@ -14,6 +14,7 @@ const IMAGE = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAw
 let mongo;
 let baseURL;
 let adminToken;
+const activeSessions = new Map();
 
 function dailyFees(amount = 100) {
   return Object.fromEntries(FARE_VEHICLE_CATEGORIES.map(category => [category, amount]));
@@ -39,10 +40,12 @@ function driverToken(driver) {
 }
 
 async function json(path, { token, method = 'GET', body } = {}) {
+  const userId = token ? jwt.decode(token)?.id : null;
   const response = await fetch(`${baseURL}${path}`, {
     method,
     headers: {
       ...(token ? { authorization: `Bearer ${token}` } : {}),
+      ...(userId && activeSessions.get(String(userId)) ? { 'x-session-token': activeSessions.get(String(userId)) } : {}),
       ...(body ? { 'content-type': 'application/json' } : {})
     },
     ...(body ? { body: JSON.stringify(body) } : {})
@@ -63,6 +66,7 @@ async function registerDriver({ name, phone, vehicleType, ridePreference }) {
   assert.equal(result.response.status, 201, `${name} should register: ${result.body.error || 'unexpected response'}`);
   assert.equal(result.body.user.ridePreference, ridePreference);
   const driver = await models.User.findById(result.body.user.id).lean();
+  activeSessions.set(String(driver._id), result.body.sessionToken);
   const approved = await json(`/api/admin/users/${driver._id}/status`, {
     token: adminToken, method: 'PATCH', body: { action: 'approve' }
   });

@@ -291,9 +291,6 @@ textarea.support-input{resize:vertical;min-height:85px}
 .pending-card-title{font-size:.95rem;font-weight:700;color:#f5c518;margin-bottom:.5rem}
 .pending-card-msg{font-size:.78rem;color:#999;line-height:1.55}
 /* ── Forgot Password ── */
-.fp-otp-box{background:#0a0f1a;border:2px solid #f5c518;border-radius:12px;padding:1rem;text-align:center;margin:.75rem 0}
-.fp-otp-code{font-size:2rem;font-weight:800;letter-spacing:.25em;color:#f5c518}
-.fp-otp-note{font-size:.7rem;color:#888;margin-top:.35rem}
 .btn-text-link{background:none;border:none;color:#f5c518;font-size:.8rem;cursor:pointer;text-decoration:underline;margin-top:.4rem;display:inline-block;padding:0}
 </style>
 </head>
@@ -419,12 +416,8 @@ textarea.support-input{resize:vertical;min-height:85px}
         <div style="text-align:center;margin-top:.5rem"><button class="btn-text-link" onclick="switchTab('login')">← Back to Sign In</button></div>
       </div>
       <div id="dfp-step2" style="display:none">
-        <p style="font-size:.82rem;color:#888;margin-bottom:.6rem">Enter the 4-digit code sent to your phone.</p>
-        <div class="fp-otp-box" id="dfp-otp-box" style="display:none">
-          <div class="fp-otp-code" id="dfp-otp-code"></div>
-          <div class="fp-otp-note">Demo mode — SMS in production</div>
-        </div>
-        <div class="form-group"><label>OTP Code</label><input type="text" id="dfp-otp" placeholder="4-digit code" maxlength="4" inputmode="numeric" style="letter-spacing:.3em;font-size:1.2rem;text-align:center"></div>
+        <p style="font-size:.82rem;color:#888;margin-bottom:.6rem">Enter the 6-digit code sent to your phone.</p>
+        <div class="form-group"><label>OTP Code</label><input type="text" id="dfp-otp" placeholder="6-digit code" maxlength="6" inputmode="numeric" style="letter-spacing:.3em;font-size:1.2rem;text-align:center"></div>
         <button class="btn-primary" onclick="driverForgotVerifyOtp()">Verify OTP</button>
         <div style="text-align:center;margin-top:.5rem"><button class="btn-text-link" onclick="driverForgotSendOtp()">Resend OTP</button></div>
       </div>
@@ -1098,12 +1091,8 @@ async function driverForgotSendOtp() {
   if (!phone) return (errEl.textContent = 'Enter your registered phone number');
   errEl.textContent = '';
   try {
-    const res = await apiCall('/api/auth/forgot-password', 'POST', { phone });
+    await apiCall('/api/auth/forgot-password', 'POST', { phone });
     _dfpPhone = phone;
-    if (res.otp) {
-      document.getElementById('dfp-otp-code').textContent = res.otp;
-      document.getElementById('dfp-otp-box').style.display = 'block';
-    }
     document.getElementById('dfp-step1').style.display = 'none';
     document.getElementById('dfp-step2').style.display = 'block';
   } catch (e) { errEl.textContent = e.message; }
@@ -1112,7 +1101,7 @@ async function driverForgotSendOtp() {
 async function driverForgotVerifyOtp() {
   const otp = document.getElementById('dfp-otp').value.trim();
   const errEl = document.getElementById('auth-error');
-  if (otp.length !== 4) return (errEl.textContent = 'Enter the 4-digit OTP');
+  if (!/^\d{6}$/.test(otp)) return (errEl.textContent = 'Enter the 6-digit OTP');
   errEl.textContent = '';
   document.getElementById('dfp-step2').style.display = 'none';
   document.getElementById('dfp-step3').style.display = 'block';
@@ -1383,7 +1372,7 @@ function toggleOnline(online) {
 // ── Socket.io ─────────────────────────────────────────────────────────────
 function connectSocket() {
   if (socket) return;
-  socket = io({ auth: { token } });
+  socket = io({ auth: { token, sessionToken } });
   socket.on('connect_error', e => console.warn('Socket error:', e.message));
 
   // Fired on both initial connection AND every successful reconnect.

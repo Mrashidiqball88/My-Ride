@@ -63,6 +63,7 @@ function customerToken() {
 function driverToken() {
   return jwt.sign({ id: 'driver-1', role: 'driver', name: 'Driver' }, JWT_SECRET);
 }
+const TEST_SESSION = 'test-session';
 
 async function request(server, path, options = {}) {
   const response = await fetch(`http://127.0.0.1:${server.address().port}${path}`, {
@@ -321,6 +322,15 @@ test('Long Range commission is charged once only after a completed ride', async 
 
 test('ride creation uses the server-calculated fare and records the authoritative offer expiry', async () => {
   const settings = settingsFor(300, 125);
+  models.User.findById = () => ({
+    select: () => ({
+      lean: async () => ({
+        activeSessionToken: TEST_SESSION,
+        accountStatus: 'active',
+        identityVerificationStatus: 'approved'
+      })
+    })
+  });
   models.Settings.findOne = ({ key }) => ({
     lean: async () => ({ value: key === 'per_km_rates' ? DEFAULT_PER_KM_RATES : settings })
   });
@@ -340,7 +350,7 @@ test('ride creation uses the server-calculated fare and records the authoritativ
   try {
     const result = await request(server, '/api/rides', {
       method: 'POST',
-      headers: { authorization: `Bearer ${customerToken()}` },
+      headers: { authorization: `Bearer ${customerToken()}`, 'x-session-token': TEST_SESSION },
       body: JSON.stringify({
         pickupLocation: { lat: 1, lng: 2 },
         dropoffLocation: { lat: 3, lng: 4 },
@@ -515,6 +525,9 @@ test('Long Range broadcast only returns opted-in drivers for Socket.io and push 
 });
 
 test('customer nearby-driver map uses the persisted Admin broadcast radius instead of a hardcoded distance', async () => {
+  models.User.findById = () => ({
+    select: () => ({ lean: async () => ({ activeSessionToken: TEST_SESSION }) })
+  });
   models.Settings.findOne = ({ key }) => ({
     lean: async () => key === 'ride_broadcast_settings'
       ? { value: { maximumRideBroadcastRadiusKm: 8 } }
@@ -531,7 +544,7 @@ test('customer nearby-driver map uses the persisted Admin broadcast radius inste
   const server = app.listen(0);
   try {
     const result = await request(server, '/api/drivers/nearby?lat=31.5204&lng=74.3587', {
-      headers: { authorization: `Bearer ${customerToken()}` }
+      headers: { authorization: `Bearer ${customerToken()}`, 'x-session-token': TEST_SESSION }
     });
     assert.equal(result.response.status, 200);
     assert.equal(result.body.length, 1);
@@ -554,7 +567,8 @@ test('available-rides recovery uses the same radius so reconnecting drivers cann
         accountStatus: 'active',
         isOnline: true,
         lastOnlineHeartbeat: new Date(),
-        currentLocation: { lat: 31.5204, lng: 74.3587 }
+        currentLocation: { lat: 31.5204, lng: 74.3587 },
+        activeSessionToken: TEST_SESSION
       })
     })
   });
@@ -569,7 +583,7 @@ test('available-rides recovery uses the same radius so reconnecting drivers cann
   const server = app.listen(0);
   try {
     const result = await request(server, '/api/rides/available', {
-      headers: { authorization: `Bearer ${driverToken()}` }
+      headers: { authorization: `Bearer ${driverToken()}`, 'x-session-token': TEST_SESSION }
     });
     assert.equal(result.response.status, 200);
     assert.deepEqual(result.body.map(ride => ride._id), ['near-ride']);

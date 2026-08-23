@@ -15,6 +15,14 @@ const ONLINE_KEY = 'myride.driver.online';
 const ACTIVE_RIDE_KEY = 'myride.driver.activeRide';
 const API_URL = process.env.EXPO_PUBLIC_RIDE_API_URL ||
   (process.env.EXPO_PUBLIC_DOMAIN ? `https://${process.env.EXPO_PUBLIC_DOMAIN}` : '');
+let sessionRevokedHandler: (() => void) | null = null;
+
+class SessionRevokedError extends Error {
+  constructor() {
+    super('Your account was signed in on another device.');
+    this.name = 'SessionRevokedError';
+  }
+}
 
 export const DRIVER_VEHICLE_CATEGORIES = [
   'Bike', 'Riksha', 'Car Mini', 'Car Sedan', 'Car SUV', 'Van Seven Seats',
@@ -70,6 +78,10 @@ function api(path: string, token?: string, session?: string, init: RequestInit =
     },
   }).then(async response => {
     const data = await response.json().catch(() => ({}));
+    if (response.status === 401 && data.error === 'LOGGED_IN_ELSEWHERE') {
+      sessionRevokedHandler?.();
+      throw new SessionRevokedError();
+    }
     if (!response.ok) throw new Error(data.error || `Network request failed (${response.status})`);
     return data;
   });
@@ -139,7 +151,7 @@ export function DriverRuntimeProvider({ children }: { children: ReactNode }) {
     if (!tokenRef.current || socket.current) return;
     setConnection('connecting');
     const nextSocket = io(API_URL, {
-      path: '/socket.io', auth: { token: tokenRef.current }, transports: ['websocket'],
+      path: '/socket.io', auth: { token: tokenRef.current, sessionToken: sessionRef.current }, transports: ['websocket'],
       reconnection: true, reconnectionAttempts: Infinity, reconnectionDelay: 1000, reconnectionDelayMax: 15_000,
     });
     socket.current = nextSocket;
@@ -245,6 +257,30 @@ export function DriverRuntimeProvider({ children }: { children: ReactNode }) {
       await Location.stopLocationUpdatesAsync(BACKGROUND_LOCATION_TASK);
     }
   }, []);
+
+  const clearRevokedSession = useCallback(() => {
+    socket.current?.disconnect();
+    socket.current = null;
+    tokenRef.current = null;
+    sessionRef.current = null;
+    void stopLocationService();
+    void Promise.all([TOKEN_KEY, SESSION_KEY, USER_KEY, ONLINE_KEY, ACTIVE_RIDE_KEY]
+      .map(key => SecureStore.deleteItemAsync(key)));
+    setUser(null);
+    setIsOnline(false);
+    setPendingRide(null);
+    setActiveRideId(null);
+    setLongRangeState(null);
+    setConnection('offline');
+    setError('Your account was signed in on another device. Please sign in again.');
+  }, [stopLocationService]);
+
+  useEffect(() => {
+    sessionRevokedHandler = clearRevokedSession;
+    return () => {
+      if (sessionRevokedHandler === clearRevokedSession) sessionRevokedHandler = null;
+    };
+  }, [clearRevokedSession]);
 
   const setOnlineState = useCallback(async (next: boolean) => {
     const token = tokenRef.current;

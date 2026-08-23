@@ -4,6 +4,7 @@ const { test, afterEach } = require('node:test');
 const assert = require('node:assert/strict');
 const jwt = require('jsonwebtoken');
 const crypto = require('crypto');
+const bcrypt = require('bcryptjs');
 
 const rideHailing = require('../server');
 const { app, models } = rideHailing;
@@ -11,9 +12,11 @@ const { app, models } = rideHailing;
 const JWT_SECRET = 'ride-hailing-secret-fallback';
 const original = {
   userFindOne: models.User.findOne,
+  userFindById: models.User.findById,
   userCreate: models.User.create,
   userUpdateOne: models.User.updateOne,
   walletCreate: models.Wallet.create,
+  subAdminFindById: models.SubAdmin.findById,
   settingsFindOne: models.Settings.findOne,
   settingsFindOneAndUpdate: models.Settings.findOneAndUpdate
 };
@@ -21,10 +24,12 @@ const original = {
 afterEach(() => {
   Object.assign(models.User, {
     findOne: original.userFindOne,
+    findById: original.userFindById,
     create: original.userCreate,
     updateOne: original.userUpdateOne
   });
   Object.assign(models.Wallet, { create: original.walletCreate });
+  Object.assign(models.SubAdmin, { findById: original.subAdminFindById });
   Object.assign(models.Settings, {
     findOne: original.settingsFindOne,
     findOneAndUpdate: original.settingsFindOneAndUpdate
@@ -138,6 +143,9 @@ test('customer identity files are not public and only a Super Admin can retrieve
   models.User.findOne = queryInput => queryInput._id === customerId
     ? { select: () => query({ customerIdFront: fileName, identityVerifiedAt: new Date() }) }
     : query(null);
+  models.SubAdmin.findById = () => ({
+    select: () => query({ _id: 'sub-admin', username: 'ops', permissions: {}, isBlocked: false })
+  });
 
   try {
     await withServer(async server => {
@@ -231,5 +239,83 @@ test('recovery-key setup works, rate limits attempts, and invalidates old Super 
       headers: { authorization: `Bearer ${newLogin.body.token}` }
     });
     assert.equal(newSession.response.status, 200);
+  });
+});
+
+test('Customer and Driver requests require the latest matching session token', async () => {
+  for (const role of ['customer', 'driver']) {
+    const user = { _id: `${role}-1`, activeSessionToken: `${role}-current` };
+    models.User.findById = () => query(user);
+    const token = jwt.sign({ id: user._id, role, name: role }, JWT_SECRET);
+
+    await withServer(async server => {
+      const missing = await request(server, '/api/auth/me', {
+        headers: { authorization: `Bearer ${token}` }
+      });
+      assert.equal(missing.response.status, 401);
+      assert.equal(missing.body.error, 'LOGGED_IN_ELSEWHERE');
+
+      const replaced = await request(server, '/api/auth/me', {
+        headers: { authorization: `Bearer ${token}`, 'x-session-token': `${role}-old` }
+      });
+      assert.equal(replaced.response.status, 401);
+      assert.equal(replaced.body.error, 'LOGGED_IN_ELSEWHERE');
+
+      const current = await request(server, '/api/auth/me', {
+        headers: { authorization: `Bearer ${token}`, 'x-session-token': user.activeSessionToken }
+      });
+      assert.equal(current.response.status, 200);
+    });
+  }
+});
+
+test('unknown recovery numbers return exactly Wrong number without creating an OTP', async () => {
+  let updated = false;
+  models.User.findOne = () => query(null);
+  models.User.updateOne = async () => { updated = true; };
+
+  await withServer(async server => {
+    const result = await request(server, '/api/auth/forgot-password', {
+      method: 'POST',
+      body: JSON.stringify({ phone: '0300 999 9999' })
+    });
+    assert.equal(result.response.status, 404);
+    assert.equal(result.body.error, 'Wrong number');
+    assert.equal(updated, false);
+  });
+});
+
+test('a successful password reset clears the OTP and replaces the active session', async () => {
+  const user = {
+    _id: 'reset-user',
+    phone: '+923001234567',
+    otpCode: await bcrypt.hash('123456', 10),
+    otpExpiry: new Date(Date.now() + 60_000),
+    activeSessionToken: 'old-session'
+  };
+  let update;
+  models.User.findOne = () => query(user);
+  models.User.updateOne = async (_filter, next) => {
+    update = next;
+    Object.assign(user, next);
+  };
+  models.User.findById = () => query(user);
+  const oldToken = jwt.sign({ id: user._id, role: 'customer', name: 'Customer' }, JWT_SECRET);
+
+  await withServer(async server => {
+    const reset = await request(server, '/api/auth/reset-password', {
+      method: 'POST',
+      body: JSON.stringify({ phone: '0300-1234567', otp: '123456', newPassword: 'a-new-password' })
+    });
+    assert.equal(reset.response.status, 200);
+    assert.equal(update.otpCode, null);
+    assert.equal(update.otpExpiry, null);
+    assert.notEqual(update.activeSessionToken, 'old-session');
+
+    const oldSession = await request(server, '/api/auth/me', {
+      headers: { authorization: `Bearer ${oldToken}`, 'x-session-token': 'old-session' }
+    });
+    assert.equal(oldSession.response.status, 401);
+    assert.equal(oldSession.body.error, 'LOGGED_IN_ELSEWHERE');
   });
 });

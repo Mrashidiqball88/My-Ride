@@ -29,6 +29,8 @@ const webpush  = require('web-push');
 const crypto   = require('crypto');
 const Tesseract = require('tesseract.js');
 const sharp    = require('sharp');
+const { cert, getApps, initializeApp } = require('firebase-admin/app');
+const { getAuth } = require('firebase-admin/auth');
 
 // ── 2. APP & SERVER INITIALIZATION ───────────────────────────────────────
 const app    = express();
@@ -42,6 +44,36 @@ app.get('/api',    (_req, res) => res.status(200).json({ status: 'ok' }));
 
 const server = http.createServer(app);
 const io     = new Server(server, { cors: { origin: '*', methods: ['GET', 'POST'] } });
+
+// Firebase Phone Auth keeps SMS delivery and OTP verification in Firebase.
+// Only the public web config is sent to browsers; the Admin credential stays
+// server-side and is supplied through environment variables for portability.
+const FIREBASE_PROJECT_ID = process.env.FIREBASE_PROJECT_ID || '';
+const FIREBASE_WEB_CONFIG = Object.freeze({
+  apiKey: process.env.FIREBASE_API_KEY || '',
+  authDomain: process.env.FIREBASE_AUTH_DOMAIN || '',
+  projectId: FIREBASE_PROJECT_ID,
+  storageBucket: process.env.FIREBASE_STORAGE_BUCKET || '',
+  messagingSenderId: process.env.FIREBASE_MESSAGING_SENDER_ID || '',
+  appId: process.env.FIREBASE_APP_ID || ''
+});
+const firebaseAdminConfigured = Boolean(
+  FIREBASE_PROJECT_ID && process.env.FIREBASE_CLIENT_EMAIL && process.env.FIREBASE_PRIVATE_KEY
+);
+let firebaseAdminAuth = null;
+if (firebaseAdminConfigured) {
+  const firebaseApp = getApps()[0] || initializeApp({
+    credential: cert({
+      projectId: FIREBASE_PROJECT_ID,
+      clientEmail: process.env.FIREBASE_CLIENT_EMAIL,
+      privateKey: process.env.FIREBASE_PRIVATE_KEY.replace(/\\n/g, '\n')
+    })
+  });
+  firebaseAdminAuth = getAuth(firebaseApp);
+}
+function firebaseWebConfigAvailable() {
+  return Object.values(FIREBASE_WEB_CONFIG).every(Boolean);
+}
 
 // ── Request body timeout ──────────────────────────────────────────────────
 // Drivers on 2G/3G can take 30–90 s to push four compressed photos (~1 MB
@@ -1280,6 +1312,24 @@ function normalizeNationalId(value) {
   return String(value || '').replace(/\D/g, '');
 }
 
+function normalizePhoneNumber(value) {
+  const input = String(value || '').trim();
+  if (!input) return '';
+  const digits = input.replace(/[^\d+]/g, '').replace(/(?!^)\+/g, '');
+  let normalized = digits;
+  if (normalized.startsWith('00')) normalized = `+${normalized.slice(2)}`;
+  if (normalized.startsWith('0')) normalized = `+92${normalized.slice(1)}`;
+  else if (/^92\d+$/.test(normalized)) normalized = `+${normalized}`;
+  if (!/^\+[1-9]\d{7,14}$/.test(normalized)) return '';
+  return normalized;
+}
+
+function phoneLookupValues(value) {
+  const raw = String(value || '').trim();
+  const normalized = normalizePhoneNumber(raw);
+  return [...new Set([normalized, raw].filter(Boolean))];
+}
+
 function normalizeNameForMatch(value) {
   return String(value || '').toUpperCase().replace(/[^A-Z]/g, '');
 }
@@ -1360,19 +1410,23 @@ async function authMiddleware(req, res, next) {
   }
   try {
     req.user = jwt.verify(auth.slice(7), JWT_SECRET);
-    // Single-device session enforcement — drivers only
-    if (req.user.role === 'driver' && dbConnected) {
+    if (req.user.role === 'customer' || req.user.role === 'driver') {
       const clientSession = req.headers['x-session-token'];
-      if (clientSession) {
-        const driver = await User.findById(req.user.id).select('activeSessionToken').lean();
-        if (driver && driver.activeSessionToken && driver.activeSessionToken !== clientSession) {
-          return res.status(401).json({ error: 'LOGGED_IN_ELSEWHERE' });
-        }
+      if (typeof clientSession !== 'string' || !clientSession) {
+        return res.status(401).json({ error: 'LOGGED_IN_ELSEWHERE' });
+      }
+      const user = await User.findById(req.user.id).select('activeSessionToken').lean();
+      if (!user || !user.activeSessionToken || user.activeSessionToken !== clientSession) {
+        return res.status(401).json({ error: 'LOGGED_IN_ELSEWHERE' });
       }
     }
     next();
-  } catch {
-    return res.status(401).json({ error: 'Invalid or expired token' });
+  } catch (err) {
+    if (err?.name === 'JsonWebTokenError' || err?.name === 'TokenExpiredError') {
+      return res.status(401).json({ error: 'Invalid or expired token' });
+    }
+    console.warn(`[auth] session validation failed: ${err.message}`);
+    return res.status(503).json({ error: 'Session validation is temporarily unavailable' });
   }
 }
 
@@ -1505,7 +1559,8 @@ app.post('/api/auth/register', async (req, res) => {
     const { name, email, password, phone, role, vehicleType, vehicleModel, vehiclePlate, ridePreference,
              profilePhoto, licensePhoto, cnicFront, cnicBack, cnicNumber, vehicleRegPhoto } = req.body;
     if (!name || !password) return res.status(400).json({ error: 'Name and password are required' });
-    if (!phone)             return res.status(400).json({ error: 'Phone number is required' });
+    const normalizedPhone = normalizePhoneNumber(phone);
+    if (!normalizedPhone)   return res.status(400).json({ error: 'Enter a valid mobile number' });
     const resolvedRoleEarly = role || 'customer';
     const resolvedRidePreference = resolvedRoleEarly === 'driver' ? normalizeRidePreference(ridePreference) : 'Both';
     const normalizedCustomerId = normalizeNationalId(cnicNumber);
@@ -1528,7 +1583,7 @@ app.post('/api/auth/register', async (req, res) => {
 
     if (resolvedEmail && await User.findOne({ email: resolvedEmail }))
       return res.status(409).json({ error: 'Email already registered' });
-    if (phone && await User.findOne({ phone: phone.trim() }))
+    if (await User.findOne({ phone: { $in: phoneLookupValues(phone) } }))
       return res.status(409).json({ error: 'Phone number already registered' });
     const nationalIdHash = resolvedRoleEarly === 'customer'
       ? crypto.createHmac('sha256', JWT_SECRET).update(normalizedCustomerId).digest('hex')
@@ -1546,6 +1601,9 @@ app.post('/api/auth/register', async (req, res) => {
       } catch (err) {
         console.warn(`[identity-verification] Unable to read submitted customer ID: ${err.message}`);
       }
+      if (!identityVerified) {
+        return res.status(422).json({ error: 'Wrong Documents / Document Verification Failed' });
+      }
     }
 
     const hash = await bcrypt.hash(password, 12);
@@ -1555,7 +1613,7 @@ app.post('/api/auth/register', async (req, res) => {
     const user = await User.create({
       name,
       email:         resolvedEmail  || undefined,
-      phone:         phone?.trim()  || '',
+      phone:         normalizedPhone,
       password:      hash,
       role:          resolvedRole,
       accountStatus: resolvedRole === 'driver' ? 'pending' : (identityVerified ? 'active' : 'pending'),
@@ -1612,9 +1670,13 @@ app.post('/api/auth/login', async (req, res) => {
     if (!identifier || !password) return res.status(400).json({ error: 'Phone/email and password required' });
 
     // Look up by email if it contains @, otherwise by phone
+    const normalizedPhone = identifier.includes('@') ? '' : normalizePhoneNumber(identifier);
+    if (!identifier.includes('@') && !normalizedPhone) {
+      return res.status(400).json({ error: 'Enter a valid mobile number' });
+    }
     const user = identifier.includes('@')
       ? await User.findOne({ email: identifier.toLowerCase() })
-      : await User.findOne({ phone: identifier });
+      : await User.findOne({ phone: { $in: phoneLookupValues(identifier) } });
 
     if (!user) return res.status(404).json({ error: 'No account found with this phone number or email' });
     if (!(await bcrypt.compare(password, user.password)))
@@ -1631,6 +1693,7 @@ app.post('/api/auth/login', async (req, res) => {
     // Generate a new single-device session token and overwrite any previous one
     const sessionToken = crypto.randomBytes(32).toString('hex');
     await User.updateOne({ _id: user._id }, { activeSessionToken: sessionToken });
+    io.in(`user:${user._id}`).disconnectSockets(true);
 
     const token = jwt.sign(
        { id: user._id, email: user.email || '', role: user.role, name: user.name, accountStatus: user.accountStatus },
@@ -1679,44 +1742,46 @@ app.post('/api/account/delete-request', authMiddleware, async (req, res) => {
 app.post('/api/auth/forgot-password', async (req, res) => {
   try {
     const { phone } = req.body;
-    // Always return the same response to avoid exposing which phone numbers
-    // are registered. Reject non-string input before it can reach MongoDB.
-    const normalizedPhone = typeof phone === 'string' ? phone.trim() : '';
-    const genericResponse = {
-      success: true,
-      message: 'If the phone number is registered, a password reset code has been issued.'
-    };
-    if (!normalizedPhone) return res.json(genericResponse);
-    const user = await User.findOne({ phone: normalizedPhone });
-    if (!user) return res.json(genericResponse);
-
-    const otp = String(crypto.randomInt(100000, 1000000));          // 6-digit, CSPRNG
-    const expiry = new Date(Date.now() + 10 * 60 * 1000);           // 10 min
-    await User.updateOne(
-      { _id: user._id },
-      { otpCode: await bcrypt.hash(otp, 12), otpExpiry: expiry }
-    );
-
-    // OTP values and account identifiers must never be returned to the caller
-    // or written to logs. Connect an SMS provider before enabling this flow in
-    // production; until then, the code is intentionally server-only.
-    res.json(genericResponse);
+    const normalizedPhone = normalizePhoneNumber(phone);
+    if (!normalizedPhone) return res.status(400).json({ error: 'Enter a valid registered mobile number' });
+    const user = await User.findOne({ phone: { $in: phoneLookupValues(phone) } });
+    if (!user) return res.status(404).json({ error: 'Wrong number' });
+    if (!firebaseWebConfigAvailable() || !firebaseAdminAuth) {
+      return res.status(503).json({ error: 'Phone OTP service is not configured' });
+    }
+    return res.json({ success: true, phone: normalizePhoneNumber(user.phone), firebaseConfig: FIREBASE_WEB_CONFIG });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
 app.post('/api/auth/reset-password', async (req, res) => {
   try {
-    const { phone, otp, newPassword } = req.body;
-    if (typeof phone !== 'string' || typeof otp !== 'string' || typeof newPassword !== 'string' ||
-        !phone.trim() || !otp.trim() || !newPassword)
-      return res.status(400).json({ error: 'Phone, OTP, and new password required' });
-    const user = await User.findOne({ phone: phone.trim() });
-    if (!user || !user.otpCode || !(await bcrypt.compare(otp.trim(), user.otpCode)))
-      return res.status(400).json({ error: 'Invalid or expired OTP' });
-    if (user.otpExpiry < new Date()) return res.status(400).json({ error: 'OTP has expired — request a new one' });
+    const { firebaseIdToken, newPassword } = req.body;
+    if (typeof firebaseIdToken !== 'string' || !firebaseIdToken || typeof newPassword !== 'string' || !newPassword)
+      return res.status(400).json({ error: 'Verified phone OTP and new password required' });
+    if (!firebaseAdminAuth) return res.status(503).json({ error: 'Phone OTP service is not configured' });
+    let decoded;
+    try {
+      decoded = await firebaseAdminAuth.verifyIdToken(firebaseIdToken);
+    } catch {
+      return res.status(400).json({ error: 'Invalid or expired phone OTP' });
+    }
+    const normalizedPhone = normalizePhoneNumber(decoded.phone_number);
+    if (!normalizedPhone) return res.status(400).json({ error: 'Invalid or expired phone OTP' });
+    const user = await User.findOne({ phone: { $in: phoneLookupValues(normalizedPhone) } });
+    if (!user || normalizePhoneNumber(user.phone) !== normalizedPhone)
+      return res.status(400).json({ error: 'Invalid or expired phone OTP' });
     if (newPassword.length < 8) return res.status(400).json({ error: 'New password must be at least 8 characters' });
     const hash = await bcrypt.hash(newPassword, 12);
-    await User.updateOne({ _id: user._id }, { password: hash, otpCode: null, otpExpiry: null });
+    await User.updateOne(
+      { _id: user._id },
+      {
+        password: hash,
+        otpCode: null,
+        otpExpiry: null,
+        activeSessionToken: crypto.randomBytes(32).toString('hex')
+      }
+    );
+    io.in(`user:${user._id}`).disconnectSockets(true);
     res.json({ success: true });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
@@ -4236,14 +4301,24 @@ app.use((err, _req, res, _next) => {
 // Socket.io — Real-time Layer
 // ─────────────────────────────────────────────────────────────────────────────
 
-io.use((socket, next) => {
+io.use(async (socket, next) => {
   const token = socket.handshake.auth?.token;
   if (!token) return next(new Error('Authentication required'));
   try {
     socket.user = jwt.verify(token, JWT_SECRET);
+    if (socket.user.role === 'customer' || socket.user.role === 'driver') {
+      const clientSession = socket.handshake.auth?.sessionToken;
+      if (typeof clientSession !== 'string' || !clientSession) {
+        return next(new Error('Session expired'));
+      }
+      const user = await User.findById(socket.user.id).select('activeSessionToken').lean();
+      if (!user || user.activeSessionToken !== clientSession) {
+        return next(new Error('Session expired'));
+      }
+    }
     next();
-  } catch {
-    next(new Error('Invalid token'));
+  } catch (err) {
+    next(new Error(err?.name === 'JsonWebTokenError' ? 'Invalid token' : 'Session validation unavailable'));
   }
 });
 

@@ -19,6 +19,7 @@
     "expo-secure-store": "~15.0.8",
     "expo-task-manager": "~14.0.9",
     "express": "4.19.2",
+    "firebase-admin": "^14.3.0",
     "jsonwebtoken": "9.0.2",
     "mongodb-memory-server": "^10.4.3",
     "mongoose": "^9.9.3",
