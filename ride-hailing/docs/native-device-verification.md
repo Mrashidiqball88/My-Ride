@@ -43,8 +43,12 @@ sound/vibration, radio recovery, or force-stop behavior.
 
 1. Leave the driver online with the screen locked/backgrounded.
 2. Create a ride matching the driver's vehicle category.
-3. Pass when the phone produces sound and vibration, and opening the alert
-   displays the same ride ID, pickup, drop-off, and fare as the customer request.
+3. Pass when the phone produces sound and vibration with public lock-screen
+   visibility, and opening the alert displays the same ride ID, pickup,
+   drop-off, fare, and remaining server-issued response window as the customer
+   request. On Android, also record whether the device grants the
+   full-screen-intent permission; OEM and Do Not Disturb policies may still
+   suppress an interruptive presentation.
 4. Create a second matching ride only after dismissing or accepting the first;
    confirm the offer does not show a different ride's details.
 
@@ -96,7 +100,7 @@ native device build, so it cannot satisfy the scenarios below.
 | --- | --- | --- | --- | --- |
 | Android locked location | No approved Android device or native build available | **Blocked — no device evidence** (2026-08-22T15:31:49Z); no lock-screen movement, foreground-service notification screenshot, ride ID, or timestamped GPS update can be recorded in this workspace. Supporting config enables Android background location and foreground service; background updates request 25 m / 15 s intervals. | Blocked | Replit workspace |
 | iOS locked location | No approved iOS device or native build available | **Blocked — no device evidence** (2026-08-22T15:31:49Z); no lock-screen movement, system location indicator, Settings permission screenshot, ride ID, or timestamped GPS update can be recorded in this workspace. Supporting config declares When In Use and Always usage descriptions and enables the background indicator. | Blocked | Replit workspace |
-| Alert and matching offer | No approved Android/iOS device or native build available | **Blocked — no device evidence** (2026-08-22T15:31:49Z); sound, vibration, lock-screen tap-through, ride ID, pickup/drop-off, and fare cannot be observed or captured. Supporting implementation schedules a default-sound ride-request notification and retains the ride payload when opened. | Blocked | Replit workspace |
+| Alert and matching offer | No approved Android/iOS device or native build available | **Blocked — no device evidence** (2026-08-23); sound, vibration, lock-screen tap-through, ride ID, pickup/drop-off, fare, server-expiry countdown, and full-screen-intent permission behavior cannot be observed or captured. Supporting implementation uses the maximum-importance public Android channel, a high-priority push payload, action category, deep-link payload, and the declared Android full-screen-intent permission. Expo does not provide a supported API that guarantees a full-screen intent; OS/OEM and Do Not Disturb policy remains authoritative. | Blocked | Replit workspace |
 | Network interruption | No approved Android/iOS device or native build available | **Blocked — no device evidence** (2026-08-22T15:31:49Z); Wi-Fi/mobile-data switching, reconnect timing, duplicate visible offers, and an accepted ride ID cannot be observed or logged. Supporting implementation enables Socket.io reconnection and refreshes available rides after reconnect. | Blocked | Replit workspace |
 | Force-stop / permission revoke | No approved Android/iOS device or native build available | **Blocked — no device evidence** (2026-08-22T15:31:49Z); force-stop/termination, permission revocation, the >90-second wait, and absence of a new offer cannot be observed or captured. Supporting server contracts verify heartbeat persistence; background GPS fails closed on 401/403. | Blocked | Replit workspace |
 

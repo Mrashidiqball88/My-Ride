@@ -1,7 +1,7 @@
-// MyRide Service Worker — v1
+// MyRide Service Worker — v2
 // Strategy: network-first for API/socket, cache-first for static assets.
 
-const CACHE_NAME = 'myride-v1';
+const CACHE_NAME = 'myride-v2';
 
 // Static assets worth caching for fast repeat loads
 const PRECACHE = [
@@ -47,7 +47,13 @@ self.addEventListener('push', event => {
     tag:                'ride-request',
     requireInteraction: true,
     vibrate:            [400, 150, 400, 150, 400],
-    data:               { url: data.url || '/driver', rideId: data.rideId || null },
+    data:               {
+      url: data.url || '/driver',
+      rideId: data.rideId || null,
+      ride: data.ride || null,
+      broadcastDurationSeconds: data.broadcastDurationSeconds || null,
+      broadcastExpiresAt: data.broadcastExpiresAt || null
+    },
     actions: [
       { action: 'accept', title: '✅ Accept Ride' },
       { action: 'reject', title: '❌ Reject Ride' },

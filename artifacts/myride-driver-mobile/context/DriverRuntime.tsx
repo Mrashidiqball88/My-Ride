@@ -28,6 +28,8 @@ export type DriverUser = {
 export type RideRequest = {
   id: string; fare: number; distance?: number; vehicleType?: string;
   isLongRange?: boolean;
+  broadcastDurationSeconds?: number;
+  broadcastExpiresAt?: string | Date;
   pickupLocation?: { address?: string; lat: number; lng: number };
   dropoffLocation?: { address?: string; lat: number; lng: number };
 };
@@ -88,6 +90,15 @@ async function configureNotifications() {
   if (!permissions.granted) await Notifications.requestPermissionsAsync();
 }
 
+function normalizeRideRequest(ride: RideRequest & { _id?: string }): RideRequest {
+  return { ...ride, id: String(ride.id || ride._id || '') };
+}
+
+function isRideOfferLive(ride: RideRequest | null | undefined) {
+  const expiresAt = new Date(ride?.broadcastExpiresAt || 0).getTime();
+  return Boolean(ride?.id) && Number.isFinite(expiresAt) && expiresAt > Date.now();
+}
+
 export function DriverRuntimeProvider({ children }: { children: ReactNode }) {
   const [ready, setReady] = useState(false);
   const [user, setUser] = useState<DriverUser | null>(null);
@@ -100,14 +111,23 @@ export function DriverRuntimeProvider({ children }: { children: ReactNode }) {
   const socket = useRef<Socket | null>(null);
   const tokenRef = useRef<string | null>(null);
   const sessionRef = useRef<string | null>(null);
+  const isOnlineRef = useRef(false);
+  const activeRideIdRef = useRef<string | null>(null);
+  const alertedRideIds = useRef(new Set<string>());
+
+  useEffect(() => { isOnlineRef.current = isOnline; }, [isOnline]);
+  useEffect(() => { activeRideIdRef.current = activeRideId; }, [activeRideId]);
 
   const hydrateAvailableRides = useCallback(async () => {
-    if (!tokenRef.current || !isOnline) return;
+    if (!tokenRef.current || !isOnlineRef.current) return;
     try {
       const rides = await api('/api/rides/available', tokenRef.current, sessionRef.current || undefined);
-      if (Array.isArray(rides) && rides.length) setPendingRide(rides[0] as RideRequest);
+      const nextRide = Array.isArray(rides)
+        ? rides.map(ride => normalizeRideRequest(ride as RideRequest & { _id?: string })).find(isRideOfferLive)
+        : undefined;
+      setPendingRide(current => nextRide || (isRideOfferLive(current) ? current : null));
     } catch { /* A reconnect can race the availability change; socket retry continues. */ }
-  }, [isOnline]);
+  }, []);
 
   const loadLongRange = useCallback(async () => {
     if (!tokenRef.current) return;
@@ -125,28 +145,34 @@ export function DriverRuntimeProvider({ children }: { children: ReactNode }) {
     socket.current = nextSocket;
     nextSocket.on('connect', () => {
       setConnection('connected');
-      if (isOnline) {
+      if (isOnlineRef.current) {
         nextSocket.emit('driver:status', { isOnline: true });
         nextSocket.emit('driver:heartbeat');
       }
-      if (activeRideId) nextSocket.emit('ride:join', activeRideId);
+      if (activeRideIdRef.current) nextSocket.emit('ride:join', activeRideIdRef.current);
       void hydrateAvailableRides();
     });
     nextSocket.on('disconnect', () => setConnection('connecting'));
     nextSocket.on('connect_error', () => setConnection('connecting'));
     nextSocket.on('driver:rehydrate', () => void hydrateAvailableRides());
     nextSocket.on('ride:new', (ride: RideRequest) => {
-      if (!isOnline || activeRideId) return;
-      setPendingRide(current => current?.id === ride.id ? current : ride);
+      const nextRide = normalizeRideRequest(ride);
+      if (!isOnlineRef.current || activeRideIdRef.current || !isRideOfferLive(nextRide)) return;
+      setPendingRide(current => current?.id === nextRide.id ? current : nextRide);
       void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning);
-      void Notifications.scheduleNotificationAsync({
-        content: {
-          title: 'New ride request',
-          body: `${ride.pickupLocation?.address || 'Nearby pickup'} · Rs ${Number(ride.fare || 0).toLocaleString()}`,
-          sound: 'default', categoryIdentifier: 'ride-request', data: { type: 'ride:new', ride },
-        },
-        trigger: null,
-      });
+      // Expo's remote notification already displays in the foreground. Only
+      // create a local fallback while backgrounded, and only once per ride.
+      if (AppState.currentState !== 'active' && !alertedRideIds.current.has(nextRide.id)) {
+        alertedRideIds.current.add(nextRide.id);
+        void Notifications.scheduleNotificationAsync({
+          content: {
+            title: 'New ride request',
+            body: `${nextRide.pickupLocation?.address || 'Nearby pickup'} · Rs ${Number(nextRide.fare || 0).toLocaleString()}`,
+            sound: 'default', categoryIdentifier: 'ride-request', data: { type: 'ride:new', ride: nextRide },
+          },
+          trigger: null,
+        });
+      }
     });
     nextSocket.on('ride:taken', ({ rideId }: { rideId: string }) => {
       setPendingRide(current => current?.id === rideId ? null : current);
@@ -184,7 +210,7 @@ export function DriverRuntimeProvider({ children }: { children: ReactNode }) {
     });
   // setOnlineState is stable through declaration below at execution time.
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeRideId, hydrateAvailableRides, isOnline]);
+  }, [hydrateAvailableRides]);
 
   const sendCurrentLocation = useCallback(async (location: Location.LocationObject) => {
     if (!tokenRef.current || !isOnline) return;
@@ -232,7 +258,11 @@ export function DriverRuntimeProvider({ children }: { children: ReactNode }) {
       setIsOnline(next);
       socket.current?.emit('driver:status', { isOnline: next });
       if (next) socket.current?.emit('driver:heartbeat');
-      else await stopLocationService();
+      else {
+        setPendingRide(null);
+        alertedRideIds.current.clear();
+        await stopLocationService();
+      }
     } catch (cause) {
       if (next) {
         await api('/api/driver/availability', token, sessionRef.current || undefined, {
@@ -271,11 +301,18 @@ export function DriverRuntimeProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     const subscription = Notifications.addNotificationResponseReceivedListener(response => {
-      const data = response.notification.request.content.data as { type?: string; ride?: RideRequest };
+      const data = response.notification.request.content.data as { type?: string; ride?: RideRequest & { _id?: string } };
       if (data.type === 'ride:new' && data.ride) {
-        if (response.actionIdentifier !== 'dismiss') setPendingRide(data.ride);
+        const ride = normalizeRideRequest(data.ride);
+        if (response.actionIdentifier !== 'dismiss' && isRideOfferLive(ride)) setPendingRide(ride);
       }
     });
+    void Notifications.getLastNotificationResponseAsync().then(response => {
+      const data = response?.notification.request.content.data as { type?: string; ride?: RideRequest & { _id?: string } } | undefined;
+      if (data?.type === 'ride:new' && data.ride && isRideOfferLive(normalizeRideRequest(data.ride))) {
+        setPendingRide(normalizeRideRequest(data.ride));
+      }
+    }).catch(() => undefined);
     return () => subscription.remove();
   }, []);
 
@@ -306,6 +343,27 @@ export function DriverRuntimeProvider({ children }: { children: ReactNode }) {
     return () => { clearInterval(interval); subscription.remove(); };
   }, [hydrateAvailableRides, isOnline]);
 
+  useEffect(() => {
+    if (!pendingRide) return;
+    const remainingMs = new Date(pendingRide.broadcastExpiresAt || 0).getTime() - Date.now();
+    if (remainingMs <= 0) {
+      setPendingRide(null);
+      return;
+    }
+    const timeout = setTimeout(() => setPendingRide(current => current?.id === pendingRide.id ? null : current), remainingMs + 25);
+    return () => clearTimeout(timeout);
+  }, [pendingRide]);
+
+  useEffect(() => {
+    if (!ready || !user || !isOnline || Platform.OS === 'web') return;
+    // Restore the existing foreground/background location task after a normal
+    // process restart. If Android permissions were revoked, fail closed.
+    void startLocationService().catch(async cause => {
+      setError(cause instanceof Error ? cause.message : 'Background location is no longer available.');
+      await setOnlineState(false).catch(() => undefined);
+    });
+  }, [isOnline, ready, startLocationService, user]);
+
   const signIn = useCallback(async (identifier: string, password: string) => {
     const response = await api('/api/auth/login', undefined, undefined, { method: 'POST', body: JSON.stringify({ identifier, password }) });
     if (response.user?.role !== 'driver') throw new Error('Use the Customer app for this account.');
@@ -329,6 +387,10 @@ export function DriverRuntimeProvider({ children }: { children: ReactNode }) {
 
   const acceptRide = useCallback(async () => {
     if (!pendingRide || !tokenRef.current) return;
+    if (!isRideOfferLive(pendingRide)) {
+      setPendingRide(null);
+      throw new Error('This ride request has expired.');
+    }
     await api(`/api/rides/${pendingRide.id}/counter`, tokenRef.current, sessionRef.current || undefined, {
       method: 'PATCH', body: JSON.stringify({ price: pendingRide.fare, type: 'accept' }),
     });

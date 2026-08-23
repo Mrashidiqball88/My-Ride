@@ -850,7 +850,7 @@ input[type=date]:focus{border-color:#f5c518}
           <div class="sec-hdr-actions"><button class="btn-refresh" onclick="loadRideSettings()">↻ Reload</button></div>
         </div>
         <p style="font-size:.8rem;color:#475569;margin-bottom:1.1rem">
-          Choose how far from a pickup point a driver can receive a ride request. This also controls the nearby-driver map and driver alerts.
+          Choose how far from a pickup point a driver can receive a ride request and how long each request remains open. These settings control nearby-driver matching and Driver alerts.
         </p>
         <div style="background:#0f0f1e;border:1px solid #1e1e2e;border-radius:14px;padding:1rem;max-width:520px">
           <div class="field-item">
@@ -860,7 +860,12 @@ input[type=date]:focus{border-color:#f5c518}
               <input class="modal-input" id="ride-broadcast-radius-km" type="number" min="0.5" max="100" step="0.1" inputmode="decimal" placeholder="5" oninput="syncRideRadiusFromInput()">
             </div>
           </div>
+           <div class="field-item" style="margin-top:1rem;max-width:260px">
+             <div class="field-label">Broadcast Request Duration (Seconds)</div>
+             <input class="modal-input" id="ride-broadcast-duration-seconds" type="number" min="30" max="120" step="1" inputmode="numeric" value="60">
+           </div>
           <p style="font-size:.72rem;color:#64748b;line-height:1.5;margin-top:.7rem">Drivers outside this straight-line distance from the pickup point will not receive the request. Allowed range: 0.5–100 km.</p>
+           <p style="font-size:.72rem;color:#64748b;line-height:1.5;margin-top:.35rem">Each eligible Driver sees an authoritative countdown for this period. Allowed range: 30–120 seconds.</p>
         </div>
         <div id="ride-settings-feedback" style="min-height:1.25rem;font-size:.8rem;margin:.8rem 0"></div>
         <button class="btn btn-primary" style="padding:.75rem 2rem;font-size:.9rem" onclick="saveRideSettings()">💾 Save Ride Settings</button>
@@ -2722,6 +2727,7 @@ async function loadRideSettings() {
   try {
     const settings = await api('/api/admin/ride-settings');
     setRideRadiusValue(settings.maximumRideBroadcastRadiusKm ?? 5);
+    document.getElementById('ride-broadcast-duration-seconds').value = settings.broadcastRequestDurationSeconds ?? 60;
     feedback.textContent = '';
   } catch (e) {
     feedback.textContent = `⚠ ${e.message}`;
@@ -2732,15 +2738,20 @@ async function loadRideSettings() {
 async function saveRideSettings() {
   const feedback = document.getElementById('ride-settings-feedback');
   const radius = document.getElementById('ride-broadcast-radius-km').value;
+  const duration = document.getElementById('ride-broadcast-duration-seconds').value;
   feedback.textContent = 'Saving Ride Settings…'; feedback.style.color = '#64748b';
   try {
     const result = await api('/api/admin/ride-settings', 'PATCH', {
-      rideBroadcastSettings: { maximumRideBroadcastRadiusKm: radius }
+      rideBroadcastSettings: {
+        maximumRideBroadcastRadiusKm: radius,
+        broadcastRequestDurationSeconds: duration
+      }
     });
     setRideRadiusValue(result.settings.maximumRideBroadcastRadiusKm);
-    feedback.textContent = `✓ Ride broadcast radius saved: ${result.settings.maximumRideBroadcastRadiusKm} km.`;
+    document.getElementById('ride-broadcast-duration-seconds').value = result.settings.broadcastRequestDurationSeconds;
+    feedback.textContent = `✓ Broadcast settings saved: ${result.settings.maximumRideBroadcastRadiusKm} km for ${result.settings.broadcastRequestDurationSeconds} seconds.`;
     feedback.style.color = '#22c55e';
-    showToast('Ride broadcast radius updated ✓', 'success');
+    showToast('Ride broadcast settings updated ✓', 'success');
   } catch (e) {
     const details = Array.isArray(e.errors) ? `: ${e.errors.join('; ')}` : '';
     feedback.textContent = `✕ ${e.message || 'Could not save Ride Settings'}${details}`;

@@ -7,8 +7,8 @@ const jwt = require('jsonwebtoken');
 const fare = require('../server');
 const {
   app, io, models, FARE_VEHICLE_CATEGORIES, DEFAULT_PER_KM_RATES,
-  DEFAULT_RIDE_BROADCAST_RADIUS_KM, normalizeRideBroadcastSettings,
-  validateRideBroadcastSettings, findRideBroadcastDrivers, findLongRangeBroadcastDrivers, emitRideRequestToDrivers, chargeLongRangeCommission,
+  DEFAULT_RIDE_BROADCAST_RADIUS_KM, DEFAULT_RIDE_BROADCAST_REQUEST_DURATION_SECONDS, normalizeRideBroadcastSettings,
+  validateRideBroadcastSettings, rideOfferIsStillOpenQuery, findRideBroadcastDrivers, findLongRangeBroadcastDrivers, emitRideRequestToDrivers, chargeLongRangeCommission,
   normalizeLongRangeSettings, validateLongRangeSettings, calculateRideFare
    , normalizeTerms, normalizeFareVehicle, storedVehicleTypesForFareCategory
 } = fare;
@@ -319,7 +319,7 @@ test('Long Range commission is charged once only after a completed ride', async 
   assert.equal(updates[0].$set.longRangeCommissionAmount, 100);
 });
 
-test('ride creation uses the server-calculated fare, not a client amount', async () => {
+test('ride creation uses the server-calculated fare and records the authoritative offer expiry', async () => {
   const settings = settingsFor(300, 125);
   models.Settings.findOne = ({ key }) => ({
     lean: async () => ({ value: key === 'per_km_rates' ? DEFAULT_PER_KM_RATES : settings })
@@ -353,6 +353,10 @@ test('ride creation uses the server-calculated fare, not a client amount', async
     assert.equal(created.fare, 650);
     assert.equal(created.fareQuote.totalFare, 650);
     assert.equal(result.body.fare, 650);
+    assert.equal(created.broadcastDurationSeconds, DEFAULT_RIDE_BROADCAST_REQUEST_DURATION_SECONDS);
+    assert.ok(created.broadcastExpiresAt instanceof Date);
+    assert.ok(created.broadcastExpiresAt.getTime() > created.createdAt.getTime());
+    assert.equal(new Date(result.body.broadcastExpiresAt).getTime(), created.broadcastExpiresAt.getTime());
   } finally {
     await new Promise(resolve => server.close(resolve));
   }
@@ -384,12 +388,19 @@ test('refreshing a pending ride emits the new fare to its customer and normalize
   assert.ok(emissions.every(item => item.payload.fare === 580));
 });
 
-test('ride broadcast settings default to 5 km and reject an invalid Admin radius', () => {
-  assert.deepEqual(normalizeRideBroadcastSettings(), { maximumRideBroadcastRadiusKm: DEFAULT_RIDE_BROADCAST_RADIUS_KM });
-  assert.deepEqual(normalizeRideBroadcastSettings({ maximumRideBroadcastRadiusKm: 8 }), { maximumRideBroadcastRadiusKm: 8 });
-  assert.match(validateRideBroadcastSettings({ maximumRideBroadcastRadiusKm: 0 }).errors.join(' '), /between/);
-  assert.match(validateRideBroadcastSettings({ maximumRideBroadcastRadiusKm: 100.001 }).errors.join(' '), /between/);
-  assert.equal(validateRideBroadcastSettings({ maximumRideBroadcastRadiusKm: 10 }).errors.length, 0);
+test('ride broadcast settings default to a 60 second window and validate the Admin duration', () => {
+  assert.deepEqual(normalizeRideBroadcastSettings(), {
+    maximumRideBroadcastRadiusKm: DEFAULT_RIDE_BROADCAST_RADIUS_KM,
+    broadcastRequestDurationSeconds: DEFAULT_RIDE_BROADCAST_REQUEST_DURATION_SECONDS
+  });
+  assert.deepEqual(normalizeRideBroadcastSettings({ maximumRideBroadcastRadiusKm: 8, broadcastRequestDurationSeconds: 45 }), {
+    maximumRideBroadcastRadiusKm: 8, broadcastRequestDurationSeconds: 45
+  });
+  assert.match(validateRideBroadcastSettings({ maximumRideBroadcastRadiusKm: 0, broadcastRequestDurationSeconds: 60 }).errors.join(' '), /between/);
+  assert.match(validateRideBroadcastSettings({ maximumRideBroadcastRadiusKm: 100.001, broadcastRequestDurationSeconds: 60 }).errors.join(' '), /between/);
+  assert.match(validateRideBroadcastSettings({ maximumRideBroadcastRadiusKm: 10, broadcastRequestDurationSeconds: 29 }).errors.join(' '), /between 30 and 120/);
+  assert.match(validateRideBroadcastSettings({ maximumRideBroadcastRadiusKm: 10, broadcastRequestDurationSeconds: 60.5 }).errors.join(' '), /whole number/);
+  assert.equal(validateRideBroadcastSettings({ maximumRideBroadcastRadiusKm: 10, broadcastRequestDurationSeconds: 60 }).errors.length, 0);
 });
 
 test('Admin can persist a dynamic ride broadcast radius', async () => {
@@ -404,21 +415,31 @@ test('Admin can persist a dynamic ride broadcast radius', async () => {
     const saved = await request(server, '/api/admin/ride-settings', {
       method: 'PATCH',
       headers: { authorization: `Bearer ${adminToken()}` },
-      body: JSON.stringify({ rideBroadcastSettings: { maximumRideBroadcastRadiusKm: 8.5 } })
+      body: JSON.stringify({ rideBroadcastSettings: { maximumRideBroadcastRadiusKm: 8.5, broadcastRequestDurationSeconds: 75 } })
     });
     assert.equal(saved.response.status, 200);
-    assert.deepEqual(stored, { maximumRideBroadcastRadiusKm: 8.5 });
+    assert.deepEqual(stored, { maximumRideBroadcastRadiusKm: 8.5, broadcastRequestDurationSeconds: 75 });
     assert.deepEqual(saved.body.settings, stored);
 
     const rejected = await request(server, '/api/admin/ride-settings', {
       method: 'PATCH',
       headers: { authorization: `Bearer ${adminToken()}` },
-      body: JSON.stringify({ rideBroadcastSettings: { maximumRideBroadcastRadiusKm: -1 } })
+      body: JSON.stringify({ rideBroadcastSettings: { maximumRideBroadcastRadiusKm: -1, broadcastRequestDurationSeconds: 20 } })
     });
     assert.equal(rejected.response.status, 422);
   } finally {
     await new Promise(resolve => server.close(resolve));
   }
+});
+
+test('the server-side offer guard excludes expired request windows', () => {
+  const now = new Date('2026-08-23T12:00:00.000Z');
+  assert.deepEqual(rideOfferIsStillOpenQuery(now), {
+    $or: [
+      { broadcastExpiresAt: { $gt: now } },
+      { broadcastExpiresAt: null, createdAt: { $gte: new Date('2026-08-23T11:59:00.000Z') } }
+    ]
+  });
 });
 
 test('shared broadcast matcher only selects fresh, wallet-eligible drivers inside the configured radius', async () => {

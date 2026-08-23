@@ -875,7 +875,12 @@ const rideSchema = new mongoose.Schema({
   driverReview:    { type: String,  default: '' },
   customerRating:  { type: Number, default: null },
   customerReview:  { type: String,  default: '' },
-  verificationPin: { type: String,  default: null }   // 4-digit PIN for ride start
+  verificationPin: { type: String,  default: null },  // 4-digit PIN for ride start
+  // The response window is persisted with each request. This makes expiry
+  // authoritative across server restarts and lets reconnecting drivers render
+  // the remaining time rather than restarting a local countdown.
+  broadcastDurationSeconds: { type: Number, default: null },
+  broadcastExpiresAt: { type: Date, default: null }
 }, { timestamps: true });
 
 const walletSchema = new mongoose.Schema({
@@ -1062,6 +1067,9 @@ const DRIVER_HEARTBEAT_MAX_AGE_MS = 90 * 1000;
 const DEFAULT_RIDE_BROADCAST_RADIUS_KM = 5;
 const MIN_RIDE_BROADCAST_RADIUS_KM = 0.5;
 const MAX_RIDE_BROADCAST_RADIUS_KM = 100;
+const DEFAULT_RIDE_BROADCAST_REQUEST_DURATION_SECONDS = 60;
+const MIN_RIDE_BROADCAST_REQUEST_DURATION_SECONDS = 30;
+const MAX_RIDE_BROADCAST_REQUEST_DURATION_SECONDS = 120;
 
 async function sendExpoPush(tokens, message) {
   const recipients = [...new Set(tokens.filter(token => /^ExponentPushToken\[.+\]$|^ExpoPushToken\[.+\]$/.test(String(token || ''))))];
@@ -1088,19 +1096,33 @@ function haversineKm(lat1, lng1, lat2, lng2) {
 }
 
 function normalizeRideBroadcastSettings(value = {}) {
+  const source = typeof value === 'object' && value !== null ? value : {};
   const rawRadius = typeof value === 'object' && value !== null
-    ? value.maximumRideBroadcastRadiusKm
+    ? source.maximumRideBroadcastRadiusKm
     : value;
   const radius = Number(rawRadius);
+  const duration = Number(source.broadcastRequestDurationSeconds);
+  const normalizedDuration = Number.isInteger(duration)
+    && duration >= MIN_RIDE_BROADCAST_REQUEST_DURATION_SECONDS
+    && duration <= MAX_RIDE_BROADCAST_REQUEST_DURATION_SECONDS
+    ? duration
+    : DEFAULT_RIDE_BROADCAST_REQUEST_DURATION_SECONDS;
   if (!Number.isFinite(radius) || radius < MIN_RIDE_BROADCAST_RADIUS_KM || radius > MAX_RIDE_BROADCAST_RADIUS_KM) {
-    return { maximumRideBroadcastRadiusKm: DEFAULT_RIDE_BROADCAST_RADIUS_KM };
+    return {
+      maximumRideBroadcastRadiusKm: DEFAULT_RIDE_BROADCAST_RADIUS_KM,
+      broadcastRequestDurationSeconds: normalizedDuration
+    };
   }
-  return { maximumRideBroadcastRadiusKm: Number(radius.toFixed(2)) };
+  return {
+    maximumRideBroadcastRadiusKm: Number(radius.toFixed(2)),
+    broadcastRequestDurationSeconds: normalizedDuration
+  };
 }
 
 function validateRideBroadcastSettings(value) {
   const rawRadius = value?.maximumRideBroadcastRadiusKm;
   const radius = Number(rawRadius);
+  const duration = Number(value?.broadcastRequestDurationSeconds);
   const errors = [];
   if (!Number.isFinite(radius)) errors.push('Maximum Ride Broadcast Radius must be a number');
   else if (radius < MIN_RIDE_BROADCAST_RADIUS_KM || radius > MAX_RIDE_BROADCAST_RADIUS_KM) {
@@ -1108,7 +1130,27 @@ function validateRideBroadcastSettings(value) {
   } else if (Math.round(radius * 100) !== radius * 100) {
     errors.push('Maximum Ride Broadcast Radius can have at most two decimal places');
   }
-  return { settings: normalizeRideBroadcastSettings({ maximumRideBroadcastRadiusKm: radius }), errors };
+  if (!Number.isInteger(duration)) errors.push('Broadcast Request Duration must be a whole number of seconds');
+  else if (duration < MIN_RIDE_BROADCAST_REQUEST_DURATION_SECONDS || duration > MAX_RIDE_BROADCAST_REQUEST_DURATION_SECONDS) {
+    errors.push(`Broadcast Request Duration must be between ${MIN_RIDE_BROADCAST_REQUEST_DURATION_SECONDS} and ${MAX_RIDE_BROADCAST_REQUEST_DURATION_SECONDS} seconds`);
+  }
+  return {
+    settings: normalizeRideBroadcastSettings({
+      maximumRideBroadcastRadiusKm: radius,
+      broadcastRequestDurationSeconds: duration
+    }),
+    errors
+  };
+}
+
+function rideOfferIsStillOpenQuery(now = new Date()) {
+  const legacyCutoff = new Date(now.getTime() - DEFAULT_RIDE_BROADCAST_REQUEST_DURATION_SECONDS * 1000);
+  return {
+    $or: [
+      { broadcastExpiresAt: { $gt: now } },
+      { broadcastExpiresAt: null, createdAt: { $gte: legacyCutoff } }
+    ]
+  };
 }
 
 async function getRideBroadcastSettings() {
@@ -1748,12 +1790,14 @@ app.post('/api/rides', authMiddleware, customerOnly, customerCanBook, async (req
     if (!pickupLocation) {
       return res.status(400).json({ error: 'Pickup is required' });
     }
-    const [settingsDoc, ratesDoc, longRangeDoc] = await Promise.all([
+    const [settingsDoc, ratesDoc, longRangeDoc, rideBroadcastDoc] = await Promise.all([
       Settings.findOne({ key: 'daily_fare_settings' }).lean(),
       Settings.findOne({ key: 'per_km_rates' }).lean(),
-      Settings.findOne({ key: LONG_RANGE_SETTINGS_KEY }).lean()
+      Settings.findOne({ key: LONG_RANGE_SETTINGS_KEY }).lean(),
+      Settings.findOne({ key: 'ride_broadcast_settings' }).lean()
     ]);
     const longRangeSettings = normalizeLongRangeSettings(longRangeDoc?.value);
+    const rideBroadcastSettings = normalizeRideBroadcastSettings(rideBroadcastDoc?.value);
     const fareQuote = calculateRideFare(
       normalizeFareSettings(settingsDoc?.value),
       longRangeSettings,
@@ -1769,6 +1813,7 @@ app.post('/api/rides', authMiddleware, customerOnly, customerCanBook, async (req
       : (dropoffLocation ? [dropoffLocation] : []);
     if (!stops.length) return res.status(400).json({ error: 'At least one dropoff stop is required' });
 
+    const broadcastExpiresAt = new Date(Date.now() + rideBroadcastSettings.broadcastRequestDurationSeconds * 1000);
     const ride = await Ride.create({
       passenger:        req.user.id,
       pickupLocation,
@@ -1781,7 +1826,9 @@ app.post('/api/rides', authMiddleware, customerOnly, customerCanBook, async (req
       vehicleType:   fareQuote.vehicleType,
       notes:         notes         || '',
       paymentMethod: paymentMethod || 'cash',
-      mobileAccount: mobileAccount || ''
+      mobileAccount: mobileAccount || '',
+      broadcastDurationSeconds: rideBroadcastSettings.broadcastRequestDurationSeconds,
+      broadcastExpiresAt
     });
 
     const ridePayload = {
@@ -1796,7 +1843,9 @@ app.post('/api/rides', authMiddleware, customerOnly, customerCanBook, async (req
       vehicleType:      ride.vehicleType,
       paymentMethod:    ride.paymentMethod,
       notes:            ride.notes,
-      createdAt:        ride.createdAt
+      createdAt:        ride.createdAt,
+      broadcastDurationSeconds: ride.broadcastDurationSeconds,
+      broadcastExpiresAt: ride.broadcastExpiresAt
     };
 
     // Every delivery channel receives the exact same eligible, geo-filtered
@@ -1808,7 +1857,7 @@ app.post('/api/rides', authMiddleware, customerOnly, customerCanBook, async (req
     const broadcast = databaseReady
       ? (ride.isLongRange
         ? await findLongRangeBroadcastDrivers(ride.pickupLocation, ride.vehicleType, longRangeSettings)
-        : await findRideBroadcastDrivers(ride.pickupLocation, ride.vehicleType))
+        : await findRideBroadcastDrivers(ride.pickupLocation, ride.vehicleType, rideBroadcastSettings))
       : { drivers: [], radiusKm: DEFAULT_RIDE_BROADCAST_RADIUS_KM };
     ridePayload.broadcastRadiusKm = broadcast.radiusKm;
     emitRideRequestToDrivers(broadcast.drivers, ridePayload);
@@ -1825,6 +1874,9 @@ app.post('/api/rides', authMiddleware, customerOnly, customerCanBook, async (req
         body:    `👤 ${customerName}\n📍 ${area}\n💰 ${fareStr}${distStr}`,
         url:     '/driver',
         rideId:  String(ride._id),
+        ride: ridePayload,
+        broadcastDurationSeconds: ridePayload.broadcastDurationSeconds,
+        broadcastExpiresAt: ridePayload.broadcastExpiresAt,
         actions: [
           { action: 'accept', title: '✅ Accept Ride' },
           { action: 'reject', title: '❌ Reject Ride' },
@@ -1854,7 +1906,9 @@ app.post('/api/rides', authMiddleware, customerOnly, customerCanBook, async (req
         title: 'New ride request',
         body: `${ride.pickupLocation?.address || 'Nearby pickup'} · Rs ${(ride.fare || 0).toLocaleString()}`,
         data: { type: 'ride:new', ride: ridePayload, rideId: String(ride._id) },
-        categoryId: 'ride-request'
+        categoryId: 'ride-request',
+        channelId: 'ride-alerts',
+        interruptionLevel: 'timeSensitive'
       });
     }
 
@@ -1877,7 +1931,8 @@ app.get('/api/rides/available', authMiddleware, driverOnly, async (req, res) => 
     ]);
     const rides = await Ride.find({
       status: 'requested',
-      vehicleType: { $in: storedVehicleTypesForFareCategory(driver.vehicleType) }
+      vehicleType: { $in: storedVehicleTypesForFareCategory(driver.vehicleType) },
+      ...rideOfferIsStillOpenQuery()
     })
       .populate('passenger', 'name phone rating')
       .sort({ createdAt: -1 });
@@ -2050,7 +2105,7 @@ app.patch('/api/rides/:id/accept', authMiddleware, async (req, res) => {
       return res.status(403).json({ error: 'Only drivers can accept rides' });
     }
     const ride = await Ride.findOneAndUpdate(
-      { _id: req.params.id, status: 'requested', driver: null },
+      { _id: req.params.id, status: 'requested', driver: null, ...rideOfferIsStillOpenQuery() },
       { $set: { driver: req.user.id, status: 'accepted' } },
       { new: true }
     ).populate('passenger', 'name phone');
@@ -2192,7 +2247,7 @@ app.patch('/api/rides/:id/counter', authMiddleware, async (req, res) => {
     const { price, type } = req.body;           // type: 'accept' | 'counter'
     if (!price || price < 1) return res.status(400).json({ error: 'Valid price required' });
 
-    const ride = await Ride.findOne({ _id: req.params.id, status: 'requested' });
+    const ride = await Ride.findOne({ _id: req.params.id, status: 'requested', ...rideOfferIsStillOpenQuery() });
     if (!ride) return res.status(404).json({ error: 'Ride not available' });
     if (ride.isLongRange) {
       const [driverLongRange, settings, wallet] = await Promise.all([
@@ -2263,7 +2318,7 @@ app.patch('/api/rides/:id/accept-driver', authMiddleware, async (req, res) => {
     if (!driverId) return res.status(400).json({ error: 'driverId required' });
 
     const ride = await Ride.findOneAndUpdate(
-      { _id: req.params.id, passenger: req.user.id, status: 'requested', driver: null },
+      { _id: req.params.id, passenger: req.user.id, status: 'requested', driver: null, ...rideOfferIsStillOpenQuery() },
       { $set: { driver: driverId, status: 'accepted' } },
       { new: true }
     ).populate('passenger', 'name phone');
@@ -4666,6 +4721,7 @@ module.exports = {
   FARE_VEHICLE_CATEGORIES,
   DEFAULT_PER_KM_RATES,
   DEFAULT_RIDE_BROADCAST_RADIUS_KM,
+  DEFAULT_RIDE_BROADCAST_REQUEST_DURATION_SECONDS,
   normalizeFareSettings,
   validateFareSettings,
   calculateFareFromSettings,
@@ -4684,6 +4740,7 @@ module.exports = {
   runDailyDeduction,
   normalizeRideBroadcastSettings,
   validateRideBroadcastSettings,
+  rideOfferIsStillOpenQuery,
   haversineKm,
   findRideBroadcastDrivers,
   findLongRangeBroadcastDrivers,

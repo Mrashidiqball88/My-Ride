@@ -1363,6 +1363,12 @@ function toggleOnline(online) {
     return;
   }
   isOnline = online;
+  if (!online) {
+    pendingRide = null;
+    sentOffer = null;
+    hideRideRequest();
+    clearRideMap();
+  }
   socket?.emit('driver:status', { isOnline: online });
   document.getElementById('status-text').textContent = online ? 'You are Online ✓' : 'You are Offline';
   document.getElementById('status-sub').textContent  = online
@@ -1511,6 +1517,10 @@ function connectSocket() {
     showToast(reason, 'error');
     const toggle = document.getElementById('online-toggle');
     if (toggle) { toggle.checked = false; isOnline = false; }
+    pendingRide = null;
+    sentOffer = null;
+    hideRideRequest();
+    clearRideMap();
     document.getElementById('status-text').textContent = '⚠ Cannot Go Online';
     document.getElementById('status-sub').textContent  = reason;
     document.getElementById('idle-msg').innerHTML =
@@ -1519,7 +1529,8 @@ function connectSocket() {
 
   // New ride request from passenger
   socket.on('ride:new', (ride) => {
-    if (!isOnline || activeRide || sentOffer) return;
+    if (!isOnline || activeRide || sentOffer || !rideOfferIsLive(ride)) return;
+    if (pendingRide && String(pendingRide.id || pendingRide._id) === String(ride.id || ride._id)) return;
     pendingRide = ride;
     showRideRequest(ride);
   });
@@ -1617,7 +1628,8 @@ async function reconcileRideRequestsAfterReconnect() {
       }
 
       const rides = await response.json();
-      const availableIds = new Set(rides.map(ride => String(ride._id || ride.id)));
+      const liveRides = rides.filter(rideOfferIsLive);
+      const availableIds = new Set(liveRides.map(ride => String(ride._id || ride.id)));
       const pendingId = pendingRide && String(pendingRide.id || pendingRide._id);
       const offeredId = sentOffer && String(sentOffer.rideId);
 
@@ -1627,6 +1639,10 @@ async function reconcileRideRequestsAfterReconnect() {
         // popup and offer state so the driver cannot act on a stale ride.
         sentOffer = null;
         hideRideRequest();
+      }
+      if (!pendingRide && !sentOffer && liveRides.length) {
+        pendingRide = liveRides[0];
+        showRideRequest(pendingRide);
       }
       return;
     } catch (error) {
@@ -1644,7 +1660,21 @@ function formatStopAddr(loc) {
   return loc?.address || (loc ? `${loc.lat?.toFixed(4)}, ${loc.lng?.toFixed(4)}` : '—');
 }
 
+function rideOfferIsLive(ride) {
+  const expiresAt = new Date(ride?.broadcastExpiresAt || ride?.offerExpiresAt || 0).getTime();
+  return Number.isFinite(expiresAt) && expiresAt > Date.now();
+}
+
+function remainingRideOfferSeconds(ride) {
+  const expiresAt = new Date(ride?.broadcastExpiresAt || ride?.offerExpiresAt || 0).getTime();
+  return Number.isFinite(expiresAt) ? Math.max(0, Math.ceil((expiresAt - Date.now()) / 1000)) : 0;
+}
+
 function showRideRequest(ride) {
+  if (!rideOfferIsLive(ride)) {
+    hideRideRequest();
+    return;
+  }
   document.getElementById('rr-pickup').textContent = formatStopAddr(ride.pickupLocation);
 
   // Build stop rows (multi-stop aware)
@@ -1686,14 +1716,20 @@ function showRideRequest(ride) {
 
   document.getElementById('ride-request').style.display = 'block';
 
-  // 25-second countdown timer
-  let secs = 25;
-  document.getElementById('rr-timer').textContent = `${secs}s`;
+  // The server owns the absolute expiry time. Reconnecting or receiving a
+  // duplicate event therefore cannot restart an offer's response window.
   clearInterval(requestTimer);
-  requestTimer = setInterval(() => {
-    secs--;
+  const renderRemainingTime = () => {
+    const secs = remainingRideOfferSeconds(ride);
     document.getElementById('rr-timer').textContent = `${secs}s`;
-    if (secs <= 0) { clearInterval(requestTimer); hideRideRequest(); }
+    if (secs <= 0) {
+      clearInterval(requestTimer);
+      hideRideRequest();
+    }
+  };
+  renderRemainingTime();
+  requestTimer = setInterval(() => {
+    renderRemainingTime();
   }, 1000);
 
   showRideOnMap(ride);
