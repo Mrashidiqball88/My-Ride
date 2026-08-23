@@ -950,6 +950,22 @@ const Ticket   = mongoose.model('Ticket',   ticketSchema);
 const Settings = mongoose.model('Settings', settingsSchema);
 const PushSub  = mongoose.model('PushSub',  pushSubSchema);
 
+const TERMS_SETTINGS_KEY = 'terms_and_conditions';
+const DEFAULT_TERMS = Object.freeze({
+  customer: 'Please use My Ride responsibly and follow all applicable local laws.',
+  driver: 'Please drive safely, follow all applicable local laws, and treat customers respectfully.'
+});
+function normalizeTerms(value = {}) {
+  return {
+    customer: typeof value.customer === 'string' ? value.customer.slice(0, 50000) : DEFAULT_TERMS.customer,
+    driver: typeof value.driver === 'string' ? value.driver.slice(0, 50000) : DEFAULT_TERMS.driver
+  };
+}
+async function getTermsSettings() {
+  const doc = await Settings.findOne({ key: TERMS_SETTINGS_KEY }).lean();
+  return normalizeTerms(doc?.value);
+}
+
 const RIDE_RETENTION_SETTINGS_KEY = 'ride_data_retention';
 const DEFAULT_RIDE_RETENTION_DAYS = 30;
 const MIN_RIDE_RETENTION_DAYS = 1;
@@ -3679,6 +3695,32 @@ app.patch('/api/admin/long-range-settings', adminJwt, requirePerm('manageFareSet
     io.emit('long-range:settings-updated', { settings: validated.settings, updatedAt: new Date().toISOString() });
     res.json({ success: true, settings: validated.settings });
   } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// Terms are public read-only content for the two role apps; only authorized
+// Admins can change them. Socket broadcast keeps already-open apps current.
+app.get('/api/terms/:role', async (req, res) => {
+  if (!['customer', 'driver'].includes(req.params.role)) return res.status(400).json({ error: 'Unknown terms role' });
+  const terms = await getTermsSettings();
+  res.json({ role: req.params.role, content: terms[req.params.role] });
+});
+app.get('/api/admin/terms', adminJwt, requirePerm('manageFareSettings'), async (_req, res) => {
+  res.json(await getTermsSettings());
+});
+app.patch('/api/admin/terms', adminJwt, requirePerm('manageFareSettings'), async (req, res) => {
+  const current = await getTermsSettings();
+  const next = normalizeTerms({
+    customer: req.body?.customer ?? current.customer,
+    driver: req.body?.driver ?? current.driver
+  });
+  await Settings.findOneAndUpdate(
+    { key: TERMS_SETTINGS_KEY },
+    { key: TERMS_SETTINGS_KEY, value: next },
+    { upsert: true, new: true, setDefaultsOnInsert: true }
+  );
+  const payload = { terms: next, updatedAt: new Date().toISOString() };
+  io.emit('terms:updated', payload);
+  res.json({ success: true, ...payload });
 });
 
 app.patch('/api/admin/daily-fee-settings', adminJwt, requirePerm('manageDriverPasses'), async (req, res) => {

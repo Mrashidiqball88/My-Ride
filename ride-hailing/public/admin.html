@@ -370,6 +370,7 @@ input[type=date]:focus{border-color:#f5c518}
       <div class="sb-item"        onclick="showSection('blk-pass')"     data-sec="blk-pass">    <span class="sb-icon">🚫</span> Blocked Customers</div>
       <div class="sb-group-label">System & Pricing</div>
       <div class="sb-item"        onclick="showSection('app-settings')" data-sec="app-settings"><span class="sb-icon">⚙️</span> App Settings / Pricing</div>
+       <div class="sb-item"        onclick="showSection('terms-settings')" data-sec="terms-settings"><span class="sb-icon">📜</span> Terms & Conditions Settings</div>
       <div class="sb-item"        onclick="showSection('live-rides')"   data-sec="live-rides">  <span class="sb-icon">🗺️</span> Live Rides</div>
        <div class="sb-item"        onclick="showSection('ride-retention')" data-sec="ride-retention"><span class="sb-icon">🧹</span> Rides Data Retention</div>
       <div class="sb-item"        onclick="showSection('sos')"          data-sec="sos">         <span class="sb-icon">🆘</span> SOS Monitor <span class="sb-badge-count" id="sos-cnt" style="display:none">0</span></div>
@@ -831,6 +832,12 @@ input[type=date]:focus{border-color:#f5c518}
             <p>Control the customer-facing payment channels and account details.</p>
             <button class="btn btn-primary" onclick="showSection('pay-settings')">Manage payments</button>
           </article>
+          <article class="settings-card" id="terms-settings-card">
+            <div class="settings-icon">📜</div>
+            <h3>Terms & Conditions</h3>
+            <p>Maintain separate terms for Customers and Drivers and publish updates live.</p>
+            <button class="btn btn-primary" onclick="showSection('terms-settings')">Manage terms</button>
+          </article>
         </div>
       </div>
 
@@ -888,6 +895,30 @@ input[type=date]:focus{border-color:#f5c518}
         </div>
         <div id="long-range-settings-feedback" style="min-height:1.25rem;font-size:.8rem;margin:.8rem 0"></div>
         <button class="btn btn-primary" style="padding:.75rem 2rem;font-size:.9rem" onclick="saveLongRangeSettings()">💾 Save Long Range Settings</button>
+      </div>
+      <div class="section-panel" id="sec-terms-settings">
+        <div class="sec-hdr"><h2>📜 Terms & Conditions Settings</h2><div class="sec-hdr-actions"><button class="btn-refresh" onclick="loadTermsSettings()">↻ Reload</button></div></div>
+        <p style="font-size:.8rem;color:#475569;margin-bottom:1.1rem">Customer and Driver terms are managed independently. Saving either tab publishes the new content immediately to that role’s app.</p>
+        <div class="filter-tabs" style="margin-bottom:1rem">
+          <button type="button" class="ftab active" data-terms-tab="customer" onclick="switchTermsTab('customer')">For Customer Terms &amp; Conditions</button>
+          <button type="button" class="ftab" data-terms-tab="driver" onclick="switchTermsTab('driver')">For Driver Terms &amp; Conditions</button>
+        </div>
+        <div id="terms-editor-customer">
+          <label class="field-label" for="terms-customer-input">Customer terms</label>
+          <p style="font-size:.72rem;color:#64748b;margin:.35rem 0 .6rem">Use one point per line. Select lines and use “Bullet points” to format them.</p>
+          <div style="display:flex;gap:.5rem;margin-bottom:.5rem"><button class="btn btn-secondary" type="button" onclick="formatTermsBullets('terms-customer-input')">• Bullet points</button></div>
+          <textarea id="terms-customer-input" class="modal-input" rows="14" placeholder="Enter terms for Customers…"></textarea>
+          <div id="terms-customer-feedback" style="min-height:1.25rem;font-size:.8rem;margin:.7rem 0"></div>
+          <button class="btn btn-primary" type="button" onclick="saveTerms('customer')">💾 Save Customer Terms</button>
+        </div>
+        <div id="terms-editor-driver" style="display:none">
+          <label class="field-label" for="terms-driver-input">Driver terms</label>
+          <p style="font-size:.72rem;color:#64748b;margin:.35rem 0 .6rem">Use one point per line. Select lines and use “Bullet points” to format them.</p>
+          <div style="display:flex;gap:.5rem;margin-bottom:.5rem"><button class="btn btn-secondary" type="button" onclick="formatTermsBullets('terms-driver-input')">• Bullet points</button></div>
+          <textarea id="terms-driver-input" class="modal-input" rows="14" placeholder="Enter terms for Drivers…"></textarea>
+          <div id="terms-driver-feedback" style="min-height:1.25rem;font-size:.8rem;margin:.7rem 0"></div>
+          <button class="btn btn-primary" type="button" onclick="saveTerms('driver')">💾 Save Driver Terms</button>
+        </div>
       </div>
 
       <!-- ════ 12. RATINGS & FEEDBACK ════ -->
