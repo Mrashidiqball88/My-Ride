@@ -6,9 +6,10 @@ const jwt = require('jsonwebtoken');
 const bcrypt = require('bcryptjs');
 const service = require('../server');
 
-const { app, models } = service;
+const { app, models, chargeDailyFeeForOnlineDriver, runDailyDeduction } = service;
 const original = {
   userFindById: models.User.findById,
+  userFind: models.User.find,
   userUpdateOne: models.User.updateOne,
   userFindOne: models.User.findOne,
   userFindByIdAndUpdate: models.User.findByIdAndUpdate,
@@ -20,6 +21,7 @@ const original = {
 
 afterEach(() => {
   models.User.findById = original.userFindById;
+  models.User.find = original.userFind;
   models.User.updateOne = original.userUpdateOne;
   models.User.findOne = original.userFindOne;
   models.User.findByIdAndUpdate = original.userFindByIdAndUpdate;
@@ -144,6 +146,99 @@ test('daily fee is charged from the wallet only when a driver goes online, and i
     const insufficient = await request(server, '/api/driver/availability', { isOnline: true });
     assert.equal(insufficient.response.status, 403);
     assert.match(insufficient.body.error, /must cover today's Daily Fee/);
+  } finally {
+    await new Promise(resolve => server.close(resolve));
+  }
+});
+
+test('Long Range Only drivers are exempt from Daily Fees while Short Range Only and Both are charged', async () => {
+  let walletTouched = false;
+  models.Wallet.findOne = () => { walletTouched = true; throw new Error('Long Range Only must not read or debit a Daily Fee wallet'); };
+  models.Wallet.findOneAndUpdate = () => { walletTouched = true; throw new Error('Long Range Only must not debit a Daily Fee wallet'); };
+  const exempt = await chargeDailyFeeForOnlineDriver('driver-long-range', {
+    vehicleType: 'Car Sedan', ridePreference: 'Long Range Only'
+  });
+  assert.equal(exempt.exempt, true);
+  assert.equal(exempt.charged, false);
+  assert.equal(walletTouched, false);
+
+  let deducted = 0;
+  models.Wallet.findOne = () => ({ select: () => ({ lean: async () => ({ balance: 5000, fee_paid_at: null }) }) });
+  models.Wallet.findOneAndUpdate = async (_query, update) => {
+    deducted += -update.$inc.balance;
+    return { balance: 4900 };
+  };
+  models.User.updateOne = async () => ({ acknowledged: true });
+  const settings = { 'Car Sedan': 100 };
+  for (const ridePreference of ['Short Range Only', 'Both']) {
+    const result = await chargeDailyFeeForOnlineDriver(`driver-${ridePreference}`, {
+      vehicleType: 'Car Sedan', ridePreference, paidUntilDate: null, lastDailyFeePaidAt: null
+    }, settings);
+    assert.equal(result.charged, true);
+  }
+  assert.equal(deducted, 200);
+});
+
+test('the scheduled Daily Fee sweep skips Long Range Only and charges eligible Both drivers', async () => {
+  const drivers = [
+    { _id: 'long-range-only', vehicleType: 'Car Mini', ridePreference: 'Long Range Only', paidUntilDate: null, lastDailyFeePaidAt: null },
+    { _id: 'both-ranges', vehicleType: 'Car Mini', ridePreference: 'Both', paidUntilDate: null, lastDailyFeePaidAt: null }
+  ];
+  models.User.find = () => ({ select: () => drivers });
+  models.Settings.findOne = () => ({ lean: async () => ({ value: { 'Car Mini': 100 } }) });
+  const touchedWallets = [];
+  models.Wallet.findOne = (query) => ({
+    select: () => ({ lean: async () => {
+      touchedWallets.push(query.user);
+      return { balance: 500, fee_paid_at: null };
+    } })
+  });
+  const charges = [];
+  models.Wallet.findOneAndUpdate = async (query, update) => {
+    charges.push({ query, update });
+    return { balance: 400 };
+  };
+  models.User.updateOne = async () => ({ acknowledged: true });
+
+  await runDailyDeduction({ force: true });
+  assert.deepEqual(touchedWallets, ['both-ranges']);
+  assert.equal(charges.length, 1);
+  assert.equal(charges[0].query.user, 'both-ranges');
+});
+
+test('Long Range toggle checks the configured wallet minimum for the Driver vehicle category', async () => {
+  const perKmRates = Object.fromEntries(service.FARE_VEHICLE_CATEGORIES.map(category => [category, 100]));
+  const minimumWalletBalances = Object.fromEntries(service.FARE_VEHICLE_CATEGORIES.map(category => [category, 500]));
+  minimumWalletBalances['Toyota Highroof'] = 4000;
+  models.Settings.findOne = () => ({
+    lean: async () => ({ value: { enabled: true, perKmRates, minimumWalletBalances } })
+  });
+  let balance = 3999;
+  models.User.findById = () => ({
+    select: () => ({ lean: async () => driverDocument({ vehicleType: 'Toyota Highroof', longRangeEnabled: false }) })
+  });
+  models.Wallet.findOne = () => ({ select: () => ({ lean: async () => ({ balance }) }) });
+  const updates = [];
+  models.User.updateOne = async (_query, update) => { updates.push(update); return { acknowledged: true }; };
+
+  const server = app.listen(0);
+  try {
+    const blocked = await fetch(`http://127.0.0.1:${server.address().port}/api/driver/long-range`, {
+      method: 'PATCH',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${driverToken()}` },
+      body: JSON.stringify({ enabled: true })
+    });
+    assert.equal(blocked.status, 403);
+    assert.equal((await blocked.json()).error, 'Minimum Wallet Balance of Rs 4,000 required for Toyota Highroof to enable Long Range rides.');
+
+    balance = 4000;
+    const allowed = await fetch(`http://127.0.0.1:${server.address().port}/api/driver/long-range`, {
+      method: 'PATCH',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${driverToken()}` },
+      body: JSON.stringify({ enabled: true })
+    });
+    assert.equal(allowed.status, 200);
+    assert.equal(updates.at(-1).longRangeEnabled, true);
   } finally {
     await new Promise(resolve => server.close(resolve));
   }

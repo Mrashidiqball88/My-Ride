@@ -32,8 +32,8 @@ export type RideRequest = {
   dropoffLocation?: { address?: string; lat: number; lng: number };
 };
 export type LongRangeState = {
-  enabled: boolean; walletBalance: number;
-  settings: { enabled?: boolean; distanceCutoffKm?: number; minimumWalletBalance?: number };
+  enabled: boolean; walletBalance: number; vehicleType?: string; ridePreference?: string;
+  settings: { enabled?: boolean; distanceCutoffKm?: number; minimumWalletBalances?: Record<string, number> };
 };
 
 type RuntimeContext = {

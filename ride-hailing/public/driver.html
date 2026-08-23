@@ -774,7 +774,11 @@ function renderLongRangeState() {
   toggle.disabled = !settings.enabled;
   if (reminder) reminder.style.display = longRangeState.enabled ? 'block' : 'none';
   if (!settings.enabled) sub.textContent = 'Long Range rides are currently disabled by Admin.';
-  else sub.textContent = `Opt in for trips of ${Number(settings.distanceCutoffKm || 0).toLocaleString()} km+ · wallet minimum Rs ${Number(settings.minimumWalletBalance || 0).toLocaleString()}`;
+  else {
+    const vehicle = fareCategoryForDriver(user?.vehicleType || 'Car Mini');
+    const minimum = Number(settings.minimumWalletBalances?.[vehicle] || 0);
+    sub.textContent = `Opt in for trips of ${Number(settings.distanceCutoffKm || 0).toLocaleString()} km+ · ${vehicle} wallet minimum Rs ${minimum.toLocaleString()}`;
+  }
 }
 async function loadLongRangeState() {
   try {
@@ -803,6 +807,7 @@ async function setLongRangeEnabled(enabled, toggle) {
   } catch (e) {
     if (toggle) toggle.checked = !enabled;
     showToast(e.message, 'error');
+    if (enabled) window.alert(e.message);
     await loadLongRangeState();
   }
 }

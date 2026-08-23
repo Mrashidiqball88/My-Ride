@@ -14,6 +14,8 @@ function DriverHome() {
   const [busy, setBusy] = useState(false);
   const isWeb = Platform.OS === 'web';
   const report = (message: string) => Alert.alert('My Ride Driver', message);
+  const longRangeVehicle = runtime.longRange?.vehicleType || runtime.user?.vehicleType || 'Car Mini';
+  const longRangeMinimum = Number(runtime.longRange?.settings?.minimumWalletBalances?.[longRangeVehicle] || 0);
 
   const signIn = async () => {
     setBusy(true);
@@ -82,7 +84,7 @@ function DriverHome() {
       <View style={{ flex: 1 }}><Text style={[styles.vehicleLabel, { color: colors.mutedForeground }]}>YOUR VEHICLE CATEGORY</Text><Text style={[styles.vehicleName, { color: colors.foreground }]}>{runtime.user.vehicleType || 'Vehicle category not set'}</Text></View>
     </View>
     {runtime.longRange && <View style={[styles.longRangeCard, { backgroundColor: colors.card, borderColor: runtime.longRange.settings?.enabled ? colors.border : colors.input, borderRadius: colors.radius + 12 }]}>
-      <View style={styles.statusRow}><Ionicons name="map-outline" size={20} color={colors.primary} /><View style={{ flex: 1 }}><Text style={[styles.longRangeTitle, { color: colors.foreground }]}>Long Range Rides</Text><Text style={[styles.statusCopy, { color: colors.mutedForeground }]}>{runtime.longRange.settings?.enabled ? `Receive trips from ${Number(runtime.longRange.settings.distanceCutoffKm || 0).toLocaleString()} km+ · Wallet minimum Rs ${Number(runtime.longRange.settings.minimumWalletBalance || 0).toLocaleString()}` : 'Long Range rides are currently disabled by Admin.'}</Text></View><Switch testID="driver-long-range-toggle" value={runtime.longRange.enabled} onValueChange={toggleLongRange} disabled={busy || !runtime.longRange.settings?.enabled} trackColor={{ false: colors.muted, true: colors.primary }} thumbColor={colors.primaryForeground} /></View>
+      <View style={styles.statusRow}><Ionicons name="map-outline" size={20} color={colors.primary} /><View style={{ flex: 1 }}><Text style={[styles.longRangeTitle, { color: colors.foreground }]}>Long Range Rides</Text><Text style={[styles.statusCopy, { color: colors.mutedForeground }]}>{runtime.longRange.settings?.enabled ? `Receive trips from ${Number(runtime.longRange.settings.distanceCutoffKm || 0).toLocaleString()} km+ · ${longRangeVehicle} wallet minimum Rs ${longRangeMinimum.toLocaleString()}` : 'Long Range rides are currently disabled by Admin.'}</Text></View><Switch testID="driver-long-range-toggle" value={runtime.longRange.enabled} onValueChange={toggleLongRange} disabled={busy || !runtime.longRange.settings?.enabled} trackColor={{ false: colors.muted, true: colors.primary }} thumbColor={colors.primaryForeground} /></View>
        {runtime.longRange.enabled && <View testID="long-range-responsibility-banner" style={[styles.longRangeReminder, { backgroundColor: colors.secondary, borderColor: colors.border }]}><Ionicons name="warning-outline" size={16} color={colors.primary} /><Text style={[styles.longRangeReminderText, { color: colors.secondaryForeground }]}>Reminder: Tolls, taxes, and challans are driver responsibility.</Text></View>}
     </View>}
     {runtime.pendingRide ? <View style={[styles.rideCard, { backgroundColor: colors.card, borderColor: colors.primary, borderRadius: colors.radius + 12 }]}>

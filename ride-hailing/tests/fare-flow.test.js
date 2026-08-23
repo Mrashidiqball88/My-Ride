@@ -199,6 +199,7 @@ test('Long Range fares begin at the configured cutoff and use vehicle-specific r
     perKmRates: Object.fromEntries(FARE_VEHICLE_CATEGORIES.map(category => [category, 210]))
   });
   assert.equal(validateLongRangeSettings(longRange).errors.length, 0);
+  assert.ok(Object.values(longRange.minimumWalletBalances).every(value => value === 750), 'legacy global minimum migrates to every vehicle category');
   const standardRates = { 'Car Mini': 50 };
   const veryShort = calculateRideFare(settingsFor(300, 100), longRange, 'Car Mini', 2, new Date(), standardRates);
   assert.equal(veryShort.isLongRange, undefined);
@@ -215,6 +216,17 @@ test('Long Range fares begin at the configured cutoff and use vehicle-specific r
   assert.equal(long.totalFare, 10500);
   const invalid = validateLongRangeSettings({ enabled: true, perKmRates: {} });
   assert.equal(invalid.errors.length, FARE_VEHICLE_CATEGORIES.length);
+});
+
+test('Long Range settings keep independent minimum wallet balances by vehicle category', () => {
+  const settings = normalizeLongRangeSettings({
+    minimumWalletBalances: { Bike: 500, 'Car Sedan': 2000, 'Toyota Highroof': 4000, 'Toyota Saloon Coaster': 5000 }
+  });
+  assert.equal(settings.minimumWalletBalances.Bike, 500);
+  assert.equal(settings.minimumWalletBalances['Car Sedan'], 2000);
+  assert.equal(settings.minimumWalletBalances['Toyota Highroof'], 4000);
+  assert.equal(settings.minimumWalletBalances['Toyota Saloon Coaster'], 5000);
+  assert.equal(settings.minimumWalletBalances['Car Mini'], 500);
 });
 
 test('Toyota Highroof and Toyota Saloon Coaster are canonical categories with independent standard and Long Range rates', () => {

@@ -313,6 +313,11 @@ function isLongRangeOnlyDriver(driver) {
   return normalizeRidePreference(driver?.ridePreference) === 'Long Range Only';
 }
 
+function canDriverReceiveRideForPreference(ridePreference, isLongRange) {
+  const preference = normalizeRidePreference(ridePreference);
+  return isLongRange ? preference !== 'Short Range Only' : preference !== 'Long Range Only';
+}
+
 function storedVehicleTypesForFareCategory(category) {
   const normalized = normalizeFareVehicle(category);
   return [...new Set([
@@ -625,6 +630,11 @@ async function getLongRangeSettings() {
 
 function isLongRangeDistance(distanceKm, settings) {
   return settings.enabled && Number(distanceKm) >= settings.distanceCutoffKm;
+}
+
+function getLongRangeMinimumWalletBalance(settings, vehicleType) {
+  const category = normalizeFareVehicle(vehicleType || 'Car Mini');
+  return Number(settings?.minimumWalletBalances?.[category] ?? DEFAULT_LONG_RANGE_MINIMUM_WALLET_BALANCES[category] ?? 0);
 }
 
 function calculateRideFare(fareSettings, longRangeSettings, vehicleType, distanceKm, at, perKmRates) {
@@ -1121,6 +1131,7 @@ async function findRideBroadcastDrivers(pickupLocation, vehicleType, settings = 
     role: 'driver',
     isOnline: true,
     accountStatus: 'active',
+    ridePreference: { $ne: 'Long Range Only' },
     vehicleType: { $in: storedVehicleTypesForFareCategory(vehicleType) },
     lastOnlineHeartbeat: { $gte: new Date(Date.now() - DRIVER_HEARTBEAT_MAX_AGE_MS) },
     'currentLocation.lat': { $ne: 0 },
@@ -1154,13 +1165,14 @@ async function findLongRangeBroadcastDrivers(pickupLocation, vehicleType, longRa
   if (!hasValidCoordinates(pickupLocation)) return { drivers: [], radiusKm };
   const candidates = await User.find({
     role: 'driver', isOnline: true, longRangeEnabled: true, accountStatus: 'active',
+    ridePreference: { $ne: 'Short Range Only' },
     vehicleType: { $in: storedVehicleTypesForFareCategory(vehicleType) },
     lastOnlineHeartbeat: { $gte: new Date(Date.now() - DRIVER_HEARTBEAT_MAX_AGE_MS) },
     'currentLocation.lat': { $ne: 0 }, 'currentLocation.lng': { $ne: 0 }
   }).select('_id currentLocation expoPushToken longRangeEnabled').lean();
   const eligibleWallets = await Wallet.find({
     user: { $in: candidates.map(driver => driver._id) },
-    balance: { $gte: longRangeSettings.minimumWalletBalance }
+    balance: { $gte: getLongRangeMinimumWalletBalance(longRangeSettings, vehicleType) }
   }).select('user').lean();
   const eligibleIds = new Set(eligibleWallets.map(wallet => String(wallet.user)));
   const drivers = candidates.filter(driver => driver.longRangeEnabled === true
@@ -1202,11 +1214,11 @@ async function chargeLongRangeCommission(ride, driverId, timing, longRangeSettin
 
 async function validateLongRangeDriverEligibility(driverId, settings) {
   const [driver, wallet] = await Promise.all([
-    User.findById(driverId).select('longRangeEnabled accountStatus').lean(),
+    User.findById(driverId).select('longRangeEnabled accountStatus vehicleType').lean(),
     Wallet.findOne({ user: driverId }).select('balance').lean()
   ]);
   return !!(settings.enabled && driver?.accountStatus === 'active' && driver.longRangeEnabled
-    && Number(wallet?.balance || 0) >= settings.minimumWalletBalance);
+    && Number(wallet?.balance || 0) >= getLongRangeMinimumWalletBalance(settings, driver.vehicleType));
 }
 
 function emitRideRequestToDrivers(drivers, payload) {
@@ -1872,7 +1884,8 @@ app.get('/api/rides/available', authMiddleware, driverOnly, async (req, res) => 
       ? await Wallet.findOne({ user: req.user.id }).select('balance').lean()
       : null;
     res.json(rides.filter(ride => hasValidCoordinates(ride.pickupLocation)
-      && (!ride.isLongRange || (longRangeSettings.enabled && driver.longRangeEnabled && Number(wallet?.balance || 0) >= longRangeSettings.minimumWalletBalance))
+      && canDriverReceiveRideForPreference(driver.ridePreference, ride.isLongRange)
+      && (!ride.isLongRange || (longRangeSettings.enabled && driver.longRangeEnabled && Number(wallet?.balance || 0) >= getLongRangeMinimumWalletBalance(longRangeSettings, driver.vehicleType)))
       && haversineKm(
         Number(driver.currentLocation.lat),
         Number(driver.currentLocation.lng),
@@ -1932,9 +1945,12 @@ app.patch('/api/driver/long-range', authMiddleware, driverOnly, async (req, res)
     const settings = await getLongRangeSettings();
     if (enabled && !settings.enabled) return res.status(403).json({ error: 'Long Range rides are currently disabled by Admin.' });
     if (enabled) {
-      const wallet = await Wallet.findOne({ user: req.user.id }).select('balance').lean();
+      const [driver, wallet] = await Promise.all([
+        User.findById(req.user.id).select('vehicleType').lean(),
+        Wallet.findOne({ user: req.user.id }).select('balance').lean()
+      ]);
       const category = normalizeFareVehicle(driver?.vehicleType || 'Car Mini');
-      const minimumWalletBalance = settings.minimumWalletBalances[category] ?? DEFAULT_LONG_RANGE_MINIMUM_WALLET_BALANCES[category];
+      const minimumWalletBalance = getLongRangeMinimumWalletBalance(settings, category);
       if (Number(wallet?.balance || 0) < minimumWalletBalance) {
         return res.status(403).json({ error: `Minimum Wallet Balance of Rs ${minimumWalletBalance.toLocaleString()} required for ${category} to enable Long Range rides.` });
       }
@@ -2178,11 +2194,11 @@ app.patch('/api/rides/:id/counter', authMiddleware, async (req, res) => {
     if (!ride) return res.status(404).json({ error: 'Ride not available' });
     if (ride.isLongRange) {
       const [driverLongRange, settings, wallet] = await Promise.all([
-        User.findById(req.user.id).select('longRangeEnabled').lean(),
+        User.findById(req.user.id).select('longRangeEnabled vehicleType').lean(),
         getLongRangeSettings(),
         Wallet.findOne({ user: req.user.id }).select('balance').lean()
       ]);
-      if (!settings.enabled || !driverLongRange?.longRangeEnabled || Number(wallet?.balance || 0) < settings.minimumWalletBalance) {
+      if (!settings.enabled || !driverLongRange?.longRangeEnabled || Number(wallet?.balance || 0) < getLongRangeMinimumWalletBalance(settings, driverLongRange.vehicleType)) {
         return res.status(403).json({ error: 'You are not currently eligible for Long Range rides.' });
       }
     }
@@ -4509,8 +4525,8 @@ if (require.main === module) {
 // Daily Subscription Deduction (runs at UTC midnight every day)
 // ─────────────────────────────────────────────────────────────────────────────
 
-async function runDailyDeduction() {
-  if (!dbConnected) return;
+async function runDailyDeduction({ force = false } = {}) {
+  if (!dbConnected && !force) return;
   console.log('⏰ Running daily fee rollover checks…');
   try {
     // Drivers who choose Long Range Only never pay the standard Daily Fee.
@@ -4629,6 +4645,7 @@ module.exports = {
   calculateFareFromSettings,
   normalizeLongRangeSettings,
   validateLongRangeSettings,
+  getLongRangeMinimumWalletBalance,
   calculateRideFare,
   normalizeTerms,
   normalizeFareVehicle,
@@ -4636,6 +4653,7 @@ module.exports = {
   DRIVER_RIDE_PREFERENCES,
   normalizeRidePreference,
   isLongRangeOnlyDriver,
+  canDriverReceiveRideForPreference,
   chargeDailyFeeForOnlineDriver,
   runDailyDeduction,
   normalizeRideBroadcastSettings,

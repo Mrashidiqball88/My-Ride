@@ -5,3 +5,4 @@
 - [Live fare fixture eligibility](live-fare-fixture-eligibility.md) — live fare tests must model nearby location, wallet eligibility, and the server's current fare quote shape.
 - [Late database attachment](late-database-attachment.md) — test connections may attach after server import, so runtime database readiness must reflect the live connection state.
 - [Reconnect state reconciliation](reconnect-state-reconciliation.md) — realtime clients must recheck authoritative state after reconnect because missed events can leave stale local UI.
+- [Ride preference fee policy](ride-preference-fee-policy.md) — Long Range Only is exempt from Daily Fees and must not receive local rides.
