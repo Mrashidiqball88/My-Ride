@@ -168,6 +168,35 @@ test('Long Range fares begin at the configured cutoff and use vehicle-specific r
   assert.equal(invalid.errors.length, FARE_VEHICLE_CATEGORIES.length);
 });
 
+test('Customer fare quote uses active Long Range rates without daily fare slabs', async () => {
+  const longRangeSettings = {
+    enabled: true,
+    distanceCutoffKm: 50,
+    perKmRates: Object.fromEntries(FARE_VEHICLE_CATEGORIES.map(category => [category, {
+      Bike: 25, Riksha: 40, 'Car Mini': 80, 'Car Sedan': 100,
+      'Cary Dibba': 90, 'Car SUV': 120, 'Van Seven Seats': 150
+    }[category]]))
+  };
+  models.Settings.findOne = ({ key }) => ({
+    lean: async () => ({
+      value: key === 'long_range_ride_settings' ? longRangeSettings : null
+    })
+  });
+
+  const server = app.listen(0);
+  try {
+    const result = await request(server, '/api/fare/calculate', {
+      method: 'POST',
+      body: JSON.stringify({ vehicleType: 'Riksha', distanceKm: 293.3 })
+    });
+    assert.equal(result.response.status, 200);
+    assert.equal(result.body.longRangeRatePerKm, 40);
+    assert.equal(result.body.totalFare, Math.round(293.3 * 40));
+  } finally {
+    await new Promise(resolve => server.close(resolve));
+  }
+});
+
 test('Long Range commission uses one wallet debit when the charge is retried', async () => {
   const updates = [];
   let debitAttempt = 0;

@@ -3642,6 +3642,22 @@ app.get('/api/per-km-rates', async (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
+// Customer fare display needs both legacy local rates and the active Long
+// Range configuration. Keep the legacy endpoint above unchanged for Driver
+// and older clients, while giving the Customer app one coherent payload.
+app.get('/api/customer/fare-config', async (req, res) => {
+  try {
+    const [ratesDoc, longRangeDoc] = await Promise.all([
+      Settings.findOne({ key: 'per_km_rates' }).lean(),
+      Settings.findOne({ key: LONG_RANGE_SETTINGS_KEY }).lean()
+    ]);
+    res.json({
+      perKmRates: normalizePerKmRates(ratesDoc?.value),
+      longRangeSettings: normalizeLongRangeSettings(longRangeDoc?.value)
+    });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
 app.get('/api/admin/per-km-rates', adminJwt, requirePerm('manageFareSettings'), async (req, res) => {
   try {
     const doc = await Settings.findOne({ key: 'per_km_rates' }).lean();
