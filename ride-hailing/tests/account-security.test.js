@@ -7,7 +7,7 @@ const crypto = require('crypto');
 const bcrypt = require('bcryptjs');
 
 const rideHailing = require('../server');
-const { app, models } = rideHailing;
+const { app, models, setFirebaseAdminAuthForTests } = rideHailing;
 
 const JWT_SECRET = 'ride-hailing-secret-fallback';
 const original = {
@@ -34,6 +34,7 @@ afterEach(() => {
     findOne: original.settingsFindOne,
     findOneAndUpdate: original.settingsFindOneAndUpdate
   });
+  setFirebaseAdminAuthForTests(null);
 });
 
 function query(value) {
@@ -285,12 +286,10 @@ test('unknown recovery numbers return exactly Wrong number without creating an O
   });
 });
 
-test('a successful password reset clears the OTP and replaces the active session', async () => {
+test('a Firebase-verified password reset replaces the active session', async () => {
   const user = {
     _id: 'reset-user',
     phone: '+923001234567',
-    otpCode: await bcrypt.hash('123456', 10),
-    otpExpiry: new Date(Date.now() + 60_000),
     activeSessionToken: 'old-session'
   };
   let update;
@@ -300,12 +299,18 @@ test('a successful password reset clears the OTP and replaces the active session
     Object.assign(user, next);
   };
   models.User.findById = () => query(user);
+  setFirebaseAdminAuthForTests({
+    async verifyIdToken(token) {
+      assert.equal(token, 'firebase-id-token');
+      return { phone_number: '+923001234567' };
+    }
+  });
   const oldToken = jwt.sign({ id: user._id, role: 'customer', name: 'Customer' }, JWT_SECRET);
 
   await withServer(async server => {
     const reset = await request(server, '/api/auth/reset-password', {
       method: 'POST',
-      body: JSON.stringify({ phone: '0300-1234567', otp: '123456', newPassword: 'a-new-password' })
+      body: JSON.stringify({ firebaseIdToken: 'firebase-id-token', newPassword: 'a-new-password' })
     });
     assert.equal(reset.response.status, 200);
     assert.equal(update.otpCode, null);
@@ -317,5 +322,21 @@ test('a successful password reset clears the OTP and replaces the active session
     });
     assert.equal(oldSession.response.status, 401);
     assert.equal(oldSession.body.error, 'LOGGED_IN_ELSEWHERE');
+  });
+});
+
+test('password reset rejects a Firebase token for a different phone number', async () => {
+  models.User.findOne = () => query({ _id: 'reset-user', phone: '+923001234567' });
+  setFirebaseAdminAuthForTests({
+    async verifyIdToken() { return { phone_number: '+923009999999' }; }
+  });
+
+  await withServer(async server => {
+    const reset = await request(server, '/api/auth/reset-password', {
+      method: 'POST',
+      body: JSON.stringify({ firebaseIdToken: 'wrong-phone-token', newPassword: 'a-new-password' })
+    });
+    assert.equal(reset.response.status, 400);
+    assert.equal(reset.body.error, 'Invalid or expired phone OTP');
   });
 });

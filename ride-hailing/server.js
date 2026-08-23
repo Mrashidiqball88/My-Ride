@@ -72,7 +72,15 @@ if (firebaseAdminConfigured) {
   firebaseAdminAuth = getAuth(firebaseApp);
 }
 function firebaseWebConfigAvailable() {
-  return Object.values(FIREBASE_WEB_CONFIG).every(Boolean);
+  return Boolean(
+    FIREBASE_WEB_CONFIG.apiKey &&
+    FIREBASE_WEB_CONFIG.authDomain &&
+    FIREBASE_WEB_CONFIG.projectId &&
+    FIREBASE_WEB_CONFIG.appId
+  );
+}
+function setFirebaseAdminAuthForTests(auth) {
+  firebaseAdminAuth = auth;
 }
 
 // ── Request body timeout ──────────────────────────────────────────────────
@@ -1737,7 +1745,7 @@ app.post('/api/account/delete-request', authMiddleware, async (req, res) => {
   }
 });
 
-// ── Forgot Password (OTP-based) ───────────────────────────────────────────
+// ── Forgot Password (Firebase Phone Auth) ─────────────────────────────────
 
 app.post('/api/auth/forgot-password', async (req, res) => {
   try {
@@ -1751,6 +1759,13 @@ app.post('/api/auth/forgot-password', async (req, res) => {
     }
     return res.json({ success: true, phone: normalizePhoneNumber(user.phone), firebaseConfig: FIREBASE_WEB_CONFIG });
   } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.get('/api/auth/firebase-config', (req, res) => {
+  if (!firebaseWebConfigAvailable() || !firebaseAdminAuth) {
+    return res.status(503).json({ error: 'Phone OTP service is not configured' });
+  }
+  res.json({ firebaseConfig: FIREBASE_WEB_CONFIG });
 });
 
 app.post('/api/auth/reset-password', async (req, res) => {
@@ -4825,5 +4840,6 @@ module.exports = {
   SUB_ADMIN_PERMISSION_CATALOG,
   normalizeSubAdminPermissions,
   hasAdminPermission,
+  setFirebaseAdminAuthForTests,
   models: { User, Ride, Wallet, Payment, Settings, SubAdmin }
 };
