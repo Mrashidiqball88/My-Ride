@@ -3,12 +3,6 @@ import { logger } from "./logger";
 
 const mongoUri = process.env["MONGO_URI"];
 
-if (!mongoUri) {
-  throw new Error(
-    "MONGO_URI environment variable is required but was not provided.",
-  );
-}
-
 function normalizeMongoUri(uri: string): string {
   const schemeEnd = uri.indexOf("://");
   if (schemeEnd === -1) {
@@ -43,15 +37,21 @@ function normalizeMongoUri(uri: string): string {
   return `${uri.slice(0, authorityStart)}${normalizedUserInfo}${uri.slice(userInfoSeparator)}`;
 }
 
-export const mongoClient = new MongoClient(normalizeMongoUri(mongoUri), {
-  serverSelectionTimeoutMS: 5_000,
-});
+export const mongoClient = mongoUri
+  ? new MongoClient(normalizeMongoUri(mongoUri), {
+      serverSelectionTimeoutMS: 5_000,
+    })
+  : undefined;
 
 let database: Db | undefined;
 
 export async function connectToMongoDB(): Promise<Db> {
   if (database) {
     return database;
+  }
+
+  if (!mongoClient) {
+    throw new Error("MONGO_URI environment variable is not configured.");
   }
 
   await mongoClient.connect();
@@ -73,7 +73,7 @@ export function isMongoDBConnected(): boolean {
 }
 
 export async function closeMongoDB(): Promise<void> {
-  if (!database) {
+  if (!database || !mongoClient) {
     return;
   }
 

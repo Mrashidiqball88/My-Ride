@@ -25,11 +25,15 @@ if (!Number.isInteger(port) || port <= 0) {
 }
 
 async function startServer(): Promise<void> {
-  try {
-    await connectToMongoDB();
-  } catch (err) {
-    logger.error({ err }, "Unable to connect to MongoDB — exiting");
-    process.exit(1);
+  if (process.env["MONGO_URI"]) {
+    try {
+      await connectToMongoDB();
+    } catch (err) {
+      logger.error({ err }, "Unable to connect to MongoDB — exiting");
+      process.exit(1);
+    }
+  } else {
+    logger.warn("MONGO_URI is not configured; starting without database access");
   }
 
   const server = createServer(app);
