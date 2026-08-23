@@ -59,3 +59,12 @@ externalPort = 80
 [[ports]]
 localPort = 24305
 externalPort = 3000
+
+[userenv]
+
+[userenv.shared]
+SMTP_HOST = "://gmail.com"
+SMTP_PORT = "465"
+SMTP_SECURE = "true"
+SMTP_USER = "Mrashidiqbal88@gmail.com"
+EMAIL_FROM = "\"My Ride\" <Mrashidiqbal88@gmail.com>"
