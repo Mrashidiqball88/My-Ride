@@ -16,8 +16,6 @@
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <script src="/socket.io/socket.io.js"></script>
-    <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-app-compat.js"></script>
-    <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-auth-compat.js"></script>
 <style>
 *{margin:0;padding:0;box-sizing:border-box;-webkit-tap-highlight-color:transparent}
 body{font-family:'Segoe UI',sans-serif;background:#0a0a0f;color:#fff;height:100dvh;overflow:hidden;display:flex;flex-direction:column}
@@ -350,21 +348,20 @@ body{font-family:'Segoe UI',sans-serif;background:#0a0a0f;color:#fff;height:100d
     <div id="forgot-form" style="display:none">
       <!-- Step 1: enter phone -->
       <div id="fp-step1">
-        <div class="form-group"><label>Registered Phone Number</label><input type="tel" id="fp-phone" placeholder="+92 300 0000000" inputmode="tel"></div>
-        <div id="fp-recaptcha"></div>
-        <button class="btn-primary" onclick="forgotSendOtp()">Send Code</button>
+        <div class="form-group"><label>Registered Email Address</label><input type="email" id="fp-email" placeholder="you@example.com" autocomplete="email"></div>
+        <button class="btn-primary" onclick="forgotSendOtp()">Send OTP</button>
         <div style="text-align:center;margin-top:.5rem"><button class="btn-text-link" onclick="switchTab('login')">← Back to Sign In</button></div>
       </div>
       <!-- Step 2: verify OTP -->
       <div id="fp-step2" style="display:none">
-        <p style="font-size:.82rem;color:#888;margin-bottom:.6rem">Enter the 6-digit verification code sent to your phone.</p>
+        <p style="font-size:.82rem;color:#888;margin-bottom:.6rem">Enter the 6-digit code sent to your email.</p>
         <div class="form-group"><label>OTP Code</label><input type="text" id="fp-otp" placeholder="6-digit code" maxlength="6" inputmode="numeric" style="letter-spacing:.3em;font-size:1.2rem;text-align:center"></div>
-        <button class="btn-primary" onclick="forgotVerifyOtp()">Verify Code</button>
-        <div style="text-align:center;margin-top:.5rem"><button class="btn-text-link" onclick="forgotSendOtp()">Resend Code</button></div>
+        <button class="btn-primary" onclick="forgotVerifyOtp()">Verify OTP</button>
+        <div style="text-align:center;margin-top:.5rem"><button class="btn-text-link" onclick="forgotSendOtp()">Resend OTP</button></div>
       </div>
       <!-- Step 3: new password -->
       <div id="fp-step3" style="display:none">
-        <p style="font-size:.82rem;color:#66bb66;margin-bottom:.75rem">✓ Phone verified! Set your new password.</p>
+        <p style="font-size:.82rem;color:#66bb66;margin-bottom:.75rem">✓ Email verified! Set your new password.</p>
         <div class="form-group">
           <label>New Password</label>
           <div class="pw-wrap">
@@ -952,30 +949,15 @@ function togglePw(id) {
 }
 
 // ── Forgot Password Flow ───────────────────────────────────────────────────
-let _fpPhone = '';
-let _fpConfirmation = null;
-let _fpIdToken = '';
-let _fpRecaptcha = null;
-
-function setupFirebasePhoneAuth(config) {
-  if (!window.firebase?.auth) throw new Error('Phone verification is unavailable. Please try again later.');
-  if (!firebase.apps.length) firebase.initializeApp(config);
-  if (_fpRecaptcha) _fpRecaptcha.clear();
-  _fpRecaptcha = new firebase.auth.RecaptchaVerifier('fp-recaptcha', { size: 'invisible' });
-  return firebase.auth();
-}
+let _fpEmail = '';
 
 async function forgotSendOtp() {
-  const phone = document.getElementById('fp-phone').value.trim();
-  if (!phone) return (document.getElementById('auth-error').textContent = 'Enter your registered phone number');
+  const email = document.getElementById('fp-email').value.trim();
+  if (!email) return (document.getElementById('auth-error').textContent = 'Enter your registered email address');
   document.getElementById('auth-error').textContent = '';
   try {
-    const result = await apiCall('/api/auth/forgot-password', 'POST', { phone });
-    const auth = setupFirebasePhoneAuth(result.firebaseConfig);
-    await _fpRecaptcha.render();
-    _fpConfirmation = await auth.signInWithPhoneNumber(result.phone, _fpRecaptcha);
-    _fpPhone = result.phone;
-    _fpIdToken = '';
+    await apiCall('/api/auth/forgot-password', 'POST', { email });
+    _fpEmail = email.toLowerCase();
     document.getElementById('fp-step1').style.display = 'none';
     document.getElementById('fp-step2').style.display = 'block';
   } catch (e) { document.getElementById('auth-error').textContent = e.message; }
@@ -984,29 +966,21 @@ async function forgotSendOtp() {
 async function forgotVerifyOtp() {
   const otp = document.getElementById('fp-otp').value.trim();
   if (!/^\d{6}$/.test(otp)) return (document.getElementById('auth-error').textContent = 'Enter the 6-digit OTP');
-  if (!_fpConfirmation) return (document.getElementById('auth-error').textContent = 'Request a new verification code');
   document.getElementById('auth-error').textContent = '';
-  try {
-    const credential = await _fpConfirmation.confirm(otp);
-    _fpIdToken = await credential.user.getIdToken(true);
-    document.getElementById('fp-step2').style.display = 'none';
-    document.getElementById('fp-step3').style.display = 'block';
-  } catch (e) { document.getElementById('auth-error').textContent = e.message; }
+  document.getElementById('fp-step2').style.display = 'none';
+  document.getElementById('fp-step3').style.display = 'block';
 }
 
 async function forgotResetPassword() {
   const newPass = document.getElementById('fp-newpass').value;
   if (newPass.length < 6) return (document.getElementById('auth-error').textContent = 'Password must be at least 6 characters');
-  if (!_fpIdToken) return (document.getElementById('auth-error').textContent = 'Verify your phone before resetting your password');
   try {
-    await apiCall('/api/auth/reset-password', 'POST', { firebaseIdToken: _fpIdToken, newPassword: newPass });
-    await firebase.auth().signOut();
-    if (_fpRecaptcha) _fpRecaptcha.clear();
+    await apiCall('/api/auth/reset-password', 'POST', { email: _fpEmail, otp: document.getElementById('fp-otp').value.trim(), newPassword: newPass });
     showToast && showToast('Password reset! Please sign in.', 'success');
     document.getElementById('auth-error').textContent = '';
     switchTab('login');
     document.getElementById('l-email').value = _fpPhone;
-    _fpPhone = ''; _fpIdToken = ''; _fpConfirmation = null; _fpRecaptcha = null;
+    _fpEmail = '';
   } catch (e) { document.getElementById('auth-error').textContent = e.message; }
 }
 
@@ -1035,7 +1009,7 @@ function doLogout() {
   // 3. Clear every login / register field so nothing persists visually
   ['l-email', 'l-pass',
    'r-name', 'r-phone', 'r-cnic', 'r-email', 'r-pass',
-   'fp-phone', 'fp-otp', 'fp-newpass'
+   'fp-email', 'fp-otp', 'fp-newpass'
   ].forEach(id => { const el = document.getElementById(id); if (el) el.value = ''; });
   document.getElementById('auth-error').textContent = '';
 

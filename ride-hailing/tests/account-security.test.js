@@ -7,7 +7,7 @@ const crypto = require('crypto');
 const bcrypt = require('bcryptjs');
 
 const rideHailing = require('../server');
-const { app, models, setFirebaseAdminAuthForTests } = rideHailing;
+const { app, models, setEmailTransporterForTests } = rideHailing;
 
 const JWT_SECRET = 'ride-hailing-secret-fallback';
 const original = {
@@ -34,7 +34,7 @@ afterEach(() => {
     findOne: original.settingsFindOne,
     findOneAndUpdate: original.settingsFindOneAndUpdate
   });
-  setFirebaseAdminAuthForTests(null);
+  setEmailTransporterForTests(rideHailing.emailTransporter || { sendMail: async () => {} });
 });
 
 function query(value) {
@@ -270,7 +270,7 @@ test('Customer and Driver requests require the latest matching session token', a
   }
 });
 
-test('unknown recovery numbers return exactly Wrong number without creating an OTP', async () => {
+test('unknown recovery emails return exactly Wrong email without creating an OTP', async () => {
   let updated = false;
   models.User.findOne = () => query(null);
   models.User.updateOne = async () => { updated = true; };
@@ -278,15 +278,15 @@ test('unknown recovery numbers return exactly Wrong number without creating an O
   await withServer(async server => {
     const result = await request(server, '/api/auth/forgot-password', {
       method: 'POST',
-      body: JSON.stringify({ phone: '0300 999 9999' })
+      body: JSON.stringify({ email: 'unknown@example.test' })
     });
     assert.equal(result.response.status, 404);
-    assert.equal(result.body.error, 'Wrong number');
+    assert.equal(result.body.error, 'Wrong email');
     assert.equal(updated, false);
   });
 });
 
-test('a Firebase-verified password reset replaces the active session', async () => {
+test('an emailed OTP password reset replaces the active session', async () => {
   const user = {
     _id: 'reset-user',
     phone: '+923001234567',
@@ -299,10 +299,10 @@ test('a Firebase-verified password reset replaces the active session', async () 
     Object.assign(user, next);
   };
   models.User.findById = () => query(user);
-  setFirebaseAdminAuthForTests({
-    async verifyIdToken(token) {
-      assert.equal(token, 'firebase-id-token');
-      return { phone_number: '+923001234567' };
+  setEmailTransporterForTests({
+    async sendMail(message) {
+      assert.equal(message.to, 'ayesha@example.test');
+      return { messageId: 'test-email' };
     }
   });
   const oldToken = jwt.sign({ id: user._id, role: 'customer', name: 'Customer' }, JWT_SECRET);
@@ -310,7 +310,7 @@ test('a Firebase-verified password reset replaces the active session', async () 
   await withServer(async server => {
     const reset = await request(server, '/api/auth/reset-password', {
       method: 'POST',
-      body: JSON.stringify({ firebaseIdToken: 'firebase-id-token', newPassword: 'a-new-password' })
+      body: JSON.stringify({ email: 'ayesha@example.test', otp: '123456', newPassword: 'a-new-password' })
     });
     assert.equal(reset.response.status, 200);
     assert.equal(update.otpCode, null);
@@ -325,18 +325,19 @@ test('a Firebase-verified password reset replaces the active session', async () 
   });
 });
 
-test('password reset rejects a Firebase token for a different phone number', async () => {
-  models.User.findOne = () => query({ _id: 'reset-user', phone: '+923001234567' });
-  setFirebaseAdminAuthForTests({
-    async verifyIdToken() { return { phone_number: '+923009999999' }; }
+test('password reset rejects an incorrect emailed OTP', async () => {
+  models.User.findOne = () => query({
+    _id: 'reset-user', email: 'ayesha@example.test',
+    otpCode: await bcrypt.hash('654321', 10),
+    otpExpiry: new Date(Date.now() + 60_000)
   });
 
   await withServer(async server => {
     const reset = await request(server, '/api/auth/reset-password', {
       method: 'POST',
-      body: JSON.stringify({ firebaseIdToken: 'wrong-phone-token', newPassword: 'a-new-password' })
+      body: JSON.stringify({ email: 'ayesha@example.test', otp: '123456', newPassword: 'a-new-password' })
     });
     assert.equal(reset.response.status, 400);
-    assert.equal(reset.body.error, 'Invalid or expired phone OTP');
+    assert.equal(reset.body.error, 'Invalid or expired OTP');
   });
 });

@@ -16,8 +16,6 @@
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <script src="/socket.io/socket.io.js"></script>
-    <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-app-compat.js"></script>
-    <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-auth-compat.js"></script>
 <style>
 *{margin:0;padding:0;box-sizing:border-box;-webkit-tap-highlight-color:transparent}
 body{font-family:'Segoe UI',sans-serif;background:#0a0a0f;color:#fff;height:100dvh;overflow:hidden;display:flex;flex-direction:column}
@@ -413,19 +411,18 @@ textarea.support-input{resize:vertical;min-height:85px}
     <!-- Forgot Password -->
     <div id="forgot-form" style="display:none">
       <div id="dfp-step1">
-        <div class="form-group"><label>Registered Phone Number</label><input type="tel" id="dfp-phone" placeholder="+92 300 0000000" inputmode="tel"></div>
-        <div id="dfp-recaptcha"></div>
-        <button class="btn-primary" onclick="driverForgotSendOtp()">Send Code</button>
+        <div class="form-group"><label>Registered Email Address</label><input type="email" id="dfp-email" placeholder="you@example.com" autocomplete="email"></div>
+        <button class="btn-primary" onclick="driverForgotSendOtp()">Send OTP</button>
         <div style="text-align:center;margin-top:.5rem"><button class="btn-text-link" onclick="switchTab('login')">← Back to Sign In</button></div>
       </div>
       <div id="dfp-step2" style="display:none">
-        <p style="font-size:.82rem;color:#888;margin-bottom:.6rem">Enter the 6-digit verification code sent to your phone.</p>
+        <p style="font-size:.82rem;color:#888;margin-bottom:.6rem">Enter the 6-digit code sent to your email.</p>
         <div class="form-group"><label>OTP Code</label><input type="text" id="dfp-otp" placeholder="6-digit code" maxlength="6" inputmode="numeric" style="letter-spacing:.3em;font-size:1.2rem;text-align:center"></div>
-        <button class="btn-primary" onclick="driverForgotVerifyOtp()">Verify Code</button>
-        <div style="text-align:center;margin-top:.5rem"><button class="btn-text-link" onclick="driverForgotSendOtp()">Resend Code</button></div>
+        <button class="btn-primary" onclick="driverForgotVerifyOtp()">Verify OTP</button>
+        <div style="text-align:center;margin-top:.5rem"><button class="btn-text-link" onclick="driverForgotSendOtp()">Resend OTP</button></div>
       </div>
       <div id="dfp-step3" style="display:none">
-        <p style="font-size:.82rem;color:#66bb66;margin-bottom:.75rem">✓ Phone verified! Set your new password.</p>
+        <p style="font-size:.82rem;color:#66bb66;margin-bottom:.75rem">✓ Email verified! Set your new password.</p>
         <div class="form-group">
           <label>New Password</label>
           <div class="pw-wrap">
@@ -1086,31 +1083,16 @@ async function doRegister() {
 }
 
 // ── Driver Forgot Password ──────────────────────────────────────────────────
-let _dfpPhone = '';
-let _dfpConfirmation = null;
-let _dfpIdToken = '';
-let _dfpRecaptcha = null;
-
-function setupDriverFirebasePhoneAuth(config) {
-  if (!window.firebase?.auth) throw new Error('Phone verification is unavailable. Please try again later.');
-  if (!firebase.apps.length) firebase.initializeApp(config);
-  if (_dfpRecaptcha) _dfpRecaptcha.clear();
-  _dfpRecaptcha = new firebase.auth.RecaptchaVerifier('dfp-recaptcha', { size: 'invisible' });
-  return firebase.auth();
-}
+let _dfpEmail = '';
 
 async function driverForgotSendOtp() {
-  const phone = document.getElementById('dfp-phone').value.trim();
+  const email = document.getElementById('dfp-email').value.trim();
   const errEl = document.getElementById('auth-error');
-  if (!phone) return (errEl.textContent = 'Enter your registered phone number');
+  if (!email) return (errEl.textContent = 'Enter your registered email address');
   errEl.textContent = '';
   try {
-    const result = await apiCall('/api/auth/forgot-password', 'POST', { phone });
-    const auth = setupDriverFirebasePhoneAuth(result.firebaseConfig);
-    await _dfpRecaptcha.render();
-    _dfpConfirmation = await auth.signInWithPhoneNumber(result.phone, _dfpRecaptcha);
-    _dfpPhone = result.phone;
-    _dfpIdToken = '';
+    await apiCall('/api/auth/forgot-password', 'POST', { email });
+    _dfpEmail = email.toLowerCase();
     document.getElementById('dfp-step1').style.display = 'none';
     document.getElementById('dfp-step2').style.display = 'block';
   } catch (e) { errEl.textContent = e.message; }
@@ -1120,29 +1102,21 @@ async function driverForgotVerifyOtp() {
   const otp = document.getElementById('dfp-otp').value.trim();
   const errEl = document.getElementById('auth-error');
   if (!/^\d{6}$/.test(otp)) return (errEl.textContent = 'Enter the 6-digit OTP');
-  if (!_dfpConfirmation) return (errEl.textContent = 'Request a new verification code');
   errEl.textContent = '';
-  try {
-    const credential = await _dfpConfirmation.confirm(otp);
-    _dfpIdToken = await credential.user.getIdToken(true);
-    document.getElementById('dfp-step2').style.display = 'none';
-    document.getElementById('dfp-step3').style.display = 'block';
-  } catch (e) { errEl.textContent = e.message; }
+  document.getElementById('dfp-step2').style.display = 'none';
+  document.getElementById('dfp-step3').style.display = 'block';
 }
 
 async function driverForgotResetPassword() {
   const newPass = document.getElementById('dfp-newpass').value;
   const errEl   = document.getElementById('auth-error');
   if (newPass.length < 6) return (errEl.textContent = 'Password must be at least 6 characters');
-  if (!_dfpIdToken) return (errEl.textContent = 'Verify your phone before resetting your password');
   try {
-    await apiCall('/api/auth/reset-password', 'POST', { firebaseIdToken: _dfpIdToken, newPassword: newPass });
-    await firebase.auth().signOut();
-    if (_dfpRecaptcha) _dfpRecaptcha.clear();
+    await apiCall('/api/auth/reset-password', 'POST', { email: _dfpEmail, otp: document.getElementById('dfp-otp').value.trim(), newPassword: newPass });
     errEl.textContent = '';
     switchTab('login');
     document.getElementById('l-email').value = _dfpPhone;
-    _dfpPhone = ''; _dfpIdToken = ''; _dfpConfirmation = null; _dfpRecaptcha = null;
+    _dfpEmail = '';
     showToast('Password reset! Please sign in.', 'success');
   } catch (e) { errEl.textContent = e.message; }
 }
@@ -1172,7 +1146,7 @@ function doLogout() {
   // 3. Clear every login / register field so nothing persists visually
   ['l-email', 'l-pass',
    'r-phone', 'r-pass',
-   'dfp-phone', 'dfp-otp', 'dfp-newpass'
+   'dfp-email', 'dfp-otp', 'dfp-newpass'
   ].forEach(id => { const el = document.getElementById(id); if (el) el.value = ''; });
   document.getElementById('auth-error').textContent = '';
 

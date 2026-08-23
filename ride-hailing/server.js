@@ -29,8 +29,7 @@ const webpush  = require('web-push');
 const crypto   = require('crypto');
 const Tesseract = require('tesseract.js');
 const sharp    = require('sharp');
-const { cert, getApps, initializeApp } = require('firebase-admin/app');
-const { getAuth } = require('firebase-admin/auth');
+const nodemailer = require('nodemailer');
 
 // ── 2. APP & SERVER INITIALIZATION ───────────────────────────────────────
 const app    = express();
@@ -45,42 +44,23 @@ app.get('/api',    (_req, res) => res.status(200).json({ status: 'ok' }));
 const server = http.createServer(app);
 const io     = new Server(server, { cors: { origin: '*', methods: ['GET', 'POST'] } });
 
-// Firebase Phone Auth keeps SMS delivery and OTP verification in Firebase.
-// Only the public web config is sent to browsers; the Admin credential stays
-// server-side and is supplied through environment variables for portability.
-const FIREBASE_PROJECT_ID = process.env.FIREBASE_PROJECT_ID || '';
-const FIREBASE_WEB_CONFIG = Object.freeze({
-  apiKey: process.env.FIREBASE_API_KEY || '',
-  authDomain: process.env.FIREBASE_AUTH_DOMAIN || '',
-  projectId: FIREBASE_PROJECT_ID,
-  storageBucket: process.env.FIREBASE_STORAGE_BUCKET || '',
-  messagingSenderId: process.env.FIREBASE_MESSAGING_SENDER_ID || '',
-  appId: process.env.FIREBASE_APP_ID || ''
+const SMTP_HOST = process.env.SMTP_HOST || '';
+const SMTP_PORT = Number(process.env.SMTP_PORT || 587);
+const SMTP_SECURE = process.env.SMTP_SECURE === 'true' || SMTP_PORT === 465;
+const SMTP_USER = process.env.SMTP_USER || '';
+const SMTP_PASS = process.env.SMTP_PASS || '';
+const EMAIL_FROM = process.env.EMAIL_FROM || SMTP_USER;
+let emailTransporter = nodemailer.createTransport({
+  host: SMTP_HOST,
+  port: SMTP_PORT,
+  secure: SMTP_SECURE,
+  auth: SMTP_USER && SMTP_PASS ? { user: SMTP_USER, pass: SMTP_PASS } : undefined
 });
-const firebaseAdminConfigured = Boolean(
-  FIREBASE_PROJECT_ID && process.env.FIREBASE_CLIENT_EMAIL && process.env.FIREBASE_PRIVATE_KEY
-);
-let firebaseAdminAuth = null;
-if (firebaseAdminConfigured) {
-  const firebaseApp = getApps()[0] || initializeApp({
-    credential: cert({
-      projectId: FIREBASE_PROJECT_ID,
-      clientEmail: process.env.FIREBASE_CLIENT_EMAIL,
-      privateKey: process.env.FIREBASE_PRIVATE_KEY.replace(/\\n/g, '\n')
-    })
-  });
-  firebaseAdminAuth = getAuth(firebaseApp);
+function emailOtpConfigured() {
+  return Boolean(SMTP_HOST && SMTP_USER && SMTP_PASS && EMAIL_FROM);
 }
-function firebaseWebConfigAvailable() {
-  return Boolean(
-    FIREBASE_WEB_CONFIG.apiKey &&
-    FIREBASE_WEB_CONFIG.authDomain &&
-    FIREBASE_WEB_CONFIG.projectId &&
-    FIREBASE_WEB_CONFIG.appId
-  );
-}
-function setFirebaseAdminAuthForTests(auth) {
-  firebaseAdminAuth = auth;
+function setEmailTransporterForTests(transporter) {
+  emailTransporter = transporter;
 }
 
 // ── Request body timeout ──────────────────────────────────────────────────
@@ -799,7 +779,7 @@ function normalizeMongoUri(uri) {
 
 const userSchema = new mongoose.Schema({
   name:    { type: String, required: true, trim: true },
-  email:   { type: String, unique: true, sparse: true, lowercase: true, trim: true }, // optional
+  email:   { type: String, required: true, unique: true, lowercase: true, trim: true },
   password:{ type: String, required: true },
   phone:   { type: String, default: '', trim: true },
   role:    { type: String, enum: ['customer', 'driver'], default: 'customer' },
@@ -1566,7 +1546,8 @@ app.post('/api/auth/register', async (req, res) => {
   try {
     const { name, email, password, phone, role, vehicleType, vehicleModel, vehiclePlate, ridePreference,
              profilePhoto, licensePhoto, cnicFront, cnicBack, cnicNumber, vehicleRegPhoto } = req.body;
-    if (!name || !password) return res.status(400).json({ error: 'Name and password are required' });
+    if (!name || !password || typeof email !== 'string' || !email.trim())
+      return res.status(400).json({ error: 'Name, email, and password are required' });
     const normalizedPhone = normalizePhoneNumber(phone);
     if (!normalizedPhone)   return res.status(400).json({ error: 'Enter a valid mobile number' });
     const resolvedRoleEarly = role || 'customer';
@@ -1587,9 +1568,11 @@ app.post('/api/auth/register', async (req, res) => {
       return res.status(400).json({ error: 'Choose a valid vehicle category' });
     }
 
-    const resolvedEmail = email ? email.toLowerCase().trim() : null;
+    const resolvedEmail = email.toLowerCase().trim();
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(resolvedEmail))
+      return res.status(400).json({ error: 'Enter a valid email address' });
 
-    if (resolvedEmail && await User.findOne({ email: resolvedEmail }))
+    if (await User.findOne({ email: resolvedEmail }))
       return res.status(409).json({ error: 'Email already registered' });
     if (await User.findOne({ phone: { $in: phoneLookupValues(phone) } }))
       return res.status(409).json({ error: 'Phone number already registered' });
@@ -1620,7 +1603,7 @@ app.post('/api/auth/register', async (req, res) => {
     const customerBackFile = resolvedRole === 'customer' ? await savePrivateIdentityDocument(cnicBack, 'customer_id_back') : '';
     const user = await User.create({
       name,
-      email:         resolvedEmail  || undefined,
+      email:         resolvedEmail,
       phone:         normalizedPhone,
       password:      hash,
       role:          resolvedRole,
@@ -1745,46 +1728,45 @@ app.post('/api/account/delete-request', authMiddleware, async (req, res) => {
   }
 });
 
-// ── Forgot Password (Firebase Phone Auth) ─────────────────────────────────
+// ── Forgot Password (Email OTP) ────────────────────────────────────────────
 
 app.post('/api/auth/forgot-password', async (req, res) => {
   try {
-    const { phone } = req.body;
-    const normalizedPhone = normalizePhoneNumber(phone);
-    if (!normalizedPhone) return res.status(400).json({ error: 'Enter a valid registered mobile number' });
-    const user = await User.findOne({ phone: { $in: phoneLookupValues(phone) } });
-    if (!user) return res.status(404).json({ error: 'Wrong number' });
-    if (!firebaseWebConfigAvailable() || !firebaseAdminAuth) {
-      return res.status(503).json({ error: 'Phone OTP service is not configured' });
-    }
-    return res.json({ success: true, phone: normalizePhoneNumber(user.phone), firebaseConfig: FIREBASE_WEB_CONFIG });
+    const email = typeof req.body?.email === 'string' ? req.body.email.trim().toLowerCase() : '';
+    if (!email) return res.status(400).json({ error: 'Enter your registered email address' });
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email))
+      return res.status(400).json({ error: 'Enter a valid email address' });
+    const user = await User.findOne({ email });
+    if (!user) return res.status(404).json({ error: 'Wrong email' });
+    if (!emailOtpConfigured()) return res.status(503).json({ error: 'Email OTP service is not configured' });
+    const otp = String(crypto.randomInt(100000, 1000000));
+    const otpHash = await bcrypt.hash(otp, 10);
+    await emailTransporter.sendMail({
+      from: EMAIL_FROM,
+      to: email,
+      subject: 'My Ride password reset code',
+      text: `Your My Ride password reset code is ${otp}. It expires in 10 minutes. If you did not request this, ignore this email.`,
+      html: `<p>Your My Ride password reset code is <strong>${otp}</strong>.</p><p>It expires in 10 minutes. If you did not request this, ignore this email.</p>`
+    });
+    await User.updateOne({ _id: user._id }, {
+      otpCode: otpHash,
+      otpExpiry: new Date(Date.now() + 10 * 60 * 1000)
+    });
+    return res.json({ success: true, message: 'A verification code was sent to your email address' });
   } catch (err) { res.status(500).json({ error: err.message }); }
-});
-
-app.get('/api/auth/firebase-config', (req, res) => {
-  if (!firebaseWebConfigAvailable() || !firebaseAdminAuth) {
-    return res.status(503).json({ error: 'Phone OTP service is not configured' });
-  }
-  res.json({ firebaseConfig: FIREBASE_WEB_CONFIG });
 });
 
 app.post('/api/auth/reset-password', async (req, res) => {
   try {
-    const { firebaseIdToken, newPassword } = req.body;
-    if (typeof firebaseIdToken !== 'string' || !firebaseIdToken || typeof newPassword !== 'string' || !newPassword)
-      return res.status(400).json({ error: 'Verified phone OTP and new password required' });
-    if (!firebaseAdminAuth) return res.status(503).json({ error: 'Phone OTP service is not configured' });
-    let decoded;
-    try {
-      decoded = await firebaseAdminAuth.verifyIdToken(firebaseIdToken);
-    } catch {
-      return res.status(400).json({ error: 'Invalid or expired phone OTP' });
-    }
-    const normalizedPhone = normalizePhoneNumber(decoded.phone_number);
-    if (!normalizedPhone) return res.status(400).json({ error: 'Invalid or expired phone OTP' });
-    const user = await User.findOne({ phone: { $in: phoneLookupValues(normalizedPhone) } });
-    if (!user || normalizePhoneNumber(user.phone) !== normalizedPhone)
-      return res.status(400).json({ error: 'Invalid or expired phone OTP' });
+    const email = typeof req.body?.email === 'string' ? req.body.email.trim().toLowerCase() : '';
+    const { otp, newPassword } = req.body;
+    if (!email || typeof otp !== 'string' || !otp.trim() || typeof newPassword !== 'string' || !newPassword)
+      return res.status(400).json({ error: 'Email, OTP, and new password required' });
+    const user = await User.findOne({ email });
+    if (!user || !user.otpCode || !(await bcrypt.compare(otp.trim(), user.otpCode)))
+      return res.status(400).json({ error: 'Invalid or expired OTP' });
+    if (!user.otpExpiry || user.otpExpiry < new Date())
+      return res.status(400).json({ error: 'OTP has expired — request a new one' });
     if (newPassword.length < 8) return res.status(400).json({ error: 'New password must be at least 8 characters' });
     const hash = await bcrypt.hash(newPassword, 12);
     await User.updateOne(
@@ -4840,6 +4822,6 @@ module.exports = {
   SUB_ADMIN_PERMISSION_CATALOG,
   normalizeSubAdminPermissions,
   hasAdminPermission,
-  setFirebaseAdminAuthForTests,
+  setEmailTransporterForTests,
   models: { User, Ride, Wallet, Payment, Settings, SubAdmin }
 };
