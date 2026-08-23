@@ -299,7 +299,7 @@ test('Customer fare quote uses active Long Range rates without daily fare slabs'
   }
 });
 
-test('Long Range commission uses one wallet debit when the charge is retried', async () => {
+test('Long Range commission is charged once only after a completed ride', async () => {
   const updates = [];
   let debitAttempt = 0;
   models.Wallet.findOneAndUpdate = async () => {
@@ -309,9 +309,11 @@ test('Long Range commission uses one wallet debit when the charge is retried', a
   models.Wallet.exists = async () => debitAttempt > 1;
   models.Ride.updateOne = async (_query, update) => { updates.push(update); };
   const ride = { _id: 'long-range-ride', isLongRange: true, fare: 1000, longRangeCommissionChargedAt: null };
-  const settings = { commissionTiming: 'accepted', commissionPercent: 10 };
+  const settings = { commissionTiming: 'completed', commissionPercent: 10 };
   assert.equal((await chargeLongRangeCommission(ride, 'driver-1', 'accepted', settings)).ok, true);
-  assert.equal((await chargeLongRangeCommission(ride, 'driver-1', 'accepted', settings)).ok, true);
+  assert.equal(debitAttempt, 0, 'accepting must not charge a completion-timed commission');
+  assert.equal((await chargeLongRangeCommission(ride, 'driver-1', 'completed', settings)).ok, true);
+  assert.equal((await chargeLongRangeCommission(ride, 'driver-1', 'completed', settings)).ok, true);
   assert.equal(debitAttempt, 2);
   assert.equal(updates.length, 2);
   assert.equal(updates[0].$set.longRangeCommissionAmount, 100);

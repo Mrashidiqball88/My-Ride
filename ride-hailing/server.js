@@ -581,7 +581,7 @@ const DEFAULT_LONG_RANGE_SETTINGS = Object.freeze({
   minimumWalletBalances: DEFAULT_LONG_RANGE_MINIMUM_WALLET_BALANCES,
   broadcastRadiusKm: 30,
   commissionPercent: 10,
-  commissionTiming: 'accepted',
+  commissionTiming: 'completed',
   perKmRates: Object.fromEntries(FARE_VEHICLE_CATEGORIES.map(category => [category, null]))
 });
 
@@ -601,7 +601,9 @@ function normalizeLongRangeSettings(input = {}) {
     })),
     broadcastRadiusKm: numberInRange(source.broadcastRadiusKm, DEFAULT_LONG_RANGE_SETTINGS.broadcastRadiusKm, 0.5, 500),
     commissionPercent: numberInRange(source.commissionPercent, DEFAULT_LONG_RANGE_SETTINGS.commissionPercent, 0, 100),
-    commissionTiming: source.commissionTiming === 'started' ? 'started' : 'accepted',
+    // A Long Range commission is only earned when the ride successfully
+    // finishes. Older accepted/started settings migrate to this policy.
+    commissionTiming: 'completed',
     perKmRates: Object.fromEntries(FARE_VEHICLE_CATEGORIES.map(category => {
       const rate = Number(source.perKmRates?.[category]);
       return [category, Number.isFinite(rate) && rate > 0 ? Number(rate.toFixed(2)) : null];
@@ -804,7 +806,7 @@ const userSchema = new mongoose.Schema({
   vehicleRegPhoto: { type: String, default: '' },
   vehicleReviewRequestedAt: { type: Date, default: null },
   cnicNumber:      { type: String, default: '' },      // retained for existing driver records only
-  nationalIdHash:  { type: String, unique: true, sparse: true, default: '', select: false },
+  nationalIdHash:  { type: String, unique: true, sparse: true, select: false },
   nationalIdLast4: { type: String, default: '' },
   customerIdFront: { type: String, default: '', select: false },
   customerIdBack:  { type: String, default: '', select: false },
@@ -1525,7 +1527,7 @@ app.post('/api/auth/register', async (req, res) => {
       cnicFront:     resolvedRole === 'driver' ? await saveDocToDisk(cnicFront, 'cnicFront') : '',
       cnicBack:      resolvedRole === 'driver' ? await saveDocToDisk(cnicBack, 'cnicBack') : '',
       cnicNumber:    resolvedRole === 'driver' ? (cnicNumber || '') : '',
-      nationalIdHash,
+      nationalIdHash: nationalIdHash || undefined,
       nationalIdLast4: resolvedRole === 'customer' ? normalizedCustomerId.slice(-4) : '',
       customerIdFront: customerFrontFile,
       customerIdBack: customerBackFile,
@@ -2127,8 +2129,8 @@ app.patch('/api/rides/:id/status', authMiddleware, driverOnly, async (req, res) 
       }
     }
 
-    if (ride.status === 'arrived' && status === 'in-progress') {
-      const commission = await chargeLongRangeCommission(ride, req.user.id, 'started', await getLongRangeSettings());
+    if (status === 'completed') {
+      const commission = await chargeLongRangeCommission(ride, req.user.id, 'completed', await getLongRangeSettings());
       if (!commission.ok) return res.status(403).json({ error: commission.error });
     }
     ride.status = status;
@@ -3105,6 +3107,30 @@ app.get('/api/admin/drivers', adminJwt, requirePerm('viewDrivers'), async (req, 
       .select('-password -otpCode -otpExpiry')
       .sort('-createdAt').limit(200);
     res.json(drivers);
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// PATCH /api/admin/drivers/:id/ride-preference — an administrator can correct
+// a Driver's local/Long Range scope. Switching from Long Range Only applies
+// the normal Daily Fee rule immediately if the active Driver is overdue.
+app.patch('/api/admin/drivers/:id/ride-preference', adminJwt, requirePerm('manageDriverStatus'), async (req, res) => {
+  try {
+    const ridePreference = String(req.body?.ridePreference || '').trim();
+    if (!DRIVER_RIDE_PREFERENCES.includes(ridePreference)) {
+      return res.status(400).json({ error: `Ride preference must be one of: ${DRIVER_RIDE_PREFERENCES.join(', ')}` });
+    }
+    const driver = await User.findOne({ _id: req.params.id, role: 'driver' })
+      .select('name vehicleType accountStatus paidUntilDate lastDailyFeePaidAt isFreeTrial ridePreference')
+      .lean();
+    if (!driver) return res.status(404).json({ error: 'Driver not found' });
+
+    await User.updateOne({ _id: driver._id }, { ridePreference });
+    const updatedDriver = { ...driver, ridePreference };
+    const dailyFee = updatedDriver.accountStatus === 'active'
+      ? await chargeDailyFeeForOnlineDriver(updatedDriver._id, updatedDriver)
+      : { allowed: true, charged: false };
+    io.to(`user:${driver._id}`).emit('ride-preference:updated', { ridePreference, dailyFee });
+    res.json({ driver: { id: driver._id, name: driver.name, ridePreference }, dailyFee });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 

@@ -891,7 +891,7 @@ input[type=date]:focus{border-color:#f5c518}
             <div class="field-item"><div class="field-label">Long Range broadcast radius (km)</div><input class="modal-input" id="lr-radius" type="number" min=".5" step=".1"></div>
             <div class="field-item"><div class="field-label">Commission (%)</div><input class="modal-input" id="lr-commission" type="number" min="0" max="100" step=".1"></div>
           </div>
-          <div class="field-item" style="max-width:360px"><div class="field-label">Deduct commission</div><select class="modal-input" id="lr-timing"><option value="accepted">When ride is accepted</option><option value="started">When ride starts</option></select></div>
+          <div class="field-item" style="max-width:360px"><div class="field-label">Deduct commission</div><select class="modal-input" id="lr-timing"><option value="completed">When ride is completed</option></select></div>
            <div class="field-label" style="margin-top:1rem">Long Range rate and minimum wallet balance by vehicle</div><div id="lr-rates" class="field-row"></div>
         </div>
         <div id="long-range-settings-feedback" style="min-height:1.25rem;font-size:.8rem;margin:.8rem 0"></div>
@@ -1821,7 +1821,7 @@ async function loadDrivers(status = 'all') {
         <td><input type="checkbox" class="driver-chk" value="${d._id}" style="cursor:pointer" onchange="toggleDriverSelect('${d._id}',this.checked)"></td>
         <td><div style="display:flex;align-items:center">${avatarHtml}<div><div style="font-weight:700;color:#e2e8f0">${d.name}</div></div></div></td>
         <td>${d.phone||'—'}</td>
-        <td><div style="font-size:.75rem">${d.vehicleType||'—'}<br><span style="color:#475569">${d.vehicleModel||''} ${d.vehiclePlate||''}</span></div></td>
+         <td><div style="font-size:.75rem">${d.vehicleType||'—'}<br><span style="color:#475569">${d.vehicleModel||''} ${d.vehiclePlate||''}</span><br><span style="color:#38bdf8">${d.ridePreference || 'Both'}</span></div></td>
         <td>${feeCell}</td>
         <td style="${lowRating?'color:#ef4444':''};font-weight:${lowRating?'700':'400'}">⭐ ${(d.rating||5).toFixed(1)}</td>
         <td>${badgeHtml(d.accountStatus||'active')}</td>
@@ -1836,6 +1836,7 @@ async function loadDrivers(status = 'all') {
           ${d.accountStatus==='suspended' && hasPermission('manageDriverStatus')   ? `<button class="btn btn-green"  onclick="userAction('${d._id}','unblock','driver')">▶</button>
             <button class="btn btn-red"   onclick="userAction('${d._id}','block','driver')">⛔</button>` : ''}
           ${d.accountStatus==='blocked'   && hasPermission('manageDriverStatus')   ? `<button class="btn btn-green"  onclick="userAction('${d._id}','unblock','driver')">▶</button>` : ''}
+           ${hasPermission('manageDriverStatus') ? `<select aria-label="Ride preference for ${escHtml(d.name)}" class="modal-input" style="width:auto;min-width:130px;padding:.28rem .4rem;font-size:.68rem" onchange="setDriverRidePreference('${d._id}', this.value)"><option value="Short Range Only" ${d.ridePreference==='Short Range Only'?'selected':''}>Short Range Only</option><option value="Long Range Only" ${d.ridePreference==='Long Range Only'?'selected':''}>Long Range Only</option><option value="Both" ${(!d.ridePreference || d.ridePreference==='Both')?'selected':''}>Both</option></select>` : ''}
           ${isSuperAdmin ? `<button class="btn btn-red" onclick="openDeleteModal('${d._id}','${d.name.replace(/'/g,"\\'")}','driver')" title="Delete Account">🗑</button>` : ''}
         </div></td>
       </tr>`;
@@ -3080,7 +3081,7 @@ async function loadLongRangeSettings() {
     document.getElementById('lr-cutoff').value = settings.distanceCutoffKm;
     document.getElementById('lr-radius').value = settings.broadcastRadiusKm;
     document.getElementById('lr-commission').value = settings.commissionPercent;
-    document.getElementById('lr-timing').value = settings.commissionTiming || 'accepted';
+    document.getElementById('lr-timing').value = 'completed';
     renderLongRangeRates(settings.perKmRates, settings.minimumWalletBalances);
     feedback.textContent = '';
   } catch (e) { feedback.textContent = `⚠ ${e.message}`; feedback.style.color = '#ef4444'; }
@@ -3107,6 +3108,18 @@ async function saveLongRangeSettings() {
     const details = Array.isArray(e?.errors) ? `: ${e.errors.join('; ')}` : '';
     feedback.textContent = `✕ ${e.message || 'Could not save Long Range settings'}${details}`; feedback.style.color = '#ef4444';
     showToast(e.message || 'Could not save Long Range settings', 'error');
+  }
+}
+
+async function setDriverRidePreference(driverId, ridePreference) {
+  try {
+    const result = await api(`/api/admin/drivers/${driverId}/ride-preference`, 'PATCH', { ridePreference });
+    const feeNote = result.dailyFee?.charged ? ' Daily Fee charged for the new standard preference.' : '';
+    showToast(`Ride preference updated to ${ridePreference}.${feeNote}`, 'success');
+    loadDrivers(currentDriverStatus);
+  } catch (e) {
+    showToast(e.message || 'Could not update ride preference', 'error');
+    loadDrivers(currentDriverStatus);
   }
 }
 
