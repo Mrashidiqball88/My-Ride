@@ -474,7 +474,7 @@ textarea.support-input{resize:vertical;min-height:85px}
     </div>
   </div>
   <div id="long-range-bar" style="display:none;background:#101827;border-bottom:1px solid #1e3a5f;padding:.55rem 1rem;align-items:center;justify-content:space-between;gap:.8rem">
-    <div><div style="font-size:.8rem;font-weight:700;color:#dbeafe">🛣️ Long Range Rides</div><div id="long-range-sub" style="font-size:.7rem;color:#94a3b8">Loading eligibility…</div></div>
+    <div style="min-width:0"><div style="font-size:.8rem;font-weight:700;color:#dbeafe">🛣️ Long Range Rides</div><div id="long-range-sub" style="font-size:.7rem;color:#94a3b8">Loading eligibility…</div><div id="long-range-reminder" style="display:none;margin-top:.3rem;color:#fbbf24;font-size:.68rem;font-weight:700">⚠ Reminder: Tolls, taxes, and challans are driver responsibility.</div></div>
     <div class="toggle-wrap"><input type="checkbox" id="long-range-toggle" class="toggle-input" onchange="toggleLongRange(this.checked)"><label for="long-range-toggle" class="toggle-label"></label></div>
   </div>
 
@@ -754,11 +754,13 @@ function renderLongRangeState() {
   const bar = document.getElementById('long-range-bar');
   const toggle = document.getElementById('long-range-toggle');
   const sub = document.getElementById('long-range-sub');
+  const reminder = document.getElementById('long-range-reminder');
   if (!bar || !toggle || !sub) return;
   const settings = longRangeState.settings || {};
   bar.style.display = 'flex';
   toggle.checked = !!longRangeState.enabled;
   toggle.disabled = !settings.enabled;
+  if (reminder) reminder.style.display = longRangeState.enabled ? 'block' : 'none';
   if (!settings.enabled) sub.textContent = 'Long Range rides are currently disabled by Admin.';
   else sub.textContent = `Opt in for trips of ${Number(settings.distanceCutoffKm || 0).toLocaleString()} km+ · wallet minimum Rs ${Number(settings.minimumWalletBalance || 0).toLocaleString()}`;
 }
@@ -773,6 +775,14 @@ async function loadLongRangeState() {
 }
 async function toggleLongRange(enabled) {
   const toggle = document.getElementById('long-range-toggle');
+  if (enabled) {
+    if (toggle) toggle.checked = false;
+    openLongRangeResponsibilityModal();
+    return;
+  }
+  await setLongRangeEnabled(false, toggle);
+}
+async function setLongRangeEnabled(enabled, toggle) {
   try {
     const result = await apiCall('/api/driver/long-range', 'PATCH', { enabled });
     longRangeState.enabled = result.enabled; longRangeState.settings = result.settings || longRangeState.settings;
@@ -783,6 +793,23 @@ async function toggleLongRange(enabled) {
     showToast(e.message, 'error');
     await loadLongRangeState();
   }
+}
+function openLongRangeResponsibilityModal() {
+  const modal = document.getElementById('long-range-responsibility-modal');
+  if (modal) {
+    modal.style.display = 'flex';
+    document.getElementById('long-range-agree-btn')?.focus();
+  }
+}
+function closeLongRangeResponsibilityModal() {
+  const modal = document.getElementById('long-range-responsibility-modal');
+  if (modal) modal.style.display = 'none';
+  const toggle = document.getElementById('long-range-toggle');
+  if (toggle) toggle.checked = !!longRangeState.enabled;
+}
+async function agreeAndActivateLongRange() {
+  closeLongRangeResponsibilityModal();
+  await setLongRangeEnabled(true, document.getElementById('long-range-toggle'));
 }
 function toggleTodayFareWidget() {
   const widget = document.getElementById('today-fare-widget');
@@ -2324,6 +2351,23 @@ if (token && user && user.role === 'driver') {
   document.getElementById('auth-screen').style.display = 'flex';
 }
 </script>
+
+<!-- ── Long Range Responsibility Confirmation ── -->
+<div id="long-range-responsibility-modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.88);z-index:3600;align-items:center;justify-content:center;padding:1rem;box-sizing:border-box" role="dialog" aria-modal="true" aria-labelledby="long-range-responsibility-title">
+  <div style="background:#111827;border:1px solid #f59e0b;border-radius:16px;padding:1.35rem;max-width:420px;width:100%;box-shadow:0 18px 60px rgba(0,0,0,.45)">
+    <div style="display:flex;align-items:flex-start;gap:.75rem">
+      <div style="font-size:1.7rem;line-height:1">⚠️</div>
+      <div>
+        <h3 id="long-range-responsibility-title" style="color:#fbbf24;margin:0 0 .55rem;font-size:1.05rem">Long Range Ride Responsibility</h3>
+        <p style="color:#e5e7eb;font-size:.85rem;line-height:1.55;margin:0">NOTICE: All toll plaza payments, motor/highway taxes, and traffic challans during long-range/intercity trips are the sole responsibility of the driver. Customers are not liable for these expenses.</p>
+      </div>
+    </div>
+    <div style="display:flex;gap:.6rem;margin-top:1.2rem">
+      <button onclick="closeLongRangeResponsibilityModal()" style="flex:1;padding:.72rem;border-radius:9px;background:#1f2937;border:1px solid #475569;color:#cbd5e1;cursor:pointer;font-size:.84rem">Cancel</button>
+      <button id="long-range-agree-btn" onclick="agreeAndActivateLongRange()" style="flex:1.35;padding:.72rem;border-radius:9px;background:#f59e0b;color:#111827;border:none;cursor:pointer;font-size:.84rem;font-weight:800">I Agree &amp; Activate</button>
+    </div>
+  </div>
+</div>
 
 <!-- ── PIN Entry Modal ── -->
 <div id="pin-entry-modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.92);z-index:3500;align-items:center;justify-content:center">
