@@ -218,6 +218,7 @@ test('vehicle document replacement requires an image and immediately returns the
     _id: '507f1f77bcf86cd799439011',
     role: 'driver',
     password,
+    vehicleType: 'Car Mini',
     vehicleModel: 'Old Model',
     vehiclePlate: 'OLD-123',
     vehicleRegPhoto: '/uploads/driver_docs/old.jpg',
@@ -238,6 +239,7 @@ test('vehicle document replacement requires an image and immediately returns the
   try {
     const missingDocument = await request(server, '/api/user/update-profile', {
       currentPassword: 'current-password',
+      vehicleType: 'Toyota Saloon Coaster',
       vehicleModel: 'New Model',
       vehiclePlate: 'NEW-456'
     });
@@ -246,6 +248,7 @@ test('vehicle document replacement requires an image and immediately returns the
 
     const submitted = await request(server, '/api/user/update-profile', {
       currentPassword: 'current-password',
+      vehicleType: 'Toyota Saloon Coaster',
       vehicleModel: 'New Model',
       vehiclePlate: 'new-456',
       vehicleRegPhoto: 'data:image/png;base64,aGVsbG8='
@@ -253,6 +256,7 @@ test('vehicle document replacement requires an image and immediately returns the
     assert.equal(submitted.response.status, 200);
     assert.equal(persisted.vehicleModel, 'New Model');
     assert.equal(persisted.vehiclePlate, 'NEW-456');
+    assert.equal(persisted.vehicleType, 'Toyota Saloon Coaster');
     assert.equal(persisted.accountStatus, 'pending');
     assert.equal(persisted.identityVerificationStatus, 'pending');
     assert.equal(persisted.isOnline, false);

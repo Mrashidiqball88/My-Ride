@@ -288,10 +288,12 @@ test.describe('Document upload flow — large photos (~1.7 MB each)', () => {
       await expect(page.locator('#cv-err')).toContainText(/Upload the new vehicle registration/i);
 
       await page.locator('#cv-vehicle-reg').setInputFiles(FIXTURES.license);
+      await page.locator('#cv-type').selectOption('Toyota Highroof');
       await page.locator('#cv-btn').click();
       await expect.poll(() => submittedBody).toBeTruthy();
       expect(submittedBody.vehicleModel).toBe('Toyota Yaris 2024');
       expect(submittedBody.vehiclePlate).toBe('LHR-2024');
+      expect(submittedBody.vehicleType).toBe('Toyota Highroof');
       expect(submittedBody.vehicleRegPhoto).toMatch(/^data:image\/jpeg;base64,/);
       await expect(page.locator('#change-vehicle-modal')).toBeHidden();
 

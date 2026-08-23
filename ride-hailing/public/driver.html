@@ -354,6 +354,8 @@ textarea.support-input{resize:vertical;min-height:85px}
             <option value="Car SUV">🚘 Car SUV</option>
             <option value="Van Seven Seats">🚐 Van Seven Seats</option>
             <option value="Cary Dibba">🛻 Cary Dibba</option>
+            <option value="Toyota Highroof">🚐 Toyota Highroof</option>
+            <option value="Toyota Saloon Coaster">🚌 Toyota Saloon Coaster</option>
           </select>
         </div>
         <div class="form-group"><label>Vehicle Model <span style="color:#f5c518">*</span></label><input type="text" id="r-vehicle-model" placeholder="e.g. Suzuki Cultus 2020"></div>
@@ -2531,6 +2533,9 @@ if (token && user && user.role === 'driver') {
      <h3 style="color:#f5c518;margin:0 0 .45rem;font-size:1rem">🚗 Change Vehicle Info</h3>
      <p style="color:#94a3b8;font-size:.75rem;line-height:1.45;margin:0 0 .9rem">A new registration or ownership document is required. Your account will be under review and unavailable for rides until Admin approval.</p>
     <input type="password" id="cv-current" placeholder="Current password" style="width:100%;padding:.7rem;border-radius:8px;border:1px solid #333;background:#0d0d1a;color:#fff;margin-bottom:.5rem;box-sizing:border-box;font-size:.875rem">
+    <select id="cv-type" aria-label="Vehicle category" style="width:100%;padding:.7rem;border-radius:8px;border:1px solid #333;background:#0d0d1a;color:#fff;margin-bottom:.5rem;box-sizing:border-box;font-size:.875rem">
+      <option value="Bike">🛵 Bike</option><option value="Riksha">🛺 Riksha</option><option value="Car Mini">🚙 Car Mini</option><option value="Car Sedan">🚗 Car Sedan</option><option value="Car SUV">🚘 Car SUV</option><option value="Van Seven Seats">🚐 Van Seven Seats</option><option value="Cary Dibba">🛻 Cary Dibba</option><option value="Toyota Highroof">🚐 Toyota Highroof</option><option value="Toyota Saloon Coaster">🚌 Toyota Saloon Coaster</option>
+    </select>
     <input type="text" id="cv-model" placeholder="Vehicle model (e.g. Suzuki Cultus 2022)" style="width:100%;padding:.7rem;border-radius:8px;border:1px solid #333;background:#0d0d1a;color:#fff;margin-bottom:.5rem;box-sizing:border-box;font-size:.875rem">
     <input type="text" id="cv-plate" placeholder="Number plate (e.g. LHR-1234)" style="width:100%;padding:.7rem;border-radius:8px;border:1px solid #333;background:#0d0d1a;color:#fff;margin-bottom:.4rem;box-sizing:border-box;font-size:.875rem;text-transform:uppercase">
      <label for="cv-vehicle-reg" style="display:block;color:#cbd5e1;font-size:.76rem;font-weight:700;margin:.7rem 0 .35rem">Vehicle Registration / Ownership Document <span style="color:#f5c518">*</span></label>
@@ -2739,6 +2744,7 @@ async function submitChangePassword() {
 // Change Vehicle Info
 function openChangeVehicleModal() {
   document.getElementById('cv-current').value = '';
+  document.getElementById('cv-type').value    = fareCategoryForDriver(user?.vehicleType || 'Car Mini');
   document.getElementById('cv-model').value   = user?.vehicleModel || '';
   document.getElementById('cv-plate').value   = user?.vehiclePlate || '';
   const documentInput = document.getElementById('cv-vehicle-reg');
@@ -2753,6 +2759,7 @@ function openChangeVehicleModal() {
 function closeChangeVehicleModal() { document.getElementById('change-vehicle-modal').style.display = 'none'; }
 async function submitChangeVehicle() {
   const currentPassword = document.getElementById('cv-current').value;
+  const vehicleType     = document.getElementById('cv-type').value;
   const vehicleModel    = document.getElementById('cv-model').value.trim();
   const vehiclePlate    = document.getElementById('cv-plate').value.trim().toUpperCase();
   const documentInput   = document.getElementById('cv-vehicle-reg');
@@ -2769,7 +2776,7 @@ async function submitChangeVehicle() {
     _photos['cv-vehicle-reg'] = vehicleRegPhoto;
     showUploadProgress(); setUploadProgress(45);
     const res = await apiCall('/api/user/update-profile', 'POST', {
-      currentPassword, vehicleModel, vehiclePlate, vehicleRegPhoto
+      currentPassword, vehicleType, vehicleModel, vehiclePlate, vehicleRegPhoto
     });
     setUploadProgress(100);
     user = { ...user, ...res.user, accountStatus: 'pending', isOnline: false, longRangeEnabled: false };

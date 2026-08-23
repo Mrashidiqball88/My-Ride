@@ -647,6 +647,10 @@ input[type=date]:focus{border-color:#f5c518}
           </div>
           <div class="field-row">
             <div class="field-item"><div class="field-label">Cary Dibba Daily Fee (PKR)</div><input class="modal-input daily-fee-input" data-category="Cary Dibba" type="number" min="0.01" step="0.01" placeholder="Enter fee"></div>
+            <div class="field-item"><div class="field-label">Toyota Highroof Daily Fee (PKR)</div><input class="modal-input daily-fee-input" data-category="Toyota Highroof" type="number" min="0.01" step="0.01" placeholder="Enter fee"></div>
+          </div>
+          <div class="field-row">
+            <div class="field-item"><div class="field-label">Toyota Saloon Coaster Daily Fee (PKR)</div><input class="modal-input daily-fee-input" data-category="Toyota Saloon Coaster" type="number" min="0.01" step="0.01" placeholder="Enter fee"></div>
           </div>
           <button class="btn btn-primary" type="button" style="padding:.65rem 1.25rem;font-size:.82rem" onclick="saveDailyFeeSettings()">💾 Update Fees</button>
           <div id="daily-fee-feedback" style="margin-top:.65rem;font-size:.78rem;min-height:1.1rem"></div>
@@ -675,6 +679,10 @@ input[type=date]:focus{border-color:#f5c518}
           </div>
           <div class="field-row">
             <div class="field-item"><div class="field-label">Van Seven Seats (PKR /km)</div><input class="modal-input per-km-input" data-category="Van Seven Seats" type="number" min="0.01" step="0.01"></div>
+            <div class="field-item"><div class="field-label">Toyota Highroof (PKR /km)</div><input class="modal-input per-km-input" data-category="Toyota Highroof" type="number" min="0.01" step="0.01"></div>
+          </div>
+          <div class="field-row">
+            <div class="field-item"><div class="field-label">Toyota Saloon Coaster (PKR /km)</div><input class="modal-input per-km-input" data-category="Toyota Saloon Coaster" type="number" min="0.01" step="0.01"></div>
           </div>
           <button class="btn btn-primary" type="button" style="padding:.65rem 1.25rem;font-size:.82rem;background:#0ea5e9" onclick="savePerKmRates()">💾 Save /km Rates</button>
           <div id="per-km-feedback" style="margin-top:.65rem;font-size:.78rem;min-height:1.1rem"></div>
@@ -2785,7 +2793,7 @@ async function loadPaymentSettings() {
 }
 
 // ── Dynamic Daily Fee Settings ─────────────────────────────────────────────────
-const DAILY_FEE_CATEGORIES = ['Car Sedan', 'Car Mini', 'Riksha', 'Bike', 'Car SUV', 'Van Seven Seats', 'Cary Dibba'];
+const DAILY_FEE_CATEGORIES = ['Car Sedan', 'Car Mini', 'Riksha', 'Bike', 'Car SUV', 'Van Seven Seats', 'Cary Dibba', 'Toyota Highroof', 'Toyota Saloon Coaster'];
 let dailyFeeSettingsState = {};
 
 function dailyFeeForVehicle(vehicleType) {
@@ -2915,7 +2923,7 @@ async function savePaymentSettings() {
 }
 
 // ── Daily Fare Settings ───────────────────────────────────────────────────────
-const FARE_CATEGORIES = ['Car Sedan', 'Car Mini', 'Riksha', 'Bike', 'Car SUV', 'Van Seven Seats', 'Cary Dibba'];
+const FARE_CATEGORIES = ['Car Sedan', 'Car Mini', 'Riksha', 'Bike', 'Car SUV', 'Van Seven Seats', 'Cary Dibba', 'Toyota Highroof', 'Toyota Saloon Coaster'];
 let fareSettingsState = {};
 
 function fareCategoryCard(category, config = {}) {
@@ -3058,7 +3066,7 @@ async function saveFareCategory(category) {
   }
 }
 
-const LONG_RANGE_CATEGORIES = ['Car Sedan', 'Car Mini', 'Riksha', 'Bike', 'Car SUV', 'Van Seven Seats', 'Cary Dibba'];
+const LONG_RANGE_CATEGORIES = ['Car Sedan', 'Car Mini', 'Riksha', 'Bike', 'Car SUV', 'Van Seven Seats', 'Cary Dibba', 'Toyota Highroof', 'Toyota Saloon Coaster'];
 function renderLongRangeRates(rates = {}) {
   document.getElementById('lr-rates').innerHTML = LONG_RANGE_CATEGORIES.map(category =>
     `<div class="field-item" style="min-width:180px"><div class="field-label">${category} (Rs /km)</div><input class="modal-input lr-rate" data-category="${category}" type="number" min=".01" step=".01" value="${rates[category] ?? ''}"></div>`

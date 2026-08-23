@@ -10,7 +10,7 @@ const {
   DEFAULT_RIDE_BROADCAST_RADIUS_KM, normalizeRideBroadcastSettings,
   validateRideBroadcastSettings, findRideBroadcastDrivers, findLongRangeBroadcastDrivers, emitRideRequestToDrivers, chargeLongRangeCommission,
   normalizeLongRangeSettings, validateLongRangeSettings, calculateRideFare
-  , normalizeTerms
+   , normalizeTerms, normalizeFareVehicle, storedVehicleTypesForFareCategory
 } = fare;
 
 const JWT_SECRET = 'ride-hailing-secret-fallback';
@@ -217,10 +217,36 @@ test('Long Range fares begin at the configured cutoff and use vehicle-specific r
   assert.equal(invalid.errors.length, FARE_VEHICLE_CATEGORIES.length);
 });
 
+test('Toyota Highroof and Toyota Saloon Coaster are canonical categories with independent standard and Long Range rates', () => {
+  assert.ok(FARE_VEHICLE_CATEGORIES.includes('Toyota Highroof'));
+  assert.ok(FARE_VEHICLE_CATEGORIES.includes('Toyota Saloon Coaster'));
+  assert.equal(normalizeFareVehicle('Toyota Hi Roof'), 'Toyota Highroof');
+  assert.equal(normalizeFareVehicle('Toyota Coaster'), 'Toyota Saloon Coaster');
+  assert.ok(storedVehicleTypesForFareCategory('Toyota Highroof').includes('Toyota Hi-Roof'));
+  assert.equal(DEFAULT_PER_KM_RATES['Toyota Highroof'], 120);
+  assert.equal(DEFAULT_PER_KM_RATES['Toyota Saloon Coaster'], 140);
+
+  const longRange = normalizeLongRangeSettings({
+    enabled: true,
+    perKmRates: Object.fromEntries(FARE_VEHICLE_CATEGORIES.map(category => [
+      category,
+      category === 'Toyota Highroof' ? 180 : category === 'Toyota Saloon Coaster' ? 220 : 100
+    ]))
+  });
+  const fares = settingsFor(200, 100);
+  const highroof = calculateRideFare(fares, longRange, 'Toyota Highroof', 12, new Date(), DEFAULT_PER_KM_RATES);
+  const coaster = calculateRideFare(fares, longRange, 'Toyota Saloon Coaster', 50, new Date(), DEFAULT_PER_KM_RATES);
+  assert.equal(highroof.totalFare, 200 + (12 * 120));
+  assert.equal(coaster.isLongRange, true);
+  assert.equal(coaster.longRangeRatePerKm, 220);
+  assert.equal(coaster.totalFare, 50 * 220);
+});
+
 test('Customer fare quote uses active Long Range rates without daily fare slabs', async () => {
   const expectedRates = {
     Bike: 25, Riksha: 40, 'Car Mini': 80, 'Car Sedan': 100,
-    'Cary Dibba': 90, 'Car SUV': 120, 'Van Seven Seats': 150
+    'Cary Dibba': 90, 'Car SUV': 120, 'Van Seven Seats': 150,
+    'Toyota Highroof': 175, 'Toyota Saloon Coaster': 225
   };
   const longRangeSettings = {
     enabled: true,

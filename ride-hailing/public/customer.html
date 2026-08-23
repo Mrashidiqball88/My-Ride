@@ -563,6 +563,12 @@ body{font-family:'Segoe UI',sans-serif;background:#0a0a0f;color:#fff;height:100d
         <button class="vehicle-btn" data-type="Cary Dibba" onclick="selectVehicle(this)">
           <div class="v-icon">🛻</div><div class="v-name">Carry Dibba</div><div class="v-fare">Admin-set fare</div>
         </button>
+        <button class="vehicle-btn" data-type="Toyota Highroof" onclick="selectVehicle(this)">
+          <div class="v-icon">🚐</div><div class="v-name">Toyota Highroof</div><div class="v-fare">Admin-set fare</div>
+        </button>
+        <button class="vehicle-btn" data-type="Toyota Saloon Coaster" onclick="selectVehicle(this)">
+          <div class="v-icon">🚌</div><div class="v-name">Toyota Saloon Coaster</div><div class="v-fare">Admin-set fare</div>
+        </button>
       </div>
 
       <!-- ── Fare Negotiation Card ── -->
@@ -1176,7 +1182,8 @@ function initMap() {
 const _vehicleIcons = {
   'Bike': '🛵', 'Riksha': '🛺', 'Rickshaw': '🛺', 'Car Mini': '🚙',
   'Car Sedan': '🚗', 'Car AC': '🚗', 'Car SUV': '🚘',
-  'Van Seven Seats': '🚐', 'Cary Dibba': '🛻'
+  'Van Seven Seats': '🚐', 'Cary Dibba': '🛻',
+  'Toyota Highroof': '🚐', 'Toyota Saloon Coaster': '🚌'
 };
 
 async function pollNearbyDrivers() {

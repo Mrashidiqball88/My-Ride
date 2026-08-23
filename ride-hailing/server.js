@@ -1437,6 +1437,9 @@ app.post('/api/auth/register', async (req, res) => {
     if (resolvedRoleEarly === 'driver' && (!profilePhoto || !licensePhoto || !cnicFront || !cnicBack || !vehicleRegPhoto)) {
       return res.status(400).json({ error: 'Profile photo, CNIC front/back, driving license, and vehicle registration documents are required' });
     }
+    if (resolvedRoleEarly === 'driver' && !FARE_VEHICLE_CATEGORIES.includes(normalizeFareVehicle(vehicleType))) {
+      return res.status(400).json({ error: 'Choose a valid vehicle category' });
+    }
 
     const resolvedEmail = email ? email.toLowerCase().trim() : null;
 
@@ -1473,7 +1476,7 @@ app.post('/api/auth/register', async (req, res) => {
       password:      hash,
       role:          resolvedRole,
       accountStatus: resolvedRole === 'driver' ? 'pending' : (identityVerified ? 'active' : 'pending'),
-      vehicleType:   vehicleType    || '',
+      vehicleType:   resolvedRole === 'driver' ? normalizeFareVehicle(vehicleType) : '',
       vehicleModel:  vehicleModel   || '',
       vehiclePlate:  vehiclePlate   || '',
       profilePhoto:  await saveDocToDisk(profilePhoto, 'profile'),
@@ -2324,7 +2327,7 @@ app.post('/api/user/update-profile', authMiddleware, async (req, res) => {
       if (user.role !== 'driver') return res.status(403).json({ error: 'Only Drivers can change vehicle information' });
       const model = String(vehicleModel || '').trim();
       const plate = String(vehiclePlate || '').trim().toUpperCase();
-      const category = normalizeFareVehicle(vehicleType || user.vehicleType);
+      const category = normalizeFareVehicle(vehicleType || user.vehicleType || 'Car Mini');
       if (!model || !plate || !vehicleRegPhoto) {
         return res.status(400).json({ error: 'Vehicle model, number plate, and a new vehicle registration or ownership document are required' });
       }
@@ -4572,6 +4575,7 @@ module.exports = {
   server,
   io,
   FARE_VEHICLE_CATEGORIES,
+  DEFAULT_PER_KM_RATES,
   DEFAULT_RIDE_BROADCAST_RADIUS_KM,
   normalizeFareSettings,
   validateFareSettings,
@@ -4581,6 +4585,7 @@ module.exports = {
   calculateRideFare,
   normalizeTerms,
   normalizeFareVehicle,
+  storedVehicleTypesForFareCategory,
   normalizeRideBroadcastSettings,
   validateRideBroadcastSettings,
   haversineKm,

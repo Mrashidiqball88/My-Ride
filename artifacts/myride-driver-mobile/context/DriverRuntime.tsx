@@ -16,6 +16,11 @@ const ACTIVE_RIDE_KEY = 'myride.driver.activeRide';
 const API_URL = process.env.EXPO_PUBLIC_RIDE_API_URL ||
   (process.env.EXPO_PUBLIC_DOMAIN ? `https://${process.env.EXPO_PUBLIC_DOMAIN}` : '');
 
+export const DRIVER_VEHICLE_CATEGORIES = [
+  'Bike', 'Riksha', 'Car Mini', 'Car Sedan', 'Car SUV', 'Van Seven Seats',
+  'Cary Dibba', 'Toyota Highroof', 'Toyota Saloon Coaster',
+] as const;
+
 export type DriverUser = {
   id: string; name: string; role: 'driver'; accountStatus: string;
   vehicleType?: string; vehicleModel?: string; vehiclePlate?: string;
