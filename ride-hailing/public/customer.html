@@ -1265,7 +1265,7 @@ function openLocationSheet(type) {
   if (locationSearchOrigin && locationSearchOrigin.type !== type) restoreLocationSearchInput();
   const inputWrap = type === 'pickup'
     ? document.getElementById('pickup-wrap')
-    : document.querySelector(`#${type}-wrap .loc-wrap`);
+    : document.querySelector(`#stop-wrap-${type.replace('stop-', '')} .loc-wrap`);
   const slot = document.getElementById('location-search-slot');
   if (inputWrap && slot && inputWrap.parentElement !== slot) {
     locationSearchOrigin = {
