@@ -29,8 +29,8 @@ outputType = "webview"
 
 [[workflows.workflow.tasks]]
 task = "shell.exec"
-args = "cd ride-hailing && DEMO_ACCOUNTS_ENABLED=true pnpm dev"
-waitForPort = 8080
+args = "cd ride-hailing && PORT=3000 DEMO_ACCOUNTS_ENABLED=true pnpm dev"
+waitForPort = 3000
 
 [agent]
 stack = "PNPM_WORKSPACE"

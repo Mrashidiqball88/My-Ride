@@ -62,6 +62,11 @@ function emailOtpConfigured() {
 function setEmailTransporterForTests(transporter) {
   emailTransporter = transporter;
 }
+if (emailOtpConfigured()) {
+  emailTransporter.verify()
+    .then(() => console.log('✓ Email OTP SMTP connection verified'))
+    .catch((err) => console.error('Email OTP SMTP connection failed:', err.message));
+}
 
 // ── Request body timeout ──────────────────────────────────────────────────
 // Drivers on 2G/3G can take 30–90 s to push four compressed photos (~1 MB
