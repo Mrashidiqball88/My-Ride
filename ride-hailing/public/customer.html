@@ -1116,7 +1116,10 @@ function bootApp() {
 
 function renderCustomerPerKmRates(rates = {}) {
   customerPerKmRates = rates;
-  const activeRates = customerLongRangeSettings?.enabled
+  const hasLongRangeDistance = Number.isFinite(Number(routeDistanceKm))
+    && customerLongRangeSettings
+    && Number(routeDistanceKm) >= Number(customerLongRangeSettings.distanceCutoffKm);
+  const activeRates = hasLongRangeDistance && customerLongRangeSettings.enabled
     ? customerLongRangeSettings.perKmRates
     : rates;
   document.querySelectorAll('.vehicle-btn').forEach(button => {
