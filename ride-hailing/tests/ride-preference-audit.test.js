@@ -57,7 +57,7 @@ async function registerDriver({ name, phone, vehicleType, ridePreference }) {
   const result = await json('/api/auth/register', {
     method: 'POST',
     body: {
-      name, phone, password: 'audit-driver-password', role: 'driver',
+      name, phone, email: `${phone.replace(/\D/g, '')}@audit.myride.test`, password: 'audit-driver-password', role: 'driver',
       vehicleType, vehicleModel: `${vehicleType} Audit`, vehiclePlate: `AUD-${phone.slice(-4)}`,
       ridePreference,
       profilePhoto: IMAGE, licensePhoto: IMAGE, cnicFront: IMAGE, cnicBack: IMAGE, vehicleRegPhoto: IMAGE
@@ -148,7 +148,10 @@ test('audits registration, scheduled fees, wallet gates, completion commission, 
   assert.ok(bMatches.drivers.some(driver => String(driver._id) === String(driverB._id)));
   assert.ok(cMatches.drivers.some(driver => String(driver._id) === String(driverC._id)));
 
-  const customer = await models.User.create({ name: 'Audit Customer', password: 'not-used', role: 'customer', accountStatus: 'active' });
+  const customer = await models.User.create({
+    name: 'Audit Customer', email: 'audit.customer@myride.test',
+    password: 'not-used', role: 'customer', accountStatus: 'active'
+  });
   const longRangeRide = await models.Ride.create({
     passenger: customer._id, driver: null, status: 'requested', vehicleType: 'Toyota Highroof',
     isLongRange: true, fare: 1000, pickupLocation: { lat: 31.52, lng: 74.35 }, dropoffLocation: { lat: 32.0, lng: 74.7 }

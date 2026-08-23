@@ -334,6 +334,7 @@ textarea.support-input{resize:vertical;min-height:85px}
         <p style="text-align:center;font-size:.73rem;color:#555;margin-bottom:.9rem">Step 1 of 2 — Basic Information</p>
         <div class="form-group"><label>Full Name <span style="color:#f5c518">*</span></label><input type="text" id="r-name" placeholder="Driver name"></div>
         <div class="form-group"><label>Phone Number <span style="color:#f5c518">*</span></label><input type="tel" id="r-phone" placeholder="+92 300 0000000" inputmode="tel"></div>
+        <div class="form-group"><label>Email <span style="color:#f5c518">*</span></label><input type="email" id="r-email" placeholder="you@email.com" autocomplete="email" required></div>
         <div class="form-group">
           <label>Password <span style="color:#f5c518">*</span></label>
           <div class="pw-wrap">
@@ -422,7 +423,7 @@ textarea.support-input{resize:vertical;min-height:85px}
         <div style="text-align:center;margin-top:.5rem"><button class="btn-text-link" onclick="driverForgotSendOtp()">Resend OTP</button></div>
       </div>
       <div id="dfp-step3" style="display:none">
-        <p style="font-size:.82rem;color:#66bb66;margin-bottom:.75rem">✓ Email verified! Set your new password.</p>
+        <p style="font-size:.82rem;color:#66bb66;margin-bottom:.75rem">Set your new password to finish verifying your email code.</p>
         <div class="form-group">
           <label>New Password</label>
           <div class="pw-wrap">
@@ -1005,6 +1006,7 @@ async function previewPhoto(input, previewId) {
 async function doRegister() {
   const name         = document.getElementById('r-name').value.trim();
   const phone        = document.getElementById('r-phone').value.trim();
+  const email        = document.getElementById('r-email').value.trim();
   const vehicle      = document.getElementById('r-vehicle').value;
   const vehicleModel = document.getElementById('r-vehicle-model').value.trim();
   const vehiclePlate = document.getElementById('r-plate').value.trim().toUpperCase();
@@ -1040,6 +1042,7 @@ async function doRegister() {
 
   if (!name)  { errEl.textContent = 'Full name is required';    resetBtn(); return; }
   if (!phone) { errEl.textContent = 'Phone number is required'; resetBtn(); return; }
+  if (!email) { errEl.textContent = 'Email is required';        resetBtn(); return; }
   if (pass.length < 6) { errEl.textContent = 'Password must be at least 6 characters'; resetBtn(); return; }
 
   // Phase 2: navigate to upload progress screen and send via XHR (has upload.progress events)
@@ -1076,7 +1079,7 @@ async function doRegister() {
   };
 
   xhr.send(JSON.stringify({
-    name, phone, password: pass, role: 'driver', vehicleType: vehicle,
+    name, phone, email, password: pass, role: 'driver', vehicleType: vehicle,
     ridePreference: document.getElementById('r-ride-preference').value,
     vehicleModel, vehiclePlate, profilePhoto, licensePhoto, cnicFront, cnicBack, vehicleRegPhoto
   }));
@@ -1115,7 +1118,7 @@ async function driverForgotResetPassword() {
     await apiCall('/api/auth/reset-password', 'POST', { email: _dfpEmail, otp: document.getElementById('dfp-otp').value.trim(), newPassword: newPass });
     errEl.textContent = '';
     switchTab('login');
-    document.getElementById('l-email').value = _dfpPhone;
+    document.getElementById('l-email').value = _dfpEmail;
     _dfpEmail = '';
     showToast('Password reset! Please sign in.', 'success');
   } catch (e) { errEl.textContent = e.message; }
@@ -1145,7 +1148,7 @@ function doLogout() {
 
   // 3. Clear every login / register field so nothing persists visually
   ['l-email', 'l-pass',
-   'r-phone', 'r-pass',
+   'r-phone', 'r-email', 'r-pass',
    'dfp-email', 'dfp-otp', 'dfp-newpass'
   ].forEach(id => { const el = document.getElementById(id); if (el) el.value = ''; });
   document.getElementById('auth-error').textContent = '';

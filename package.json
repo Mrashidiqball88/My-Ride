@@ -20,7 +20,6 @@
     "expo-task-manager": "~14.0.9",
     "express": "4.19.2",
     "jsonwebtoken": "9.0.2",
-    "nodemailer": "^7.0.5",
     "mongodb-memory-server": "^10.4.3",
     "mongoose": "^9.9.3",
     "nodemailer": "^9.0.5",

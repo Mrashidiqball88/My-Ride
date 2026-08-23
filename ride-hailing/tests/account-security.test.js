@@ -129,6 +129,19 @@ test('duplicate National IDs are rejected before another customer is created', a
   });
 });
 
+test('email is required for both customer and driver registration', async () => {
+  await withServer(async server => {
+    for (const role of ['customer', 'driver']) {
+      const result = await request(server, '/api/auth/register', {
+        method: 'POST',
+        body: JSON.stringify(registrationBody({ role, email: '' }))
+      });
+      assert.equal(result.response.status, 400);
+      assert.equal(result.body.error, 'Name, email, and password are required');
+    }
+  });
+});
+
 test('customer identity files are not public and only a Super Admin can retrieve them', async () => {
   const customerId = 'customer-identity-test';
   const fileName = 'customer_id_front_test.png';

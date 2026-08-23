@@ -333,7 +333,7 @@ body{font-family:'Segoe UI',sans-serif;background:#0a0a0f;color:#fff;height:100d
       <div class="form-group"><label>National ID — Front <span style="color:#f5c518">*</span></label><input type="file" id="r-cnic-front" accept="image/jpeg,image/png,image/webp" capture="environment"></div>
       <div class="form-group"><label>National ID — Back <span style="color:#f5c518">*</span></label><input type="file" id="r-cnic-back" accept="image/jpeg,image/png,image/webp" capture="environment"></div>
       <p style="font-size:.7rem;color:#666;margin:-.35rem 0 1rem;line-height:1.4">Your details are matched securely against both ID images before an account is created.</p>
-      <div class="form-group"><label>Email <span style="color:#555;font-size:.75em">(optional)</span></label><input type="email" id="r-email" placeholder="you@email.com"></div>
+      <div class="form-group"><label>Email <span style="color:#f5c518">*</span></label><input type="email" id="r-email" placeholder="you@email.com" autocomplete="email" required></div>
       <div class="form-group">
         <label>Password <span style="color:#f5c518">*</span></label>
         <div class="pw-wrap">
@@ -361,7 +361,7 @@ body{font-family:'Segoe UI',sans-serif;background:#0a0a0f;color:#fff;height:100d
       </div>
       <!-- Step 3: new password -->
       <div id="fp-step3" style="display:none">
-        <p style="font-size:.82rem;color:#66bb66;margin-bottom:.75rem">✓ Email verified! Set your new password.</p>
+        <p style="font-size:.82rem;color:#66bb66;margin-bottom:.75rem">Set your new password to finish verifying your email code.</p>
         <div class="form-group">
           <label>New Password</label>
           <div class="pw-wrap">
@@ -979,7 +979,7 @@ async function forgotResetPassword() {
     showToast && showToast('Password reset! Please sign in.', 'success');
     document.getElementById('auth-error').textContent = '';
     switchTab('login');
-    document.getElementById('l-email').value = _fpPhone;
+    document.getElementById('l-email').value = _fpEmail;
     _fpEmail = '';
   } catch (e) { document.getElementById('auth-error').textContent = e.message; }
 }
