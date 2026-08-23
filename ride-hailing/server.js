@@ -50,11 +50,12 @@ const SMTP_SECURE = process.env.SMTP_SECURE === 'true' || SMTP_PORT === 465;
 const SMTP_USER = process.env.SMTP_USER || '';
 const SMTP_PASS = process.env.SMTP_PASS || '';
 const EMAIL_FROM = process.env.EMAIL_FROM || SMTP_USER;
+const smtpPassword = SMTP_HOST === 'smtp.gmail.com' ? SMTP_PASS.replace(/\s/g, '') : SMTP_PASS;
 let emailTransporter = nodemailer.createTransport({
   host: SMTP_HOST,
   port: SMTP_PORT,
   secure: SMTP_SECURE,
-  auth: SMTP_USER && SMTP_PASS ? { user: SMTP_USER, pass: SMTP_PASS } : undefined
+  auth: SMTP_USER && smtpPassword ? { user: SMTP_USER, pass: smtpPassword } : undefined
 });
 function emailOtpConfigured() {
   return Boolean(SMTP_HOST && SMTP_USER && SMTP_PASS && EMAIL_FROM);
