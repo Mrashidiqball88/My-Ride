@@ -1376,6 +1376,18 @@ function connectSocket() {
     if (activeRide) {
       socket.emit('ride:join', activeRide._id);
     }
+    // A ride can be taken while this socket is disconnected, so the
+    // driver may never receive the room's ride:taken event. Reconcile the
+    // request state from the server after every reconnect instead of
+    // trusting the in-memory popup state.
+    reconcileRideRequestsAfterReconnect();
+  });
+
+  socket.on('driver:rehydrate', ({ isOnline: restoredOnline }) => {
+    if (restoredOnline) {
+      isOnline = true;
+      reconcileRideRequestsAfterReconnect();
+    }
   });
 
   // Admin replied to a support ticket
@@ -1569,6 +1581,45 @@ function connectSocket() {
       showToast('⚠️ Passenger cancelled the ride request', 'error');
     }
   });
+}
+
+async function reconcileRideRequestsAfterReconnect() {
+  if (!isOnline || activeRide) return;
+
+  // The reconnect handler and driver:status update happen independently on
+  // the server. Retry briefly so the availability endpoint sees the fresh
+  // heartbeat before deciding whether local state is stale.
+  for (let attempt = 0; attempt < 3; attempt++) {
+    try {
+      const response = await fetch('/api/rides/available', {
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      if (!response.ok) {
+        if (response.status === 403 && attempt < 2) {
+          await new Promise(resolve => setTimeout(resolve, 150 * (attempt + 1)));
+          continue;
+        }
+        return;
+      }
+
+      const rides = await response.json();
+      const availableIds = new Set(rides.map(ride => String(ride._id || ride.id)));
+      const pendingId = pendingRide && String(pendingRide.id || pendingRide._id);
+      const offeredId = sentOffer && String(sentOffer.rideId);
+
+      if ((pendingId && !availableIds.has(pendingId)) ||
+          (offeredId && !availableIds.has(offeredId))) {
+        // The request was accepted/cancelled while we were away. Clear both
+        // popup and offer state so the driver cannot act on a stale ride.
+        sentOffer = null;
+        hideRideRequest();
+      }
+      return;
+    } catch (error) {
+      if (attempt === 2) console.warn('Ride request reconciliation failed:', error.message);
+      else await new Promise(resolve => setTimeout(resolve, 150 * (attempt + 1)));
+    }
+  }
 }
 
 // ── Ride Request Popup ─────────────────────────────────────────────────────

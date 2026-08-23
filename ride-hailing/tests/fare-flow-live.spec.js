@@ -390,7 +390,7 @@ test.describe('live Mongo fare refresh', () => {
     }
   });
 
-  test('dismisses a stale Highroof request after another Highroof driver accepts it', async ({ browser, playwright }) => {
+  test('clears a Highroof request after takeover during a driver reconnect', async ({ browser, playwright }) => {
     const customerToken = token(customer);
     const takeoverToken = token(highroofTakeoverDriver);
     const baseURL = `http://127.0.0.1:${httpServer.address().port}`;
@@ -427,17 +427,32 @@ test.describe('live Mongo fare refresh', () => {
       await expect(highroofPage.locator('#rr-vehicle')).toHaveText('Toyota Highroof');
       await expect(coasterPage.locator('#ride-request')).toBeHidden();
 
+      // The original driver misses ride:taken while its socket is down.
+      await highroofPage.evaluate(() => socket.disconnect());
+      await expect.poll(() => highroofPage.evaluate(() => socket.connected)).toBe(false);
+
       const accepted = await request.patch(`/api/rides/${ride._id}/accept`, {
         headers: { authorization: `Bearer ${takeoverToken}` }
       });
       expect(accepted.status()).toBe(200);
 
+      await highroofPage.evaluate(() => socket.connect());
+      await expect.poll(() => highroofPage.evaluate(() => socket.connected)).toBe(true);
       await expect(highroofPage.locator('#ride-request')).toBeHidden();
       await expect.poll(() => highroofPage.evaluate(() => ({
         pendingRide: !!pendingRide,
         sentOffer: !!sentOffer,
         activeRide: !!activeRide
       }))).toEqual({ pendingRide: false, sentOffer: false, activeRide: false });
+      await expect.poll(async () => {
+        const available = await highroofPage.evaluate(async () => {
+          const response = await fetch('/api/rides/available', {
+            headers: { authorization: `Bearer ${localStorage.getItem('rh_token')}` }
+          });
+          return response.json();
+        });
+        return available.some(availableRide => String(availableRide._id) === String(ride._id));
+      }).toBe(false);
       await expect(coasterPage.locator('#ride-request')).toBeHidden();
     } finally {
       await Promise.all([highroofPage.close(), coasterPage.close()]);
