@@ -209,7 +209,9 @@ const FARE_VEHICLE_CATEGORIES = [
   'Bike',
   'Car SUV',
   'Van Seven Seats',
-  'Cary Dibba'
+  'Cary Dibba',
+  'Toyota Highroof',
+  'Toyota Saloon Coaster'
 ];
 const FARE_VEHICLE_ALIASES = {
   Sedan: 'Car Sedan',
@@ -221,7 +223,12 @@ const FARE_VEHICLE_ALIASES = {
   Van: 'Van Seven Seats',
   'Van Seven Seats': 'Van Seven Seats',
   'Carry Dibba': 'Cary Dibba',
-  'Cary Dibba': 'Cary Dibba'
+  'Cary Dibba': 'Cary Dibba',
+  'Toyota Hi Roof': 'Toyota Highroof',
+  'Toyota Hi-Roof': 'Toyota Highroof',
+  'Toyota High Roof': 'Toyota Highroof',
+  'Toyota Coaster': 'Toyota Saloon Coaster',
+  'Toyota Saloon': 'Toyota Saloon Coaster'
 };
 const PAYMENT_GATEWAYS = ['jazzcash', 'easypaisa', 'bank', 'sadapay'];
 const PAYMENT_GATEWAY_DEFAULTS = {
@@ -425,7 +432,9 @@ const DEFAULT_PER_KM_RATES = {
   'Car Sedan': 70,
   'Cary Dibba': 80,
   'Car SUV': 100,
-  'Van Seven Seats': 100
+  'Van Seven Seats': 100,
+  'Toyota Highroof': 120,
+  'Toyota Saloon Coaster': 140
 };
 
 function normalizePerKmRates(value = {}) {
@@ -2291,7 +2300,7 @@ app.patch('/api/rides/:id/update-fare', authMiddleware, async (req, res) => {
 // ── Profile Update (phone, password, vehicle) with current-password verification ─
 app.post('/api/user/update-profile', authMiddleware, async (req, res) => {
   try {
-    const { currentPassword, newPhone, newPassword, vehicleModel, vehiclePlate, vehicleRegPhoto } = req.body;
+    const { currentPassword, newPhone, newPassword, vehicleType, vehicleModel, vehiclePlate, vehicleRegPhoto } = req.body;
     if (!currentPassword) return res.status(400).json({ error: 'Current password is required' });
 
     const user = await User.findById(req.user.id);
@@ -2310,13 +2319,17 @@ app.post('/api/user/update-profile', authMiddleware, async (req, res) => {
       if (newPassword.length < 6) return res.status(400).json({ error: 'New password must be at least 6 characters' });
       updates.password = await bcrypt.hash(newPassword, 10);
     }
-    const vehicleChangeRequested = vehicleModel !== undefined || vehiclePlate !== undefined || vehicleRegPhoto !== undefined;
+    const vehicleChangeRequested = vehicleType !== undefined || vehicleModel !== undefined || vehiclePlate !== undefined || vehicleRegPhoto !== undefined;
     if (vehicleChangeRequested) {
       if (user.role !== 'driver') return res.status(403).json({ error: 'Only Drivers can change vehicle information' });
       const model = String(vehicleModel || '').trim();
       const plate = String(vehiclePlate || '').trim().toUpperCase();
+      const category = normalizeFareVehicle(vehicleType || user.vehicleType);
       if (!model || !plate || !vehicleRegPhoto) {
         return res.status(400).json({ error: 'Vehicle model, number plate, and a new vehicle registration or ownership document are required' });
+      }
+      if (!FARE_VEHICLE_CATEGORIES.includes(category)) {
+        return res.status(400).json({ error: 'A valid vehicle category is required' });
       }
       // A vehicle document must be a freshly supplied image. Validate before
       // writing the file or changing any persisted driver state.
@@ -2326,6 +2339,7 @@ app.post('/api/user/update-profile', authMiddleware, async (req, res) => {
       Object.assign(updates, {
         vehicleModel: model,
         vehiclePlate: plate,
+        vehicleType: category,
         vehicleRegPhoto: replacementDocument,
         accountStatus: 'pending',
         identityVerificationStatus: 'pending',
@@ -2387,7 +2401,14 @@ app.post('/api/wallet/add-funds', authMiddleware, async (req, res) => {
 // ─────────────────────────────────────────────────────────────────────────────
 
 // Daily earnings targets per vehicle category (PKR)
-const DAILY_TARGETS   = { 'Bike': 2500, 'Rickshaw': 4000, 'Car Mini': 5500, 'Car AC': 6500 };
+const DAILY_TARGETS   = {
+  Bike: 2500,
+  Rickshaw: 4000,
+  'Car Mini': 5500,
+  'Car AC': 6500,
+  'Toyota Highroof': 8000,
+  'Toyota Saloon Coaster': 9000
+};
 // Helper: today's date string in UTC (YYYY-MM-DD)
 function todayUTC() {
   return new Date().toISOString().slice(0, 10);
