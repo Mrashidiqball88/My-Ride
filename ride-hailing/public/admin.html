@@ -83,6 +83,22 @@ body{font-family:'Segoe UI',system-ui,sans-serif;background:#06060e;color:#e2e8f
 .section-action-bar{display:flex;align-items:center;justify-content:space-between;gap:.75rem;margin-top:1.5rem;padding:1rem 0;border-top:1px solid #1e1e2e}
 .section-action-bar .section-back-inline{background:#0f0f1e;border:1px solid #1e1e3a;color:#94a3b8}
 .section-action-bar .section-save{margin-left:auto}
+.retention-card{max-width:720px;background:#0f0f1e;border:1px solid #2a2500;border-radius:14px;padding:1rem}
+.retention-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:.8rem;margin:1rem 0}
+.retention-stat{background:#06060e;border:1px solid #1e1e2e;border-radius:10px;padding:.75rem}
+.retention-stat-label{font-size:.66rem;color:#64748b;text-transform:uppercase;letter-spacing:.05em}
+.retention-stat-value{font-size:1rem;color:#f5c518;font-weight:800;margin-top:.25rem}
+.retention-actions{display:flex;gap:.55rem;align-items:center;flex-wrap:wrap}
+.retention-feedback{min-height:1.1rem;font-size:.75rem;color:#94a3b8;margin-top:.7rem}
+.admin-search{max-width:850px;background:#0f0f1e;border:1px solid #1e1e2e;border-radius:14px;padding:1rem;margin-top:1.25rem}
+.admin-search-row{display:flex;gap:.55rem;align-items:center}
+.admin-search-input{flex:1;min-width:0;background:#06060e;border:1px solid #1e1e3a;border-radius:9px;padding:.65rem .8rem;color:#e2e8f0;font-size:.85rem;outline:none}
+.admin-search-input:focus{border-color:#38bdf8}
+.search-results{margin-top:.75rem;display:grid;gap:.55rem}
+.search-result{display:flex;align-items:center;gap:.7rem;justify-content:space-between;flex-wrap:wrap;background:#06060e;border:1px solid #1e1e2e;border-radius:10px;padding:.7rem}
+.search-result-main{min-width:0;flex:1}
+.search-result-name{font-size:.82rem;font-weight:800;color:#e2e8f0}
+.search-result-meta{font-size:.7rem;color:#64748b;margin-top:.2rem;word-break:break-word}
 
 /* ── Stats Cards ── */
 .stats-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:.9rem;margin-bottom:1.5rem}
@@ -128,6 +144,8 @@ body{font-family:'Segoe UI',system-ui,sans-serif;background:#06060e;color:#e2e8f
 .data-table td{padding:.65rem .85rem;border-bottom:1px solid #0f0f18;vertical-align:middle;color:#cbd5e1}
 .data-table tr:hover td{background:#0a0a14}
 .table-wrap{background:#0f0f1e;border:1px solid #1e1e2e;border-radius:14px;overflow:hidden}
+#sec-drivers .table-wrap{overflow-x:auto}
+#sec-drivers .data-table{min-width:900px}
 
 /* ── Status badges ── */
 .badge{display:inline-flex;align-items:center;gap:.25rem;font-size:.65rem;font-weight:700;padding:.2rem .55rem;border-radius:100px;white-space:nowrap}
@@ -245,6 +263,10 @@ textarea.modal-input{resize:vertical;min-height:70px}
   .doc-grid{grid-template-columns:1fr}
   .radius-control{max-width:100%;flex-wrap:wrap}
   .radius-control .modal-input{width:100%;flex-basis:100%}
+  .admin-search-row{align-items:stretch;flex-direction:column}
+  .admin-search-row .btn{width:100%;justify-content:center}
+  .retention-actions{align-items:stretch;flex-direction:column}
+  .retention-actions .btn{width:100%;justify-content:center}
 }
 
 /* ── Empty / Loading states ── */
@@ -349,6 +371,7 @@ input[type=date]:focus{border-color:#f5c518}
       <div class="sb-group-label">System & Pricing</div>
       <div class="sb-item"        onclick="showSection('app-settings')" data-sec="app-settings"><span class="sb-icon">⚙️</span> App Settings / Pricing</div>
       <div class="sb-item"        onclick="showSection('live-rides')"   data-sec="live-rides">  <span class="sb-icon">🗺️</span> Live Rides</div>
+       <div class="sb-item"        onclick="showSection('ride-retention')" data-sec="ride-retention"><span class="sb-icon">🧹</span> Rides Data Retention</div>
       <div class="sb-item"        onclick="showSection('sos')"          data-sec="sos">         <span class="sb-icon">🆘</span> SOS Monitor <span class="sb-badge-count" id="sos-cnt" style="display:none">0</span></div>
       <div class="sb-item"        onclick="showSection('ratings')"      data-sec="ratings">      <span class="sb-icon">⭐</span> Ratings & Feedback</div>
       <div class="sb-item"        onclick="showSection('support')"      data-sec="support">      <span class="sb-icon">🎫</span> Support Tickets <span class="sb-badge-count" id="sup-cnt" style="display:none">0</span></div>
@@ -383,6 +406,19 @@ input[type=date]:focus{border-color:#f5c518}
           <div class="stat-card"><div class="stat-label">Total Drivers</div><div class="stat-val" id="s-drivers">—</div><div class="stat-sub" id="s-drivers-sub">— pending</div></div>
           <div class="stat-card"><div class="stat-label">Passengers</div><div class="stat-val" id="s-pass">—</div><div class="stat-sub" id="s-pass-sub">— blocked</div></div>
           <div class="stat-card red"><div class="stat-label">Unresolved SOS</div><div class="stat-val" id="s-sos">—</div><div class="stat-sub">Emergency alerts</div></div>
+        </div>
+        <div class="admin-search" id="admin-search">
+          <div class="sec-hdr" style="margin-bottom:.55rem">
+            <div>
+              <h2>🔎 Unified Profile Search</h2>
+              <div style="font-size:.72rem;color:#64748b;margin-top:.2rem">Search customers and drivers by name, phone, CNIC/NIC, or vehicle.</div>
+            </div>
+          </div>
+          <div class="admin-search-row">
+            <input class="admin-search-input" id="global-search-input" type="search" placeholder="Name, phone, CNIC, vehicle model or plate…" autocomplete="off">
+            <button class="btn btn-primary" id="global-search-btn" type="button" onclick="runGlobalSearch()">Search</button>
+          </div>
+          <div class="search-results" id="global-search-results"><div style="font-size:.75rem;color:#475569">Enter at least two characters to search.</div></div>
         </div>
         <!-- Daily income strip -->
         <div class="sec-hdr"><h2>💰 Last 7 Days Income</h2><button class="btn-refresh" onclick="loadOverview()">↻ Refresh</button></div>
@@ -519,7 +555,31 @@ input[type=date]:focus{border-color:#f5c518}
         </table></div>
       </div>
 
-      <!-- ════ 9. SOS MONITOR ════ -->
+      <!-- ════ 9. RIDE DATA RETENTION ════ -->
+      <div class="section-panel" id="sec-ride-retention">
+        <div class="sec-hdr">
+          <h2>🧹 Rides Data Retention</h2>
+        </div>
+        <div class="retention-card">
+          <p class="section-intro">Automatically purge only completed and canceled ride records older than the configured period. Customer accounts, Driver profiles, wallets, CNIC data, documents, and credentials are never touched.</p>
+          <div class="retention-grid">
+            <div class="retention-stat"><div class="retention-stat-label">Retention period</div><div class="retention-stat-value" id="retention-days-label">Loading…</div></div>
+            <div class="retention-stat"><div class="retention-stat-label">Purges</div><div class="retention-stat-value">Completed + Canceled only</div></div>
+            <div class="retention-stat"><div class="retention-stat-label">Current cutoff</div><div class="retention-stat-value" id="retention-cutoff-label">—</div></div>
+          </div>
+          <div class="form-group" style="max-width:260px">
+            <label for="retention-days-input">Keep ride history for (days)</label>
+            <input class="modal-input" id="retention-days-input" type="number" min="1" max="3650" step="1" value="30">
+          </div>
+          <div class="retention-actions">
+            <button class="btn btn-yellow" id="retention-save-btn" type="button" onclick="saveRideRetention()">Save Retention Period</button>
+            <button class="btn btn-red" id="retention-purge-btn" type="button" onclick="purgeOldRides()">Purge Old Ride History</button>
+          </div>
+          <div class="retention-feedback" id="retention-feedback" role="status"></div>
+        </div>
+      </div>
+
+      <!-- ════ 10. SOS MONITOR ════ -->
       <div class="section-panel" id="sec-sos">
         <div class="sec-hdr">
           <h2>🆘 Emergency / SOS Alert Monitor</h2>
@@ -1106,7 +1166,7 @@ function hasSectionAccess(name) {
   if (name === 'app-settings') {
     return ['manageRideSettings', 'manageFareSettings', 'managePaymentSettings'].some(hasPermission);
   }
-  if (['sub-admins', 'deletions'].includes(name)) return isSuperAdmin;
+  if (['sub-admins', 'deletions', 'ride-retention'].includes(name)) return isSuperAdmin;
   return false;
 }
 
@@ -1382,13 +1442,14 @@ const SECTION_TITLES = {
   'live-rides':'Live Rides & History', sos:'SOS Alert Monitor',
   'fee-compliance':'Driver Wallets & Daily Fees',
   'app-settings':'App Settings / Pricing',
-  'ride-settings':'Ride Settings', 'fare-settings':'Daily Fare Settings', 'pay-settings':'Payment Settings', ratings:'Ratings & Feedback', support:'Support Tickets', 'audit-logs':'Payment & Pass Audit Logs',
+  'ride-settings':'Ride Settings', 'fare-settings':'Daily Fare Settings', 'pay-settings':'Payment Settings', 'ride-retention':'Rides Data Retention', ratings:'Ratings & Feedback', support:'Support Tickets', 'audit-logs':'Payment & Pass Audit Logs',
   deletions:'Account Deletion Requests', 'sub-admins':'Sub-Admin User Management'
 };
 const SECTION_SAVE_HANDLERS = {
   'pay-settings': 'savePaymentSettings',
   'ride-settings': 'saveRideSettings',
-  'fare-settings': 'saveFareSettings'
+  'fare-settings': 'saveFareSettings',
+  'ride-retention': 'saveRideRetention'
 };
 
 function backToDashboard() {
@@ -1504,6 +1565,7 @@ function showSection(name) {
     drivers: () => loadDrivers(currentDriverStatus), passengers: () => loadPassengers(currentPassStatus),
     'new-requests': loadNewRequests, 'temp-blocked': loadTempBlocked,
     'blk-pass': loadBlockedPass, 'live-rides': () => loadRides(currentRideStatus),
+    'ride-retention': loadRideRetention,
     sos: () => loadSOS(currentSOSFilter), 'ride-settings': loadRideSettings, 'fare-settings': loadFareSettings, 'pay-settings': loadPaymentSettings,
     'fee-compliance': loadFeeCompliance,
     ratings: loadRatings, support: () => loadSupportTickets(currentSupStatus),
@@ -1864,6 +1926,107 @@ function rideBadge(status) {
     'in-progress':'badge-live', completed:'badge-active', cancelled:'badge-blocked'
   };
   return `<span class="badge ${map[status]||'badge-pending'}">${status}</span>`;
+}
+
+async function loadRideRetention() {
+  const feedback = document.getElementById('retention-feedback');
+  try {
+    const data = await api('/api/admin/ride-retention');
+    const input = document.getElementById('retention-days-input');
+    if (input) input.value = data.days;
+    updateRetentionCutoff(data.days);
+    if (feedback) feedback.textContent = 'Only completed and canceled Ride records are eligible for purge.';
+  } catch (e) {
+    if (feedback) { feedback.textContent = e.message; feedback.style.color = '#ef4444'; }
+  }
+}
+
+function updateRetentionCutoff(days) {
+  const daysLabel = document.getElementById('retention-days-label');
+  const cutoffLabel = document.getElementById('retention-cutoff-label');
+  const cutoff = new Date(Date.now() - Number(days) * 24 * 60 * 60 * 1000);
+  if (daysLabel) daysLabel.textContent = `${Number(days)} days`;
+  if (cutoffLabel) cutoffLabel.textContent = Number.isNaN(cutoff.getTime()) ? '—' : fmtDate(cutoff);
+}
+
+async function saveRideRetention() {
+  const input = document.getElementById('retention-days-input');
+  const saveButton = document.getElementById('retention-save-btn');
+  const feedback = document.getElementById('retention-feedback');
+  const days = Number(input?.value);
+  if (!Number.isInteger(days) || days < 1 || days > 3650) {
+    if (feedback) { feedback.textContent = 'Enter a whole number from 1 to 3650 days.'; feedback.style.color = '#ef4444'; }
+    return;
+  }
+  if (saveButton) { saveButton.disabled = true; saveButton.textContent = 'Saving…'; }
+  try {
+    const data = await api('/api/admin/ride-retention', 'PATCH', { days });
+    updateRetentionCutoff(data.days);
+    if (feedback) { feedback.textContent = `Retention period saved: ${data.days} days.`; feedback.style.color = '#22c55e'; }
+    showToast('Ride retention period saved ✓', 'success');
+  } catch (e) {
+    if (feedback) { feedback.textContent = e.message; feedback.style.color = '#ef4444'; }
+    showToast(e.message || 'Could not save retention period', 'error');
+  } finally {
+    if (saveButton) { saveButton.disabled = false; saveButton.textContent = 'Save Retention Period'; }
+  }
+}
+
+async function purgeOldRides() {
+  const button = document.getElementById('retention-purge-btn');
+  const feedback = document.getElementById('retention-feedback');
+  if (!confirm('Purge only completed and canceled rides older than the configured retention period? User accounts and documents will not be changed.')) return;
+  if (button) { button.disabled = true; button.textContent = 'Purging…'; }
+  try {
+    const data = await api('/api/admin/ride-retention/purge', 'POST');
+    if (feedback) { feedback.textContent = `Purge complete: ${data.deletedCount} ride record${data.deletedCount === 1 ? '' : 's'} removed.`; feedback.style.color = '#22c55e'; }
+    showToast(`Ride history purge complete: ${data.deletedCount} removed ✓`, 'success');
+    if (document.getElementById('sec-live-rides')?.classList.contains('active')) loadRides(currentRideStatus);
+  } catch (e) {
+    if (feedback) { feedback.textContent = e.message; feedback.style.color = '#ef4444'; }
+    showToast(e.message || 'Could not purge ride history', 'error');
+  } finally {
+    if (button) { button.disabled = false; button.textContent = 'Purge Old Ride History'; }
+  }
+}
+
+async function runGlobalSearch() {
+  const input = document.getElementById('global-search-input');
+  const button = document.getElementById('global-search-btn');
+  const results = document.getElementById('global-search-results');
+  const query = input?.value.trim() || '';
+  if (query.length < 2) {
+    results.innerHTML = '<div style="font-size:.75rem;color:#f59e0b">Enter at least two characters to search.</div>';
+    return;
+  }
+  button.disabled = true; button.textContent = 'Searching…';
+  results.innerHTML = '<div class="loading-row">Searching profiles…</div>';
+  try {
+    const users = await api(`/api/admin/search?q=${encodeURIComponent(query)}`);
+    if (!users.length) {
+      results.innerHTML = '<div style="font-size:.75rem;color:#64748b">No customer or driver profiles matched.</div>';
+      return;
+    }
+    results.innerHTML = users.map(user => {
+      const vehicle = user.role === 'driver'
+        ? `${user.vehicleType || 'Vehicle not set'} · ${user.vehicleModel || 'Model not set'} · ${user.vehiclePlate || 'Plate not set'}`
+        : 'Customer account';
+      const identity = user.role === 'customer'
+        ? (user.hasCustomerIdentityDocuments ? 'CNIC documents available to Super Admin' : 'No CNIC documents')
+        : 'Driver documents available';
+      return `<div class="search-result">
+        <div class="search-result-main">
+          <div class="search-result-name">${escHtml(user.name)} <span class="badge ${user.role === 'driver' ? 'badge-live' : 'badge-active'}">${escHtml(user.role)}</span></div>
+          <div class="search-result-meta">${escHtml(user.phone || user.email || 'No contact')} · ${escHtml(vehicle)} · ${escHtml(identity)}</div>
+        </div>
+        <button class="btn btn-blue" type="button" onclick="viewUser('${user._id}','${user.role}')">View Full Profile</button>
+      </div>`;
+    }).join('');
+  } catch (e) {
+    results.innerHTML = `<div style="font-size:.75rem;color:#ef4444">${escHtml(e.message || 'Search failed')}</div>`;
+  } finally {
+    button.disabled = false; button.textContent = 'Search';
+  }
 }
 
 // ── 9. SOS MONITOR ────────────────────────────────────────────────────────────
@@ -2835,6 +2998,10 @@ function applyPermissions() {
   });
   const deleteNav = document.querySelector('[data-sec="deletions"]');
   if (deleteNav) deleteNav.style.display = isSuperAdmin ? '' : 'none';
+  const retentionNav = document.querySelector('[data-sec="ride-retention"]');
+  if (retentionNav) retentionNav.style.display = isSuperAdmin ? '' : 'none';
+  const searchPanel = document.getElementById('admin-search');
+  if (searchPanel) searchPanel.style.display = (isSuperAdmin || hasPermission('viewCustomers') || hasPermission('viewDrivers')) ? '' : 'none';
   ['bulk-trial-btn', 'waiver-btn', 'remind-btn'].forEach(id => {
     const button = document.getElementById(id);
     if (button) button.style.display = hasPermission('manageDriverPasses') ? '' : 'none';

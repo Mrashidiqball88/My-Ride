@@ -870,6 +870,30 @@ const Payment  = mongoose.model('Payment',  paymentSchema);
 const Ticket   = mongoose.model('Ticket',   ticketSchema);
 const Settings = mongoose.model('Settings', settingsSchema);
 const PushSub  = mongoose.model('PushSub',  pushSubSchema);
+
+const RIDE_RETENTION_SETTINGS_KEY = 'ride_data_retention';
+const DEFAULT_RIDE_RETENTION_DAYS = 30;
+const MIN_RIDE_RETENTION_DAYS = 1;
+const MAX_RIDE_RETENTION_DAYS = 3650;
+
+function normalizeRideRetentionDays(value) {
+  const days = Number(value);
+  return Number.isInteger(days) ? days : DEFAULT_RIDE_RETENTION_DAYS;
+}
+
+function validateRideRetentionDays(value) {
+  const days = Number(value);
+  if (!Number.isInteger(days) || days < MIN_RIDE_RETENTION_DAYS || days > MAX_RIDE_RETENTION_DAYS) {
+    return { days: null, error: `Retention period must be a whole number between ${MIN_RIDE_RETENTION_DAYS} and ${MAX_RIDE_RETENTION_DAYS} days` };
+  }
+  return { days, error: null };
+}
+
+async function getRideRetentionDays() {
+  const doc = await Settings.findOne({ key: RIDE_RETENTION_SETTINGS_KEY }).lean();
+  const days = normalizeRideRetentionDays(doc?.value?.days ?? doc?.value);
+  return Math.min(MAX_RIDE_RETENTION_DAYS, Math.max(MIN_RIDE_RETENTION_DAYS, days));
+}
 // A foreground-location task posts at least every 15 seconds. The grace window
 // absorbs OS/radio jitter while failing closed after a force-stop or prolonged
 // connectivity loss.
@@ -1185,6 +1209,13 @@ function requirePerm(permName) {
       return res.status(403).json({ error: `Permission denied: ${permName} required` });
     next();
   };
+}
+
+function requireProfileSearchAccess(req, res, next) {
+  if (req.admin?.isSuperAdmin || hasAdminPermission(req.admin, 'viewCustomers') || hasAdminPermission(req.admin, 'viewDrivers')) {
+    return next();
+  }
+  return res.status(403).json({ error: 'Permission denied: customer or driver view access required' });
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -2638,6 +2669,44 @@ app.get('/api/admin/stats', adminJwt, requirePerm('viewOverview'), async (req, r
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
+// GET /api/admin/search?q= — permission-scoped profile search. Private
+// customer identity files are represented only by availability flags; their
+// bytes remain behind the Super Admin-only download endpoint.
+app.get('/api/admin/search', adminJwt, requireProfileSearchAccess, async (req, res) => {
+  try {
+    const query = String(req.query.q || '').trim();
+    if (query.length < 2) return res.json([]);
+    const escaped = query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const matcher = new RegExp(escaped, 'i');
+    const allowedRoles = req.admin?.isSuperAdmin
+      ? ['customer', 'driver']
+      : [
+          hasAdminPermission(req.admin, 'viewCustomers') && 'customer',
+          hasAdminPermission(req.admin, 'viewDrivers') && 'driver'
+        ].filter(Boolean);
+    const users = await User.find({
+      $and: [
+        { role: { $in: allowedRoles } },
+        { $or: [
+          { name: matcher }, { phone: matcher }, { email: matcher },
+          { cnicNumber: matcher }, { nationalIdLast4: matcher },
+          { vehicleType: matcher }, { vehicleModel: matcher }, { vehiclePlate: matcher }
+        ] }
+      ]
+    })
+      .select('name email phone role cnicNumber vehicleType vehicleModel vehiclePlate accountStatus suspendReason suspendedAt isOnline rating totalRides createdAt profilePhoto cnicFront cnicBack licensePhoto vehicleRegPhoto identityVerificationStatus identityVerifiedAt +customerIdFront +customerIdBack')
+      .sort({ role: 1, name: 1 })
+      .limit(50)
+      .lean();
+    res.json(users.map(user => ({
+      ...user,
+      hasCustomerIdentityDocuments: user.role === 'customer' && !!(user.customerIdFront || user.customerIdBack),
+      customerIdFront: undefined,
+      customerIdBack: undefined
+    })));
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
 // GET /api/admin/drivers?status=all|pending|approved|suspended|blocked
 app.get('/api/admin/drivers', adminJwt, requirePerm('viewDrivers'), async (req, res) => {
   try {
@@ -2748,6 +2817,52 @@ app.delete('/api/admin/users/:id', adminJwt, requireSuperAdmin, async (req, res)
     io.to(`user:${req.params.id}`).emit('account:deleted', { reason: 'Your account has been permanently deleted.' });
     await User.deleteOne({ _id: req.params.id });
     res.json({ success: true, name: user.name });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// GET/PATCH /api/admin/ride-retention — Super Admin controls the ride-only
+// retention policy. This setting never changes user, wallet, or file records.
+app.get('/api/admin/ride-retention', adminJwt, requireSuperAdmin, async (_req, res) => {
+  try {
+    const days = await getRideRetentionDays();
+    res.json({ days, statuses: ['completed', 'cancelled'] });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.patch('/api/admin/ride-retention', adminJwt, requireSuperAdmin, async (req, res) => {
+  try {
+    const validated = validateRideRetentionDays(req.body?.days);
+    if (validated.error) return res.status(422).json({ error: validated.error });
+    await Settings.findOneAndUpdate(
+      { key: RIDE_RETENTION_SETTINGS_KEY },
+      { key: RIDE_RETENTION_SETTINGS_KEY, value: { days: validated.days } },
+      { upsert: true, new: true, setDefaultsOnInsert: true }
+    );
+    res.json({ success: true, days: validated.days, statuses: ['completed', 'cancelled'] });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.post('/api/admin/ride-retention/purge', adminJwt, requireSuperAdmin, async (req, res) => {
+  try {
+    const configuredDays = await getRideRetentionDays();
+    const requested = req.body?.days === undefined
+      ? { days: configuredDays, error: null }
+      : validateRideRetentionDays(req.body.days);
+    if (requested.error) return res.status(422).json({ error: requested.error });
+    const cutoff = new Date(Date.now() - requested.days * 24 * 60 * 60 * 1000);
+    // Intentionally delete only Ride documents. No User, Wallet, or filesystem
+    // operation belongs in this handler.
+    const result = await Ride.deleteMany({
+      status: { $in: ['completed', 'cancelled'] },
+      createdAt: { $lt: cutoff }
+    });
+    res.json({
+      success: true,
+      deletedCount: result.deletedCount || 0,
+      days: requested.days,
+      cutoff: cutoff.toISOString(),
+      statuses: ['completed', 'cancelled']
+    });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
