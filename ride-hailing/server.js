@@ -504,24 +504,42 @@ function validateFareSettings(input) {
   const errors = [];
   for (const category of FARE_VEHICLE_CATEGORIES) {
     const rule = settings[category];
-    if (rule.baseFare === null) errors.push(`${category}: Base Fare is required`);
-    for (let i = 0; i < rule.distanceSlabs.length; i++) {
-      const slab = rule.distanceSlabs[i];
-      const next = rule.distanceSlabs[i + 1];
-      if (next && slab.maxKm !== null && slab.maxKm > next.minKm) {
-        errors.push(`${category}: distance slabs overlap`);
-      }
-      if (next && slab.maxKm !== null && Math.abs(slab.maxKm - next.minKm) > 0.000001) {
-        errors.push(`${category}: distance slabs must be continuous without gaps`);
-      }
-      if (i === 0 && slab.minKm !== 0) errors.push(`${category}: first distance slab must start at 0 km`);
-      if (i === rule.distanceSlabs.length - 1 && slab.maxKm !== null) {
-        errors.push(`${category}: last distance slab must have no maximum`);
-      }
-    }
-    if (!rule.distanceSlabs.length) errors.push(`${category}: at least one distance slab is required`);
+    validateFareCategory(category, rule, errors);
   }
   return { settings, errors };
+}
+
+function validateFareCategory(category, rule, errors = []) {
+  if (!FARE_VEHICLE_CATEGORIES.includes(category)) {
+    errors.push(`${category}: unknown vehicle category`);
+    return errors;
+  }
+  if (rule.baseFare === null) errors.push(`${category}: Base Fare is required`);
+  for (let i = 0; i < rule.distanceSlabs.length; i++) {
+    const slab = rule.distanceSlabs[i];
+    const next = rule.distanceSlabs[i + 1];
+    if (next && slab.maxKm !== null && slab.maxKm > next.minKm) {
+      errors.push(`${category}: distance slabs overlap`);
+    }
+    if (next && slab.maxKm !== null && Math.abs(slab.maxKm - next.minKm) > 0.000001) {
+      errors.push(`${category}: distance slabs must be continuous without gaps`);
+    }
+    if (i === 0 && slab.minKm !== 0) errors.push(`${category}: first distance slab must start at 0 km`);
+    if (i === rule.distanceSlabs.length - 1 && slab.maxKm !== null) {
+      errors.push(`${category}: last distance slab must have no maximum`);
+    }
+  }
+  if (!rule.distanceSlabs.length) errors.push(`${category}: at least one distance slab is required`);
+  return errors;
+}
+
+function validateFareCategorySettings(category, input) {
+  const normalized = normalizeFareSettings({ [category]: input })[category];
+  return { setting: normalized, errors: validateFareCategory(category, normalized, []) };
+}
+
+function mergeFareCategorySettings(existing, category, setting) {
+  return normalizeFareSettings({ ...(existing || {}), [category]: setting });
 }
 
 const LONG_RANGE_SETTINGS_KEY = 'long_range_ride_settings';
@@ -3758,7 +3776,28 @@ app.patch('/api/admin/daily-fee-settings', adminJwt, requirePerm('manageDriverPa
 
 app.patch('/api/admin/fare-settings', adminJwt, requirePerm('manageFareSettings'), async (req, res) => {
   try {
-    const validated = validateFareSettings(req.body?.dailyFareSettings);
+    const category = req.body?.category;
+    const submittedSettings = req.body?.dailyFareSettings;
+    if (category !== undefined) {
+      const categoryInput = submittedSettings?.[category];
+      const categoryValidation = validateFareCategorySettings(category, categoryInput);
+      if (categoryValidation.errors.length) {
+        return res.status(422).json({ error: 'Invalid Daily Fare Settings', errors: categoryValidation.errors });
+      }
+      const existingDoc = await Settings.findOne({ key: 'daily_fare_settings' }).lean();
+      const settings = mergeFareCategorySettings(existingDoc?.value, category, categoryValidation.setting);
+      await Settings.findOneAndUpdate(
+        { key: 'daily_fare_settings' },
+        { key: 'daily_fare_settings', value: settings },
+        { upsert: true, new: true, setDefaultsOnInsert: true }
+      );
+      await refreshPendingRideFares(settings);
+      const payload = { settings, updatedAt: new Date().toISOString(), category };
+      io.emit('fare:updated', payload);
+      return res.json({ success: true, ...payload });
+    }
+
+    const validated = validateFareSettings(submittedSettings);
     if (validated.errors.length) {
       return res.status(422).json({ error: 'Invalid Daily Fare Settings', errors: validated.errors });
     }
