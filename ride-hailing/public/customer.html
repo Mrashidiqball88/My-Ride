@@ -114,13 +114,16 @@ body{font-family:'Segoe UI',sans-serif;background:#0a0a0f;color:#fff;height:100d
 .loc-secondary{font-size:.72rem;color:#555;margin-top:.1rem}
 .loc-loading{padding:.6rem .85rem;font-size:.8rem;color:#555;text-align:center}
 .location-sheet{position:fixed;left:0;right:0;bottom:0;z-index:40;display:flex;flex-direction:column;max-height:min(72vh,620px);min-height:260px;background:#13131a;border-top:1px solid #3a3a4a;border-radius:20px 20px 0 0;box-shadow:0 -12px 35px rgba(0,0,0,.5);transform:translateY(110%);transition:transform .22s ease;pointer-events:none;touch-action:none}
-.location-sheet.open{transform:translateY(0);pointer-events:auto}.location-sheet.expanded{max-height:min(88vh,760px)}
+.location-sheet.open{top:env(safe-area-inset-top, 0px);height:calc(100dvh - env(safe-area-inset-top, 0px));max-height:none;transform:translateY(0);pointer-events:auto;border-radius:0}.location-sheet.expanded{max-height:min(88vh,760px)}
 .location-sheet.dragging{transition:none}
 .sheet-grabber{width:52px;height:5px;border-radius:99px;background:#555;margin:.7rem auto .4rem;cursor:grab;flex:0 0 auto}
+.location-search-slot{position:sticky;top:0;z-index:3;flex:0 0 auto;padding:.65rem 1rem .55rem;background:#13131a;border-bottom:1px solid #252535}
+.location-search-slot:empty{display:none}
+.location-search-slot .loc-wrap{margin-bottom:0}
 .sheet-header{display:flex;align-items:center;gap:.65rem;padding:.35rem 1rem .75rem;border-bottom:1px solid #252535;flex:0 0 auto}
 .sheet-header-copy{flex:1}.sheet-kicker{font-size:.63rem;color:#f5c518;font-weight:800;text-transform:uppercase;letter-spacing:.08em}.sheet-title{font-size:.92rem;color:#fff;font-weight:700;margin-top:.15rem}
 .sheet-close{width:32px;height:32px;border:1px solid #343448;background:#1e1e2e;color:#bbb;border-radius:50%;font-size:.9rem;cursor:pointer}
-.sheet-list{overflow-y:auto;overscroll-behavior:contain;-webkit-overflow-scrolling:touch;padding:.35rem .7rem 1.2rem;touch-action:pan-y}
+.sheet-list{min-height:0;flex:1;overflow-y:auto;overscroll-behavior:contain;-webkit-overflow-scrolling:touch;padding:.35rem .7rem 1.2rem;touch-action:pan-y}
 .sheet-item{display:flex;align-items:center;gap:.7rem;width:100%;border:0;border-bottom:1px solid #242436;background:transparent;color:#fff;text-align:left;padding:.78rem .45rem;cursor:pointer;min-height:58px}
 .sheet-item:last-child{border-bottom:0}.sheet-item:active,.sheet-item:focus-visible{background:#22223a;outline:none}.sheet-item-icon{width:30px;text-align:center;font-size:1.15rem}.sheet-item-copy{min-width:0}.sheet-item-primary{font-size:.86rem;color:#eee;font-weight:650;line-height:1.3}.sheet-item-secondary{font-size:.7rem;color:#777;margin-top:.15rem;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.sheet-item.my-location{background:#142333;border:1px solid #22547b;border-radius:11px;margin:.3rem 0 .45rem;padding:.72rem .45rem}.sheet-empty{padding:1rem .5rem;text-align:center;color:#777;font-size:.8rem}
 
@@ -416,6 +419,7 @@ body{font-family:'Segoe UI',sans-serif;background:#0a0a0f;color:#fff;height:100d
 
   <section id="location-sheet" class="location-sheet" aria-label="Location suggestions" aria-hidden="true">
     <div id="location-sheet-grabber" class="sheet-grabber" aria-label="Drag suggestions"></div>
+    <div id="location-search-slot" class="location-search-slot"></div>
     <div class="sheet-header">
       <div class="sheet-header-copy"><div class="sheet-kicker" id="location-sheet-kicker">Choose a location</div><div class="sheet-title" id="location-sheet-title">Search an area</div></div>
       <button class="sheet-close" type="button" onclick="closeLocationSheet()" aria-label="Close location suggestions">✕</button>
@@ -783,6 +787,7 @@ let locSearchSeq = {};
 let activeLocationSearch = null;
 let locationSheetResults = [];
 let locationSheetDrag = null;
+let locationSearchOrigin = null;
 let currentFareQuote = null;
 let fareQuoteRequest = 0;
 let customerPerKmRates = {};
@@ -1257,13 +1262,36 @@ function localLocationResults(query) {
 }
 
 function openLocationSheet(type) {
+  if (locationSearchOrigin && locationSearchOrigin.type !== type) restoreLocationSearchInput();
+  const inputWrap = type === 'pickup'
+    ? document.getElementById('pickup-wrap')
+    : document.querySelector(`#${type}-wrap .loc-wrap`);
+  const slot = document.getElementById('location-search-slot');
+  if (inputWrap && slot && inputWrap.parentElement !== slot) {
+    locationSearchOrigin = {
+      type,
+      element: inputWrap,
+      parent: inputWrap.parentElement,
+      nextSibling: inputWrap.nextSibling
+    };
+    slot.appendChild(inputWrap);
+  }
   activeLocationSearch = type;
   const sheet = document.getElementById('location-sheet');
   sheet.classList.add('open');
   sheet.setAttribute('aria-hidden', 'false');
 }
 
+function restoreLocationSearchInput() {
+  if (!locationSearchOrigin) return;
+  const { element, parent, nextSibling } = locationSearchOrigin;
+  if (parent && nextSibling && nextSibling.parentElement === parent) parent.insertBefore(element, nextSibling);
+  else if (parent) parent.appendChild(element);
+  locationSearchOrigin = null;
+}
+
 function closeLocationSheet() {
+  restoreLocationSearchInput();
   activeLocationSearch = null;
   const sheet = document.getElementById('location-sheet');
   sheet.classList.remove('open', 'dragging');
