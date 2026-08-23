@@ -3,3 +3,4 @@
 - [Admin permission refresh](admin-permission-refresh.md) — refresh the server-side Sub-Admin session before applying client visibility rules.
 - [Admin deep-link guards](admin-deep-link-guards.md) — protect both initial hash loads and later hash changes, with fallback before restricted loaders run.
 - [Live fare fixture eligibility](live-fare-fixture-eligibility.md) — live fare tests must model nearby location, wallet eligibility, and the server's current fare quote shape.
+- [Late database attachment](late-database-attachment.md) — test connections may attach after server import, so runtime database readiness must reflect the live connection state.

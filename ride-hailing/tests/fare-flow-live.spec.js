@@ -68,6 +68,8 @@ test.describe('live Mongo fare refresh', () => {
   let customer;
   let matchingDriver;
   let otherDriver;
+  let highroofDriver;
+  let coasterDriver;
 
   test.beforeAll(async () => {
     mongo = await MongoMemoryServer.create();
@@ -99,9 +101,31 @@ test.describe('live Mongo fare refresh', () => {
       currentLocation: { lat: 50, lng: 50 },
       accountStatus: 'active'
     });
+    highroofDriver = await models.User.create({
+      name: 'Highroof Driver',
+      email: 'fare-live-highroof@example.test',
+      password: 'not-used',
+      role: 'driver',
+      vehicleType: 'Toyota Highroof',
+      isOnline: true,
+      currentLocation: { lat: 1, lng: 2 },
+      accountStatus: 'active'
+    });
+    coasterDriver = await models.User.create({
+      name: 'Coaster Driver',
+      email: 'fare-live-coaster@example.test',
+      password: 'not-used',
+      role: 'driver',
+      vehicleType: 'Toyota Saloon Coaster',
+      isOnline: true,
+      currentLocation: { lat: 1, lng: 2 },
+      accountStatus: 'active'
+    });
     await models.Wallet.create([
       { user: matchingDriver._id, balance: 1000, transactions: [] },
-      { user: otherDriver._id, balance: 1000, transactions: [] }
+      { user: otherDriver._id, balance: 1000, transactions: [] },
+      { user: highroofDriver._id, balance: 1000, transactions: [] },
+      { user: coasterDriver._id, balance: 1000, transactions: [] }
     ]);
     await models.Settings.create({
       key: 'daily_fare_settings',
@@ -212,6 +236,120 @@ test.describe('live Mongo fare refresh', () => {
         .toMatchObject({ baseFare: 500 });
     } finally {
       await Promise.all([matchingPage.close(), otherPage.close(), customerPage.close()]);
+      await request.dispose();
+    }
+  });
+
+  test('routes each Toyota category from the customer UI to only its matching driver', async ({ browser, playwright }) => {
+    const customerToken = token(customer);
+    const highroofToken = token(highroofDriver);
+    const coasterToken = token(coasterDriver);
+    const otherToken = token(otherDriver);
+    const baseURL = `http://127.0.0.1:${httpServer.address().port}`;
+    const request = await playwright.request.newContext({ baseURL });
+    const customerPage = await browser.newPage();
+    const highroofPage = await browser.newPage();
+    const coasterPage = await browser.newPage();
+    const otherPage = await browser.newPage();
+
+    try {
+      const fareSettings = settingsFor(200, 100);
+      fareSettings['Toyota Highroof'] = {
+        baseFare: 700,
+        distanceSlabs: [{ minKm: 0, maxKm: null, rate: 130 }],
+        peakRules: []
+      };
+      fareSettings['Toyota Saloon Coaster'] = {
+        baseFare: 900,
+        distanceSlabs: [{ minKm: 0, maxKm: null, rate: 170 }],
+        peakRules: []
+      };
+      const saved = await request.patch('/api/admin/fare-settings', {
+        headers: { authorization: `Bearer ${token({ _id: new mongoose.Types.ObjectId(), role: 'admin', isAdmin: true, name: 'Admin' })}` },
+        data: { dailyFareSettings: fareSettings }
+      });
+      expect(saved.ok()).toBeTruthy();
+
+      await Promise.all([
+        openAuthenticatedClient(customerPage, baseURL, '/customer', customer, customerToken),
+        openAuthenticatedClient(highroofPage, baseURL, '/driver', highroofDriver, highroofToken),
+        openAuthenticatedClient(coasterPage, baseURL, '/driver', coasterDriver, coasterToken),
+        openAuthenticatedClient(otherPage, baseURL, '/driver', otherDriver, otherToken)
+      ]);
+      await Promise.all([
+        highroofPage.evaluate(() => toggleOnline(true)),
+        coasterPage.evaluate(() => toggleOnline(true)),
+        otherPage.evaluate(() => toggleOnline(true))
+      ]);
+      await expect.poll(async () => (await models.User.findById(highroofDriver._id).lean()).isOnline).toBe(true);
+      await expect.poll(async () => (await models.User.findById(coasterDriver._id).lean()).isOnline).toBe(true);
+      await expect.poll(async () => (await models.User.findById(otherDriver._id).lean()).isOnline).toBe(true);
+      await expect.poll(() => io.sockets.adapter.rooms.get('drivers:Toyota Highroof')?.size || 0).toBeGreaterThan(0);
+      await expect.poll(() => io.sockets.adapter.rooms.get('drivers:Toyota Saloon Coaster')?.size || 0).toBeGreaterThan(0);
+      await expect.poll(() => io.sockets.adapter.rooms.get(`user:${highroofDriver._id}`)?.size || 0).toBe(1);
+      await expect.poll(() => io.sockets.adapter.rooms.get(`user:${coasterDriver._id}`)?.size || 0).toBe(1);
+      await expect.poll(() => highroofPage.evaluate(() => isOnline)).toBe(true);
+      await expect.poll(() => coasterPage.evaluate(() => isOnline)).toBe(true);
+      await expect.poll(async () => {
+        const broadcast = await findRideBroadcastDrivers({ lat: 1, lng: 2 }, 'Toyota Highroof');
+        return broadcast.drivers.some(driver => String(driver._id) === String(highroofDriver._id));
+      }).toBe(true);
+      await expect.poll(async () => {
+        const broadcast = await findRideBroadcastDrivers({ lat: 1, lng: 2 }, 'Toyota Saloon Coaster');
+        return broadcast.drivers.some(driver => String(driver._id) === String(coasterDriver._id));
+      }).toBe(true);
+
+      const cases = [
+        { category: 'Toyota Highroof', driverPage: highroofPage, expectedFare: 1540 },
+        { category: 'Toyota Saloon Coaster', driverPage: coasterPage, expectedFare: 1880 }
+      ];
+      for (const [index, { category, driverPage, expectedFare }] of cases.entries()) {
+        if (index > 0) {
+          await openAuthenticatedClient(customerPage, baseURL, '/customer', customer, customerToken);
+        }
+        await expect.poll(() => driverPage.evaluate(() => ({
+          isOnline, activeRide: !!activeRide, sentOffer: !!sentOffer, pendingRide: !!pendingRide
+        }))).toEqual({ isOnline: true, activeRide: false, sentOffer: false, pendingRide: false });
+        await customerPage.evaluate(() => {
+          pickup = { lat: 1, lng: 2, address: 'Toyota pickup' };
+          dropoffs[0] = { lat: 1.05, lng: 2.05, address: 'Toyota dropoff' };
+          activeStops = 1;
+          routeDistanceKm = 7;
+        });
+        await customerPage.locator(`.vehicle-btn[data-type="${category}"]`).click();
+        const expectedFareLabel = `Rs ${expectedFare.toLocaleString()}`;
+        await expect(customerPage.locator('#fare-suggested-val')).toHaveText(expectedFareLabel);
+        await expect(customerPage.locator('#book-btn')).toBeVisible();
+
+        await customerPage.locator('#book-btn').click();
+        const availableRides = await driverPage.evaluate(async () => {
+          const response = await fetch('/api/rides/available', {
+            headers: { authorization: `Bearer ${localStorage.getItem('rh_token')}` }
+          });
+          return response.json();
+        });
+        expect(availableRides).toHaveLength(1);
+        expect(availableRides[0]).toMatchObject({
+          vehicleType: category,
+          fare: expectedFare
+        });
+        await expect(customerPage.locator('#ar-live-fare')).toHaveText(expectedFareLabel);
+        const otherAvailableRides = await otherPage.evaluate(async () => {
+          const response = await fetch('/api/rides/available', {
+            headers: { authorization: `Bearer ${localStorage.getItem('rh_token')}` }
+          });
+          return response.json();
+        });
+        expect(otherAvailableRides).toEqual([]);
+        const ride = await models.Ride.findOne({ passenger: customer._id, vehicleType: category })
+          .sort({ createdAt: -1 }).lean();
+        expect(ride).toBeTruthy();
+        expect(ride.fare).toBe(expectedFare);
+      }
+    } finally {
+      await Promise.all([
+        customerPage.close(), highroofPage.close(), coasterPage.close(), otherPage.close()
+      ]);
       await request.dispose();
     }
   });

@@ -1758,7 +1758,10 @@ app.post('/api/rides', authMiddleware, customerOnly, customerCanBook, async (req
     // Every delivery channel receives the exact same eligible, geo-filtered
     // driver set. This prevents a distant socket or push recipient from seeing
     // an offer that is outside the Admin-configured broadcast radius.
-    const broadcast = dbConnected
+    // Tests may attach an in-memory Mongoose connection after importing this
+    // module, so use the connection's live state alongside the startup flag.
+    const databaseReady = dbConnected || mongoose.connection.readyState === 1;
+    const broadcast = databaseReady
       ? (ride.isLongRange
         ? await findLongRangeBroadcastDrivers(ride.pickupLocation, ride.vehicleType, longRangeSettings)
         : await findRideBroadcastDrivers(ride.pickupLocation, ride.vehicleType))
