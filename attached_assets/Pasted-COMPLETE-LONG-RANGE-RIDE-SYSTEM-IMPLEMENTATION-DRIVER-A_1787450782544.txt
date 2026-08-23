@@ -1,0 +1,29 @@
+COMPLETE LONG RANGE RIDE SYSTEM IMPLEMENTATION (DRIVER APP & ADMIN PANEL)
+
+Please implement the full Long Range Ride feature across the Driver App and Admin Panel based on the following exact rules:
+
+PART 1: DRIVER APP IMPLEMENTATION
+1. Sidebar Button: Add "Active Long Range" toggle switch in the Driver App sidebar.
+2. Notifications: 
+   - When Turned ON: Show popup toast -> "Active: You will now receive both local and long-range rides."
+   - When Turned OFF: Show popup toast -> "Deactivated: You will now receive local rides only."
+3. Wallet Eligibility Check:
+   - Before allowing activation, check driver's wallet balance against the Admin-configured minimum required balance.
+   - If balance is insufficient, prevent toggle activation and display popup message: "Recharge your wallet to activate this feature. Maintain wallet balance up to Rs. [Required_Amount]."
+4. Master Disable: If the feature is disabled in the Admin Panel, grey out / disable this toggle in the Driver App.
+
+PART 2: ADMIN PANEL - NEW "LONG RANGE SETTINGS" PANEL
+Add a new dedicated configuration section in the Admin Panel with the following fields:
+
+1. Active / Deactive Long Range Feature: Master toggle to enable/disable the feature system-wide.
+2. Set Long Range Distance Cutoff (KM): Set threshold (e.g. 30 km or 50 km). Any trip equal to or above this KM is classified as a Long Range Ride.
+3. Set Minimum Wallet Balance Limit: Configure minimum wallet amount (e.g., Rs 2000, 3000) required by drivers to activate long-range mode.
+4. Set Long Range Broadcast Radius (KM): Set search radius distance specifically for broadcasting long-range requests to eligible drivers.
+5. Commission Percentage & Deduction Trigger:
+   - Input for Admin commission percentage.
+   - Deduction timing selector: [Deduct when Ride Accepted] OR [Deduct when Ride Started].
+6. Per KM Fare Rules by Vehicle Category:
+   - Provide independent Per-KM fare input boxes for each vehicle type (Car Sedan, Car Mini, Rickshaw, Bike, etc.).
+   - When a ride exceeds the Long Range Cutoff limit, automatically calculate the fare for Customer and Driver using these Long Range Per-KM rates.
+
+Ensure real-time sync across Customer pricing quotes, Driver app toggle status, and Admin settings.
