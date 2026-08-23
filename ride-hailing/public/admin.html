@@ -1214,7 +1214,7 @@ const SECTION_PERMISSION = {
   'temp-blocked': 'manageDriverStatus', passengers: 'viewCustomers',
   'blk-pass': 'manageCustomers', 'live-rides': 'viewRides', sos: 'viewSOS',
   ratings: 'viewRatings', support: 'viewSupport', 'audit-logs': 'viewAuditLogs',
-  'ride-settings': 'manageRideSettings', 'fare-settings': 'manageFareSettings', 'long-range-settings': 'manageFareSettings',
+  'ride-settings': 'manageRideSettings', 'fare-settings': 'manageFareSettings', 'long-range-settings': 'manageFareSettings', 'terms-settings': 'manageFareSettings',
   'pay-settings': 'managePaymentSettings'
 };
 function hasSectionAccess(name) {
@@ -1497,7 +1497,7 @@ const SECTION_TITLES = {
   'temp-blocked':'Driver Status', 'blk-pass':'Blocked Customers',
   'live-rides':'Live Rides & History', sos:'SOS Alert Monitor',
   'fee-compliance':'Driver Wallets & Daily Fees',
-  'app-settings':'App Settings / Pricing',
+  'app-settings':'App Settings / Pricing', 'terms-settings':'Terms & Conditions Settings',
   'ride-settings':'Ride Settings', 'fare-settings':'Daily Fare Settings', 'long-range-settings':'Long Range Ride Settings', 'pay-settings':'Payment Settings', 'ride-retention':'Rides Data Retention', ratings:'Ratings & Feedback', support:'Support Tickets', 'audit-logs':'Payment & Pass Audit Logs',
   deletions:'Account Deletion Requests', 'sub-admins':'Sub-Admin User Management'
 };
@@ -1506,6 +1506,7 @@ const SECTION_SAVE_HANDLERS = {
   'ride-settings': 'saveRideSettings',
   'fare-settings': 'saveFareSettings',
   'long-range-settings': 'saveLongRangeSettings',
+  'terms-settings': 'saveActiveTerms',
   'ride-retention': 'saveRideRetention'
 };
 
@@ -1623,7 +1624,7 @@ function showSection(name) {
     'new-requests': loadNewRequests, 'temp-blocked': loadTempBlocked,
     'blk-pass': loadBlockedPass, 'live-rides': () => loadRides(currentRideStatus),
     'ride-retention': loadRideRetention,
-    sos: () => loadSOS(currentSOSFilter), 'ride-settings': loadRideSettings, 'fare-settings': loadFareSettings, 'long-range-settings': loadLongRangeSettings, 'pay-settings': loadPaymentSettings,
+    sos: () => loadSOS(currentSOSFilter), 'ride-settings': loadRideSettings, 'fare-settings': loadFareSettings, 'long-range-settings': loadLongRangeSettings, 'terms-settings': loadTermsSettings, 'pay-settings': loadPaymentSettings,
     'fee-compliance': loadFeeCompliance,
     ratings: loadRatings, support: () => loadSupportTickets(currentSupStatus),
     deletions: loadDeletionRequests,
@@ -3075,6 +3076,64 @@ async function saveLongRangeSettings() {
   }
 }
 
+let activeTermsTab = 'customer';
+let termsSettingsState = { customer: '', driver: '' };
+function switchTermsTab(role) {
+  activeTermsTab = role;
+  document.querySelectorAll('[data-terms-tab]').forEach(tab => tab.classList.toggle('active', tab.dataset.termsTab === role));
+  document.getElementById('terms-editor-customer').style.display = role === 'customer' ? '' : 'none';
+  document.getElementById('terms-editor-driver').style.display = role === 'driver' ? '' : 'none';
+}
+async function loadTermsSettings() {
+  try {
+    termsSettingsState = await api('/api/admin/terms');
+    document.getElementById('terms-customer-input').value = termsSettingsState.customer || '';
+    document.getElementById('terms-driver-input').value = termsSettingsState.driver || '';
+    document.getElementById('terms-customer-feedback').textContent = '';
+    document.getElementById('terms-driver-feedback').textContent = '';
+  } catch (e) {
+    document.getElementById(`terms-${activeTermsTab}-feedback`).textContent = `⚠ ${e.message}`;
+    document.getElementById(`terms-${activeTermsTab}-feedback`).style.color = '#ef4444';
+  }
+}
+function formatTermsBullets(id) {
+  const input = document.getElementById(id);
+  if (!input) return;
+  const start = input.selectionStart;
+  const end = input.selectionEnd;
+  const selected = input.value.slice(start, end) || input.value;
+  const formatted = selected.split('\n').map(line => {
+    const trimmed = line.trim();
+    return trimmed && !/^[-•*]\s/.test(trimmed) ? `• ${trimmed}` : line;
+  }).join('\n');
+  if (input.selectionStart !== input.selectionEnd) {
+    input.setRangeText(formatted, start, end, 'select');
+  } else {
+    input.value = formatted;
+  }
+  input.dispatchEvent(new Event('input'));
+}
+async function saveTerms(role) {
+  const feedback = document.getElementById(`terms-${role}-feedback`);
+  const input = document.getElementById(`terms-${role}-input`);
+  feedback.textContent = 'Saving…'; feedback.style.color = '#64748b';
+  try {
+    const result = await api('/api/admin/terms', 'PATCH', { [role]: input.value });
+    termsSettingsState = result.terms;
+    input.value = result.terms[role] || '';
+    feedback.textContent = `✓ ${role === 'customer' ? 'Customer' : 'Driver'} terms saved and published live.`;
+    feedback.style.color = '#22c55e';
+    showToast(`${role === 'customer' ? 'Customer' : 'Driver'} terms updated ✓`, 'success');
+  } catch (e) {
+    feedback.textContent = `✕ ${e.message}`;
+    feedback.style.color = '#ef4444';
+    showToast(e.message, 'error');
+  }
+}
+async function saveActiveTerms() {
+  await saveTerms(activeTermsTab);
+}
+
 // ── Permission Enforcement ────────────────────────────────────────────────────
 function applyPermissions() {
   Object.entries(SECTION_PERMISSION).forEach(([section, permission]) => {
@@ -3088,6 +3147,7 @@ function applyPermissions() {
     'ride-settings-card': 'manageRideSettings',
     'fare-settings-card': 'manageFareSettings',
     'long-range-settings-card': 'manageFareSettings',
+    'terms-settings-card': 'manageFareSettings',
     'driver-fees-card': 'viewDriverPasses',
     'payment-settings-card': 'managePaymentSettings'
   };

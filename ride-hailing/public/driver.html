@@ -452,6 +452,7 @@ textarea.support-input{resize:vertical;min-height:85px}
         <div class="dots-dropdown" id="driver-dots-dropdown" style="display:none">
           <div class="dots-item" onclick="openSupportModal();closeDriverMenu()">🎫 Contact Support</div>
           <div class="dots-item" onclick="openMyTickets();closeDriverMenu()">📋 My Tickets <span id="driver-ticket-badge" class="ticket-badge" style="display:none">0</span></div>
+          <div class="dots-item" onclick="openTermsModal();closeDriverMenu()">📜 Terms &amp; Conditions</div>
           <div class="dots-item" onclick="openChangePhoneModal();closeDriverMenu()">📱 Change Phone Number</div>
           <div class="dots-item" onclick="openChangePasswordModal();closeDriverMenu()">🔑 Change Password</div>
           <div class="dots-item" onclick="openChangeVehicleModal();closeDriverMenu()">🚗 Change Vehicle Info</div>
@@ -691,6 +692,7 @@ let driverFareSettings = {};
 let dailyFeeSettings = {};
 let driverPerKmRates = {};
 let longRangeState = { enabled: false, walletBalance: 0, settings: {} };
+let driverTerms = '';
 
 // ── Toast ──────────────────────────────────────────────────────────────────
 function showToast(msg, type = 'info') {
@@ -1174,6 +1176,7 @@ function bootApp() {
   initTodayFareWidget();
   loadDriverFareSettings();
   loadLongRangeState();
+  loadDriverTerms();
   // Request notification permission then register Web Push subscription
   if ('Notification' in window && Notification.permission === 'default') {
     Notification.requestPermission().then(perm => {
@@ -2083,6 +2086,27 @@ function toggleDriverMenu(e) {
   dd.style.display = dd.style.display === 'none' ? 'block' : 'none';
 }
 function closeDriverMenu() { document.getElementById('driver-dots-dropdown').style.display = 'none'; }
+async function loadDriverTerms() {
+  try {
+    const result = await apiCall('/api/terms/driver');
+    driverTerms = result.content || '';
+    const content = document.getElementById('driver-terms-content');
+    if (content && document.getElementById('driver-terms-modal')?.style.display === 'flex') content.textContent = driverTerms;
+  } catch (e) { console.warn('Driver terms unavailable:', e.message); }
+}
+function openTermsModal() {
+  closeDriverMenu();
+  const modal = document.getElementById('driver-terms-modal');
+  if (modal) {
+    modal.style.display = 'flex';
+    document.getElementById('driver-terms-content').textContent = driverTerms || 'Terms & Conditions are loading…';
+  }
+  loadDriverTerms();
+}
+function closeTermsModal() {
+  const modal = document.getElementById('driver-terms-modal');
+  if (modal) modal.style.display = 'none';
+}
 document.addEventListener('click', (e) => {
   if (!e.target.closest('#driver-dots-btn')) closeDriverMenu();
 });
@@ -2408,6 +2432,14 @@ if (token && user && user.role === 'driver') {
 </div>
 
 <!-- ── Contact Support Modal ── -->
+<div id="driver-terms-modal" class="support-overlay" style="display:none" onclick="if(event.target===this)closeTermsModal()">
+  <div class="support-modal" style="max-width:520px;max-height:80vh;display:flex;flex-direction:column">
+    <h3>📜 Terms &amp; Conditions</h3>
+    <div id="driver-terms-content" style="white-space:pre-wrap;overflow-y:auto;color:#cbd5e1;font-size:.82rem;line-height:1.6;max-height:55vh">Terms &amp; Conditions are loading…</div>
+    <div class="support-modal-btns"><button class="btn-sup-cancel" onclick="closeTermsModal()">Close</button></div>
+  </div>
+</div>
+
 <div class="support-overlay" id="support-overlay" onclick="if(event.target===this)closeSupportModal()">
   <div class="support-modal">
     <h3>🎫 Contact Support</h3>

@@ -402,6 +402,7 @@ body{font-family:'Segoe UI',sans-serif;background:#0a0a0f;color:#fff;height:100d
           <div class="dots-item" onclick="openEmergencyContactsModal()">🆘 Emergency Contacts</div>
           <div class="dots-item" onclick="openSupportModal()">🎫 Contact Support</div>
           <div class="dots-item" onclick="openMyTickets()">📋 My Tickets <span id="cust-ticket-badge" class="cust-ticket-badge" style="display:none">0</span></div>
+          <div class="dots-item" onclick="openTermsModal();closeDotsMenu()">📜 Terms &amp; Conditions</div>
           <div class="dots-item" onclick="openChangePhoneModal();closeDotsMenu()">📱 Change Phone Number</div>
           <div class="dots-item" onclick="openChangePasswordModal();closeDotsMenu()">🔑 Change Password</div>
           <div class="dots-item danger" onclick="openDeleteAccountModal()">🗑 Delete Account</div>
@@ -705,6 +706,14 @@ body{font-family:'Segoe UI',sans-serif;background:#0a0a0f;color:#fff;height:100d
 </div>
 
 <!-- ── Support Modal ── -->
+<div class="modal-overlay" id="customer-terms-modal" style="display:none;align-items:center" onclick="if(event.target===this)closeTermsModal()">
+  <div class="modal-card" style="max-width:520px;max-height:80vh;display:flex;flex-direction:column">
+    <div style="font-size:1rem;font-weight:800;color:#e2e8f0;margin-bottom:.9rem">📜 Terms &amp; Conditions</div>
+    <div id="customer-terms-content" style="white-space:pre-wrap;overflow-y:auto;color:#cbd5e1;font-size:.82rem;line-height:1.6;max-height:55vh">Terms &amp; Conditions are loading…</div>
+    <button onclick="closeTermsModal()" style="width:100%;margin-top:1rem;padding:.6rem;border-radius:8px;background:#1a1a2a;border:1px solid #1e1e2e;color:#64748b;cursor:pointer;font-size:.85rem">Close</button>
+  </div>
+</div>
+
 <div class="modal-overlay" id="support-modal" style="display:none;align-items:center" onclick="if(event.target===this)closeSupportModal()">
   <div class="modal-card" style="max-width:360px">
     <div style="font-size:1rem;font-weight:800;color:#e2e8f0;margin-bottom:.9rem">🎫 Contact Support</div>
@@ -764,6 +773,7 @@ let routeDistanceKm = null;
 let offeredFare = 0;
 let activeRide = null;
 let socket = null;
+let customerTerms = '';
 let locationWatchId = null;
 let driverOffers = [];
 let activeLiveFare = 0;
@@ -1014,6 +1024,27 @@ function toggleDotsMenu(e) {
 function closeDotsMenu() {
   document.getElementById('dots-dropdown').style.display = 'none';
 }
+async function loadCustomerTerms() {
+  try {
+    const result = await apiCall('/api/terms/customer');
+    customerTerms = result.content || '';
+    const content = document.getElementById('customer-terms-content');
+    if (content && document.getElementById('customer-terms-modal')?.style.display === 'flex') content.textContent = customerTerms;
+  } catch (e) { console.warn('Customer terms unavailable:', e.message); }
+}
+function openTermsModal() {
+  closeDotsMenu();
+  const modal = document.getElementById('customer-terms-modal');
+  if (modal) {
+    modal.style.display = 'flex';
+    document.getElementById('customer-terms-content').textContent = customerTerms || 'Terms & Conditions are loading…';
+  }
+  loadCustomerTerms();
+}
+function closeTermsModal() {
+  const modal = document.getElementById('customer-terms-modal');
+  if (modal) modal.style.display = 'none';
+}
 document.addEventListener('click', (e) => {
   if (!document.getElementById('dots-btn')?.contains(e.target)) closeDotsMenu();
 });
@@ -1066,6 +1097,7 @@ function bootApp() {
   loadCustomerPerKmRates();
   loadEmergencyContacts();   // pre-cache for SOS
   checkUnreadCustTickets();  // badge for unread admin replies
+  loadCustomerTerms();
   // Double rAF ensures the browser has fully painted the flex layout before
   // Leaflet measures #map — fixes the 0×0 container race condition.
   requestAnimationFrame(() => requestAnimationFrame(() => {
@@ -1873,6 +1905,13 @@ function connectSocket() {
     else loadCustomerPerKmRates();
     if (pickup && dropoffs.slice(0, activeStops).some(Boolean)) updateFare();
     showToast('Admin updated /km rates. Your quote has been refreshed.', 'info');
+  });
+  socket.on('terms:updated', ({ terms }) => {
+    if (typeof terms?.customer === 'string') {
+      customerTerms = terms.customer;
+      const content = document.getElementById('customer-terms-content');
+      if (content && document.getElementById('customer-terms-modal')?.style.display === 'flex') content.textContent = customerTerms;
+    }
   });
 }
 

@@ -4448,6 +4448,7 @@ module.exports = {
   normalizeLongRangeSettings,
   validateLongRangeSettings,
   calculateRideFare,
+  normalizeTerms,
   normalizeFareVehicle,
   normalizeRideBroadcastSettings,
   validateRideBroadcastSettings,

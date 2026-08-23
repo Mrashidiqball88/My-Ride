@@ -10,6 +10,7 @@ const {
   DEFAULT_RIDE_BROADCAST_RADIUS_KM, normalizeRideBroadcastSettings,
   validateRideBroadcastSettings, findRideBroadcastDrivers, emitRideRequestToDrivers, chargeLongRangeCommission,
   normalizeLongRangeSettings, validateLongRangeSettings, calculateRideFare
+  , normalizeTerms
 } = fare;
 
 const JWT_SECRET = 'ride-hailing-secret-fallback';
@@ -117,6 +118,36 @@ test('Admin fare settings persist every vehicle category and reject gaps or over
     assert.match(gap.body.errors.join(' '), /gaps/);
   } finally {
     await new Promise(resolve => server.close(resolve));
+  }
+});
+
+test('Customer and Driver terms stay independent and publish role-specific reads', async () => {
+  let stored = { customer: 'Customer v1', driver: 'Driver v1' };
+  models.Settings.findOne = () => ({ lean: async () => ({ value: stored }) });
+  models.Settings.findOneAndUpdate = async (_query, update) => {
+    stored = update.value;
+    return { value: stored };
+  };
+  const testServer = app.listen(0);
+  try {
+    const customer = await request(testServer, '/api/terms/customer');
+    const driver = await request(testServer, '/api/terms/driver');
+    assert.equal(customer.body.content, 'Customer v1');
+    assert.equal(driver.body.content, 'Driver v1');
+    const saved = await request(testServer, '/api/admin/terms', {
+      method: 'PATCH',
+      headers: { authorization: `Bearer ${adminToken()}` },
+      body: JSON.stringify({ driver: 'Driver v2' })
+    });
+    assert.equal(saved.response.status, 200);
+    assert.equal(saved.body.terms.customer, 'Customer v1');
+    assert.equal(saved.body.terms.driver, 'Driver v2');
+    const customerAfter = await request(testServer, '/api/terms/customer');
+    const driverAfter = await request(testServer, '/api/terms/driver');
+    assert.equal(customerAfter.body.content, 'Customer v1');
+    assert.equal(driverAfter.body.content, 'Driver v2');
+  } finally {
+    await new Promise(resolve => testServer.close(resolve));
   }
 });
 
