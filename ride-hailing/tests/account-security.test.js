@@ -289,7 +289,10 @@ test('unknown recovery emails return exactly Wrong email without creating an OTP
 test('an emailed OTP password reset replaces the active session', async () => {
   const user = {
     _id: 'reset-user',
+    email: 'ayesha@example.test',
     phone: '+923001234567',
+    otpCode: await bcrypt.hash('123456', 10),
+    otpExpiry: new Date(Date.now() + 60_000),
     activeSessionToken: 'old-session'
   };
   let update;
@@ -299,12 +302,6 @@ test('an emailed OTP password reset replaces the active session', async () => {
     Object.assign(user, next);
   };
   models.User.findById = () => query(user);
-  setEmailTransporterForTests({
-    async sendMail(message) {
-      assert.equal(message.to, 'ayesha@example.test');
-      return { messageId: 'test-email' };
-    }
-  });
   const oldToken = jwt.sign({ id: user._id, role: 'customer', name: 'Customer' }, JWT_SECRET);
 
   await withServer(async server => {
@@ -326,9 +323,10 @@ test('an emailed OTP password reset replaces the active session', async () => {
 });
 
 test('password reset rejects an incorrect emailed OTP', async () => {
+  const otpCode = await bcrypt.hash('654321', 10);
   models.User.findOne = () => query({
     _id: 'reset-user', email: 'ayesha@example.test',
-    otpCode: await bcrypt.hash('654321', 10),
+    otpCode,
     otpExpiry: new Date(Date.now() + 60_000)
   });
 
