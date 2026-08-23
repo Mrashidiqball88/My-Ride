@@ -358,6 +358,14 @@ textarea.support-input{resize:vertical;min-height:85px}
             <option value="Toyota Saloon Coaster">🚌 Toyota Saloon Coaster</option>
           </select>
         </div>
+        <div class="form-group">
+          <label>Ride Preference <span style="color:#f5c518">*</span></label>
+          <select id="r-ride-preference">
+            <option value="Both" selected>Both Short Range &amp; Long Range</option>
+            <option value="Short Range Only">Short Range Only</option>
+            <option value="Long Range Only">Long Range Only</option>
+          </select>
+        </div>
         <div class="form-group"><label>Vehicle Model <span style="color:#f5c518">*</span></label><input type="text" id="r-vehicle-model" placeholder="e.g. Suzuki Cultus 2020"></div>
         <div class="form-group"><label>Number Plate <span style="color:#f5c518">*</span></label><input type="text" id="r-plate" placeholder="e.g. LHR-1234" style="text-transform:uppercase"></div>
         <button class="btn-primary" onclick="nextRegStep()">Continue → Upload Documents</button>
@@ -1071,6 +1079,7 @@ async function doRegister() {
 
   xhr.send(JSON.stringify({
     name, phone, password: pass, role: 'driver', vehicleType: vehicle,
+    ridePreference: document.getElementById('r-ride-preference').value,
     vehicleModel, vehiclePlate, profilePhoto, licensePhoto, cnicFront, cnicBack, vehicleRegPhoto
   }));
 }

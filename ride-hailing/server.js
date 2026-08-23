@@ -301,6 +301,18 @@ function normalizeFareVehicle(value) {
   return FARE_VEHICLE_CATEGORIES.includes(raw) ? raw : (FARE_VEHICLE_ALIASES[raw] || raw);
 }
 
+const DRIVER_RIDE_PREFERENCES = ['Short Range Only', 'Long Range Only', 'Both'];
+function normalizeRidePreference(value) {
+  const raw = String(value || '').trim().toLowerCase();
+  if (raw === 'long range only' || raw === 'long-range-only' || raw === 'longrangeonly') return 'Long Range Only';
+  if (raw === 'short range only' || raw === 'short-range-only' || raw === 'shortrangeonly') return 'Short Range Only';
+  return 'Both';
+}
+
+function isLongRangeOnlyDriver(driver) {
+  return normalizeRidePreference(driver?.ridePreference) === 'Long Range Only';
+}
+
 function storedVehicleTypesForFareCategory(category) {
   const normalized = normalizeFareVehicle(category);
   return [...new Set([
@@ -362,8 +374,11 @@ function endOfTodayUTC() {
 // simultaneous online requests from charging the same driver twice.
 const ACTIVE_FEE_PASS_MS = 24 * 60 * 60 * 1000;
 
-async function chargeDailyFeeForOnlineDriver(driverId, driver) {
-  const rate = await getDailyFeeForVehicle(driver.vehicleType);
+async function chargeDailyFeeForOnlineDriver(driverId, driver, dailyFeeSettings = null) {
+  if (isLongRangeOnlyDriver(driver)) {
+    return { allowed: true, charged: false, rate: null, exempt: true, reason: 'Long Range Only drivers are exempt from the Daily Fee' };
+  }
+  const rate = await getDailyFeeForVehicle(driver.vehicleType, dailyFeeSettings);
   if (!Number.isFinite(rate) || rate <= 0) {
     return { allowed: true, charged: false, rate: null };
   }
@@ -552,10 +567,13 @@ function mergeFareCategorySettings(existing, category, setting) {
 }
 
 const LONG_RANGE_SETTINGS_KEY = 'long_range_ride_settings';
+const DEFAULT_LONG_RANGE_MINIMUM_WALLET_BALANCES = Object.freeze(
+  Object.fromEntries(FARE_VEHICLE_CATEGORIES.map(category => [category, 500]))
+);
 const DEFAULT_LONG_RANGE_SETTINGS = Object.freeze({
   enabled: false,
   distanceCutoffKm: 50,
-  minimumWalletBalance: 500,
+  minimumWalletBalances: DEFAULT_LONG_RANGE_MINIMUM_WALLET_BALANCES,
   broadcastRadiusKm: 30,
   commissionPercent: 10,
   commissionTiming: 'accepted',
@@ -571,7 +589,11 @@ function normalizeLongRangeSettings(input = {}) {
   return {
     enabled: source.enabled === true,
     distanceCutoffKm: numberInRange(source.distanceCutoffKm, DEFAULT_LONG_RANGE_SETTINGS.distanceCutoffKm, 1, 2000),
-    minimumWalletBalance: numberInRange(source.minimumWalletBalance, DEFAULT_LONG_RANGE_SETTINGS.minimumWalletBalance, 0, 1000000),
+    minimumWalletBalances: Object.fromEntries(FARE_VEHICLE_CATEGORIES.map(category => {
+      const legacyMinimum = source.minimumWalletBalance;
+      const configuredMinimum = source.minimumWalletBalances?.[category] ?? legacyMinimum;
+      return [category, numberInRange(configuredMinimum, DEFAULT_LONG_RANGE_MINIMUM_WALLET_BALANCES[category], 0, 1000000)];
+    })),
     broadcastRadiusKm: numberInRange(source.broadcastRadiusKm, DEFAULT_LONG_RANGE_SETTINGS.broadcastRadiusKm, 0.5, 500),
     commissionPercent: numberInRange(source.commissionPercent, DEFAULT_LONG_RANGE_SETTINGS.commissionPercent, 0, 100),
     commissionTiming: source.commissionTiming === 'started' ? 'started' : 'accepted',
@@ -588,6 +610,9 @@ function validateLongRangeSettings(input) {
   if (input?.enabled === true) {
     for (const category of FARE_VEHICLE_CATEGORIES) {
       if (!settings.perKmRates[category]) errors.push(`${category}: Long Range /km rate must be greater than zero`);
+      if (!Number.isFinite(settings.minimumWalletBalances[category]) || settings.minimumWalletBalances[category] < 0) {
+        errors.push(`${category}: Minimum Wallet Balance must be zero or greater`);
+      }
     }
   }
   return { settings, errors };
@@ -727,6 +752,7 @@ const userSchema = new mongoose.Schema({
   phone:   { type: String, default: '', trim: true },
   role:    { type: String, enum: ['customer', 'driver'], default: 'customer' },
   vehicleType:  { type: String, enum: [...FARE_VEHICLE_CATEGORIES, 'Rickshaw', 'Car AC', ''], default: '' },
+  ridePreference: { type: String, enum: DRIVER_RIDE_PREFERENCES, default: 'Both' },
   vehicleModel: { type: String, default: '' },
   vehiclePlate: { type: String, default: '' },
   isOnline: { type: Boolean, default: false },
@@ -1420,11 +1446,12 @@ function requireProfileSearchAccess(req, res, next) {
 
 app.post('/api/auth/register', async (req, res) => {
   try {
-    const { name, email, password, phone, role, vehicleType, vehicleModel, vehiclePlate,
+    const { name, email, password, phone, role, vehicleType, vehicleModel, vehiclePlate, ridePreference,
              profilePhoto, licensePhoto, cnicFront, cnicBack, cnicNumber, vehicleRegPhoto } = req.body;
     if (!name || !password) return res.status(400).json({ error: 'Name and password are required' });
     if (!phone)             return res.status(400).json({ error: 'Phone number is required' });
     const resolvedRoleEarly = role || 'customer';
+    const resolvedRidePreference = resolvedRoleEarly === 'driver' ? normalizeRidePreference(ridePreference) : 'Both';
     const normalizedCustomerId = normalizeNationalId(cnicNumber);
     if (resolvedRoleEarly === 'customer') {
       if (!cnicNumber || !cnicFront || !cnicBack) {
@@ -1477,6 +1504,7 @@ app.post('/api/auth/register', async (req, res) => {
       role:          resolvedRole,
       accountStatus: resolvedRole === 'driver' ? 'pending' : (identityVerified ? 'active' : 'pending'),
       vehicleType:   resolvedRole === 'driver' ? normalizeFareVehicle(vehicleType) : '',
+      ridePreference: resolvedRidePreference,
       vehicleModel:  vehicleModel   || '',
       vehiclePlate:  vehiclePlate   || '',
       profilePhoto:  await saveDocToDisk(profilePhoto, 'profile'),
@@ -1510,6 +1538,7 @@ app.post('/api/auth/register', async (req, res) => {
       user: { id: user._id, name: user.name, email: user.email || '', phone: user.phone,
                role: user.role, accountStatus: user.accountStatus, identityVerificationStatus: user.identityVerificationStatus,
               vehicleType: user.vehicleType,
+              ridePreference: user.ridePreference || 'Both',
               vehicleModel: user.vehicleModel, vehiclePlate: user.vehiclePlate,
                lastDailyFeePaidAt: null, dailyFeeAmount: await getDailyFeeForVehicle(user.vehicleType),
                paidUntilDate: null, dailyFeeRate: await getDailyFeeForVehicle(user.vehicleType) }
@@ -1557,7 +1586,8 @@ app.post('/api/auth/login', async (req, res) => {
       user: { id: user._id, name: user.name, email: user.email || '', phone: user.phone,
                role: user.role, accountStatus: user.accountStatus, identityVerificationStatus: user.identityVerificationStatus,
               profilePhoto: user.profilePhoto || '',
-              vehicleType: user.vehicleType,
+               vehicleType: user.vehicleType,
+               ridePreference: user.ridePreference || 'Both',
               vehicleModel: user.vehicleModel, vehiclePlate: user.vehiclePlate, rating: user.rating,
               lastDailyFeePaidAt: user.lastDailyFeePaidAt || null,
                dailyFeeAmount: await getDailyFeeForVehicle(user.vehicleType),
@@ -1822,7 +1852,7 @@ app.post('/api/rides', authMiddleware, customerOnly, customerCanBook, async (req
 
 app.get('/api/rides/available', authMiddleware, driverOnly, async (req, res) => {
   try {
-    const driver = await User.findById(req.user.id).select('vehicleType accountStatus isOnline longRangeEnabled lastOnlineHeartbeat currentLocation').lean();
+    const driver = await User.findById(req.user.id).select('vehicleType ridePreference accountStatus isOnline longRangeEnabled lastOnlineHeartbeat currentLocation').lean();
     const hasFreshHeartbeat = driver?.lastOnlineHeartbeat &&
       new Date(driver.lastOnlineHeartbeat).getTime() >= Date.now() - DRIVER_HEARTBEAT_MAX_AGE_MS;
     if (!driver || driver.accountStatus !== 'active' || !driver.isOnline || !hasFreshHeartbeat || !hasValidCoordinates(driver.currentLocation)) {
@@ -1863,7 +1893,7 @@ app.post('/api/driver/availability', authMiddleware, async (req, res) => {
     }
     const isOnline = req.body?.isOnline === true;
     const driver = await User.findById(req.user.id)
-      .select('accountStatus vehicleType paidUntilDate lastDailyFeePaidAt isFreeTrial longRangeEnabled').lean();
+      .select('accountStatus vehicleType ridePreference paidUntilDate lastDailyFeePaidAt isFreeTrial longRangeEnabled').lean();
     if (!driver || driver.accountStatus !== 'active') {
       return res.status(403).json({ error: 'Your driver account is not approved for online availability' });
     }
@@ -1879,7 +1909,7 @@ app.post('/api/driver/availability', authMiddleware, async (req, res) => {
       ? { isOnline: true, lastOnlineHeartbeat: new Date() }
       : { isOnline: false };
     await User.updateOne({ _id: req.user.id }, update);
-    res.json({ isOnline, vehicleType: normalizeFareVehicle(driver.vehicleType || 'Car Mini'), longRangeEnabled: !!driver.longRangeEnabled });
+    res.json({ isOnline, vehicleType: normalizeFareVehicle(driver.vehicleType || 'Car Mini'), ridePreference: normalizeRidePreference(driver.ridePreference), longRangeEnabled: !!driver.longRangeEnabled });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -1888,11 +1918,11 @@ app.post('/api/driver/availability', authMiddleware, async (req, res) => {
 app.get('/api/driver/long-range', authMiddleware, driverOnly, async (req, res) => {
   try {
     const [driver, wallet, settings] = await Promise.all([
-      User.findById(req.user.id).select('longRangeEnabled').lean(),
+      User.findById(req.user.id).select('longRangeEnabled vehicleType ridePreference').lean(),
       Wallet.findOne({ user: req.user.id }).select('balance').lean(),
       getLongRangeSettings()
     ]);
-    res.json({ enabled: !!driver?.longRangeEnabled, walletBalance: Number(wallet?.balance || 0), settings });
+    res.json({ enabled: !!driver?.longRangeEnabled, walletBalance: Number(wallet?.balance || 0), vehicleType: normalizeFareVehicle(driver?.vehicleType || 'Car Mini'), ridePreference: normalizeRidePreference(driver?.ridePreference), settings });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
@@ -1903,8 +1933,10 @@ app.patch('/api/driver/long-range', authMiddleware, driverOnly, async (req, res)
     if (enabled && !settings.enabled) return res.status(403).json({ error: 'Long Range rides are currently disabled by Admin.' });
     if (enabled) {
       const wallet = await Wallet.findOne({ user: req.user.id }).select('balance').lean();
-      if (Number(wallet?.balance || 0) < settings.minimumWalletBalance) {
-        return res.status(403).json({ error: `Recharge your wallet to activate this feature. Maintain wallet balance up to Rs. ${settings.minimumWalletBalance.toLocaleString()}.` });
+      const category = normalizeFareVehicle(driver?.vehicleType || 'Car Mini');
+      const minimumWalletBalance = settings.minimumWalletBalances[category] ?? DEFAULT_LONG_RANGE_MINIMUM_WALLET_BALANCES[category];
+      if (Number(wallet?.balance || 0) < minimumWalletBalance) {
+        return res.status(403).json({ error: `Minimum Wallet Balance of Rs ${minimumWalletBalance.toLocaleString()} required for ${category} to enable Long Range rides.` });
       }
     }
     await User.updateOne({ _id: req.user.id }, { longRangeEnabled: enabled });
@@ -4481,12 +4513,23 @@ async function runDailyDeduction() {
   if (!dbConnected) return;
   console.log('⏰ Running daily fee rollover checks…');
   try {
-    // Fees are charged atomically when a driver first toggles ONLINE. This
-    // midnight job intentionally does not debit wallets, which means drivers
-    // who stayed offline all day are never charged.
+    // Drivers who choose Long Range Only never pay the standard Daily Fee.
+    // Short Range Only and Both are charged through the same atomic 24-hour
+    // pass logic used when going online. This also makes the scheduled sweep
+    // safe to retry without charging an active pass twice.
     const drivers = await User.find({ role: 'driver', accountStatus: 'active' })
-      .select('_id vehicleType name');
-    console.log(`✓ Daily fee rollover complete: ${drivers.length} active driver(s) checked; no offline-account charge`);
+      .select('_id vehicleType ridePreference name paidUntilDate lastDailyFeePaidAt isFreeTrial');
+    const dailyFeeSettings = await getDailyFeeSettings();
+    let charged = 0;
+    let exempt = 0;
+    let blocked = 0;
+    for (const driver of drivers) {
+      const result = await chargeDailyFeeForOnlineDriver(driver._id, driver, dailyFeeSettings);
+      if (result.exempt) exempt++;
+      else if (result.charged) charged++;
+      else if (!result.allowed) blocked++;
+    }
+    console.log(`✓ Daily fee rollover complete: ${drivers.length} active driver(s) checked; ${charged} charged, ${exempt} Long Range Only exempt, ${blocked} awaiting wallet balance`);
 
     // Notify drivers who now have zero or negative balance
     if (global._vapidPublicKey && drivers.length > 0) {
@@ -4522,12 +4565,13 @@ async function runDailyDeduction() {
         const expiredDrivers = await User.find({
           role: 'driver', accountStatus: 'active',
           $or: [{ paidUntilDate: null }, { paidUntilDate: { $lte: now } }]
-        }).select('_id vehicleType').lean();
+        }).select('_id vehicleType ridePreference').lean();
+        const feeRequiredDrivers = expiredDrivers.filter(driver => !isLongRangeOnlyDriver(driver));
 
-        if (expiredDrivers.length) {
+        if (feeRequiredDrivers.length) {
           const vehicleTypeById = {};
-          expiredDrivers.forEach(d => { vehicleTypeById[String(d._id)] = d.vehicleType; });
-          const expiredIds = expiredDrivers.map(d => d._id);
+          feeRequiredDrivers.forEach(d => { vehicleTypeById[String(d._id)] = d.vehicleType; });
+          const expiredIds = feeRequiredDrivers.map(d => d._id);
           const subs = await PushSub.find({ user: { $in: expiredIds } }).lean();
 
           for (const sub of subs) {
@@ -4549,7 +4593,7 @@ async function runDailyDeduction() {
               if (err.statusCode === 410) PushSub.deleteOne({ _id: sub._id }).catch(() => {});
             });
           }
-          console.log(`🔒 Fee-expiry notification sent to ${expiredDrivers.length} driver(s)`);
+          console.log(`🔒 Fee-expiry notification sent to ${feeRequiredDrivers.length} driver(s)`);
         }
       } catch (notifyErr) { console.warn('Fee-expiry notify error:', notifyErr.message); }
     }
@@ -4589,6 +4633,11 @@ module.exports = {
   normalizeTerms,
   normalizeFareVehicle,
   storedVehicleTypesForFareCategory,
+  DRIVER_RIDE_PREFERENCES,
+  normalizeRidePreference,
+  isLongRangeOnlyDriver,
+  chargeDailyFeeForOnlineDriver,
+  runDailyDeduction,
   normalizeRideBroadcastSettings,
   validateRideBroadcastSettings,
   haversineKm,
