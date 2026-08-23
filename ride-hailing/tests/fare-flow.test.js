@@ -8,7 +8,7 @@ const fare = require('../server');
 const {
   app, io, models, FARE_VEHICLE_CATEGORIES, DEFAULT_PER_KM_RATES,
   DEFAULT_RIDE_BROADCAST_RADIUS_KM, normalizeRideBroadcastSettings,
-  validateRideBroadcastSettings, findRideBroadcastDrivers, emitRideRequestToDrivers, chargeLongRangeCommission,
+  validateRideBroadcastSettings, findRideBroadcastDrivers, findLongRangeBroadcastDrivers, emitRideRequestToDrivers, chargeLongRangeCommission,
   normalizeLongRangeSettings, validateLongRangeSettings, calculateRideFare
   , normalizeTerms
 } = fare;
@@ -412,6 +412,44 @@ test('shared broadcast matcher only selects fresh, wallet-eligible drivers insid
     room: 'user:near-driver',
     event: 'ride:new',
     payload: { id: 'ride-nearby-only' }
+  }]);
+});
+
+test('Long Range broadcast only returns opted-in drivers for Socket.io and push delivery', async () => {
+  let driverQuery;
+  models.User.find = query => {
+    driverQuery = query;
+    return {
+      select: () => ({
+        lean: async () => [
+          { _id: 'opted-in', longRangeEnabled: true, currentLocation: { lat: 31.5204, lng: 74.3587 }, expoPushToken: 'ExponentPushToken[in]' },
+          { _id: 'opted-out', longRangeEnabled: false, currentLocation: { lat: 31.5204, lng: 74.3587 }, expoPushToken: 'ExponentPushToken[out]' }
+        ]
+      })
+    };
+  };
+  models.Wallet.find = () => ({
+    select: () => ({
+      lean: async () => [{ user: 'opted-in' }, { user: 'opted-out' }]
+    })
+  });
+
+  const result = await findLongRangeBroadcastDrivers(
+    { lat: 31.5204, lng: 74.3587 },
+    'Car Mini',
+    { broadcastRadiusKm: 30, minimumWalletBalance: 500 }
+  );
+
+  assert.equal(driverQuery.longRangeEnabled, true);
+  assert.deepEqual(result.drivers.map(driver => driver._id), ['opted-in']);
+
+  const emissions = [];
+  io.to = room => ({ emit: (event, payload) => emissions.push({ room, event, payload }) });
+  emitRideRequestToDrivers(result.drivers, { id: 'long-range-only' });
+  assert.deepEqual(emissions, [{
+    room: 'user:opted-in',
+    event: 'ride:new',
+    payload: { id: 'long-range-only' }
   }]);
 });
 

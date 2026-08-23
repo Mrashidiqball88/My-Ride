@@ -1121,13 +1121,14 @@ async function findLongRangeBroadcastDrivers(pickupLocation, vehicleType, longRa
     vehicleType: { $in: storedVehicleTypesForFareCategory(vehicleType) },
     lastOnlineHeartbeat: { $gte: new Date(Date.now() - DRIVER_HEARTBEAT_MAX_AGE_MS) },
     'currentLocation.lat': { $ne: 0 }, 'currentLocation.lng': { $ne: 0 }
-  }).select('_id currentLocation expoPushToken').lean();
+  }).select('_id currentLocation expoPushToken longRangeEnabled').lean();
   const eligibleWallets = await Wallet.find({
     user: { $in: candidates.map(driver => driver._id) },
     balance: { $gte: longRangeSettings.minimumWalletBalance }
   }).select('user').lean();
   const eligibleIds = new Set(eligibleWallets.map(wallet => String(wallet.user)));
-  const drivers = candidates.filter(driver => eligibleIds.has(String(driver._id)) && hasValidCoordinates(driver.currentLocation))
+  const drivers = candidates.filter(driver => driver.longRangeEnabled === true
+      && eligibleIds.has(String(driver._id)) && hasValidCoordinates(driver.currentLocation))
     .map(driver => ({ ...driver, distanceFromPickupKm: haversineKm(
       Number(pickupLocation.lat), Number(pickupLocation.lng),
       Number(driver.currentLocation.lat), Number(driver.currentLocation.lng)
@@ -4509,6 +4510,7 @@ module.exports = {
   validateRideBroadcastSettings,
   haversineKm,
   findRideBroadcastDrivers,
+  findLongRangeBroadcastDrivers,
   emitRideRequestToDrivers,
   chargeLongRangeCommission,
   refreshPendingRideFares,
