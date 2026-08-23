@@ -1542,6 +1542,7 @@ function connectSocket() {
       showToast('Ride was taken by another driver', 'info');
     } else if (matchesSent) {
       sentOffer = null;
+      hideRideRequest();
       clearRideMap();
       showToast('Ride was taken by another driver', 'info');
     }

@@ -69,6 +69,7 @@ test.describe('live Mongo fare refresh', () => {
   let matchingDriver;
   let otherDriver;
   let highroofDriver;
+  let highroofTakeoverDriver;
   let coasterDriver;
 
   test.beforeAll(async () => {
@@ -111,6 +112,16 @@ test.describe('live Mongo fare refresh', () => {
       currentLocation: { lat: 1, lng: 2 },
       accountStatus: 'active'
     });
+    highroofTakeoverDriver = await models.User.create({
+      name: 'Highroof Takeover Driver',
+      email: 'fare-live-highroof-takeover@example.test',
+      password: 'not-used',
+      role: 'driver',
+      vehicleType: 'Toyota Highroof',
+      isOnline: true,
+      currentLocation: { lat: 1, lng: 2 },
+      accountStatus: 'active'
+    });
     coasterDriver = await models.User.create({
       name: 'Coaster Driver',
       email: 'fare-live-coaster@example.test',
@@ -125,6 +136,7 @@ test.describe('live Mongo fare refresh', () => {
       { user: matchingDriver._id, balance: 1000, transactions: [] },
       { user: otherDriver._id, balance: 1000, transactions: [] },
       { user: highroofDriver._id, balance: 1000, transactions: [] },
+      { user: highroofTakeoverDriver._id, balance: 1000, transactions: [] },
       { user: coasterDriver._id, balance: 1000, transactions: [] }
     ]);
     await models.Settings.create({
@@ -374,6 +386,61 @@ test.describe('live Mongo fare refresh', () => {
       await Promise.all([
         customerPage.close(), highroofPage.close(), coasterPage.close(), otherPage.close()
       ]);
+      await request.dispose();
+    }
+  });
+
+  test('dismisses a stale Highroof request after another Highroof driver accepts it', async ({ browser, playwright }) => {
+    const customerToken = token(customer);
+    const takeoverToken = token(highroofTakeoverDriver);
+    const baseURL = `http://127.0.0.1:${httpServer.address().port}`;
+    const request = await playwright.request.newContext({ baseURL });
+    const highroofPage = await browser.newPage();
+    const coasterPage = await browser.newPage();
+
+    try {
+      await Promise.all([
+        openAuthenticatedClient(highroofPage, baseURL, '/driver', highroofDriver, token(highroofDriver)),
+        openAuthenticatedClient(coasterPage, baseURL, '/driver', coasterDriver, token(coasterDriver))
+      ]);
+      await Promise.all([
+        highroofPage.evaluate(() => toggleOnline(true)),
+        coasterPage.evaluate(() => toggleOnline(true))
+      ]);
+      await expect.poll(() => highroofPage.evaluate(() => isOnline)).toBe(true);
+      await expect.poll(() => coasterPage.evaluate(() => isOnline)).toBe(true);
+
+      const rideResponse = await request.post('/api/rides', {
+        headers: { authorization: `Bearer ${customerToken}` },
+        data: {
+          pickupLocation: { lat: 1, lng: 2, address: 'Highroof takeover pickup' },
+          dropoffLocation: { lat: 3, lng: 4, address: 'Highroof takeover dropoff' },
+          distance: 7,
+          vehicleType: 'Toyota Highroof',
+          fare: 1
+        }
+      });
+      expect(rideResponse.status()).toBe(201);
+      const ride = await rideResponse.json();
+
+      await expect(highroofPage.locator('#ride-request')).toBeVisible();
+      await expect(highroofPage.locator('#rr-vehicle')).toHaveText('Toyota Highroof');
+      await expect(coasterPage.locator('#ride-request')).toBeHidden();
+
+      const accepted = await request.patch(`/api/rides/${ride._id}/accept`, {
+        headers: { authorization: `Bearer ${takeoverToken}` }
+      });
+      expect(accepted.status()).toBe(200);
+
+      await expect(highroofPage.locator('#ride-request')).toBeHidden();
+      await expect.poll(() => highroofPage.evaluate(() => ({
+        pendingRide: !!pendingRide,
+        sentOffer: !!sentOffer,
+        activeRide: !!activeRide
+      }))).toEqual({ pendingRide: false, sentOffer: false, activeRide: false });
+      await expect(coasterPage.locator('#ride-request')).toBeHidden();
+    } finally {
+      await Promise.all([highroofPage.close(), coasterPage.close()]);
       await request.dispose();
     }
   });

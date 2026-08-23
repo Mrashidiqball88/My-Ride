@@ -2040,7 +2040,7 @@ app.patch('/api/rides/:id/accept', authMiddleware, async (req, res) => {
         profilePhoto: driverUser.profilePhoto || ''
       }
     });
-    io.to(`drivers:${ride.vehicleType || 'Car Mini'}`).emit('ride:taken', { rideId: ride._id });
+    io.to(`drivers:${normalizeFareVehicle(ride.vehicleType || 'Car Mini')}`).emit('ride:taken', { rideId: ride._id });
 
     res.json(ride);
   } catch (err) {
@@ -2257,7 +2257,7 @@ app.patch('/api/rides/:id/accept-driver', authMiddleware, async (req, res) => {
         profilePhoto: driverUser.profilePhoto || ''
       }
     });
-    io.to(`drivers:${ride.vehicleType || 'Car Mini'}`).emit('ride:taken', { rideId: ride._id });
+    io.to(`drivers:${normalizeFareVehicle(ride.vehicleType || 'Car Mini')}`).emit('ride:taken', { rideId: ride._id });
 
     res.json(ride);
   } catch (err) {
