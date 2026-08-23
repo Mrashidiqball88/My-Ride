@@ -1603,6 +1603,10 @@ async function updateFare() {
       dist += haversine(pts[i].lat, pts[i].lng, pts[i+1].lat, pts[i+1].lng);
   }
 
+  // Keep card labels in sync with the same distance cutoff used by the
+  // server quote. Before a route distance exists, cards retain local rates.
+  routeDistanceKm = dist;
+  renderCustomerPerKmRates(customerPerKmRates);
   const requestId = ++fareQuoteRequest;
   document.getElementById('fare-row').style.display = 'block';
   document.getElementById('fare-meta').textContent = 'Calculating from Admin fare rules…';

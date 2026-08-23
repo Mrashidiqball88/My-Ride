@@ -199,11 +199,12 @@ test('Long Range fares begin at the configured cutoff and use vehicle-specific r
     perKmRates: Object.fromEntries(FARE_VEHICLE_CATEGORIES.map(category => [category, 210]))
   });
   assert.equal(validateLongRangeSettings(longRange).errors.length, 0);
-  const veryShort = calculateRideFare(settingsFor(300, 100), longRange, 'Car Mini', 2, new Date(), DEFAULT_PER_KM_RATES);
+  const standardRates = { 'Car Mini': 50 };
+  const veryShort = calculateRideFare(settingsFor(300, 100), longRange, 'Car Mini', 2, new Date(), standardRates);
   assert.equal(veryShort.isLongRange, undefined);
-  assert.equal(veryShort.perKmRate, DEFAULT_PER_KM_RATES['Car Mini']);
-  assert.equal(veryShort.totalFare, 300 + (2 * DEFAULT_PER_KM_RATES['Car Mini']));
-  const short = calculateRideFare(settingsFor(300, 100), longRange, 'Car Mini', 5, new Date(), DEFAULT_PER_KM_RATES);
+  assert.equal(veryShort.perKmRate, standardRates['Car Mini']);
+  assert.equal(veryShort.totalFare, 300 + (2 * standardRates['Car Mini']));
+  const short = calculateRideFare(settingsFor(300, 100), longRange, 'Car Mini', 5, new Date(), standardRates);
   assert.equal(short.isLongRange, undefined);
   assert.equal(short.longRangeRatePerKm, undefined);
   const local = calculateRideFare(settingsFor(300, 100), longRange, 'Car Mini', 49.99, new Date(), DEFAULT_PER_KM_RATES);
