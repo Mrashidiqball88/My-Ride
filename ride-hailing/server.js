@@ -902,6 +902,10 @@ const rideSchema = new mongoose.Schema({
   customerRating:  { type: Number, default: null },
   customerReview:  { type: String,  default: '' },
   verificationPin: { type: String,  default: null },  // 4-digit PIN for ride start
+  // The exact driver audience that received ride:new. Lifecycle retirement
+  // events target these personal rooms too, so a room-membership race cannot
+  // leave a delivered offer actionable after it is cancelled or taken.
+  notifiedDriverIds: [{ type: mongoose.Schema.Types.ObjectId, ref: 'User' }],
   // The response window is persisted with each request. This makes expiry
   // authoritative across server restarts and lets reconnecting drivers render
   // the remaining time rather than restarting a local countdown.
@@ -1300,7 +1304,7 @@ function emitRideRequestToDrivers(drivers, payload) {
 // Ride state can be visible through a personal room, an active ride room, and
 // the vehicle broadcast room at the same time. Emit each lifecycle mutation to
 // their union so every recipient sees one authoritative, idempotent update.
-function emitRideLifecycle(ride, event, detail = {}, { notifyVehicleDrivers = false } = {}) {
+function emitRideLifecycle(ride, event, detail = {}, { notifyVehicleDrivers = false, notifyDriverIds = [] } = {}) {
   const revision = new Date(ride.updatedAt || Date.now()).toISOString();
   const payload = {
     rideId: String(ride._id),
@@ -1310,6 +1314,9 @@ function emitRideLifecycle(ride, event, detail = {}, { notifyVehicleDrivers = fa
   };
   const rooms = [`ride:${ride._id}`, `user:${ride.passenger}`];
   if (ride.driver) rooms.push(`user:${ride.driver}`);
+  notifyDriverIds.forEach(driverId => {
+    if (driverId) rooms.push(`user:${driverId}`);
+  });
   if (notifyVehicleDrivers) rooms.push(`drivers:${normalizeFareVehicle(ride.vehicleType || 'Car Mini')}`);
   io.to([...new Set(rooms)]).emit(event, payload);
   return payload;
@@ -1319,7 +1326,10 @@ function emitRideAccepted(ride, verificationPin, driver) {
   emitRideLifecycle(ride, 'ride:accepted', { verificationPin, driver });
   // This intentionally reaches every eligible driver, including drivers who
   // never joined the ride room because they had only received ride:new.
-  emitRideLifecycle(ride, 'ride:taken', {}, { notifyVehicleDrivers: true });
+  emitRideLifecycle(ride, 'ride:taken', {}, {
+    notifyVehicleDrivers: true,
+    notifyDriverIds: ride.notifiedDriverIds || []
+  });
 }
 
 const ADMIN_SECURITY_KEY = 'admin_security';
@@ -1953,6 +1963,8 @@ app.post('/api/rides', authMiddleware, customerOnly, customerCanBook, async (req
         : await findRideBroadcastDrivers(ride.pickupLocation, ride.vehicleType, rideBroadcastSettings))
       : { drivers: [], radiusKm: DEFAULT_RIDE_BROADCAST_RADIUS_KM };
     ridePayload.broadcastRadiusKm = broadcast.radiusKm;
+    ride.notifiedDriverIds = broadcast.drivers.map(driver => driver._id);
+    await ride.save();
     emitRideRequestToDrivers(broadcast.drivers, ridePayload);
 
     // Also push a Web Push notification to subscribed eligible drivers
@@ -2186,6 +2198,11 @@ app.get('/api/rides/:id', authMiddleware, async (req, res) => {
     const ride = await Ride.findById(req.params.id)
       .populate('passenger driver', 'name phone vehicleType rating currentLocation');
     if (!ride) return res.status(404).json({ error: 'Ride not found' });
+    const isPassenger = String(ride.passenger?._id || ride.passenger) === String(req.user.id);
+    const isDriver = String(ride.driver?._id || ride.driver) === String(req.user.id);
+    if (!isPassenger && !isDriver) {
+      return res.status(403).json({ error: 'You are not authorized to view this ride' });
+    }
     res.json(ride);
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -2197,8 +2214,26 @@ app.patch('/api/rides/:id/accept', authMiddleware, async (req, res) => {
     if (req.user.role !== 'driver') {
       return res.status(403).json({ error: 'Only drivers can accept rides' });
     }
+    // A direct API call must not let a driver claim a ride they were never
+    // offered. The recipient snapshot is created before ride:new delivery and
+    // is the authoritative acceptance audience for this request.
+    const driverUser = await User.findOne({
+      _id: req.user.id,
+      role: 'driver',
+      accountStatus: 'active',
+      isOnline: true
+    }).select('name phone vehicleType vehicleModel vehiclePlate rating profilePhoto');
+    if (!driverUser) {
+      return res.status(403).json({ error: 'Only active online drivers can accept rides' });
+    }
     const ride = await Ride.findOneAndUpdate(
-      { _id: req.params.id, status: 'requested', driver: null, ...rideOfferIsStillOpenQuery() },
+      {
+        _id: req.params.id,
+        status: 'requested',
+        driver: null,
+        notifiedDriverIds: req.user.id,
+        ...rideOfferIsStillOpenQuery()
+      },
       { $set: { driver: req.user.id, status: 'accepted' } },
       { new: true }
     ).populate('passenger', 'name phone');
@@ -2223,7 +2258,6 @@ app.patch('/api/rides/:id/accept', authMiddleware, async (req, res) => {
     await ride.save();
 
     // Fetch full driver profile for the acceptance payload
-    const driverUser = await User.findById(req.user.id).select('name phone vehicleType vehicleModel vehiclePlate rating profilePhoto');
     emitRideAccepted(ride, verificationPin, {
       id:           req.user.id,
       name:         driverUser.name,
@@ -2323,7 +2357,10 @@ app.patch('/api/rides/:id/cancel', authMiddleware, async (req, res) => {
     await ride.save();
     // Requested riders are usually only in their vehicle room, not the ride
     // room, so cancellation must fan out to both audiences immediately.
-    emitRideLifecycle(ride, 'ride:status', { status: 'cancelled' }, { notifyVehicleDrivers: true });
+    emitRideLifecycle(ride, 'ride:status', { status: 'cancelled' }, {
+      notifyVehicleDrivers: true,
+      notifyDriverIds: ride.notifiedDriverIds || []
+    });
     res.json(ride);
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -4387,14 +4424,34 @@ io.on('connection', async (socket) => {
     }).catch(() => {});
   }
 
-  socket.on('ride:join',  (rideId) => socket.join(`ride:${rideId}`));
-  socket.on('ride:leave', (rideId) => socket.leave(`ride:${rideId}`));
+  // A ride room carries location, contact, and verification details. Personal
+  // user rooms deliver pending offers, so only the passenger or assigned driver
+  // may join a ride room after the assignment is persisted.
+  async function isRideParticipant(rideId) {
+    if (!mongoose.isValidObjectId(rideId)) return false;
+    const ride = await Ride.exists({
+      _id: rideId,
+      ...(role === 'customer' ? { passenger: id } : { driver: id })
+    }).catch(() => null);
+    return !!ride;
+  }
+
+  socket.on('ride:join', async (rideId) => {
+    if (await isRideParticipant(rideId)) socket.join(`ride:${rideId}`);
+  });
+  socket.on('ride:leave', async (rideId) => {
+    if (await isRideParticipant(rideId)) socket.leave(`ride:${rideId}`);
+  });
 
   // Driver sends location updates during a ride
   socket.on('driver:location', async ({ rideId, lat, lng }) => {
     if (role !== 'driver') return;
     if (!Number.isFinite(Number(lat)) || !Number.isFinite(Number(lng))) return;
     if (rideId) {
+      const activeRide = await Ride.findOne({
+        _id: rideId, driver: id, status: { $in: ['accepted', 'arrived', 'in-progress'] }
+      }).select('_id').lean().catch(() => null);
+      if (!activeRide) return;
       io.to(`ride:${rideId}`).emit('driver:location', { lat, lng });
       await Ride.updateOne({ _id: rideId }, { 'driverLocation.lat': lat, 'driverLocation.lng': lng }).catch(() => {});
     }
@@ -4452,9 +4509,13 @@ io.on('connection', async (socket) => {
     socket.emit('driver:heartbeat:ack', { serverTime: new Date().toISOString() });
   });
 
-  // Share live location (customer)
-  socket.on('location:share', ({ lat, lng, rideId }) => {
-    if (rideId) io.to(`ride:${rideId}`).emit('passenger:location', { lat, lng });
+  // Share passenger location only with an active ride's authorized room.
+  socket.on('location:share', async ({ lat, lng, rideId }) => {
+    if (role !== 'customer' || !rideId || !Number.isFinite(Number(lat)) || !Number.isFinite(Number(lng))) return;
+    const activeRide = await Ride.findOne({
+      _id: rideId, passenger: id, status: { $in: ['accepted', 'arrived', 'in-progress'] }
+    }).select('_id').lean().catch(() => null);
+    if (activeRide) io.to(`ride:${rideId}`).emit('passenger:location', { lat, lng });
   });
 
   socket.on('disconnect', async () => {

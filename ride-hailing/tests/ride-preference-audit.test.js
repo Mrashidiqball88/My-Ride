@@ -154,7 +154,8 @@ test('audits registration, scheduled fees, wallet gates, completion commission, 
   });
   const longRangeRide = await models.Ride.create({
     passenger: customer._id, driver: null, status: 'requested', vehicleType: 'Toyota Highroof',
-    isLongRange: true, fare: 1000, pickupLocation: { lat: 31.52, lng: 74.35 }, dropoffLocation: { lat: 32.0, lng: 74.7 }
+    isLongRange: true, fare: 1000, pickupLocation: { lat: 31.52, lng: 74.35 }, dropoffLocation: { lat: 32.0, lng: 74.7 },
+    notifiedDriverIds: [driverB._id]
   });
   const beforeCompletion = await models.Wallet.findOne({ user: driverB._id }).lean();
   assert.equal(beforeCompletion.transactions.filter(tx => tx.description === 'Long Range commission').length, 0);

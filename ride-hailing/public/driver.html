@@ -1690,7 +1690,10 @@ async function reconcileRideRequestsAfterReconnect() {
   for (let attempt = 0; attempt < 3; attempt++) {
     try {
       const response = await fetch('/api/rides/available', {
-        headers: { Authorization: `Bearer ${token}` }
+        headers: {
+          Authorization: `Bearer ${token}`,
+          ...(sessionToken ? { 'X-Session-Token': sessionToken } : {})
+        }
       });
       if (!response.ok) {
         if (response.status === 403 && attempt < 2) {

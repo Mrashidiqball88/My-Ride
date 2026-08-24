@@ -30,24 +30,49 @@ function token(user) {
   }, JWT_SECRET);
 }
 
-async function openBrowserSocket(page, baseURL, authToken, room) {
+function sessionToken(user) {
+  return `live-session-${String(user._id)}`;
+}
+
+function authHeaders(user) {
+  return {
+    authorization: `Bearer ${token(user)}`,
+    'x-session-token': sessionToken(user)
+  };
+}
+
+function browserUser(user) {
+  return {
+    _id: String(user._id),
+    id: String(user._id),
+    name: user.name,
+    role: user.role,
+    accountStatus: user.accountStatus,
+    vehicleType: user.vehicleType
+  };
+}
+
+async function openBrowserSocket(page, baseURL, user, room) {
+  const authToken = token(user);
+  const authSession = sessionToken(user);
   await page.goto(`${baseURL}/customer`);
   await page.waitForFunction(() => typeof window.io === 'function');
-  await page.evaluate(({ authToken: socketToken, room: socketRoom }) => {
+  await page.evaluate(({ authToken: socketToken, sessionToken: socketSession, room: socketRoom }) => {
     window.__fareEvents = [];
-    const socket = window.io({ auth: { token: socketToken } });
+    const socket = window.io({ auth: { token: socketToken, sessionToken: socketSession } });
     window.__fareSocket = socket;
     socket.on('ride:fare-updated', payload => window.__fareEvents.push(payload));
     if (socketRoom) socket.on('connect', () => socket.emit('ride:join', socketRoom));
-  }, { authToken, room });
+  }, { authToken, sessionToken: authSession, room });
   await page.waitForFunction(() => window.__fareSocket?.connected === true);
 }
 
 async function openAuthenticatedClient(page, baseURL, path, user, authToken) {
-  await page.addInitScript(({ user: storedUser, token: storedToken }) => {
+  await page.addInitScript(({ user: storedUser, token: storedToken, sessionToken: storedSession }) => {
     localStorage.setItem('rh_token', storedToken);
     localStorage.setItem('rh_user', JSON.stringify(storedUser));
-  }, { user, token: authToken });
+    localStorage.setItem('rh_session', storedSession);
+  }, { user: browserUser(user), token: authToken, sessionToken: sessionToken(user) });
   await page.goto(`${baseURL}${path}`);
   await page.waitForFunction(() => document.getElementById('app')?.style.display !== 'none');
   await page.waitForFunction(() => typeof socket !== 'undefined' && socket?.connected === true);
@@ -139,6 +164,9 @@ test.describe('live Mongo fare refresh', () => {
       { user: highroofTakeoverDriver._id, balance: 1000, transactions: [] },
       { user: coasterDriver._id, balance: 1000, transactions: [] }
     ]);
+    await Promise.all([
+      customer, matchingDriver, otherDriver, highroofDriver, highroofTakeoverDriver, coasterDriver
+    ].map(user => models.User.updateOne({ _id: user._id }, { activeSessionToken: sessionToken(user) })));
     await models.Settings.create({
       key: 'daily_fare_settings',
       value: settingsFor(200, 100)
@@ -152,6 +180,17 @@ test.describe('live Mongo fare refresh', () => {
     if (httpServer) await new Promise(resolve => httpServer.close(resolve));
     await mongoose.disconnect();
     if (mongo) await mongo.stop();
+  });
+
+  test.beforeEach(async () => {
+    // Each browser scenario owns its ride state. Without this reset, a pending
+    // request from an earlier case can be restored by a reconnect and mask the
+    // event the current case intends to verify.
+    await models.Ride.deleteMany({});
+    await models.User.updateMany(
+      { _id: { $in: [matchingDriver._id, otherDriver._id, highroofDriver._id, highroofTakeoverDriver._id, coasterDriver._id] } },
+      { $set: { isOnline: false } }
+    );
   });
 
   test('persists settings, creates a ride, and refreshes only matching browser clients', async ({ browser, playwright }) => {
@@ -178,7 +217,7 @@ test.describe('live Mongo fare refresh', () => {
       await Promise.all([
         openAuthenticatedClient(customerPage, baseURL, '/customer', customer, customerToken),
         openAuthenticatedClient(matchingPage, baseURL, '/driver', matchingDriver, matchingToken),
-        openBrowserSocket(otherPage, baseURL, otherToken)
+        openBrowserSocket(otherPage, baseURL, otherDriver)
       ]);
 
       await matchingPage.evaluate(() => toggleOnline(true));
@@ -190,7 +229,7 @@ test.describe('live Mongo fare refresh', () => {
       }).toBe(true);
 
       const rideResponse = await request.post('/api/rides', {
-        headers: { authorization: `Bearer ${customerToken}` },
+        headers: authHeaders(customer),
         data: {
           pickupLocation: { lat: 1, lng: 2, address: 'Live pickup' },
           dropoffLocation: { lat: 3, lng: 4, address: 'Live dropoff' },
@@ -351,7 +390,10 @@ test.describe('live Mongo fare refresh', () => {
         await customerPage.locator('#book-btn').click();
         const availableRides = await driverPage.evaluate(async () => {
           const response = await fetch('/api/rides/available', {
-            headers: { authorization: `Bearer ${localStorage.getItem('rh_token')}` }
+            headers: {
+              authorization: `Bearer ${localStorage.getItem('rh_token')}`,
+              'x-session-token': localStorage.getItem('rh_session')
+            }
           });
           return response.json();
         });
@@ -363,7 +405,10 @@ test.describe('live Mongo fare refresh', () => {
         await expect(customerPage.locator('#ar-live-fare')).toHaveText(expectedFareLabel);
         const otherAvailableRides = await otherPage.evaluate(async () => {
           const response = await fetch('/api/rides/available', {
-            headers: { authorization: `Bearer ${localStorage.getItem('rh_token')}` }
+            headers: {
+              authorization: `Bearer ${localStorage.getItem('rh_token')}`,
+              'x-session-token': localStorage.getItem('rh_session')
+            }
           });
           return response.json();
         });
@@ -409,9 +454,17 @@ test.describe('live Mongo fare refresh', () => {
       ]);
       await expect.poll(() => highroofPage.evaluate(() => isOnline)).toBe(true);
       await expect.poll(() => coasterPage.evaluate(() => isOnline)).toBe(true);
+      await expect.poll(() => io.sockets.adapter.rooms.get('drivers:Toyota Highroof')?.size || 0).toBeGreaterThan(0);
+      await expect.poll(() => io.sockets.adapter.rooms.get('drivers:Toyota Saloon Coaster')?.size || 0).toBeGreaterThan(0);
+      // This driver intentionally has no browser page: the ride-recipient
+      // snapshot must still permit a real eligible driver to take over while
+      // the originally alerted driver is disconnected.
+      await models.User.updateOne({ _id: highroofTakeoverDriver._id }, {
+        $set: { isOnline: true, lastOnlineHeartbeat: new Date(), currentLocation: { lat: 1, lng: 2 } }
+      });
 
       const rideResponse = await request.post('/api/rides', {
-        headers: { authorization: `Bearer ${customerToken}` },
+        headers: authHeaders(customer),
         data: {
           pickupLocation: { lat: 1, lng: 2, address: 'Highroof takeover pickup' },
           dropoffLocation: { lat: 3, lng: 4, address: 'Highroof takeover dropoff' },
@@ -432,7 +485,7 @@ test.describe('live Mongo fare refresh', () => {
       await expect.poll(() => highroofPage.evaluate(() => socket.connected)).toBe(false);
 
       const accepted = await request.patch(`/api/rides/${ride._id}/accept`, {
-        headers: { authorization: `Bearer ${takeoverToken}` }
+        headers: authHeaders(highroofTakeoverDriver)
       });
       expect(accepted.status()).toBe(200);
 
@@ -447,7 +500,10 @@ test.describe('live Mongo fare refresh', () => {
       await expect.poll(async () => {
         const available = await highroofPage.evaluate(async () => {
           const response = await fetch('/api/rides/available', {
-            headers: { authorization: `Bearer ${localStorage.getItem('rh_token')}` }
+            headers: {
+              authorization: `Bearer ${localStorage.getItem('rh_token')}`,
+              'x-session-token': localStorage.getItem('rh_session')
+            }
           });
           return response.json();
         });
@@ -456,6 +512,59 @@ test.describe('live Mongo fare refresh', () => {
       await expect(coasterPage.locator('#ride-request')).toBeHidden();
     } finally {
       await Promise.all([highroofPage.close(), coasterPage.close()]);
+      await request.dispose();
+    }
+  });
+
+  test('blocks an unrelated driver from reading a ride they do not own', async ({ playwright }) => {
+    const baseURL = `http://127.0.0.1:${httpServer.address().port}`;
+    const request = await playwright.request.newContext({ baseURL });
+    try {
+      const heartbeat = new Date();
+      await models.User.updateOne({ _id: matchingDriver._id }, {
+        $set: { isOnline: true, lastOnlineHeartbeat: heartbeat, currentLocation: { lat: 1, lng: 2 } }
+      });
+      await models.User.updateOne({ _id: otherDriver._id }, {
+        $set: {
+          isOnline: true,
+          vehicleType: 'Car Mini',
+          lastOnlineHeartbeat: heartbeat,
+          currentLocation: { lat: 40, lng: 40 }
+        }
+      });
+      const created = await request.post('/api/rides', {
+        headers: authHeaders(customer),
+        data: {
+          pickupLocation: { lat: 1, lng: 2, address: 'Private pickup' },
+          dropoffLocation: { lat: 3, lng: 4, address: 'Private dropoff' },
+          distance: 7,
+          vehicleType: 'Car Mini',
+          fare: 1
+        }
+      });
+      expect(created.status()).toBe(201);
+      const ride = await created.json();
+
+      const unrelatedRead = await request.get(`/api/rides/${ride._id}`, {
+        headers: authHeaders(otherDriver)
+      });
+      expect(unrelatedRead.status()).toBe(403);
+
+      const unrelatedAcceptance = await request.patch(`/api/rides/${ride._id}/accept`, {
+        headers: authHeaders(otherDriver)
+      });
+      expect(unrelatedAcceptance.status()).toBe(409);
+
+      const notifiedAcceptance = await request.patch(`/api/rides/${ride._id}/accept`, {
+        headers: authHeaders(matchingDriver)
+      });
+      expect(notifiedAcceptance.status()).toBe(200);
+
+      const passengerRead = await request.get(`/api/rides/${ride._id}`, {
+        headers: authHeaders(customer)
+      });
+      expect(passengerRead.status()).toBe(200);
+    } finally {
       await request.dispose();
     }
   });
@@ -469,7 +578,7 @@ test.describe('live Mongo fare refresh', () => {
 
     async function createRide(label) {
       const response = await request.post('/api/rides', {
-        headers: { authorization: `Bearer ${customerToken}` },
+        headers: authHeaders(customer),
         data: {
           pickupLocation: { lat: 1, lng: 2, address: `${label} pickup` },
           dropoffLocation: { lat: 3, lng: 4, address: `${label} dropoff` },
@@ -486,16 +595,21 @@ test.describe('live Mongo fare refresh', () => {
       await openAuthenticatedClient(driverPage, baseURL, '/driver', matchingDriver, matchingToken);
       await driverPage.evaluate(() => toggleOnline(true));
       await expect.poll(() => driverPage.evaluate(() => isOnline)).toBe(true);
+      await expect.poll(() => io.sockets.adapter.rooms.get('drivers:Car Mini')?.size || 0).toBeGreaterThan(0);
 
       const cancelledRide = await createRide('Instant cancellation');
       await expect(driverPage.locator('#ride-request')).toBeVisible();
-      await expect.poll(() => driverPage.evaluate(() => ({
-        pending: String(pendingRide?.id || pendingRide?._id) === String(cancelledRide._id),
+      // Browser automation does not grant notification/audio activation by
+      // default. Start the same request alert explicitly so cancellation
+      // verifies the cleanup path for an already-alerting offer.
+      await driverPage.evaluate(() => startRideAlert(pendingRide));
+      await expect.poll(() => driverPage.evaluate(rideId => ({
+        pending: String(pendingRide?.id || pendingRide?._id) === String(rideId),
         alerting: !!alertInterval
-      }))).toEqual({ pending: true, alerting: true });
+      }), cancelledRide._id)).toEqual({ pending: true, alerting: true });
 
       const cancelled = await request.patch(`/api/rides/${cancelledRide._id}/cancel`, {
-        headers: { authorization: `Bearer ${customerToken}` }
+        headers: authHeaders(customer)
       });
       expect(cancelled.status()).toBe(200);
       await expect(driverPage.locator('#ride-request')).toBeHidden();
@@ -509,13 +623,13 @@ test.describe('live Mongo fare refresh', () => {
       const acceptedRide = await createRide('Instant acceptance');
       await expect(driverPage.locator('#ride-request')).toBeVisible();
       const accepted = await request.patch(`/api/rides/${acceptedRide._id}/accept`, {
-        headers: { authorization: `Bearer ${matchingToken}` }
+        headers: authHeaders(matchingDriver)
       });
       expect(accepted.status()).toBe(200);
       await expect(driverPage.locator('#ride-request')).toBeHidden();
       await expect(driverPage.locator('#active-panel')).toBeVisible();
-      await expect.poll(() => driverPage.evaluate(() =>
-        String(activeRide?._id) === String(acceptedRide._id)
+      await expect.poll(() => driverPage.evaluate(rideId =>
+        String(activeRide?._id) === String(rideId), acceptedRide._id
       )).toBe(true);
     } finally {
       await driverPage.close();

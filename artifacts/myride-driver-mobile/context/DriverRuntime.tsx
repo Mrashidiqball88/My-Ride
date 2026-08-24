@@ -137,7 +137,18 @@ export function DriverRuntimeProvider({ children }: { children: ReactNode }) {
     localRideNotificationIds.current.delete(rideId);
     if (notificationId) {
       void Notifications.cancelScheduledNotificationAsync(notificationId).catch(() => undefined);
+      void Notifications.dismissNotificationAsync(notificationId).catch(() => undefined);
     }
+  }, []);
+
+  const clearAllRideAlerts = useCallback(() => {
+    alertedRideIds.current.clear();
+    const notificationIds = [...localRideNotificationIds.current.values()];
+    localRideNotificationIds.current.clear();
+    notificationIds.forEach(notificationId => {
+      void Notifications.cancelScheduledNotificationAsync(notificationId).catch(() => undefined);
+      void Notifications.dismissNotificationAsync(notificationId).catch(() => undefined);
+    });
   }, []);
 
   const hydrateAvailableRides = useCallback(async () => {
@@ -200,6 +211,7 @@ export function DriverRuntimeProvider({ children }: { children: ReactNode }) {
             localRideNotificationIds.current.set(nextRide.id, notificationId);
           } else {
             void Notifications.cancelScheduledNotificationAsync(notificationId).catch(() => undefined);
+            void Notifications.dismissNotificationAsync(notificationId).catch(() => undefined);
           }
         }).catch(() => undefined);
       }
@@ -287,6 +299,7 @@ export function DriverRuntimeProvider({ children }: { children: ReactNode }) {
     socket.current = null;
     tokenRef.current = null;
     sessionRef.current = null;
+    clearAllRideAlerts();
     void stopLocationService();
     void Promise.all([TOKEN_KEY, SESSION_KEY, USER_KEY, ONLINE_KEY, ACTIVE_RIDE_KEY]
       .map(key => SecureStore.deleteItemAsync(key)));
@@ -297,7 +310,7 @@ export function DriverRuntimeProvider({ children }: { children: ReactNode }) {
     setLongRangeState(null);
     setConnection('offline');
     setError('Your account was signed in on another device. Please sign in again.');
-  }, [stopLocationService]);
+  }, [clearAllRideAlerts, stopLocationService]);
 
   useEffect(() => {
     sessionRevokedHandler = clearRevokedSession;
@@ -320,7 +333,7 @@ export function DriverRuntimeProvider({ children }: { children: ReactNode }) {
       if (next) socket.current?.emit('driver:heartbeat');
       else {
         setPendingRide(null);
-        alertedRideIds.current.clear();
+        clearAllRideAlerts();
         await stopLocationService();
       }
     } catch (cause) {
@@ -332,7 +345,7 @@ export function DriverRuntimeProvider({ children }: { children: ReactNode }) {
       }
       throw cause;
     }
-  }, [startLocationService, stopLocationService]);
+  }, [clearAllRideAlerts, startLocationService, stopLocationService]);
 
   const registerExpoToken = useCallback(async () => {
     if (Platform.OS === 'web' || !tokenRef.current) return;
