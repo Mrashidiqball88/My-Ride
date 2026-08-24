@@ -8,7 +8,7 @@ const fare = require('../server');
 const {
   app, io, models, FARE_VEHICLE_CATEGORIES, DEFAULT_PER_KM_RATES,
   DEFAULT_RIDE_BROADCAST_RADIUS_KM, DEFAULT_RIDE_BROADCAST_REQUEST_DURATION_SECONDS, normalizeRideBroadcastSettings,
-  validateRideBroadcastSettings, rideOfferIsStillOpenQuery, findRideBroadcastDrivers, findLongRangeBroadcastDrivers, emitRideRequestToDrivers, chargeLongRangeCommission,
+  validateRideBroadcastSettings, rideOfferIsStillOpenQuery, findRideBroadcastDrivers, findLongRangeBroadcastDrivers, emitRideRequestToDrivers, emitRideLifecycle, chargeLongRangeCommission,
   normalizeLongRangeSettings, validateLongRangeSettings, calculateRideFare
    , normalizeTerms, normalizeFareVehicle, storedVehicleTypesForFareCategory
 } = fare;
@@ -483,6 +483,36 @@ test('shared broadcast matcher only selects fresh, wallet-eligible drivers insid
     room: 'user:near-driver',
     event: 'ride:new',
     payload: { id: 'ride-nearby-only' }
+  }]);
+});
+
+test('ride lifecycle events reach vehicle, rider, driver, and ride audiences once with an idempotent revision', () => {
+  const emissions = [];
+  io.to = rooms => ({ emit: (event, payload) => emissions.push({ rooms, event, payload }) });
+  const ride = {
+    _id: 'ride-realtime',
+    passenger: 'customer-realtime',
+    driver: 'driver-realtime',
+    vehicleType: 'Toyota Highroof',
+    updatedAt: new Date('2026-08-24T04:00:00.000Z')
+  };
+
+  emitRideLifecycle(ride, 'ride:status', { status: 'cancelled' }, { notifyVehicleDrivers: true });
+
+  assert.deepEqual(emissions, [{
+    rooms: [
+      'ride:ride-realtime',
+      'user:customer-realtime',
+      'user:driver-realtime',
+      'drivers:Toyota Highroof'
+    ],
+    event: 'ride:status',
+    payload: {
+      rideId: 'ride-realtime',
+      eventId: 'ride:status:ride-realtime:2026-08-24T04:00:00.000Z',
+      revision: '2026-08-24T04:00:00.000Z',
+      status: 'cancelled'
+    }
   }]);
 });
 

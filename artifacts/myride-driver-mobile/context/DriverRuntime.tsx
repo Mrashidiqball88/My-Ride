@@ -126,9 +126,19 @@ export function DriverRuntimeProvider({ children }: { children: ReactNode }) {
   const isOnlineRef = useRef(false);
   const activeRideIdRef = useRef<string | null>(null);
   const alertedRideIds = useRef(new Set<string>());
+  const localRideNotificationIds = useRef(new Map<string, string>());
 
   useEffect(() => { isOnlineRef.current = isOnline; }, [isOnline]);
   useEffect(() => { activeRideIdRef.current = activeRideId; }, [activeRideId]);
+
+  const clearRideAlert = useCallback((rideId: string) => {
+    alertedRideIds.current.delete(rideId);
+    const notificationId = localRideNotificationIds.current.get(rideId);
+    localRideNotificationIds.current.delete(rideId);
+    if (notificationId) {
+      void Notifications.cancelScheduledNotificationAsync(notificationId).catch(() => undefined);
+    }
+  }, []);
 
   const hydrateAvailableRides = useCallback(async () => {
     if (!tokenRef.current || !isOnlineRef.current) return;
@@ -183,13 +193,24 @@ export function DriverRuntimeProvider({ children }: { children: ReactNode }) {
             sound: 'default', categoryIdentifier: 'ride-request', data: { type: 'ride:new', ride: nextRide },
           },
           trigger: null,
-        });
+        }).then(notificationId => {
+          // A cancellation can arrive before the notification promise settles.
+          // Do not leave a late local alert behind for a retired ride.
+          if (alertedRideIds.current.has(nextRide.id)) {
+            localRideNotificationIds.current.set(nextRide.id, notificationId);
+          } else {
+            void Notifications.cancelScheduledNotificationAsync(notificationId).catch(() => undefined);
+          }
+        }).catch(() => undefined);
       }
     });
     nextSocket.on('ride:taken', ({ rideId }: { rideId: string }) => {
+      clearRideAlert(rideId);
       setPendingRide(current => current?.id === rideId ? null : current);
     });
     nextSocket.on('ride:accepted', ({ rideId }: { rideId: string }) => {
+      clearRideAlert(rideId);
+      setPendingRide(current => current?.id === rideId ? null : current);
       setActiveRideId(rideId);
       void SecureStore.setItemAsync(ACTIVE_RIDE_KEY, rideId);
     });
@@ -203,7 +224,10 @@ export function DriverRuntimeProvider({ children }: { children: ReactNode }) {
           return current;
         });
       }
-      if (status === 'cancelled') setPendingRide(current => current?.id === rideId ? null : current);
+      if (status === 'cancelled') {
+        clearRideAlert(rideId);
+        setPendingRide(current => current?.id === rideId ? null : current);
+      }
     });
     nextSocket.on('account:suspended', ({ reason }: { reason?: string }) => {
       setError(reason || 'Your driver account can no longer be online.');
@@ -222,7 +246,7 @@ export function DriverRuntimeProvider({ children }: { children: ReactNode }) {
     });
   // setOnlineState is stable through declaration below at execution time.
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [hydrateAvailableRides]);
+  }, [clearRideAlert, hydrateAvailableRides]);
 
   const sendCurrentLocation = useCallback(async (location: Location.LocationObject) => {
     if (!tokenRef.current || !isOnline) return;
@@ -383,12 +407,16 @@ export function DriverRuntimeProvider({ children }: { children: ReactNode }) {
     if (!pendingRide) return;
     const remainingMs = new Date(pendingRide.broadcastExpiresAt || 0).getTime() - Date.now();
     if (remainingMs <= 0) {
+      clearRideAlert(pendingRide.id);
       setPendingRide(null);
       return;
     }
-    const timeout = setTimeout(() => setPendingRide(current => current?.id === pendingRide.id ? null : current), remainingMs + 25);
+    const timeout = setTimeout(() => {
+      clearRideAlert(pendingRide.id);
+      setPendingRide(current => current?.id === pendingRide.id ? null : current);
+    }, remainingMs + 25);
     return () => clearTimeout(timeout);
-  }, [pendingRide]);
+  }, [clearRideAlert, pendingRide]);
 
   useEffect(() => {
     if (!ready || !user || !isOnline || Platform.OS === 'web') return;
@@ -431,8 +459,9 @@ export function DriverRuntimeProvider({ children }: { children: ReactNode }) {
       method: 'PATCH', body: JSON.stringify({ price: pendingRide.fare, type: 'accept' }),
     });
     socket.current?.emit('ride:join', pendingRide.id);
+    clearRideAlert(pendingRide.id);
     setPendingRide(null);
-  }, [pendingRide]);
+  }, [clearRideAlert, pendingRide]);
 
   const setLongRange = useCallback(async (enabled: boolean) => {
     if (!tokenRef.current) throw new Error('Sign in is required.');

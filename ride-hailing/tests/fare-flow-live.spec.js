@@ -459,4 +459,67 @@ test.describe('live Mongo fare refresh', () => {
       await request.dispose();
     }
   });
+
+  test('removes a cancelled request and activates the winning Driver without a refresh', async ({ browser, playwright }) => {
+    const customerToken = token(customer);
+    const matchingToken = token(matchingDriver);
+    const baseURL = `http://127.0.0.1:${httpServer.address().port}`;
+    const request = await playwright.request.newContext({ baseURL });
+    const driverPage = await browser.newPage();
+
+    async function createRide(label) {
+      const response = await request.post('/api/rides', {
+        headers: { authorization: `Bearer ${customerToken}` },
+        data: {
+          pickupLocation: { lat: 1, lng: 2, address: `${label} pickup` },
+          dropoffLocation: { lat: 3, lng: 4, address: `${label} dropoff` },
+          distance: 7,
+          vehicleType: 'Car Mini',
+          fare: 1
+        }
+      });
+      expect(response.status()).toBe(201);
+      return response.json();
+    }
+
+    try {
+      await openAuthenticatedClient(driverPage, baseURL, '/driver', matchingDriver, matchingToken);
+      await driverPage.evaluate(() => toggleOnline(true));
+      await expect.poll(() => driverPage.evaluate(() => isOnline)).toBe(true);
+
+      const cancelledRide = await createRide('Instant cancellation');
+      await expect(driverPage.locator('#ride-request')).toBeVisible();
+      await expect.poll(() => driverPage.evaluate(() => ({
+        pending: String(pendingRide?.id || pendingRide?._id) === String(cancelledRide._id),
+        alerting: !!alertInterval
+      }))).toEqual({ pending: true, alerting: true });
+
+      const cancelled = await request.patch(`/api/rides/${cancelledRide._id}/cancel`, {
+        headers: { authorization: `Bearer ${customerToken}` }
+      });
+      expect(cancelled.status()).toBe(200);
+      await expect(driverPage.locator('#ride-request')).toBeHidden();
+      await expect.poll(() => driverPage.evaluate(() => ({
+        pendingRide: !!pendingRide,
+        sentOffer: !!sentOffer,
+        alertInterval: !!alertInterval,
+        notification: !!rideNotification
+      }))).toEqual({ pendingRide: false, sentOffer: false, alertInterval: false, notification: false });
+
+      const acceptedRide = await createRide('Instant acceptance');
+      await expect(driverPage.locator('#ride-request')).toBeVisible();
+      const accepted = await request.patch(`/api/rides/${acceptedRide._id}/accept`, {
+        headers: { authorization: `Bearer ${matchingToken}` }
+      });
+      expect(accepted.status()).toBe(200);
+      await expect(driverPage.locator('#ride-request')).toBeHidden();
+      await expect(driverPage.locator('#active-panel')).toBeVisible();
+      await expect.poll(() => driverPage.evaluate(() =>
+        String(activeRide?._id) === String(acceptedRide._id)
+      )).toBe(true);
+    } finally {
+      await driverPage.close();
+      await request.dispose();
+    }
+  });
 });

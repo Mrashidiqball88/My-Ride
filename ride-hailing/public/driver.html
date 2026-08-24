@@ -753,6 +753,8 @@ let todayRides    = 0;
 let todayEarnings = 0;
 let alertAudioCtx = null;   // Web Audio context for ride alert
 let alertInterval = null;   // repeating beep interval
+let rideNotification = null; // active browser notification for the current offer
+let loadingAcceptedRideId = null;
 let dailyFeeDue   = false;  // true when driver hasn't submitted today's platform fee
 let driverFareSettings = {};
 let dailyFeeSettings = {};
@@ -1529,6 +1531,10 @@ function connectSocket() {
     showToast(reason || 'Your payment could not be verified and remains pending.', 'error');
     await loadPayments();
   });
+  socket.on('payment-settings:updated', async () => {
+    await loadAdminPaymentAccounts();
+    showToast('Payment account details updated by Admin.', 'info');
+  });
 
   socket.on('fare:updated', ({ settings }) => {
     if (settings) driverFareSettings = settings;
@@ -1564,6 +1570,17 @@ function connectSocket() {
     renderLongRangeState();
     showToast('🛣️ Long Range settings updated by Admin.', 'info');
   });
+  socket.on('terms:updated', ({ terms }) => {
+    if (typeof terms?.driver !== 'string') return;
+    driverTerms = terms.driver;
+    const content = document.getElementById('driver-terms-content');
+    if (content && document.getElementById('driver-terms-modal')?.style.display === 'flex') content.textContent = driverTerms;
+  });
+  socket.on('ride:broadcast-radius-updated', ({ settings }) => {
+    if (!settings) return;
+    showToast(`📡 Ride broadcast settings updated: ${settings.maximumRideBroadcastRadiusKm} km / ${settings.broadcastRequestDurationSeconds}s.`, 'info');
+    reconcileRideRequestsAfterReconnect();
+  });
 
   // Account suspended / balance too low
   socket.on('account:suspended', ({ reason }) => {
@@ -1597,29 +1614,32 @@ function connectSocket() {
     }
   });
 
-  // Customer selected a driver — check if it's us
+  // The server sends this to the customer and selected Driver's personal
+  // room, so direct accept and customer-selected offers use the same path.
   socket.on('ride:accepted', ({ rideId, driver }) => {
-    if (sentOffer && String(sentOffer.rideId) === String(rideId)) {
-      if (String(driver.id) === String(user.id)) {
-        // We were selected — dismiss the "offer sent" card immediately
-        sentOffer = null;
-        hideRideRequest();   // ← clears the waiting card right away
-        apiCall(`/api/rides/${rideId}`)
-          .then(ride => {
-            activeRide = ride;
-            showActivePanel(ride);
-            showRideOnMap(ride);
-            socket.emit('ride:join', rideId);
-            showToast('🎉 Customer accepted your offer! Head to pickup.', 'success');
-          })
-          .catch(() => showToast('Ride accepted — loading details…', 'success'));
-      } else {
-        // Another driver was selected
-        sentOffer = null;
-        hideRideRequest();   // ← also dismiss the card for the losing driver
-        clearRideMap();
-        showToast('Customer chose another driver', 'info');
-      }
+    const isWinningDriver = String(driver?.id) === String(user?.id);
+    const matchesOffer = sentOffer && String(sentOffer.rideId) === String(rideId);
+    const matchesPending = pendingRide && String(pendingRide.id || pendingRide._id) === String(rideId);
+    if (isWinningDriver) {
+      if (loadingAcceptedRideId === String(rideId) || String(activeRide?._id) === String(rideId)) return;
+      loadingAcceptedRideId = String(rideId);
+      sentOffer = null;
+      hideRideRequest();
+      apiCall(`/api/rides/${rideId}`)
+        .then(ride => {
+          activeRide = ride;
+          showActivePanel(ride);
+          showRideOnMap(ride);
+          socket.emit('ride:join', rideId);
+          showToast('🎉 Ride accepted! Head to pickup.', 'success');
+        })
+        .catch(() => showToast('Ride accepted — loading details…', 'success'))
+        .finally(() => { loadingAcceptedRideId = null; });
+    } else if (matchesOffer || matchesPending) {
+      sentOffer = null;
+      hideRideRequest();
+      clearRideMap();
+      showToast('Customer chose another driver', 'info');
     }
   });
 
@@ -1822,6 +1842,7 @@ function hideRideRequest() {
 
 // ── Ride Alert: Audio + Vibration + Browser Notification ───────────────────
 function startRideAlert(ride) {
+  stopRideAlert();
   // Repeating device vibration
   if (navigator.vibrate) navigator.vibrate([500, 200, 500, 200, 500, 200, 500]);
 
@@ -1850,11 +1871,12 @@ function startRideAlert(ride) {
   // Browser push notification (works even if tab is backgrounded)
   if (Notification.permission === 'granted' && ride) {
     try {
-      new Notification('🚗 New Ride Request!', {
+      rideNotification = new Notification('🚗 New Ride Request!', {
         body: `📍 ${ride.pickupLocation?.address || 'Nearby'}\n💰 Rs ${(ride.fare || 0).toLocaleString()} · ${ride.distance ? ride.distance.toFixed(1) + ' km' : ''}`,
         requireInteraction: true,
         tag: 'ride-request'
       });
+      rideNotification.onclose = () => { rideNotification = null; };
     } catch(e) {}
   }
 
@@ -1882,6 +1904,11 @@ function stopRideAlert() {
     alertAudioCtx = null;
   }
   if (navigator.vibrate) navigator.vibrate(0);
+  if (window.speechSynthesis) window.speechSynthesis.cancel();
+  if (rideNotification) {
+    try { rideNotification.close(); } catch(e) {}
+    rideNotification = null;
+  }
 }
 
 function rejectRide() {

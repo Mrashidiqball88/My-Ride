@@ -1297,6 +1297,31 @@ function emitRideRequestToDrivers(drivers, payload) {
   }
 }
 
+// Ride state can be visible through a personal room, an active ride room, and
+// the vehicle broadcast room at the same time. Emit each lifecycle mutation to
+// their union so every recipient sees one authoritative, idempotent update.
+function emitRideLifecycle(ride, event, detail = {}, { notifyVehicleDrivers = false } = {}) {
+  const revision = new Date(ride.updatedAt || Date.now()).toISOString();
+  const payload = {
+    rideId: String(ride._id),
+    eventId: `${event}:${ride._id}:${revision}`,
+    revision,
+    ...detail
+  };
+  const rooms = [`ride:${ride._id}`, `user:${ride.passenger}`];
+  if (ride.driver) rooms.push(`user:${ride.driver}`);
+  if (notifyVehicleDrivers) rooms.push(`drivers:${normalizeFareVehicle(ride.vehicleType || 'Car Mini')}`);
+  io.to([...new Set(rooms)]).emit(event, payload);
+  return payload;
+}
+
+function emitRideAccepted(ride, verificationPin, driver) {
+  emitRideLifecycle(ride, 'ride:accepted', { verificationPin, driver });
+  // This intentionally reaches every eligible driver, including drivers who
+  // never joined the ride room because they had only received ride:new.
+  emitRideLifecycle(ride, 'ride:taken', {}, { notifyVehicleDrivers: true });
+}
+
 const ADMIN_SECURITY_KEY = 'admin_security';
 const ADMIN_RECOVERY_ATTEMPTS = new Map();
 const ADMIN_RECOVERY_WINDOW_MS = 15 * 60 * 1000;
@@ -2199,21 +2224,16 @@ app.patch('/api/rides/:id/accept', authMiddleware, async (req, res) => {
 
     // Fetch full driver profile for the acceptance payload
     const driverUser = await User.findById(req.user.id).select('name phone vehicleType vehicleModel vehiclePlate rating profilePhoto');
-    io.to(`ride:${ride._id}`).emit('ride:accepted', {
-      rideId: ride._id,
-      verificationPin,
-      driver: {
-        id:           req.user.id,
-        name:         driverUser.name,
-        phone:        driverUser.phone || '',
-        vehicleType:  driverUser.vehicleType,
-        vehicleModel: driverUser.vehicleModel || '',
-        vehiclePlate: driverUser.vehiclePlate || '',
-        rating:       driverUser.rating || 5.0,
-        profilePhoto: driverUser.profilePhoto || ''
-      }
+    emitRideAccepted(ride, verificationPin, {
+      id:           req.user.id,
+      name:         driverUser.name,
+      phone:        driverUser.phone || '',
+      vehicleType:  driverUser.vehicleType,
+      vehicleModel: driverUser.vehicleModel || '',
+      vehiclePlate: driverUser.vehiclePlate || '',
+      rating:       driverUser.rating || 5.0,
+      profilePhoto: driverUser.profilePhoto || ''
     });
-    io.to(`drivers:${normalizeFareVehicle(ride.vehicleType || 'Car Mini')}`).emit('ride:taken', { rideId: ride._id });
 
     res.json(ride);
   } catch (err) {
@@ -2259,7 +2279,7 @@ app.patch('/api/rides/:id/status', authMiddleware, driverOnly, async (req, res) 
     ride.status = status;
     await ride.save();
 
-    io.to(`ride:${ride._id}`).emit('ride:status', { rideId: ride._id, status });
+    emitRideLifecycle(ride, 'ride:status', { status });
 
     if (status === 'completed') {
       await Wallet.updateOne(
@@ -2301,7 +2321,9 @@ app.patch('/api/rides/:id/cancel', authMiddleware, async (req, res) => {
 
     ride.status = 'cancelled';
     await ride.save();
-    io.to(`ride:${ride._id}`).emit('ride:status', { rideId: ride._id, status: 'cancelled' });
+    // Requested riders are usually only in their vehicle room, not the ride
+    // room, so cancellation must fan out to both audiences immediately.
+    emitRideLifecycle(ride, 'ride:status', { status: 'cancelled' }, { notifyVehicleDrivers: true });
     res.json(ride);
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -2416,21 +2438,16 @@ app.patch('/api/rides/:id/accept-driver', authMiddleware, async (req, res) => {
     }
 
     const driverUser = await User.findById(driverId).select('name phone vehicleType vehicleModel vehiclePlate rating profilePhoto');
-    io.to(`ride:${ride._id}`).emit('ride:accepted', {
-      rideId: ride._id,
-      verificationPin,
-      driver: {
-        id:           String(driverId),
-        name:         driverUser.name,
-        phone:        driverUser.phone || '',
-        vehicleType:  driverUser.vehicleType,
-        vehicleModel: driverUser.vehicleModel || '',
-        vehiclePlate: driverUser.vehiclePlate || '',
-        rating:       driverUser.rating || 5.0,
-        profilePhoto: driverUser.profilePhoto || ''
-      }
+    emitRideAccepted(ride, verificationPin, {
+      id:           String(driverId),
+      name:         driverUser.name,
+      phone:        driverUser.phone || '',
+      vehicleType:  driverUser.vehicleType,
+      vehicleModel: driverUser.vehicleModel || '',
+      vehiclePlate: driverUser.vehiclePlate || '',
+      rating:       driverUser.rating || 5.0,
+      profilePhoto: driverUser.profilePhoto || ''
     });
-    io.to(`drivers:${normalizeFareVehicle(ride.vehicleType || 'Car Mini')}`).emit('ride:taken', { rideId: ride._id });
 
     res.json(ride);
   } catch (err) {
@@ -4145,6 +4162,7 @@ app.patch('/api/admin/settings', adminJwt, requirePerm('managePaymentSettings'),
       await refreshPendingRideFares(savedFareSettings);
       io.emit('fare:updated', { settings: savedFareSettings, updatedAt: new Date().toISOString() });
     }
+    io.emit('payment-settings:updated', { updatedAt: new Date().toISOString() });
     const gatewayDoc = await Settings.findOne({ key: 'payment_gateway_configs' }).lean();
     const gatewayStatus = {};
     for (const gateway of PAYMENT_GATEWAYS) gatewayStatus[gateway] = publicGatewayConfig(gatewayDoc?.value?.[gateway]);
@@ -4823,6 +4841,7 @@ module.exports = {
   findRideBroadcastDrivers,
   findLongRangeBroadcastDrivers,
   emitRideRequestToDrivers,
+  emitRideLifecycle,
   chargeLongRangeCommission,
   refreshPendingRideFares,
   SUB_ADMIN_PERMISSION_CATALOG,

@@ -2047,6 +2047,11 @@ function connectSocket() {
       if (content && document.getElementById('customer-terms-modal')?.style.display === 'flex') content.textContent = customerTerms;
     }
   });
+  socket.on('ride:broadcast-radius-updated', () => {
+    // Nearby driver markers use the server's broadcast rules. Rebuild them
+    // immediately so the Customer map never presents a stale availability view.
+    if (!activeRide) startNearbyDrivers();
+  });
 }
 
 function connectToRideRoom(rideId) {
@@ -2083,9 +2088,10 @@ function connectToRideRoom(rideId) {
     }
   });
 
-  socket.on('ride:status', ({ status }) => {
+  socket.on('ride:status', ({ rideId, status }) => {
+    if (!activeRide || String(activeRide._id) !== String(rideId)) return;
     if (status === 'completed') { showToast('Ride completed! 🎉', 'success'); setTimeout(showRatingModal, 1500); }
-    else if (status === 'cancelled') { showToast('Ride was cancelled', 'error'); setTimeout(endRide, 1500); }
+    else if (status === 'cancelled') { endRide(); showToast('Ride was cancelled', 'error'); }
     else if (status === 'arrived') {
       document.getElementById('ar-status-text').textContent = 'Driver has arrived! 📍';
       showToast('Your driver has arrived!', 'info');
