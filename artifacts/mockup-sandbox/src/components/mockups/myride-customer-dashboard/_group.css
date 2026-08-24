@@ -1,0 +1,81 @@
+@import url("https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Space+Mono:wght@400;700&display=swap");
+
+.myride-shell {
+  --ink: #f4f0e7;
+  --muted: #969b9a;
+  --line: rgba(255,255,255,.1);
+  --surface: #171b1c;
+  --surface-2: #202526;
+  --deep: #0d1112;
+  --signal: #f2c94c;
+  --blue: #71b5d9;
+  --green: #76c893;
+  width: 100%;
+  min-height: 100dvh;
+  font-family: "DM Sans", sans-serif;
+  background: var(--deep);
+  color: var(--ink);
+  overflow: hidden;
+}
+.myride-shell * { box-sizing: border-box; }
+.myride-shell button, .myride-shell input { font: inherit; }
+.myride-shell button { cursor: pointer; }
+.myride-shell .mono { font-family: "Space Mono", monospace; }
+.myride-shell .small-label { color: var(--muted); font-size: 10px; font-weight: 700; letter-spacing: .12em; text-transform: uppercase; }
+.myride-shell .hairline { border-color: var(--line); }
+.myride-shell .primary-button { width: 100%; border: 0; border-radius: 13px; background: var(--signal); color: #171513; padding: 14px 16px; font-weight: 700; transition: transform .18s, opacity .18s; }
+.myride-shell .primary-button:active { transform: scale(.98); }
+.myride-shell .ghost-button { border: 1px solid var(--line); border-radius: 10px; background: transparent; color: var(--ink); }
+.myride-shell .icon-button { display: grid; place-items: center; width: 34px; height: 34px; border: 1px solid var(--line); border-radius: 10px; background: rgba(12,16,17,.65); color: var(--ink); }
+.myride-shell .avatar { display: grid; place-items: center; width: 34px; height: 34px; border-radius: 50%; background: #d7a83f; color: #1d211d; font-weight: 700; font-size: 12px; }
+.myride-shell .map-grid { position: absolute; inset: 0; background-color: #152021; background-image: linear-gradient(112deg, transparent 46%, rgba(126,154,148,.13) 47%, rgba(126,154,148,.13) 48%, transparent 49%), linear-gradient(28deg, transparent 45%, rgba(126,154,148,.11) 46%, rgba(126,154,148,.11) 47%, transparent 48%), linear-gradient(90deg, transparent 69%, rgba(72,103,98,.18) 70%, transparent 71%); background-size: 92px 92px, 128px 128px, 170px 170px; }
+.myride-shell .map-grid:after { content: ""; position: absolute; inset: 0; background: radial-gradient(circle at 48% 46%, transparent 0 13%, rgba(12,17,18,.34) 48%, rgba(8,12,13,.76)); }
+.myride-shell .route-line { position: absolute; left: 36%; top: 18%; width: 3px; height: 57%; background: var(--blue); transform: rotate(27deg); box-shadow: 0 0 14px rgba(113,181,217,.35); }
+.myride-shell .map-pin { position: absolute; display: grid; place-items: center; width: 29px; height: 29px; border: 3px solid #e9eee5; border-radius: 50%; color: #101718; }
+.myride-shell .map-pin.pickup { left: 29%; top: 26%; background: var(--blue); }
+.myride-shell .map-pin.dropoff { right: 25%; bottom: 24%; background: #e89563; }
+.myride-shell .map-label { position: absolute; z-index: 1; padding: 5px 8px; border: 1px solid rgba(255,255,255,.14); border-radius: 6px; background: rgba(15,20,20,.78); color: #d8dfd9; font-size: 10px; }
+.myride-shell .map-label.one { left: 10%; top: 39%; }
+.myride-shell .map-label.two { right: 8%; top: 16%; }
+.myride-shell .map-label.three { left: 11%; bottom: 22%; }
+.myride-shell .driver-dot { position: absolute; left: 52%; top: 54%; z-index: 2; display: grid; place-items: center; width: 27px; height: 27px; border: 2px solid #0e1515; border-radius: 50%; background: var(--signal); color: #20221c; box-shadow: 0 0 0 5px rgba(242,201,76,.16); }
+.myride-shell .topbar { position: absolute; z-index: 5; top: 0; left: 0; right: 0; display: flex; align-items: center; justify-content: space-between; padding: 16px; background: linear-gradient(#0d1112d9, transparent); }
+.myride-shell .wordmark { font-weight: 700; letter-spacing: -.04em; font-size: 20px; }
+.myride-shell .wordmark span { color: var(--signal); }
+.myride-shell .bottom-panel { position: absolute; z-index: 4; right: 0; bottom: 0; left: 0; max-height: 67%; overflow: auto; border-top: 1px solid var(--line); border-radius: 23px 23px 0 0; background: #171b1cf5; backdrop-filter: blur(16px); }
+.myride-shell .grabber { width: 36px; height: 4px; margin: 9px auto 2px; border-radius: 9px; background: #596160; }
+.myride-shell .panel-pad { padding: 14px 16px 20px; }
+.myride-shell .route-fields { position: relative; display: grid; gap: 9px; }
+.myride-shell .route-fields:before { content: ""; position: absolute; left: 12px; top: 17px; bottom: 17px; border-left: 1px dashed #6f7774; }
+.myride-shell .field { position: relative; display: flex; align-items: center; gap: 10px; }
+.myride-shell .field i { position: relative; z-index: 1; width: 25px; height: 25px; display: grid; place-items: center; border-radius: 50%; background: var(--surface-2); }
+.myride-shell .field input { width: 100%; border: 1px solid var(--line); border-radius: 10px; padding: 11px 12px; outline: none; background: #101516; color: var(--ink); font-size: 13px; }
+.myride-shell .field input:focus { border-color: var(--signal); }
+.myride-shell .vehicle-row { display: flex; gap: 8px; overflow-x: auto; padding: 14px 0; }
+.myride-shell .vehicle { min-width: 92px; padding: 10px 8px; border: 1px solid var(--line); border-radius: 11px; background: #101516; color: var(--muted); text-align: left; }
+.myride-shell .vehicle.selected { border-color: var(--signal); background: #2d2a1b; color: var(--ink); }
+.myride-shell .vehicle strong { display: block; margin-top: 5px; color: inherit; font-size: 12px; }
+.myride-shell .vehicle span { display: block; margin-top: 3px; font-size: 10px; }
+.myride-shell .fare-line { display: flex; align-items: center; justify-content: space-between; margin: 2px 0 13px; }
+.myride-shell .fare-value { color: var(--signal); font-size: 22px; font-weight: 700; }
+.myride-shell .pay-select { display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px; padding: 11px 12px; border: 1px solid var(--line); border-radius: 10px; background: #101516; font-size: 12px; }
+.myride-shell .tabs { display: flex; border-top: 1px solid var(--line); }
+.myride-shell .tab { flex: 1; border: 0; padding: 12px 5px 10px; background: transparent; color: var(--muted); font-size: 11px; }
+.myride-shell .tab.active { color: var(--signal); border-bottom: 2px solid var(--signal); }
+.myride-shell .ride-card { margin-top: 9px; padding: 13px; border: 1px solid rgba(118,200,147,.38); border-radius: 13px; background: #14201b; }
+.myride-shell .ride-card-head { display: flex; align-items: center; justify-content: space-between; }
+.myride-shell .status { color: var(--green); font-size: 11px; font-weight: 700; }
+.myride-shell .ride-card h3 { margin: 8px 0 3px; font-size: 14px; }
+.myride-shell .ride-card p { margin: 0; color: var(--muted); font-size: 11px; }
+.myride-shell .ride-card-actions { display: flex; gap: 8px; margin-top: 12px; }
+.myride-shell .ride-card-actions button { flex: 1; padding: 9px; font-size: 11px; }
+.myride-shell .scroll-page { min-height: 100dvh; overflow: auto; padding: 18px 16px 28px; }
+.myride-shell .section-title { margin: 5px 0 13px; font-size: 14px; letter-spacing: -.02em; }
+.myride-shell .journey-card { padding: 16px; border-radius: 17px; background: var(--surface); border: 1px solid var(--line); }
+.myride-shell .journey-row { display: flex; gap: 11px; align-items: flex-start; padding: 10px 0; border-bottom: 1px solid var(--line); }
+.myride-shell .journey-row:last-child { border-bottom: 0; padding-bottom: 0; }
+.myride-shell .journey-row p { margin: 2px 0 0; font-size: 13px; }
+.myride-shell .journey-row small { display: block; color: var(--muted); font-size: 10px; margin-top: 2px; }
+.myride-shell .journey-icon { color: var(--signal); margin-top: 2px; }
+.myride-shell .chip { display: inline-flex; align-items: center; gap: 5px; padding: 6px 8px; border-radius: 8px; background: #2b2b1e; color: #e7d68e; font-size: 10px; }
+.myride-shell .toast { position: fixed; z-index: 10; left: 50%; bottom: 15px; transform: translateX(-50%); padding: 9px 13px; border: 1px solid var(--line); border-radius: 99px; background: #202526; color: var(--ink); font-size: 11px; white-space: nowrap; }
