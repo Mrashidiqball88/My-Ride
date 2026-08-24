@@ -23,6 +23,37 @@ function PreviewUnavailable() {
   );
 }
 
+const galleryFrames = [
+  ["Customer — Current", "myride-customer-dashboard", "Current"],
+  ["Customer — Trip concierge", "myride-customer-dashboard", "TripConcierge"],
+  ["Customer — Map command", "myride-customer-dashboard", "MapCommand"],
+  ["Customer — Journey hub", "myride-customer-dashboard", "JourneyHub"],
+  ["Driver — Current", "myride-driver-dashboard", "Current"],
+  ["Driver — Road cockpit", "myride-driver-dashboard", "RoadCockpit"],
+  ["Driver — Earnings command", "myride-driver-dashboard", "EarningsCommand"],
+  ["Driver — Focus mode", "myride-driver-dashboard", "FocusMode"],
+] as const;
+
+function PreviewGallery() {
+  return (
+    <main style={{ minHeight: "100%", padding: "32px 20px", fontFamily: "Inter, sans-serif", background: "#0c1314", color: "#f6f7f2" }}>
+      <div style={{ maxWidth: 900, margin: "0 auto" }}>
+        <p style={{ margin: 0, color: "#70dbd3", fontSize: 12, fontWeight: 700, letterSpacing: ".14em", textTransform: "uppercase" }}>My Ride design exploration</p>
+        <h1 style={{ margin: "10px 0 8px", fontSize: 32, letterSpacing: "-.05em" }}>Choose a dashboard direction</h1>
+        <p style={{ margin: 0, color: "#aab9b8", lineHeight: 1.55 }}>Open any Customer or Driver concept to review the live, mobile-sized mockup.</p>
+        <section style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(210px, 1fr))", gap: 12, marginTop: 28 }}>
+          {galleryFrames.map(([label, group, component]) => (
+            <a key={`${group}-${component}`} href={`/__mockup/preview/${group}/${component}`} style={{ display: "block", padding: 18, borderRadius: 16, color: "inherit", textDecoration: "none", background: "#152021", border: "1px solid #294042" }}>
+              <strong style={{ display: "block", fontSize: 16 }}>{label}</strong>
+              <span style={{ display: "block", marginTop: 7, color: "#70dbd3", fontSize: 13 }}>Open live mockup →</span>
+            </a>
+          ))}
+        </section>
+      </div>
+    </main>
+  );
+}
+
 export default function App() {
   const key = useMemo(() => getPreviewKey(window.location.pathname), []);
   const [Component, setComponent] = useState<LoadedComponent | null>(null);
@@ -51,7 +82,7 @@ export default function App() {
     };
   }, [key]);
 
-  if (!key) return <PreviewUnavailable />;
+  if (!key) return <PreviewGallery />;
   if (!Component) return <PreviewUnavailable />;
   return <Component />;
 }
