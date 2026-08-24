@@ -8,3 +8,4 @@
 - [Ride preference fee policy](ride-preference-fee-policy.md) — Long Range Only is exempt from Daily Fees and must not receive local rides.
 - [Optional unique identity fields](optional-unique-identity-fields.md) — sparse unique fields must be omitted for inapplicable roles, never persisted as empty strings.
 - [Ride offer expiry authority](ride-offer-expiry-authority.md) — offer windows are persisted server timestamps, never client-only countdowns.
+- [Mockup preview routing](mockup-preview-routing.md) — sandbox previews need the artifact base path and component registry to avoid blank or fallback frames.
