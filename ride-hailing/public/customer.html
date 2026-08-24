@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
 <!-- PWA -->
-<meta name="theme-color" content="#38bdf8">
+<meta name="theme-color" content="#f26a4f">
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
@@ -295,6 +295,91 @@ body{font-family:'Segoe UI',sans-serif;background:#0a0a0f;color:#fff;height:100d
 .eta-icon{font-size:1rem;flex-shrink:0}
 .eta-text{font-weight:600}
 .eta-dist{font-size:.72rem;color:#666;margin-left:auto;white-space:nowrap}
+
+/* ── LuxeRoute production skin ──
+   The dashboard keeps the original DOM contract for the live booking code,
+   while presenting the approved paper/navy/coral customer experience. */
+:root{
+  --lr-paper:#f6f1e9;--lr-paper-deep:#ebe3d7;--lr-ink:#102337;
+  --lr-muted:#6c7881;--lr-coral:#f26a4f;--lr-coral-dark:#d9543c;
+  --lr-line:#ded5ca;--lr-blue:#376f9b;
+}
+#app{position:relative;display:none;background:var(--lr-paper);color:var(--lr-ink);overflow:hidden}
+#map{position:absolute;inset:0;width:100%;height:100%;z-index:1;filter:saturate(.72) sepia(.08);background:#d8ddd9}
+.leaflet-container{background:#d8ddd9}
+.leaflet-control-zoom{margin-top:5.6rem!important;margin-right:1rem!important;border:0!important;box-shadow:0 8px 20px rgba(16,35,55,.12)!important}
+.leaflet-control-zoom a{background:rgba(246,241,233,.94)!important;color:var(--lr-ink)!important;border:0!important}
+.header{position:absolute;top:0;left:0;right:0;height:72px;padding:1rem clamp(1rem,4vw,3rem);background:linear-gradient(180deg,rgba(246,241,233,.98),rgba(246,241,233,.84),transparent);border:0;z-index:10;color:var(--lr-ink)}
+.header-logo{font-family:Georgia,serif;font-size:1.25rem;letter-spacing:-.03em;color:var(--lr-ink)}
+.header-logo span{color:var(--lr-ink)}
+.header-logo .brand-mark{width:32px;height:32px;border-radius:10px;filter:none}
+.header-user{gap:.65rem}
+.header-name{font-size:.76rem;letter-spacing:.04em;text-transform:uppercase;color:var(--lr-ink);font-weight:800;max-width:130px}
+.avatar{width:34px;height:34px;background:var(--lr-coral);color:#fff;box-shadow:0 4px 12px rgba(242,106,79,.24)}
+.btn-dots{border-color:var(--lr-line);background:rgba(246,241,233,.88);color:var(--lr-ink)}
+.btn-dots:hover{border-color:var(--lr-coral);color:var(--lr-coral)}
+.dots-dropdown{background:var(--lr-paper);border-color:var(--lr-line);box-shadow:0 16px 32px rgba(16,35,55,.18);color:var(--lr-ink)}
+.dots-item{color:var(--lr-ink);border-bottom:1px solid rgba(222,213,202,.55)}
+.dots-item:hover{background:var(--lr-paper-deep)}
+.dots-item.danger{color:#c94d3a}
+#bottom-panel{position:absolute;left:50%;bottom:0;transform:translateX(-50%);width:min(100%,760px);max-height:min(62vh,590px);background:rgba(246,241,233,.98);border:0;border-radius:28px 28px 0 0;box-shadow:0 -18px 45px rgba(16,35,55,.15);overflow-y:auto;z-index:10;padding-bottom:env(safe-area-inset-bottom)}
+.tabs{order:-1;background:transparent;border-bottom:1px solid var(--lr-line);padding:.45rem 1rem 0}
+.tab{padding:.7rem .5rem .65rem;color:#87919a;font-size:.72rem;font-weight:800;letter-spacing:.07em;text-transform:uppercase}
+.tab.active{color:var(--lr-ink);border-bottom:2px solid var(--lr-coral)}
+.tab-icon{font-size:1rem;filter:grayscale(.35)}
+.tab.sos-tab{color:#c65242}
+.tab.sos-tab:hover,.tab.sos-tab:active{background:rgba(242,106,79,.08);color:var(--lr-coral-dark)}
+.tab-content{padding:1rem clamp(1rem,3vw,1.5rem) 1.25rem}
+.map-hint{display:none}
+.loc-wrap{margin-bottom:.55rem}
+.location-input{background:rgba(255,255,255,.62);border:1px solid var(--lr-line);border-radius:14px;padding:.9rem 2.25rem .9rem 2.7rem;color:var(--lr-ink);font-size:.92rem;box-shadow:0 4px 12px rgba(16,35,55,.04)}
+.location-input::placeholder{color:#9aa1a3}
+.location-input:focus{border-color:var(--lr-coral);box-shadow:0 0 0 3px rgba(242,106,79,.12)}
+.location-input.has-val{border-color:#8ba993}
+.pin-indicator{left:.9rem;filter:saturate(.7)}
+.btn-locate-me{right:2.25rem;color:var(--lr-coral)}
+.btn-clear-loc{background:var(--lr-paper-deep);color:var(--lr-muted)}
+.divider-line{color:#aab0ad;margin:.15rem 0}
+.divider-line::before,.divider-line::after{background:var(--lr-line)}
+.stop-header{margin:.15rem 0 .25rem}
+.stop-num-badge{background:rgba(242,106,79,.12);border-color:rgba(242,106,79,.35);color:var(--lr-coral-dark)}
+.stop-lbl-text{color:var(--lr-muted);font-size:.64rem;text-transform:uppercase;letter-spacing:.06em}
+.btn-add-stop{border-color:#cfc5b8;color:var(--lr-muted);padding:.62rem;background:transparent}
+.btn-add-stop:hover{border-color:var(--lr-coral);color:var(--lr-coral-dark);background:rgba(242,106,79,.05)}
+.vehicle-grid{grid-template-columns:repeat(4,minmax(0,1fr));gap:.45rem;margin:.9rem 0}
+.vehicle-btn{background:rgba(255,255,255,.46);border:1px solid var(--lr-line);border-radius:14px;padding:.62rem .22rem;color:var(--lr-ink)}
+.vehicle-btn.active{background:#fff;border-color:var(--lr-coral);color:var(--lr-coral-dark);box-shadow:0 6px 15px rgba(242,106,79,.13)}
+.vehicle-btn .v-icon{font-size:1.2rem}.vehicle-btn .v-name{font-size:.62rem;font-weight:800;line-height:1.2}.vehicle-btn .v-fare{font-size:.56rem;color:#9aa1a3}
+.vehicle-btn.active .v-fare{color:#b27669}
+.fare-negotiate-card{background:#fff;border:1px solid var(--lr-line);border-radius:16px;padding:.85rem 1rem;box-shadow:0 6px 18px rgba(16,35,55,.06)}
+.fare-label{color:var(--lr-muted)}.fare-badge{background:rgba(242,106,79,.1);border-color:rgba(242,106,79,.28);color:var(--lr-coral-dark)}
+.fare-meta,.fare-min-note{color:#899296}.fare-suggested-lbl{color:#9da4a5}.fare-suggested-val{color:var(--lr-ink)}
+.fare-offered-val{color:var(--lr-coral-dark)}
+.dist-badge{background:#edf2f1;border-color:#d2dfdc;color:var(--lr-blue)}
+.btn-primary{background:var(--lr-coral);color:#fff;border-radius:14px;padding:.9rem;box-shadow:0 8px 18px rgba(242,106,79,.2)}
+.btn-primary:hover{background:var(--lr-coral-dark);opacity:1}
+#active-ride{background:var(--lr-paper);border-top:3px solid var(--lr-coral);color:var(--lr-ink);box-shadow:0 -18px 45px rgba(16,35,55,.18)}
+.ride-status-badge{background:#eaf2ec;border-color:#8eb59a;color:#4c8058}
+.ar-fare-strip,.matched-card,.offer-card,.ride-history-item{background:#fff;border-color:var(--lr-line);color:var(--lr-ink)}
+.ar-fare-big,.offer-price-amt,.matched-fare-val,.rh-fare{color:var(--lr-coral-dark)}
+.offers-hdr-label,.matched-vehicle-row,.matched-pay-row,.offer-vehicle,.rh-meta{color:var(--lr-muted)}
+.offer-avatar,.matched-avatar{background:#d9e5e7;color:var(--lr-ink)}
+.btn-accept-driver{background:var(--lr-ink);border-color:var(--lr-ink)}
+.btn-accept-driver:hover{background:#1b3a54}
+.btn-secondary{background:transparent;border-color:#cfc5b8;color:var(--lr-ink)}
+.btn-danger{background:#fff1ed;border-color:#e5a99e;color:#c75240}
+.ride-history-item{border-left-color:#b6c4c2}.ride-history-item.completed{border-left-color:#70a27a}.ride-history-item.cancelled{border-left-color:#d66b5a}
+.status-pill.completed{background:#eaf2ec;color:#4c8058}.status-pill.cancelled{background:#fff1ed;color:#c75240}.status-pill.requested{background:#fff4d8;color:#9a7416}.status-pill.accepted,.status-pill.arrived,.status-pill.in-progress{background:#e9f0f5;color:#376f9b}
+.no-offers-msg,.empty-msg{color:#899296}
+@media (min-width:800px){
+  #bottom-panel{bottom:1.25rem;border-radius:24px;max-height:min(68vh,650px)}
+  .header{height:84px;padding-left:2rem;padding-right:2rem}
+}
+@media (max-width:420px){
+  .header-name{display:none}
+  .vehicle-grid{grid-template-columns:repeat(3,minmax(0,1fr))}
+  #bottom-panel{max-height:68vh;border-radius:24px 24px 0 0}
+}
 </style>
 </head>
 <body>
