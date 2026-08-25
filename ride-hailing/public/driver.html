@@ -299,8 +299,8 @@ textarea.support-input{resize:vertical;min-height:85px}
    IDs and handlers stay intact for realtime offers, payments and ride status. */
 :root{--dc-ink:#f7f7f3;--dc-muted:#9aa3a5;--dc-dim:#667174;--dc-line:rgba(255,255,255,.11);--dc-night:#111718;--dc-panel:#182022;--dc-panel2:#202a2c;--dc-cyan:#74e0d1;--dc-yellow:#f5cc68;--dc-coral:#ff8e78}
 #app{position:relative;display:none;background:var(--dc-night);color:var(--dc-ink);overflow:hidden;font-family:'DM Sans','Segoe UI',sans-serif}
-#map{position:absolute;inset:0;width:100%;height:100%;z-index:1;filter:saturate(.45) brightness(.7)}
-.leaflet-container{background:#172426}
+#map{position:absolute;inset:0;width:100%;height:100%;z-index:1;filter:none}
+.leaflet-container{background:#0c1218}
 .header{position:absolute;top:0;left:0;right:0;height:62px;padding:14px 16px 12px;background:linear-gradient(180deg,rgba(17,23,24,.96),rgba(17,23,24,.55),transparent);border:0;z-index:20}
 .header-logo{font-size:20px;letter-spacing:-.04em;color:var(--dc-ink)}
 .header-logo span{color:var(--dc-cyan)}
@@ -315,15 +315,21 @@ textarea.support-input{resize:vertical;min-height:85px}
 .dots-dropdown{background:var(--dc-panel);border-color:var(--dc-line);box-shadow:0 12px 32px rgba(0,0,0,.35)}
 .dots-item{color:var(--dc-ink);border-bottom:1px solid var(--dc-line)}
 .dots-item:hover{background:var(--dc-panel2)}
-.online-bar{position:absolute;top:64px;left:16px;right:16px;height:52px;padding:9px 12px;background:rgba(24,32,34,.93);border:1px solid var(--dc-line);border-radius:15px;box-shadow:0 12px 32px rgba(0,0,0,.25);z-index:15}
-.online-status-text{font-size:14px}.online-sub{font-size:11px;color:var(--dc-muted)}
+.driver-ops-control{position:absolute;top:72px;right:14px;z-index:24;width:min(294px,calc(100vw - 28px));color:var(--dc-ink);filter:drop-shadow(0 12px 24px rgba(0,0,0,.3))}
+.driver-ops-head{display:grid;grid-template-columns:28px minmax(0,1fr) 38px;align-items:center;gap:4px;padding:5px;background:rgba(17,26,32,.94);border:1px solid rgba(157,185,201,.2);border-radius:17px;backdrop-filter:blur(16px)}
+.driver-ops-grab{width:28px;height:34px;border:0;border-radius:10px;background:transparent;color:var(--dc-dim);cursor:grab;font-size:16px;touch-action:none}.driver-ops-grab:active{cursor:grabbing}
+.driver-ops-summary{min-width:0;border:0;background:transparent;color:var(--dc-ink);text-align:left;cursor:pointer;padding:4px 3px;display:flex;align-items:center;gap:8px}.driver-ops-summary-copy{min-width:0}.driver-ops-status-line{display:block;font-size:12px;font-weight:800;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.driver-ops-subline{display:block;color:var(--dc-muted);font-size:10px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-top:1px}
+.driver-ops-dot{width:9px;height:9px;border-radius:50%;background:#6d757b;box-shadow:0 0 0 4px rgba(109,117,123,.15);flex:none}.driver-ops-control.is-online .driver-ops-dot{background:var(--dc-cyan);box-shadow:0 0 0 4px rgba(116,224,209,.16),0 0 14px rgba(116,224,209,.62)}
+.map-refresh-btn{height:34px;width:38px;border:0;border-radius:11px;background:rgba(116,224,209,.14);color:var(--dc-cyan);font-size:16px;cursor:pointer;transition:transform .18s,background .18s}.map-refresh-btn:hover{background:var(--dc-cyan);color:#10201f}.map-refresh-btn:disabled{opacity:.55;cursor:wait}.map-refresh-btn:disabled span{display:inline-block;animation:spin .75s linear infinite}@keyframes spin{to{transform:rotate(360deg)}}
+.driver-ops-details{display:none;margin-top:7px;padding:11px;background:rgba(17,26,32,.96);border:1px solid rgba(157,185,201,.18);border-radius:16px;backdrop-filter:blur(16px)}.driver-ops-control.is-open .driver-ops-details{display:block}
+.driver-ops-row{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:5px 2px}.online-status-text{font-size:13px;font-weight:800}.online-sub{font-size:10px;color:var(--dc-muted);margin-top:2px;line-height:1.3}
+.driver-ops-control #long-range-bar,.driver-ops-control #fee-info-bar,.driver-ops-control #trial-history-banner{position:static!important;left:auto!important;right:auto!important;top:auto!important;width:auto!important;margin-top:8px;border:1px solid var(--dc-line)!important;border-radius:12px!important;background:rgba(255,255,255,.04)!important;padding:9px!important}
+.driver-ops-control #long-range-bar{gap:8px!important}.driver-ops-control #long-range-reminder{font-size:.62rem!important;line-height:1.35}.driver-ops-control #fee-info-bar{font-size:.66rem!important}.driver-ops-control #trial-history-banner{font-size:.66rem!important;color:var(--dc-yellow)!important}
 .toggle-wrap{width:44px;height:25px}.toggle-label{background:#384345}.toggle-label::after{width:19px;height:19px;left:3px;top:3px}.toggle-input:checked+.toggle-label{background:var(--dc-cyan)}.toggle-input:checked+.toggle-label::after{transform:translateX(19px)}
-#long-range-bar{position:absolute!important;top:124px;left:16px;right:16px;z-index:14;border:1px solid var(--dc-line)!important;border-radius:12px;background:rgba(24,32,34,.93)!important;color:var(--dc-ink)}
-#fee-info-bar,#trial-history-banner{position:absolute!important;top:124px;left:16px;right:16px;z-index:13;border-radius:12px}
 #pending-card{position:absolute;left:16px;right:16px;bottom:95px;margin:0;z-index:16;background:rgba(32,42,44,.96);border-color:var(--dc-yellow)}
 #pending-card .pending-card-title{color:var(--dc-yellow)}
-.stats-strip{position:absolute;left:10px;right:10px;bottom:77px;z-index:12;padding:10px 12px;background:rgba(24,32,34,.93);border:1px solid var(--dc-line);border-radius:15px;box-shadow:0 12px 32px rgba(0,0,0,.25)}
-.stat-val{font-family:'Space Mono',monospace;font-size:.85rem;color:var(--dc-yellow)}.stat-label{color:var(--dc-dim);font-size:.58rem}
+.stats-strip{position:absolute;left:50%;right:auto;bottom:78px;transform:translateX(-50%);z-index:12;width:min(360px,calc(100% - 28px));padding:5px;background:rgba(17,26,32,.94);border:1px solid rgba(157,185,201,.2);border-radius:17px;box-shadow:0 12px 32px rgba(0,0,0,.3);backdrop-filter:blur(16px);gap:4px;transition:opacity .2s,transform .2s}
+.stat-item{padding:6px 4px;border-radius:12px;background:rgba(255,255,255,.035)}.stat-item + .stat-item{border-left:0}.stat-val{font-family:'Space Mono',monospace;font-size:.78rem;color:var(--dc-yellow);white-space:nowrap}.stat-label{color:var(--dc-dim);font-size:.56rem;text-transform:uppercase;letter-spacing:.045em}
 .bottom-tabs{position:absolute;left:0;right:0;bottom:0;height:66px;z-index:30;background:rgba(17,23,24,.98);border-color:var(--dc-line)}
 .bottom-tab{color:var(--dc-dim);padding:.6rem;font-size:.7rem}.bottom-tab.active{color:var(--dc-cyan);border-color:var(--dc-cyan)}
 #info-panel,#active-panel,#payments-panel{position:absolute;left:10px;right:10px;bottom:143px;z-index:13;border:1px solid var(--dc-line);border-radius:20px;background:rgba(24,32,34,.96);box-shadow:0 12px 32px rgba(0,0,0,.25);padding:15px;max-height:calc(100vh - 245px);overflow-y:auto}
@@ -333,6 +339,14 @@ textarea.support-input{resize:vertical;min-height:85px}
 .idle-refresh-btn{background:var(--dc-cyan);border:0;color:#10201f;border-radius:12px;padding:12px;width:100%;margin-top:10px}
 .idle-refresh-btn:hover{background:#9aeee2;color:#10201f}
 #active-panel{border-color:rgba(116,224,209,.28)}
+#app.navigation-active .driver-ops-control{opacity:0;pointer-events:none;transform:translateY(-12px)}
+#app.navigation-active .stats-strip{opacity:0;pointer-events:none;transform:translate(-50%,18px)}
+#app.navigation-active .bottom-tabs{transform:translateY(110%);pointer-events:none}
+#app.navigation-active #active-panel{bottom:12px;max-height:min(47vh,405px);border-radius:24px;padding:12px 13px;background:rgba(14,22,28,.97);border-color:rgba(116,224,209,.38);box-shadow:0 18px 46px rgba(0,0,0,.45)}
+.nav-sheet-handle{width:36px;height:4px;border-radius:999px;background:rgba(255,255,255,.24);margin:0 auto 9px}.nav-topline{display:flex;align-items:center;justify-content:space-between;gap:10px}.nav-mode-label{font-size:10px;font-weight:800;letter-spacing:.11em;color:var(--dc-cyan);text-transform:uppercase}.nav-recenter-btn{border:1px solid rgba(116,224,209,.3);background:rgba(116,224,209,.1);color:var(--dc-cyan);border-radius:10px;padding:6px 8px;font-size:11px;font-weight:800;cursor:pointer}.nav-metrics{display:grid;grid-template-columns:1fr 1fr;gap:6px;margin:10px 0}.nav-metric{padding:9px 10px;border:1px solid var(--dc-line);border-radius:13px;background:#111b21}.nav-metric-value{font-family:'Space Mono',monospace;font-size:17px;font-weight:700;color:var(--dc-ink)}.nav-metric-label{font-size:9px;color:var(--dc-dim);text-transform:uppercase;letter-spacing:.08em;margin-top:2px}.nav-destination{display:flex;gap:9px;align-items:flex-start;padding:9px 10px;border-radius:13px;background:rgba(116,224,209,.09);margin-bottom:8px}.nav-destination-icon,.nav-route-symbol{display:grid;place-items:center;flex:none;width:20px;height:20px;border-radius:7px;font-family:'Space Mono',monospace;font-size:10px;font-weight:800;background:var(--dc-yellow);color:#10201f}.nav-destination-icon.dropoff,.nav-route-symbol.dropoff{background:var(--dc-coral);color:#fff}.nav-destination-kicker{font-size:9px;font-weight:800;color:var(--dc-cyan);letter-spacing:.09em;text-transform:uppercase}.nav-destination-name{display:block;font-size:13px;font-weight:800;color:var(--dc-ink);line-height:1.3;margin-top:2px}
+.navigation-route-details{display:none}
+#app.navigation-active .navigation-route-details{display:block}.navigation-route-details .ap-route{padding:8px 10px;margin:0 0 8px}.navigation-route-details .ap-route-row{font-size:.72rem;padding:2px 0}
+.map-marker-shell{background:transparent!important;border:0!important}.driver-location-marker{display:grid;place-items:center;width:30px;height:30px;border-radius:50%;background:#3e9cff;border:3px solid #eaf8ff;box-shadow:0 0 0 5px rgba(62,156,255,.2),0 4px 13px rgba(0,0,0,.42)}.driver-location-marker i{width:7px;height:7px;border-radius:50%;background:#fff}.route-marker{display:grid;place-items:center;width:30px;height:30px;border-radius:11px;border:2px solid #f4fbff;color:#10201f;font-family:'Space Mono',monospace;font-size:11px;font-weight:800;box-shadow:0 5px 14px rgba(0,0,0,.42)}.route-marker.pickup{background:var(--dc-yellow)}.route-marker.dropoff{background:var(--dc-coral);color:#fff}
 .ap-status-text{color:var(--dc-cyan)}.ap-passenger,.ap-route{background:#111819;border:1px solid var(--dc-line)}
 .ap-passenger-name,.ap-route-row{color:var(--dc-ink)}.ap-passenger-sub{color:var(--dc-muted)}
 .ap-btn.arrived{background:#182c35;color:var(--dc-cyan);border-color:#376c72}.ap-btn.start{background:#18352f;color:var(--dc-cyan);border-color:#4b978b}.ap-btn.complete{background:#2a3020;color:var(--dc-yellow);border-color:#89733d}
@@ -349,6 +363,7 @@ textarea.support-input{resize:vertical;min-height:85px}
 .btn-reject{background:transparent;border-color:var(--dc-line);color:var(--dc-muted)}
 .support-fab{background:var(--dc-panel);border-color:var(--dc-line);color:var(--dc-ink)}
 #today-fare-widget{top:130px!important;right:16px!important}#today-fare-handle{background:var(--dc-yellow)!important;border:0!important;color:#10201f!important}
+@media (max-width:430px){.driver-ops-control{width:min(276px,calc(100vw - 24px));right:12px}.driver-ops-head{border-radius:15px}.stats-strip{width:calc(100% - 24px);bottom:76px}.stat-item{padding:5px 2px}.stat-val{font-size:.72rem}.nav-metric-value{font-size:15px}}
 @media (min-width:800px){
   #info-panel,#active-panel,#payments-panel,#ride-request{left:50%;right:auto;transform:translateX(-50%);width:min(560px,calc(100% - 32px))}
   .stats-strip{left:50%;right:auto;transform:translateX(-50%);width:min(560px,calc(100% - 32px))}
@@ -529,34 +544,39 @@ textarea.support-input{resize:vertical;min-height:85px}
     </div>
   </div>
 
-  <!-- Online Toggle -->
-  <div class="online-bar">
-    <div class="online-info">
-      <div class="online-status-text" id="status-text">You are Offline</div>
-      <div class="online-sub" id="status-sub">Toggle to go online and receive ride requests</div>
+  <!-- Compact draggable operations control -->
+  <div id="driver-ops-control" class="driver-ops-control" aria-label="Driver availability controls">
+    <div class="driver-ops-head">
+      <button type="button" id="driver-ops-grab" class="driver-ops-grab" aria-label="Drag map controls">⠿</button>
+      <button type="button" id="driver-ops-summary" class="driver-ops-summary" aria-expanded="false" onclick="toggleDriverOps()">
+        <span class="driver-ops-dot" aria-hidden="true"></span>
+        <span class="driver-ops-summary-copy">
+          <span class="driver-ops-status-line" id="status-text">You are Offline</span>
+          <span class="driver-ops-subline" id="status-sub">Tap to manage availability</span>
+        </span>
+      </button>
+      <button type="button" id="map-refresh-btn" class="map-refresh-btn" onclick="refreshDashboard()" aria-label="Refresh map and ride status" title="Refresh map and ride status"><span>↻</span></button>
     </div>
-    <div class="toggle-wrap">
-      <input type="checkbox" id="online-toggle" class="toggle-input" onchange="toggleOnline(this.checked)">
-      <label for="online-toggle" class="toggle-label"></label>
+    <div class="driver-ops-details">
+      <div class="driver-ops-row">
+        <div class="online-info">
+          <div class="online-status-text">Ride requests</div>
+          <div class="online-sub">Turn on to receive nearby trips</div>
+        </div>
+        <div class="toggle-wrap">
+          <input type="checkbox" id="online-toggle" class="toggle-input" onchange="toggleOnline(this.checked)">
+          <label for="online-toggle" class="toggle-label"></label>
+        </div>
+      </div>
+      <div id="long-range-bar" style="display:none;align-items:center;justify-content:space-between;gap:.8rem">
+        <div style="min-width:0"><div style="font-size:.8rem;font-weight:700;color:#dbeafe">🛣️ Long Range Rides</div><div id="long-range-sub" style="font-size:.7rem;color:#94a3b8">Loading eligibility…</div><div id="long-range-reminder" style="display:none;margin-top:.3rem;color:#fbbf24;font-size:.68rem;font-weight:700">⚠ Tolls, taxes, and challans are driver responsibility.</div></div>
+        <div class="toggle-wrap"><input type="checkbox" id="long-range-toggle" class="toggle-input" onchange="toggleLongRange(this.checked)"><label for="long-range-toggle" class="toggle-label"></label></div>
+      </div>
+      <div id="fee-info-bar" style="display:none;flex-wrap:wrap;align-items:center;gap:.4rem">
+        <span>🚗</span><span id="fee-vehicle-text" style="color:#cbd5e1;font-weight:600">—</span><span style="color:#526068">·</span><span id="fee-rate-text" style="color:#94a3b8">—</span><span style="color:#526068">·</span><span id="fee-status-text">—</span>
+      </div>
+      <div id="trial-history-banner" style="display:none;align-items:center;gap:.4rem"><span>🎁</span><span></span></div>
     </div>
-  </div>
-  <div id="long-range-bar" style="display:none;background:#101827;border-bottom:1px solid #1e3a5f;padding:.55rem 1rem;align-items:center;justify-content:space-between;gap:.8rem">
-    <div style="min-width:0"><div style="font-size:.8rem;font-weight:700;color:#dbeafe">🛣️ Long Range Rides</div><div id="long-range-sub" style="font-size:.7rem;color:#94a3b8">Loading eligibility…</div><div id="long-range-reminder" style="display:none;margin-top:.3rem;color:#fbbf24;font-size:.68rem;font-weight:700">⚠ Reminder: Tolls, taxes, and challans are driver responsibility.</div></div>
-    <div class="toggle-wrap"><input type="checkbox" id="long-range-toggle" class="toggle-input" onchange="toggleLongRange(this.checked)"><label for="long-range-toggle" class="toggle-label"></label></div>
-  </div>
-
-  <!-- Daily Fee Info Bar -->
-  <div id="fee-info-bar" style="display:none;background:#0d0d1a;border-bottom:1px solid #1e1a0a;padding:.4rem 1rem;font-size:.75rem;color:#888;flex-wrap:wrap;align-items:center;gap:.6rem">
-    <span>🚗</span>
-    <span id="fee-vehicle-text" style="color:#cbd5e1;font-weight:600">—</span>
-    <span style="color:#2a2a3a">|</span>
-    <span id="fee-rate-text" style="color:#94a3b8">—</span>
-    <span style="color:#2a2a3a">|</span>
-    <span id="fee-status-text">—</span>
-  </div>
-  <!-- Free Trial History Banner -->
-  <div id="trial-history-banner" style="display:none;background:#1a1200;border-bottom:1px solid #2a2000;padding:.35rem 1rem;font-size:.72rem;color:#f5c518;align-items:center;gap:.4rem">
-    <span>🎁</span><span></span>
   </div>
 
   <!-- Pending Approval Card (shown when accountStatus === 'pending') -->
@@ -570,9 +590,9 @@ textarea.support-input{resize:vertical;min-height:85px}
 
   <!-- Stats strip -->
   <div class="stats-strip">
-    <div class="stat-item"><div class="stat-val" id="stat-rides">0</div><div class="stat-label">Today's Rides</div></div>
+    <div class="stat-item"><div class="stat-val" id="stat-rides">0</div><div class="stat-label">Rides today</div></div>
     <div class="stat-item"><div class="stat-val" id="stat-earning">Rs 0</div><div class="stat-label">Earnings</div></div>
-    <div class="stat-item"><div class="stat-val" id="stat-rating">5.0 ⭐</div><div class="stat-label">Rating</div></div>
+    <div class="stat-item"><div class="stat-val" id="stat-rating">5.0 ★</div><div class="stat-label">Rating</div></div>
   </div>
 
   <!-- Bottom Tabs -->
@@ -595,15 +615,23 @@ textarea.support-input{resize:vertical;min-height:85px}
 
   <!-- Active Ride Panel -->
   <div id="active-panel">
-    <div class="ap-status"><span class="ap-status-dot"></span><span class="ap-status-text" id="ap-status-text">Ride Accepted</span></div>
+    <div class="nav-sheet-handle" aria-hidden="true"></div>
+    <div class="nav-topline"><div class="ap-status"><span class="ap-status-dot"></span><span class="ap-status-text" id="ap-status-text">On the way to pickup</span></div><button type="button" class="nav-recenter-btn" onclick="focusActiveNavigation()">◎ Recenter</button></div>
+    <div class="nav-metrics">
+      <div class="nav-metric"><div class="nav-metric-value" id="nav-distance">—</div><div class="nav-metric-label">Remaining</div></div>
+      <div class="nav-metric"><div class="nav-metric-value" id="nav-eta">—</div><div class="nav-metric-label">ETA</div></div>
+    </div>
+    <div class="nav-destination"><span class="nav-destination-icon pickup" id="nav-destination-icon">P</span><div><div class="nav-destination-kicker" id="nav-leg-label">To pickup</div><strong class="nav-destination-name" id="nav-destination">Pickup location</strong></div></div>
     <div class="ap-passenger">
       <div class="ap-passenger-name" id="ap-passenger-name">Passenger</div>
-      <div class="ap-passenger-sub">📍 Pickup → 🎯 Dropoff</div>
+      <div class="ap-passenger-sub">Trip contact and route details</div>
     </div>
     <div id="ap-call-passenger"></div>
-    <div class="ap-route">
-      <div class="ap-route-row">📍 <span id="ap-pickup">—</span></div>
-      <div class="ap-route-row">🎯 <span id="ap-dropoff">—</span></div>
+    <div class="navigation-route-details">
+      <div class="ap-route">
+      <div class="ap-route-row"><span class="nav-route-symbol pickup">P</span><span id="ap-pickup">—</span></div>
+      <div class="ap-route-row"><span class="nav-route-symbol dropoff">D</span><span id="ap-dropoff">—</span></div>
+      </div>
     </div>
     <div class="ap-status-btns" id="ap-btns"></div>
   </div>
@@ -729,7 +757,7 @@ textarea.support-input{resize:vertical;min-height:85px}
 
 <!-- Draggable fare rules widget -->
 <div id="today-fare-widget" style="display:none;position:fixed;right:16px;top:155px;z-index:1800;touch-action:none">
-  <button type="button" id="today-fare-handle" aria-label="Open Today's Fare" onclick="toggleTodayFareWidget()" style="background:#f5c518;color:#111;border:2px solid #fff;border-radius:999px;padding:.62rem .85rem;font-size:.78rem;font-weight:800;box-shadow:0 7px 22px rgba(245,197,24,.36);cursor:grab">🧮 Today’s Fare</button>
+  <button type="button" id="today-fare-handle" aria-label="Open Today's Fare" onclick="toggleTodayFareWidget()" style="background:#f5c518;color:#111;border:2px solid #fff;border-radius:999px;padding:.62rem .85rem;font-size:.78rem;font-weight:800;box-shadow:0 7px 22px rgba(245,197,24,.36);cursor:grab">Today’s Fare</button>
   <div id="today-fare-panel" style="display:none;width:270px;margin-top:.45rem;background:#10101b;border:1px solid #f5c518;border-radius:12px;padding:.8rem;color:#e2e8f0;box-shadow:0 12px 28px rgba(0,0,0,.48)">
     <div style="display:flex;justify-content:space-between;gap:.5rem;align-items:center;margin-bottom:.45rem"><strong id="today-fare-title" style="font-size:.82rem;color:#f5c518">Today’s Fare</strong><button type="button" onclick="toggleTodayFareWidget()" style="border:0;background:transparent;color:#94a3b8;font-size:1rem;cursor:pointer">×</button></div>
     <div id="today-fare-content" style="font-size:.72rem;line-height:1.5;color:#cbd5e1">Loading fare rules…</div>
@@ -742,7 +770,7 @@ let token        = localStorage.getItem('rh_token');
 let sessionToken = localStorage.getItem('rh_session') || null;
 let user         = JSON.parse(localStorage.getItem('rh_user') || 'null');
 let socket = null;
-let map, pickupMarker, dropoffMarker, routeLine, myMarker;
+let map, pickupMarker, dropoffMarker, routeLine, myMarker, dropoffMarkers = [];
 let isOnline      = false;
 let pendingRide   = null;   // current popup ride
 let sentOffer     = null;   // { rideId } after driver sends an offer, before customer chooses
@@ -761,6 +789,10 @@ let dailyFeeSettings = {};
 let driverPerKmRates = {};
 let longRangeState = { enabled: false, walletBalance: 0, settings: {} };
 let driverTerms = '';
+let driverLocation = null;
+let navigationRoute = null;
+let lastNavigationRouteAt = 0;
+let lastNavigationRouteOrigin = null;
 
 // ── Toast ──────────────────────────────────────────────────────────────────
 function showToast(msg, type = 'info') {
@@ -1260,18 +1292,19 @@ function bootApp() {
   // Leaflet measures #map — fixes the 0×0 container race condition.
   requestAnimationFrame(() => requestAnimationFrame(() => {
     initMap();
+    renderAvailabilityState();
     setTimeout(() => map?.invalidateSize(), 300);
     setTimeout(() => map?.invalidateSize(), 700);
   }));
   // Show pending approval card if not yet approved
   const pendingCard = document.getElementById('pending-card');
-  const onlineBar   = document.querySelector('.online-bar');
+  const opsControl  = document.getElementById('driver-ops-control');
   if (user?.accountStatus === 'pending') {
     if (pendingCard) pendingCard.style.display = 'block';
-    if (onlineBar)   onlineBar.style.display   = 'none';
+    if (opsControl)  opsControl.style.display   = 'none';
   } else {
     if (pendingCard) pendingCard.style.display = 'none';
-    if (onlineBar)   onlineBar.style.display   = '';
+    if (opsControl)  opsControl.style.display   = '';
   }
 }
 
@@ -1334,16 +1367,15 @@ function urlBase64ToUint8Array(base64String) {
 // ── Map ────────────────────────────────────────────────────────────────────
 function initMap() {
   if (map) return;
-  map = L.map('map', { zoomControl: false, preferCanvas: true }).setView([31.5204, 74.3587], 16);
-  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-    attribution : '© <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
+  map = L.map('map', { zoomControl: false, preferCanvas: true, attributionControl: true }).setView([31.5204, 74.3587], 16);
+  L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
+    attribution : '© OpenStreetMap contributors © CARTO',
     maxNativeZoom: 19,
     maxZoom      : 20,
     subdomains   : 'abc',
     detectRetina : true,
     crossOrigin  : true
   }).addTo(map);
-  L.control.zoom({ position: 'topright' }).addTo(map);
 
   // Staggered invalidations catch every rendering phase (especially iOS Safari)
   requestAnimationFrame(() => map.invalidateSize());
@@ -1359,30 +1391,150 @@ function initMap() {
   if (navigator.geolocation) {
     locationWatch = navigator.geolocation.watchPosition(pos => {
       const { latitude: lat, longitude: lng } = pos.coords;
-      map.setView([lat, lng], map.getZoom());
+      driverLocation = { lat, lng };
       if (myMarker) myMarker.setLatLng([lat, lng]);
       else myMarker = L.marker([lat, lng], {
-        icon: L.divIcon({ html: '📍', className: '', iconSize: [28, 28], iconAnchor: [14, 28] })
+        icon: L.divIcon({ html: '<span class="driver-location-marker"><i></i></span>', className: 'map-marker-shell', iconSize: [30, 30], iconAnchor: [15, 15] })
       }).addTo(map);
 
       if (socket && isOnline) {
         socket.emit('driver:location', { lat, lng, rideId: activeRide?._id });
       }
+      if (activeRide) {
+        refreshActiveNavigation({ recenter: false });
+        map.panTo([lat, lng], { animate: true, duration: .45 });
+      } else {
+        map.setView([lat, lng], map.getZoom());
+      }
     }, () => {}, { enableHighAccuracy: true, maximumAge: 3000 });
 
     navigator.geolocation.getCurrentPosition(pos => {
-      map.setView([pos.coords.latitude, pos.coords.longitude], 15);
+      driverLocation = { lat: pos.coords.latitude, lng: pos.coords.longitude };
+      if (!activeRide) map.setView([pos.coords.latitude, pos.coords.longitude], 15);
     }, () => {});
   }
+  setupDriverOpsControl();
+}
+
+function removeRouteLine() {
+  if (routeLine) {
+    (Array.isArray(routeLine) ? routeLine : [routeLine]).forEach(line => line?.remove());
+    routeLine = null;
+  }
+}
+
+function haversineKm(a, b) {
+  if (!a || !b) return 0;
+  const toRad = value => value * Math.PI / 180;
+  const dLat = toRad(b.lat - a.lat), dLng = toRad(b.lng - a.lng);
+  const q = Math.sin(dLat / 2) ** 2 + Math.cos(toRad(a.lat)) * Math.cos(toRad(b.lat)) * Math.sin(dLng / 2) ** 2;
+  return 6371 * 2 * Math.atan2(Math.sqrt(q), Math.sqrt(1 - q));
+}
+
+function activeNavigationDestination(ride = activeRide) {
+  if (!ride) return null;
+  const inProgress = ride.status === 'in-progress';
+  const stops = (ride.dropoffLocations && ride.dropoffLocations.length)
+    ? ride.dropoffLocations
+    : (ride.dropoffLocation ? [ride.dropoffLocation] : []);
+  const point = inProgress ? stops[0] : ride.pickupLocation;
+  if (!point?.lat || !point?.lng) return null;
+  return {
+    point,
+    label: inProgress ? 'To drop-off' : 'To pickup',
+    icon: inProgress ? 'D' : 'P',
+    address: point.address || (inProgress ? 'Drop-off location' : 'Pickup location')
+  };
+}
+
+function formatNavigationDistance(meters) {
+  if (!Number.isFinite(meters)) return '—';
+  return meters < 1000 ? `${Math.max(10, Math.round(meters / 10) * 10)} m` : `${(meters / 1000).toFixed(1)} km`;
+}
+
+function formatNavigationEta(seconds) {
+  if (!Number.isFinite(seconds)) return '—';
+  const minutes = Math.max(1, Math.round(seconds / 60));
+  return minutes >= 60 ? `${Math.floor(minutes / 60)}h ${minutes % 60}m` : `${minutes} min`;
+}
+
+function updateNavigationDetails(distanceMeters, durationSeconds) {
+  const destination = activeNavigationDestination();
+  if (!destination) return;
+  document.getElementById('nav-distance').textContent = formatNavigationDistance(distanceMeters);
+  document.getElementById('nav-eta').textContent = formatNavigationEta(durationSeconds);
+  document.getElementById('nav-leg-label').textContent = destination.label;
+  document.getElementById('nav-destination-icon').textContent = destination.icon;
+  document.getElementById('nav-destination-icon').className = `nav-destination-icon ${destination.icon === 'D' ? 'dropoff' : 'pickup'}`;
+  document.getElementById('nav-destination').textContent = destination.address;
+}
+
+function drawNavigationLine(coords, { dashed = false } = {}) {
+  removeRouteLine();
+  const shadow = L.polyline(coords, { color: '#061014', weight: 10, opacity: .7, lineCap: 'round', lineJoin: 'round' }).addTo(map);
+  const line = L.polyline(coords, {
+    color: '#65dfd0', weight: 5, opacity: 1,
+    dashArray: dashed ? '9 10' : null,
+    lineCap: 'round', lineJoin: 'round'
+  }).addTo(map);
+  routeLine = [shadow, line];
+  return line;
+}
+
+function focusActiveNavigation() {
+  const destination = activeNavigationDestination();
+  if (!map || !destination) return;
+  const points = navigationRoute?.coords?.length
+    ? navigationRoute.coords
+    : [driverLocation && [driverLocation.lat, driverLocation.lng], [destination.point.lat, destination.point.lng]].filter(Boolean);
+  if (points.length >= 2) {
+    map.fitBounds(L.latLngBounds(points), {
+      paddingTopLeft: [26, 105],
+      paddingBottomRight: [26, Math.min(310, Math.round(window.innerHeight * .4))]
+    });
+  } else {
+    map.setView([destination.point.lat, destination.point.lng], 15);
+  }
+}
+
+async function refreshActiveNavigation({ force = false, recenter = false } = {}) {
+  const destination = activeNavigationDestination();
+  if (!map || !activeRide || !destination) return;
+
+  const origin = driverLocation || activeRide.pickupLocation;
+  if (!origin?.lat || !origin?.lng) return;
+  const movedKm = haversineKm(lastNavigationRouteOrigin, origin);
+  const routeAge = Date.now() - lastNavigationRouteAt;
+  const liveDistance = haversineKm(origin, destination.point) * 1000;
+  const liveDuration = liveDistance / 1000 / 28 * 3600;
+  if (!force && navigationRoute && movedKm < .08 && routeAge < 18000) {
+    updateNavigationDetails(liveDistance, liveDuration);
+    if (recenter) focusActiveNavigation();
+    return;
+  }
+
+  // Keep live location and passenger destinations in the app: this visual
+  // navigation leg is calculated locally instead of sending precise trip data
+  // to a third-party route provider.
+  const coords = [[origin.lat, origin.lng], [destination.point.lat, destination.point.lng]];
+  drawNavigationLine(coords);
+  navigationRoute = { coords, distance: liveDistance, duration: liveDuration };
+  lastNavigationRouteAt = Date.now();
+  lastNavigationRouteOrigin = { ...origin };
+  updateNavigationDetails(liveDistance, liveDuration);
+  if (recenter) focusActiveNavigation();
 }
 
 function showRideOnMap(ride) {
   if (pickupMarker)  pickupMarker.remove();
   if (dropoffMarker) dropoffMarker.remove();
-  if (routeLine)     routeLine.remove();
+  dropoffMarkers.forEach(marker => marker.remove());
+  dropoffMarkers = [];
+  removeRouteLine();
 
   const p = ride.pickupLocation;
-  pickupMarker = L.marker([p.lat, p.lng], { icon: L.divIcon({ className: 'pickup-icon', iconSize: [16, 16], iconAnchor: [8, 8] }) }).addTo(map);
+  if (!p?.lat || !p?.lng) return;
+  pickupMarker = L.marker([p.lat, p.lng], { icon: L.divIcon({ html: '<span class="route-marker pickup">P</span>', className: 'map-marker-shell', iconSize: [30, 30], iconAnchor: [15, 15] }) }).addTo(map);
 
   // Build waypoint list: pickup + all stops
   const stops = (ride.dropoffLocations && ride.dropoffLocations.length)
@@ -1394,11 +1546,16 @@ function showRideOnMap(ride) {
 
   // Mark each stop
   stops.forEach((s, i) => {
-    const cls = i === 0 ? 'dropoff-icon' : 'dropoff-icon';
-    const m = L.marker([s.lat, s.lng], { icon: L.divIcon({ className: cls, iconSize: [16, 16], iconAnchor: [8, 8] }) }).addTo(map);
+    const m = L.marker([s.lat, s.lng], { icon: L.divIcon({ html: `<span class="route-marker dropoff">${i + 1}</span>`, className: 'map-marker-shell', iconSize: [30, 30], iconAnchor: [15, 15] }) }).addTo(map);
+    dropoffMarkers.push(m);
     if (i === 0) dropoffMarker = m;
   });
 
+  if (activeRide && String(activeRide._id || activeRide.id) === String(ride._id || ride.id)) {
+    navigationRoute = null;
+    refreshActiveNavigation({ force: true, recenter: true });
+    return;
+  }
   routeLine = L.polyline(latLngs, { color: '#f5c518', weight: 3, dashArray: '8,8' }).addTo(map);
   if (latLngs.length >= 2) map.fitBounds(L.latLngBounds(latLngs), { padding: [60, 60] });
 }
@@ -1406,15 +1563,88 @@ function showRideOnMap(ride) {
 function clearRideMap() {
   if (pickupMarker)  { pickupMarker.remove();  pickupMarker  = null; }
   if (dropoffMarker) { dropoffMarker.remove(); dropoffMarker = null; }
-  if (routeLine)     { routeLine.remove();     routeLine     = null; }
+  dropoffMarkers.forEach(marker => marker.remove());
+  dropoffMarkers = [];
+  removeRouteLine();
+  navigationRoute = null;
+  lastNavigationRouteAt = 0;
+  lastNavigationRouteOrigin = null;
+}
+
+function toggleDriverOps(forceOpen) {
+  const control = document.getElementById('driver-ops-control');
+  const summary = document.getElementById('driver-ops-summary');
+  if (!control) return;
+  const open = typeof forceOpen === 'boolean' ? forceOpen : !control.classList.contains('is-open');
+  control.classList.toggle('is-open', open);
+  summary?.setAttribute('aria-expanded', String(open));
+}
+
+function syncDriverOpsState() {
+  const control = document.getElementById('driver-ops-control');
+  control?.classList.toggle('is-online', isOnline);
+}
+
+function renderAvailabilityState({ reason = '' } = {}) {
+  const toggle = document.getElementById('online-toggle');
+  if (toggle) toggle.checked = isOnline;
+  syncDriverOpsState();
+
+  const statusText = document.getElementById('status-text');
+  const statusSub = document.getElementById('status-sub');
+  const idleMessage = document.getElementById('idle-msg');
+  if (reason) {
+    if (statusText) statusText.textContent = 'Cannot go online';
+    if (statusSub) statusSub.textContent = reason;
+    if (idleMessage) idleMessage.innerHTML = `<div class="idle-icon">⚠️</div><div style="color:#ff8e78;font-size:.82rem">${reason}</div>`;
+    return;
+  }
+
+  if (statusText) statusText.textContent = isOnline ? 'You are Online ✓' : 'You are Offline';
+  if (statusSub) statusSub.textContent = isOnline ? 'Searching nearby ride requests' : 'Tap to manage availability';
+  if (idleMessage) idleMessage.innerHTML = isOnline
+    ? '<div><strong>Online and ready</strong><div style="font-size:.72rem;color:#667174;margin-top:.3rem">Your map and available rides refresh from the button above.</div></div>'
+    : '<div class="idle-icon">🛑</div><div>Toggle <strong>Online</strong> above to start receiving ride requests</div>';
+}
+
+function setupDriverOpsControl() {
+  const control = document.getElementById('driver-ops-control');
+  const grab = document.getElementById('driver-ops-grab');
+  if (!control || !grab || control.dataset.dragReady === 'true') return;
+  control.dataset.dragReady = 'true';
+  let dragging = null;
+
+  grab.addEventListener('pointerdown', event => {
+    event.preventDefault();
+    const rect = control.getBoundingClientRect();
+    dragging = { pointerId: event.pointerId, offsetX: event.clientX - rect.left, offsetY: event.clientY - rect.top };
+    grab.setPointerCapture?.(event.pointerId);
+  });
+  grab.addEventListener('pointermove', event => {
+    if (!dragging || dragging.pointerId !== event.pointerId) return;
+    const container = document.getElementById('app')?.getBoundingClientRect();
+    if (!container) return;
+    const left = Math.max(8, Math.min(container.width - control.offsetWidth - 8, event.clientX - container.left - dragging.offsetX));
+    const top = Math.max(68, Math.min(container.height - control.offsetHeight - 12, event.clientY - container.top - dragging.offsetY));
+    control.style.left = `${left}px`;
+    control.style.top = `${top}px`;
+    control.style.right = 'auto';
+  });
+  const endDrag = event => {
+    if (!dragging || dragging.pointerId !== event.pointerId) return;
+    grab.releasePointerCapture?.(event.pointerId);
+    dragging = null;
+  };
+  grab.addEventListener('pointerup', endDrag);
+  grab.addEventListener('pointercancel', endDrag);
 }
 
 // ── Online Toggle ──────────────────────────────────────────────────────────
 function toggleOnline(online) {
   if (online && user?.accountStatus === 'pending') {
     showToast('Account pending Admin approval — cannot go online yet', 'error');
-    const toggle = document.getElementById('online-toggle');
-    if (toggle) toggle.checked = false;
+    isOnline = false;
+    renderAvailabilityState();
     return;
   }
   isOnline = online;
@@ -1425,13 +1655,7 @@ function toggleOnline(online) {
     clearRideMap();
   }
   socket?.emit('driver:status', { isOnline: online });
-  document.getElementById('status-text').textContent = online ? 'You are Online ✓' : 'You are Offline';
-  document.getElementById('status-sub').textContent  = online
-    ? 'Waiting for ride requests…'
-    : 'Toggle to go online and receive ride requests';
-  document.getElementById('idle-msg').innerHTML = online
-    ? '<button class="idle-refresh-btn" onclick="refreshDashboard()">🔄 Tap to Refresh Dashboard</button><div style="font-size:.72rem;color:#555;margin-top:.3rem">Waiting for ride requests near you…</div>'
-    : '<div class="idle-icon">🛑</div><div>Toggle <strong>Online</strong> above to start receiving ride requests</div>';
+  renderAvailabilityState();
   showToast(online ? 'You are now Online' : 'You went Offline', online ? 'success' : 'info');
 }
 
@@ -1459,8 +1683,9 @@ function connectSocket() {
   });
 
   socket.on('driver:rehydrate', ({ isOnline: restoredOnline }) => {
-    if (restoredOnline) {
-      isOnline = true;
+    isOnline = !!restoredOnline;
+    renderAvailabilityState();
+    if (isOnline) {
       reconcileRideRequestsAfterReconnect();
     }
   });
@@ -1479,9 +1704,9 @@ function connectSocket() {
     user.accountStatus = 'active';
     localStorage.setItem('rh_user', JSON.stringify(user));
     const pendingCard = document.getElementById('pending-card');
-    const onlineBar   = document.querySelector('.online-bar');
+    const opsControl  = document.getElementById('driver-ops-control');
     if (pendingCard) pendingCard.style.display = 'none';
-    if (onlineBar)   onlineBar.style.display   = '';
+    if (opsControl)  opsControl.style.display   = '';
     showToast('🎉 Your account has been approved! You can now go online.', 'success');
   });
 
@@ -1494,12 +1719,11 @@ function connectSocket() {
     pendingRide = null;
     sentOffer = null;
     hideRideRequest();
-    const toggle = document.getElementById('online-toggle');
-    if (toggle) toggle.checked = false;
+    renderAvailabilityState();
     const pendingCard = document.getElementById('pending-card');
-    const onlineBar = document.querySelector('.online-bar');
+    const opsControl = document.getElementById('driver-ops-control');
     if (pendingCard) pendingCard.style.display = 'block';
-    if (onlineBar) onlineBar.style.display = 'none';
+    if (opsControl) opsControl.style.display = 'none';
     showToast(reason || 'Vehicle documents are under Admin review. You are offline until approval.', 'info');
   });
 
@@ -1585,16 +1809,12 @@ function connectSocket() {
   // Account suspended / balance too low
   socket.on('account:suspended', ({ reason }) => {
     showToast(reason, 'error');
-    const toggle = document.getElementById('online-toggle');
-    if (toggle) { toggle.checked = false; isOnline = false; }
+    isOnline = false;
     pendingRide = null;
     sentOffer = null;
     hideRideRequest();
     clearRideMap();
-    document.getElementById('status-text').textContent = '⚠ Cannot Go Online';
-    document.getElementById('status-sub').textContent  = reason;
-    document.getElementById('idle-msg').innerHTML =
-      `<div class="idle-icon">⚠️</div><div style="color:#ff5555;font-size:.82rem">${reason}</div>`;
+    renderAvailabilityState({ reason });
   });
 
   // New ride request from passenger
@@ -1983,15 +2203,23 @@ async function sendCounter() {
 
 // ── Active Ride Panel ──────────────────────────────────────────────────────
 function showActivePanel(ride) {
+  activeRide = ride;
   document.getElementById('info-panel').style.display   = 'none';
   document.getElementById('active-panel').style.display = 'block';
+  document.getElementById('app').classList.add('navigation-active');
   // Repaint map tiles — the panel swap can leave a black frame on slow devices
   setTimeout(() => map?.invalidateSize(), 150);
   setTimeout(() => map?.invalidateSize(), 600);
-  document.getElementById('ap-status-text').textContent    = 'On the way to pickup';
+  const statusLabels = {
+    accepted: 'On the way to pickup',
+    arrived: 'At pickup',
+    'in-progress': 'Ride in progress'
+  };
+  document.getElementById('ap-status-text').textContent    = statusLabels[ride.status] || statusLabels.accepted;
   document.getElementById('ap-passenger-name').textContent = ride.passenger?.name || 'Passenger';
   document.getElementById('ap-pickup').textContent         = ride.pickupLocation?.address  || 'Pickup';
   document.getElementById('ap-dropoff').textContent        = ride.dropoffLocation?.address || 'Dropoff';
+  updateNavigationDetails();
 
   // Dual call buttons — Phone + WhatsApp
   const rawPhone = ride.passenger?.phone || '';
@@ -2007,7 +2235,7 @@ function showActivePanel(ride) {
          </div>`
       : '';
   }
-  renderActiveButtons('accepted');
+  renderActiveButtons(ride.status || 'accepted');
 }
 
 function renderActiveButtons(status) {
@@ -2037,6 +2265,8 @@ async function updateStatus(status) {
       setTimeout(showDriverRatingModal, 1500);
     } else {
       renderActiveButtons(status);
+      updateNavigationDetails();
+      refreshActiveNavigation({ force: true, recenter: true });
       const msgs = { arrived: 'Marked as arrived', 'in-progress': 'Ride started' };
       showToast(msgs[status] || '', 'success');
     }
@@ -2059,6 +2289,7 @@ function endActiveRide() {
 
   document.getElementById('active-panel').style.display = 'none';
   document.getElementById('info-panel').style.display   = 'block';
+  document.getElementById('app').classList.remove('navigation-active');
   clearRideMap();
 
   // Leave the completed ride's socket room so stale events don't bleed through
@@ -2078,8 +2309,8 @@ function endActiveRide() {
 
 // ── Force-sync dashboard state from server (called by the Refresh button) ──
 async function refreshDashboard() {
-  const btn = document.querySelector('.idle-refresh-btn');
-  if (btn) { btn.textContent = '⏳ Refreshing…'; btn.disabled = true; }
+  const btn = document.getElementById('map-refresh-btn');
+  if (btn) { btn.disabled = true; btn.setAttribute('aria-label', 'Refreshing map and ride status'); }
   try {
     const { ride } = await apiCall('/api/driver/active-ride');
     if (ride) {
@@ -2096,10 +2327,14 @@ async function refreshDashboard() {
     }
     // Ensure socket rooms are correct
     if (socket && isOnline) socket.emit('driver:status', { isOnline: true });
+    if (isOnline) await reconcileRideRequestsAfterReconnect();
+    map?.invalidateSize();
+    if (activeRide) await refreshActiveNavigation({ force: true, recenter: true });
+    else if (driverLocation) map?.setView([driverLocation.lat, driverLocation.lng], Math.max(map.getZoom(), 15));
   } catch (e) {
     showToast('Refresh failed — check connection', 'error');
   } finally {
-    if (btn) { btn.textContent = '🔄 Tap to Refresh Dashboard'; btn.disabled = false; }
+    if (btn) { btn.disabled = false; btn.setAttribute('aria-label', 'Refresh map and ride status'); }
   }
 }
 
@@ -2508,6 +2743,8 @@ async function submitStartPin() {
     activeRide.status = 'in-progress';
     document.getElementById('ap-status-text').textContent = 'Ride in progress';
     renderActiveButtons('in-progress');
+    updateNavigationDetails();
+    refreshActiveNavigation({ force: true, recenter: true });
     showToast('Ride started! 🚗', 'success');
   } catch (e) {
     const errMsg = e.message || '';
@@ -2971,12 +3208,11 @@ async function submitChangeVehicle() {
     sentOffer = null;
     hideRideRequest();
     socket?.emit('driver:status', { isOnline: false });
-    const onlineToggle = document.getElementById('online-toggle');
-    if (onlineToggle) onlineToggle.checked = false;
+    renderAvailabilityState();
     const pendingCard = document.getElementById('pending-card');
-    const onlineBar = document.querySelector('.online-bar');
+    const opsControl = document.getElementById('driver-ops-control');
     if (pendingCard) pendingCard.style.display = 'block';
-    if (onlineBar) onlineBar.style.display = 'none';
+    if (opsControl) opsControl.style.display = 'none';
     document.getElementById('change-vehicle-modal').style.display = 'none';
     showToast('Vehicle update submitted. You are offline until Admin approves the new document.', 'info');
   } catch (e) {
