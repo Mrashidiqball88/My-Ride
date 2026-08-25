@@ -123,7 +123,7 @@ body{font-family:'Segoe UI',sans-serif;background:#0a0a0f;color:#fff;height:100d
 .sheet-grabber{width:52px;height:5px;border-radius:99px;background:#555;margin:.7rem auto .4rem;cursor:grab;flex:0 0 auto}
 .location-search-slot{position:sticky;top:0;z-index:3;flex:0 0 auto;padding:.65rem 1rem .55rem;background:#13131a;border-bottom:1px solid #252535}
 .location-search-slot:empty{display:none}
-.location-search-slot .loc-wrap{margin-bottom:0}
+.location-search-slot .loc-wrap{width:min(100%, 640px);margin:0 auto}
 .sheet-header{display:flex;align-items:center;gap:.65rem;padding:.35rem 1rem .75rem;border-bottom:1px solid #252535;flex:0 0 auto}
 .sheet-header-copy{flex:1}.sheet-kicker{font-size:.63rem;color:#f5c518;font-weight:800;text-transform:uppercase;letter-spacing:.08em}.sheet-title{font-size:.92rem;color:#fff;font-weight:700;margin-top:.15rem}
 .sheet-close{width:32px;height:32px;border:1px solid #343448;background:#1e1e2e;color:#bbb;border-radius:50%;font-size:.9rem;cursor:pointer}
@@ -1513,9 +1513,26 @@ function escapeLocationText(value) {
 
 function localLocationResults(query) {
   const needle = query.trim().toLocaleLowerCase();
+  if (!needle) return [];
+  const center = pickup || (map ? map.getCenter() : null);
   return LOCAL_LOCATION_AREAS
-    .filter(([name]) => !needle || name.toLocaleLowerCase().includes(needle))
-    .map(([primary, secondary, lat, lon]) => ({ primary, secondary, lat, lon, local: true }));
+    .map(([name, secondary, lat, lon]) => {
+      const normalizedName = name.toLocaleLowerCase();
+      const relevance = normalizedName.startsWith(needle) ? 0 : normalizedName.includes(needle) ? 1 : 2;
+      const distance = center ? haversine(center.lat, center.lng, lat, lon) : Number.POSITIVE_INFINITY;
+      return {
+        primary: name,
+        secondary,
+        lat,
+        lon,
+        local: true,
+        relevance,
+        distance
+      };
+    })
+    .filter(item => item.relevance < 2)
+    .sort((a, b) => a.relevance - b.relevance || a.distance - b.distance)
+    .map(({ relevance, distance, ...item }) => item);
 }
 
 function openLocationSheet(type) {
@@ -1562,7 +1579,7 @@ function renderLocationSheet(type, results, query = '') {
   const kicker = document.getElementById('location-sheet-kicker');
   const isPickup = type === 'pickup';
   kicker.textContent = isPickup ? 'Pickup location' : 'Drop-off location';
-  title.textContent = query ? `Areas matching “${query}”` : 'Search an area or choose an option';
+  title.textContent = query ? `Areas matching “${query}”` : 'Type an area name to search';
   locationSheetResults = [];
   let markup = '';
   if (isPickup) {
@@ -1579,7 +1596,11 @@ function renderLocationSheet(type, results, query = '') {
       <span class="sheet-item-primary">${escapeLocationText(primary)}</span>
       ${secondary ? `<span class="sheet-item-secondary">${escapeLocationText(secondary)}</span>` : ''}</span></button>`;
   }).join('');
-  list.innerHTML = markup || '<div class="sheet-empty">No matching areas yet. Try another letter or search phrase.</div>';
+  list.innerHTML = markup || `<div class="sheet-empty">${
+    query
+      ? 'No matching areas yet. Try another letter or search phrase.'
+      : 'Start typing to see matching areas. You can also pin the location directly on the map.'
+  }</div>`;
   openLocationSheet(type);
 }
 
