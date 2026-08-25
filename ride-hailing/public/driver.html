@@ -343,8 +343,11 @@ textarea.support-input{resize:vertical;min-height:85px}
 #app.navigation-active .driver-ops-control{opacity:0;pointer-events:none;transform:translateY(-12px)}
 #app.navigation-active .stats-strip{opacity:0;pointer-events:none;transform:translate(-50%,18px)}
 #app.navigation-active .bottom-tabs{transform:translateY(110%);pointer-events:none}
-#app.navigation-active #active-panel{bottom:12px;max-height:min(47vh,405px);border-radius:24px;padding:12px 13px;background:rgba(14,22,28,.97);border-color:rgba(116,224,209,.38);box-shadow:0 18px 46px rgba(0,0,0,.45)}
-.nav-sheet-handle{width:36px;height:4px;border-radius:999px;background:rgba(255,255,255,.24);margin:0 auto 9px}.nav-topline{display:flex;align-items:center;justify-content:space-between;gap:10px}.nav-mode-label{font-size:10px;font-weight:800;letter-spacing:.11em;color:var(--dc-cyan);text-transform:uppercase}.nav-recenter-btn{border:1px solid rgba(116,224,209,.3);background:rgba(116,224,209,.1);color:var(--dc-cyan);border-radius:10px;padding:6px 8px;font-size:11px;font-weight:800;cursor:pointer}.nav-metrics{display:grid;grid-template-columns:1fr 1fr;gap:6px;margin:10px 0}.nav-metric{padding:9px 10px;border:1px solid var(--dc-line);border-radius:13px;background:#111b21}.nav-metric-value{font-family:'Space Mono',monospace;font-size:17px;font-weight:700;color:var(--dc-ink)}.nav-metric-label{font-size:9px;color:var(--dc-dim);text-transform:uppercase;letter-spacing:.08em;margin-top:2px}.nav-destination{display:flex;gap:9px;align-items:flex-start;padding:9px 10px;border-radius:13px;background:rgba(116,224,209,.09);margin-bottom:8px}.nav-destination-icon,.nav-route-symbol{display:grid;place-items:center;flex:none;width:20px;height:20px;border-radius:7px;font-family:'Space Mono',monospace;font-size:10px;font-weight:800;background:var(--dc-yellow);color:#10201f}.nav-destination-icon.dropoff,.nav-route-symbol.dropoff{background:var(--dc-coral);color:#fff}.nav-destination-kicker{font-size:9px;font-weight:800;color:var(--dc-cyan);letter-spacing:.09em;text-transform:uppercase}.nav-destination-name{display:block;font-size:13px;font-weight:800;color:var(--dc-ink);line-height:1.3;margin-top:2px}
+#app.navigation-active #active-panel{bottom:12px;max-height:min(64vh,560px);border-radius:24px;padding:12px 13px;background:rgba(14,22,28,.97);border-color:rgba(116,224,209,.38);box-shadow:0 18px 46px rgba(0,0,0,.45);overflow-y:auto;transform:translateY(var(--nav-sheet-offset,0));transition:max-height .24s ease,transform .18s ease,padding .24s ease}
+#app.navigation-active #active-panel.nav-sheet-dragging{transition:none}
+#app.navigation-active #active-panel.nav-sheet-compact{max-height:204px;overflow:hidden}
+#app.navigation-active #active-panel.nav-sheet-collapsed{max-height:78px;overflow:hidden;padding-bottom:10px}
+.nav-sheet-handle{display:block;width:48px;height:20px;border:0;background:transparent;margin:0 auto 4px;cursor:grab;touch-action:none;position:relative}.nav-sheet-handle::after{content:'';position:absolute;width:36px;height:4px;border-radius:999px;background:rgba(255,255,255,.32);top:8px;left:6px}.nav-sheet-handle:active{cursor:grabbing}.nav-topline{display:flex;align-items:center;justify-content:space-between;gap:10px}.nav-mode-label{font-size:10px;font-weight:800;letter-spacing:.11em;color:var(--dc-cyan);text-transform:uppercase}.nav-sheet-toggle,.nav-recenter-btn{border:1px solid rgba(116,224,209,.3);background:rgba(116,224,209,.1);color:var(--dc-cyan);border-radius:10px;padding:6px 8px;font-size:11px;font-weight:800;cursor:pointer}.nav-sheet-actions{display:flex;align-items:center;gap:6px}.nav-sheet-toggle{min-width:34px}.nav-metrics{display:grid;grid-template-columns:1fr 1fr;gap:6px;margin:10px 0}.nav-metric{padding:9px 10px;border:1px solid var(--dc-line);border-radius:13px;background:#111b21}.nav-metric-value{font-family:'Space Mono',monospace;font-size:17px;font-weight:700;color:var(--dc-ink)}.nav-metric-label{font-size:9px;color:var(--dc-dim);text-transform:uppercase;letter-spacing:.08em;margin-top:2px}.nav-destination{display:flex;gap:9px;align-items:flex-start;padding:9px 10px;border-radius:13px;background:rgba(116,224,209,.09);margin-bottom:8px}.nav-destination-icon,.nav-route-symbol{display:grid;place-items:center;flex:none;width:20px;height:20px;border-radius:7px;font-family:'Space Mono',monospace;font-size:10px;font-weight:800;background:var(--dc-yellow);color:#10201f}.nav-destination-icon.dropoff,.nav-route-symbol.dropoff{background:var(--dc-coral);color:#fff}.nav-destination-kicker{font-size:9px;font-weight:800;color:var(--dc-cyan);letter-spacing:.09em;text-transform:uppercase}.nav-destination-name{display:block;font-size:13px;font-weight:800;color:var(--dc-ink);line-height:1.3;margin-top:2px}
 .navigation-route-details{display:none}
 #app.navigation-active .navigation-route-details{display:block}.navigation-route-details .ap-route{padding:8px 10px;margin:0 0 8px}.navigation-route-details .ap-route-row{font-size:.72rem;padding:2px 0}
 .map-marker-shell{background:transparent!important;border:0!important}.driver-location-marker{display:grid;place-items:center;width:30px;height:30px;border-radius:50%;background:#3e9cff;border:3px solid #eaf8ff;box-shadow:0 0 0 5px rgba(62,156,255,.2),0 4px 13px rgba(0,0,0,.42)}.driver-location-marker i{width:7px;height:7px;border-radius:50%;background:#fff}.route-marker{display:grid;place-items:center;width:30px;height:30px;border-radius:11px;border:2px solid #f4fbff;color:#10201f;font-family:'Space Mono',monospace;font-size:11px;font-weight:800;box-shadow:0 5px 14px rgba(0,0,0,.42)}.route-marker.pickup{background:var(--dc-yellow)}.route-marker.dropoff{background:var(--dc-coral);color:#fff}
@@ -612,25 +615,27 @@ textarea.support-input{resize:vertical;min-height:85px}
 
   <!-- Active Ride Panel -->
   <div id="active-panel">
-    <div class="nav-sheet-handle" aria-hidden="true"></div>
-    <div class="nav-topline"><div class="ap-status"><span class="ap-status-dot"></span><span class="ap-status-text" id="ap-status-text">On the way to pickup</span></div><button type="button" class="nav-recenter-btn" onclick="focusActiveNavigation()">◎ Recenter</button></div>
-    <div class="nav-metrics">
-      <div class="nav-metric"><div class="nav-metric-value" id="nav-distance">—</div><div class="nav-metric-label">Remaining</div></div>
-      <div class="nav-metric"><div class="nav-metric-value" id="nav-eta">—</div><div class="nav-metric-label">ETA</div></div>
-    </div>
-    <div class="nav-destination"><span class="nav-destination-icon pickup" id="nav-destination-icon">P</span><div><div class="nav-destination-kicker" id="nav-leg-label">To pickup</div><strong class="nav-destination-name" id="nav-destination">Pickup location</strong></div></div>
-    <div class="ap-passenger">
-      <div class="ap-passenger-name" id="ap-passenger-name">Passenger</div>
-      <div class="ap-passenger-sub">Trip contact and route details</div>
-    </div>
-    <div id="ap-call-passenger"></div>
-    <div class="navigation-route-details">
-      <div class="ap-route">
-      <div class="ap-route-row"><span class="nav-route-symbol pickup">P</span><span id="ap-pickup">—</span></div>
-      <div class="ap-route-row"><span class="nav-route-symbol dropoff">D</span><span id="ap-dropoff">—</span></div>
+    <button type="button" class="nav-sheet-handle" id="nav-sheet-handle" aria-label="Drag to resize navigation panel"></button>
+    <div class="nav-topline"><div class="ap-status"><span class="ap-status-dot"></span><span class="ap-status-text" id="ap-status-text">On the way to pickup</span></div><div class="nav-sheet-actions"><button type="button" class="nav-sheet-toggle" id="nav-sheet-toggle" aria-expanded="true" aria-label="Minimize navigation panel">⌄</button><button type="button" class="nav-recenter-btn" onclick="focusActiveNavigation()">◎ Recenter</button></div></div>
+    <div class="nav-sheet-content">
+      <div class="nav-metrics">
+        <div class="nav-metric"><div class="nav-metric-value" id="nav-distance">—</div><div class="nav-metric-label">Remaining</div></div>
+        <div class="nav-metric"><div class="nav-metric-value" id="nav-eta">—</div><div class="nav-metric-label">ETA</div></div>
       </div>
+      <div class="nav-destination"><span class="nav-destination-icon pickup" id="nav-destination-icon">P</span><div><div class="nav-destination-kicker" id="nav-leg-label">To pickup</div><strong class="nav-destination-name" id="nav-destination">Pickup location</strong></div></div>
+      <div class="ap-passenger">
+        <div class="ap-passenger-name" id="ap-passenger-name">Passenger</div>
+        <div class="ap-passenger-sub">Trip contact and route details</div>
+      </div>
+      <div id="ap-call-passenger"></div>
+      <div class="navigation-route-details">
+        <div class="ap-route">
+        <div class="ap-route-row"><span class="nav-route-symbol pickup">P</span><span id="ap-pickup">—</span></div>
+        <div class="ap-route-row"><span class="nav-route-symbol dropoff">D</span><span id="ap-dropoff">—</span></div>
+        </div>
+      </div>
+      <div class="ap-status-btns" id="ap-btns"></div>
     </div>
-    <div class="ap-status-btns" id="ap-btns"></div>
   </div>
 
   <!-- Payments Panel -->
@@ -790,6 +795,7 @@ let driverLocation = null;
 let navigationRoute = null;
 let lastNavigationRouteAt = 0;
 let lastNavigationRouteOrigin = null;
+let navigationFollowing = true;
 
 // ── Toast ──────────────────────────────────────────────────────────────────
 function showToast(msg, type = 'info') {
@@ -1422,6 +1428,7 @@ function initMap() {
   setTimeout(() => map.invalidateSize(), 150);
   setTimeout(() => map.invalidateSize(), 500);
   window.addEventListener('resize', () => map.invalidateSize());
+  map.on('dragstart', () => { if (activeRide) navigationFollowing = false; });
   // Re-fire when the page becomes visible again (e.g. switching tabs/apps)
   document.addEventListener('visibilitychange', () => {
     if (document.visibilityState === 'visible') map?.invalidateSize();
@@ -1437,12 +1444,12 @@ function initMap() {
         icon: L.divIcon({ html: '<span class="driver-location-marker"><i></i></span>', className: 'map-marker-shell', iconSize: [30, 30], iconAnchor: [15, 15] })
       }).addTo(map);
 
-      if (socket && isOnline) {
+      if (socket && (isOnline || activeRide)) {
         socket.emit('driver:location', { lat, lng, rideId: activeRide?._id });
       }
       if (activeRide) {
         refreshActiveNavigation({ recenter: false });
-        map.panTo([lat, lng], { animate: true, duration: .45 });
+        if (navigationFollowing) map.panTo([lat, lng], { animate: true, duration: .45 });
       } else {
         map.setView([lat, lng], map.getZoom());
       }
@@ -1524,6 +1531,7 @@ function drawNavigationLine(coords, { dashed = false } = {}) {
 function focusActiveNavigation() {
   const destination = activeNavigationDestination();
   if (!map || !destination) return;
+  navigationFollowing = true;
   const points = navigationRoute?.coords?.length
     ? navigationRoute.coords
     : [driverLocation && [driverLocation.lat, driverLocation.lng], [destination.point.lat, destination.point.lng]].filter(Boolean);
@@ -1686,6 +1694,84 @@ function setupDriverOpsControl() {
   grab.addEventListener('pointercancel', endDrag);
 }
 
+function setActiveRideSheetState(state = 'compact') {
+  const panel = document.getElementById('active-panel');
+  const toggle = document.getElementById('nav-sheet-toggle');
+  if (!panel) return;
+  const normalized = ['expanded', 'compact', 'collapsed'].includes(state) ? state : 'compact';
+  panel.classList.toggle('nav-sheet-collapsed', normalized === 'collapsed');
+  panel.classList.toggle('nav-sheet-compact', normalized === 'compact');
+  panel.style.removeProperty('max-height');
+  panel.style.removeProperty('--nav-sheet-offset');
+  panel.dataset.sheetState = normalized;
+  if (toggle) {
+    const minimized = normalized === 'collapsed';
+    toggle.textContent = minimized ? '⌃' : '⌄';
+    toggle.setAttribute('aria-expanded', String(!minimized));
+    toggle.setAttribute('aria-label', minimized ? 'Expand navigation panel' : 'Minimize navigation panel');
+  }
+  setTimeout(() => map?.invalidateSize(), 230);
+}
+
+function setupActiveRideSheet() {
+  const panel = document.getElementById('active-panel');
+  const handle = document.getElementById('nav-sheet-handle');
+  const toggle = document.getElementById('nav-sheet-toggle');
+  if (!panel || !handle || panel.dataset.sheetDragReady === 'true') return;
+  panel.dataset.sheetDragReady = 'true';
+  let drag = null;
+
+  const beginDrag = (event, pointerId, capturePointer = false) => {
+    event.preventDefault();
+    const wasCollapsed = panel.classList.contains('nav-sheet-collapsed');
+    const wasCompact = panel.classList.contains('nav-sheet-compact');
+    panel.classList.add('nav-sheet-dragging');
+    const fullHeight = Math.min(panel.scrollHeight, Math.min(window.innerHeight * .64, 560));
+    panel.classList.remove('nav-sheet-collapsed', 'nav-sheet-compact');
+    panel.style.maxHeight = `${fullHeight}px`;
+    const visibleHeight = wasCollapsed ? 78 : (wasCompact ? 204 : fullHeight);
+    drag = {
+      pointerId,
+      startY: event.clientY,
+      startOffset: Math.max(0, fullHeight - visibleHeight),
+      maxOffset: Math.max(0, fullHeight - 78),
+      moved: false
+    };
+    panel.style.setProperty('--nav-sheet-offset', `${drag.startOffset}px`);
+    if (capturePointer) handle.setPointerCapture?.(pointerId);
+  };
+  const moveDrag = (event, pointerId) => {
+    if (!drag || drag.pointerId !== pointerId) return;
+    const offset = Math.max(0, Math.min(drag.maxOffset, drag.startOffset + event.clientY - drag.startY));
+    drag.moved ||= Math.abs(event.clientY - drag.startY) > 8;
+    panel.style.setProperty('--nav-sheet-offset', `${offset}px`);
+  };
+  const finishDrag = (event, pointerId, releasePointer = false) => {
+    if (!drag || drag.pointerId !== pointerId) return;
+    if (releasePointer) handle.releasePointerCapture?.(pointerId);
+    const offset = Number.parseFloat(panel.style.getPropertyValue('--nav-sheet-offset')) || 0;
+    const ratio = drag.maxOffset ? offset / drag.maxOffset : 0;
+    panel.classList.remove('nav-sheet-dragging');
+    const next = ratio > .68 ? 'collapsed' : ratio > .24 ? 'compact' : 'expanded';
+    const moved = drag.moved;
+    drag = null;
+    setActiveRideSheetState(next);
+    if (!moved && next === 'expanded') setActiveRideSheetState('compact');
+  };
+  handle.addEventListener('pointerdown', event => beginDrag(event, event.pointerId, true));
+  handle.addEventListener('pointermove', event => moveDrag(event, event.pointerId));
+  handle.addEventListener('pointerup', event => finishDrag(event, event.pointerId, true));
+  handle.addEventListener('pointercancel', event => finishDrag(event, event.pointerId, true));
+  handle.addEventListener('mousedown', event => {
+    if (!drag) beginDrag(event, 'mouse');
+  });
+  window.addEventListener('mousemove', event => moveDrag(event, 'mouse'));
+  window.addEventListener('mouseup', event => finishDrag(event, 'mouse'));
+  toggle?.addEventListener('click', () => {
+    setActiveRideSheetState(panel.classList.contains('nav-sheet-collapsed') ? 'compact' : 'collapsed');
+  });
+}
+
 // ── Online Toggle ──────────────────────────────────────────────────────────
 function toggleOnline(online) {
   if (online && user?.accountStatus === 'pending') {
@@ -1722,6 +1808,7 @@ function connectSocket() {
     if (activeRide) {
       socket.emit('ride:join', activeRide._id);
     }
+    reconcileActiveRideAfterReconnect();
     // A ride can be taken while this socket is disconnected, so the
     // driver may never receive the room's ride:taken event. Reconcile the
     // request state from the server after every reconnect instead of
@@ -2254,6 +2341,9 @@ function showActivePanel(ride) {
   hideIdleInfoPanel();
   document.getElementById('active-panel').style.display = 'block';
   document.getElementById('app').classList.add('navigation-active');
+  setupActiveRideSheet();
+  setActiveRideSheetState('compact');
+  navigationFollowing = true;
   // Repaint map tiles — the panel swap can leave a black frame on slow devices
   setTimeout(() => map?.invalidateSize(), 150);
   setTimeout(() => map?.invalidateSize(), 600);
@@ -2333,6 +2423,7 @@ async function cancelActiveRide() {
 function endActiveRide() {
   const finishedRideId = activeRide?._id;
   activeRide = null;
+  navigationFollowing = false;
 
   document.getElementById('active-panel').style.display = 'none';
   hideIdleInfoPanel();
@@ -2352,6 +2443,22 @@ function endActiveRide() {
 
   // Re-check support-ticket badge so the bell reflects the real unread count
   checkUnreadDriverTickets();
+}
+
+async function reconcileActiveRideAfterReconnect() {
+  try {
+    const { ride } = await apiCall('/api/driver/active-ride');
+    if (!ride) {
+      if (activeRide) endActiveRide();
+      return;
+    }
+    activeRide = ride;
+    showActivePanel(ride);
+    showRideOnMap(ride);
+    socket?.emit('ride:join', String(ride._id));
+  } catch (error) {
+    console.warn('Active ride reconciliation failed:', error.message);
+  }
 }
 
 // ── Force-sync dashboard state from server (called by the Refresh button) ──

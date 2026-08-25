@@ -372,7 +372,8 @@ body{font-family:'Segoe UI',sans-serif;background:#0a0a0f;color:#fff;height:100d
 .dist-badge{background:#edf2f1;border-color:#d2dfdc;color:var(--lr-blue)}
 .btn-primary{background:var(--lr-coral);color:#fff;border-radius:14px;padding:.9rem;box-shadow:0 8px 18px rgba(242,106,79,.2)}
 .btn-primary:hover{background:var(--lr-coral-dark);opacity:1}
-#active-ride{background:var(--lr-paper);border-top:3px solid var(--lr-coral);color:var(--lr-ink);box-shadow:0 -18px 45px rgba(16,35,55,.18)}
+#active-ride{background:var(--lr-paper);border-top:3px solid var(--lr-coral);color:var(--lr-ink);box-shadow:0 -18px 45px rgba(16,35,55,.18);padding-bottom:max(.85rem,env(safe-area-inset-bottom))}
+.live-trip-card{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:.55rem .75rem;background:linear-gradient(135deg,#102337,#1f4c6b);color:#fff;border-radius:16px;padding:.8rem .9rem;margin:.2rem 0 .65rem;box-shadow:0 8px 18px rgba(16,35,55,.18)}.live-trip-kicker{font-size:.62rem;letter-spacing:.1em;text-transform:uppercase;color:#a9cfdf;font-weight:800}.live-trip-title{font-family:Georgia,serif;font-size:.98rem;font-weight:700;margin-top:.15rem;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.live-trip-recenter{align-self:start;border:1px solid rgba(255,255,255,.3);border-radius:9px;background:rgba(255,255,255,.1);color:#fff;padding:.38rem .52rem;font-size:.7rem;font-weight:700;cursor:pointer}.live-trip-metrics{grid-column:1/-1;display:grid;grid-template-columns:1fr 1fr;gap:.45rem}.live-trip-metric{background:rgba(255,255,255,.1);border-radius:11px;padding:.48rem .58rem}.live-trip-value{font-size:1rem;font-weight:800}.live-trip-label{display:block;font-size:.58rem;color:#b9d6e4;letter-spacing:.08em;text-transform:uppercase;margin-top:.08rem}.live-trip-freshness{grid-column:1/-1;font-size:.65rem;color:#b9d6e4}.live-driver-marker{transition:transform .5s linear}
 .ride-status-badge{background:#eaf2ec;border-color:#8eb59a;color:#4c8058}
 .ar-fare-strip,.matched-card,.offer-card,.ride-history-item{background:#fff;border-color:var(--lr-line);color:var(--lr-ink)}
 .ar-fare-big,.offer-price-amt,.matched-fare-val,.rh-fare{color:var(--lr-coral-dark)}
@@ -755,6 +756,12 @@ body{font-family:'Segoe UI',sans-serif;background:#0a0a0f;color:#fff;height:100d
   <!-- ── State: Driver matched ── -->
   <div id="ar-matched" style="display:none">
     <div class="ride-status-badge" style="background:#1a2a0a;border-color:#4caf50"><span class="ride-status-dot"></span><span id="ar-status-text">Driver on the way!</span></div>
+    <div class="live-trip-card" id="ar-live-trip-card" aria-live="polite">
+      <div><div class="live-trip-kicker" id="ar-trip-leg">Live driver tracking</div><div class="live-trip-title" id="ar-trip-destination">Waiting for the driver’s location</div></div>
+      <button type="button" class="live-trip-recenter" onclick="focusCustomerTrip()">◎ Map</button>
+      <div class="live-trip-metrics"><div class="live-trip-metric"><strong class="live-trip-value" id="ar-live-distance">—</strong><span class="live-trip-label">Remaining</span></div><div class="live-trip-metric"><strong class="live-trip-value" id="ar-live-eta">—</strong><span class="live-trip-label">Live ETA</span></div></div>
+      <div class="live-trip-freshness" id="ar-tracking-freshness">Tracking starts when your driver shares GPS.</div>
+    </div>
     <div class="eta-bar" id="ar-eta-bar" style="display:none">
       <span class="eta-icon">🕐</span>
       <span class="eta-text" id="ar-eta-text">Calculating arrival…</span>
@@ -921,6 +928,10 @@ let currentFareQuote = null;
 let fareQuoteRequest = 0;
 let customerPerKmRates = {};
 let customerLongRangeSettings = null;
+let liveTripLine = null;
+let lastDriverLocation = null;
+let customerTrackingFollow = true;
+let lastDriverLocationAt = 0;
 const CUSTOMER_OFFER_MIN_MULTIPLIER = 0.5;
 const CUSTOMER_OFFER_MAX_MULTIPLIER = 2;
 const CUSTOMER_OFFER_INCREMENT = 10;
@@ -1399,6 +1410,7 @@ function initMap() {
   setTimeout(() => map.invalidateSize(), 150);
   setTimeout(() => map.invalidateSize(), 500);
   window.addEventListener('resize', () => map.invalidateSize());
+  map.on('dragstart', () => { if (activeRide) customerTrackingFollow = false; });
   // Re-fire when the page becomes visible again (e.g. switching tabs/apps)
   document.addEventListener('visibilitychange', () => {
     if (document.visibilityState === 'visible') map?.invalidateSize();
@@ -2225,6 +2237,7 @@ async function cancelRide() {
 function endRide() {
   activeRide = null; routeDistanceKm = null; offeredFare = 0; customerFareOffset = 0;
   activeLiveFare = 0; driverOffers = []; activeDriverInfo = null;
+  clearLiveTripTracking();
   // Hide PIN card and reset it for the next ride
   const pinCard = document.getElementById('ar-pin-card');
   if (pinCard) { pinCard.style.display = 'none'; document.getElementById('ar-pin-value').textContent = '—'; }
@@ -2276,25 +2289,12 @@ function connectSocket() {
   socket.on('connect', () => {
     if (!activeRide) return;
     socket.emit('ride:join', activeRide._id);
-    // Fetch persisted ride data to restore driver marker from last saved location
+    // Rehydrate current status and persisted Driver GPS after every reconnect.
     apiCall(`/api/rides/${activeRide._id}`).then(ride => {
+      if (!ride || !activeRide || String(ride._id) !== String(activeRide._id)) return;
+      activeRide = ride;
       const loc = ride?.driverLocation;
-      if (loc?.lat && loc?.lng && map) {
-        if (driverMarker) driverMarker.remove();
-        driverMarker = L.marker([loc.lat, loc.lng], {
-          icon: L.divIcon({ className: 'driver-marker', html: '🚗', iconSize: [28, 28], iconAnchor: [14, 14] })
-        }).addTo(map);
-        // Pan map to show driver position relative to pickup
-        const pu = activeRide.pickupLocation;
-        if (pu?.lat && pu?.lng) {
-          try {
-            map.fitBounds(
-              L.latLngBounds([[loc.lat, loc.lng], [pu.lat, pu.lng]]),
-              { padding: [55, 55], maxZoom: 16, animate: false }
-            );
-          } catch(e) {}
-        }
-      }
+      if (loc?.lat && loc?.lng) updateLiveTripTracking(loc, { recenter: true });
     }).catch(() => {});
   });
 
@@ -2372,6 +2372,7 @@ function connectToRideRoom(rideId) {
 
   socket.on('ride:status', ({ rideId, status }) => {
     if (!activeRide || String(activeRide._id) !== String(rideId)) return;
+    activeRide.status = status;
     if (status === 'completed') { showToast('Ride completed! 🎉', 'success'); setTimeout(showRatingModal, 1500); }
     else if (status === 'cancelled') { endRide(); showToast('Ride was cancelled', 'error'); }
     else if (status === 'arrived') {
@@ -2379,38 +2380,12 @@ function connectToRideRoom(rideId) {
       showToast('Your driver has arrived!', 'info');
     } else if (status === 'in-progress') {
       document.getElementById('ar-status-text').textContent = 'Ride in progress 🚗';
+      updateLiveTripTracking(lastDriverLocation, { recenter: true });
     }
   });
 
   socket.on('driver:location', ({ lat, lng }) => {
-    // Update / create driver marker
-    if (driverMarker) driverMarker.remove();
-    driverMarker = L.marker([lat, lng], {
-      icon: L.divIcon({ className: 'driver-marker', html: '🚗', iconSize: [28, 28], iconAnchor: [14, 14] })
-    }).addTo(map);
-
-    // Pan map to show both driver and pickup
-    const pickup = activeRide?.pickupLocation;
-    if (pickup?.lat && pickup?.lng) {
-      try {
-        map.fitBounds(
-          L.latLngBounds([[lat, lng], [pickup.lat, pickup.lng]]),
-          { padding: [55, 55], maxZoom: 16, animate: true }
-        );
-      } catch(e) {}
-
-      // ETA — Haversine distance ÷ 30 km/h city speed
-      const distKm = haversineKm(lat, lng, pickup.lat, pickup.lng);
-      const etaMins = Math.max(1, Math.round(distKm / 30 * 60));
-      const etaBar  = document.getElementById('ar-eta-bar');
-      const etaTxt  = document.getElementById('ar-eta-text');
-      const etaDist = document.getElementById('ar-eta-dist');
-      if (etaBar && etaTxt) {
-        etaBar.style.display = 'flex';
-        etaTxt.textContent   = etaMins <= 1 ? 'Driver is almost here! 📍' : `Driver arriving in ~${etaMins} min${etaMins !== 1 ? 's' : ''}`;
-        if (etaDist) etaDist.textContent = `${distKm < 1 ? (distKm * 1000).toFixed(0) + ' m' : distKm.toFixed(1) + ' km'} away`;
-      }
-    }
+    updateLiveTripTracking({ lat, lng });
   });
 }
 
@@ -2421,6 +2396,95 @@ function haversineKm(lat1, lng1, lat2, lng2) {
   const a = Math.sin(dLat / 2) ** 2
     + Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) * Math.sin(dLng / 2) ** 2;
   return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+}
+
+function activeTripDestination(ride = activeRide) {
+  if (!ride) return null;
+  const inProgress = ride.status === 'in-progress';
+  const stops = (ride.dropoffLocations && ride.dropoffLocations.length)
+    ? ride.dropoffLocations
+    : (ride.dropoffLocation ? [ride.dropoffLocation] : []);
+  const point = inProgress ? stops[0] : ride.pickupLocation;
+  if (!point?.lat || !point?.lng) return null;
+  return {
+    point,
+    label: inProgress ? 'En route to your drop-off' : 'Driver is heading to pickup',
+    address: point.address || (inProgress ? 'Your drop-off location' : 'Your pickup location')
+  };
+}
+
+function formatLiveTripDistance(distanceKm) {
+  if (!Number.isFinite(distanceKm)) return '—';
+  return distanceKm < 1 ? `${Math.max(10, Math.round(distanceKm * 100) * 10)} m` : `${distanceKm.toFixed(1)} km`;
+}
+
+function formatLiveTripEta(distanceKm) {
+  if (!Number.isFinite(distanceKm)) return '—';
+  const minutes = Math.max(1, Math.round(distanceKm / 28 * 60));
+  return minutes >= 60 ? `${Math.floor(minutes / 60)}h ${minutes % 60}m` : `${minutes} min`;
+}
+
+function clearLiveTripTracking() {
+  if (liveTripLine) { liveTripLine.remove(); liveTripLine = null; }
+  lastDriverLocation = null;
+  lastDriverLocationAt = 0;
+  customerTrackingFollow = true;
+}
+
+function focusCustomerTrip() {
+  const destination = activeTripDestination();
+  if (!map || !lastDriverLocation || !destination) return;
+  customerTrackingFollow = true;
+  try {
+    map.fitBounds(
+      L.latLngBounds([[lastDriverLocation.lat, lastDriverLocation.lng], [destination.point.lat, destination.point.lng]]),
+      { paddingTopLeft: [38, 105], paddingBottomRight: [38, 205], maxZoom: 16, animate: true }
+    );
+  } catch (error) {
+    map.setView([lastDriverLocation.lat, lastDriverLocation.lng], 15);
+  }
+}
+
+function updateLiveTripTracking(location, { recenter = false } = {}) {
+  const lat = Number(location?.lat), lng = Number(location?.lng);
+  const destination = activeTripDestination();
+  if (!Number.isFinite(lat) || !Number.isFinite(lng) || !destination || !map) return;
+  lastDriverLocation = { lat, lng };
+  lastDriverLocationAt = Date.now();
+
+  if (driverMarker) {
+    driverMarker.setLatLng([lat, lng]);
+  } else {
+    driverMarker = L.marker([lat, lng], {
+      icon: L.divIcon({ className: 'driver-marker live-driver-marker', html: '🚗', iconSize: [28, 28], iconAnchor: [14, 14] })
+    }).addTo(map);
+  }
+
+  const linePoints = [[lat, lng], [destination.point.lat, destination.point.lng]];
+  if (liveTripLine) liveTripLine.setLatLngs(linePoints);
+  else liveTripLine = L.polyline(linePoints, { color: '#f26a4f', weight: 4, opacity: .9, dashArray: '8 8', lineCap: 'round' }).addTo(map);
+
+  const distanceKm = haversineKm(lat, lng, destination.point.lat, destination.point.lng);
+  const eta = formatLiveTripEta(distanceKm);
+  const distance = formatLiveTripDistance(distanceKm);
+  const isInProgress = activeRide?.status === 'in-progress';
+  document.getElementById('ar-trip-leg').textContent = isInProgress ? 'Live trip progress' : 'Live driver tracking';
+  document.getElementById('ar-trip-destination').textContent = destination.address;
+  document.getElementById('ar-live-distance').textContent = distance;
+  document.getElementById('ar-live-eta').textContent = eta;
+  document.getElementById('ar-tracking-freshness').textContent = `Updated just now · ${isInProgress ? 'Tracking to drop-off' : 'Tracking to pickup'}`;
+
+  const etaBar = document.getElementById('ar-eta-bar');
+  const etaTxt = document.getElementById('ar-eta-text');
+  const etaDist = document.getElementById('ar-eta-dist');
+  if (etaBar && etaTxt) {
+    etaBar.style.display = 'flex';
+    etaTxt.textContent = isInProgress ? `Estimated arrival in ${eta}` : (distanceKm <= .12 ? 'Driver is almost here! 📍' : `Driver arriving in ~${eta}`);
+    if (etaDist) etaDist.textContent = `${distance} remaining`;
+  }
+
+  if (recenter) focusCustomerTrip();
+  else if (customerTrackingFollow) map.panTo([lat, lng], { animate: true, duration: .5 });
 }
 
 // ── Share Location ─────────────────────────────────────────────────────────
