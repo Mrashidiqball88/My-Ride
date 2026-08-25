@@ -372,7 +372,7 @@ body{font-family:'Segoe UI',sans-serif;background:#0a0a0f;color:#fff;height:100d
 .dist-badge{background:#edf2f1;border-color:#d2dfdc;color:var(--lr-blue)}
 .btn-primary{background:var(--lr-coral);color:#fff;border-radius:14px;padding:.9rem;box-shadow:0 8px 18px rgba(242,106,79,.2)}
 .btn-primary:hover{background:var(--lr-coral-dark);opacity:1}
-#active-ride{left:50%;right:auto;width:min(760px,calc(100% - 1rem));transform:translateX(-50%);background:rgba(246,241,233,.98);border:1px solid rgba(16,35,55,.1);border-top:3px solid var(--lr-coral);border-radius:24px 24px 0 0;color:var(--lr-ink);box-shadow:0 -18px 45px rgba(16,35,55,.18);padding:.35rem .85rem max(.65rem,env(safe-area-inset-bottom));max-height:min(42vh,390px);overflow:hidden;transition:max-height .24s ease,transform .2s ease,padding .24s ease}
+#active-ride{left:50%;right:auto;width:min(760px,calc(100% - 1rem));transform:translateX(-50%) translateY(var(--active-sheet-offset,0));background:rgba(246,241,233,.98);border:1px solid rgba(16,35,55,.1);border-top:3px solid var(--lr-coral);border-radius:24px 24px 0 0;color:var(--lr-ink);box-shadow:0 -18px 45px rgba(16,35,55,.18);padding:.35rem .85rem max(.65rem,env(safe-area-inset-bottom));max-height:min(42vh,390px);overflow:hidden;transition:max-height .24s ease,transform .2s ease,padding .24s ease}
 #active-ride.active-sheet-expanded{max-height:min(68vh,620px)}
 #active-ride.active-sheet-collapsed{max-height:78px}
 #active-ride.active-sheet-dragging{transition:none}
@@ -1895,6 +1895,11 @@ function haversine(lat1, lng1, lat2, lng2) {
   return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
 }
 
+async function requestRoadRoute(points) {
+  const encoded = points.map(point => `${Number(point.lng)},${Number(point.lat)}`).join(';');
+  return apiCall(`/api/routing/road?points=${encodeURIComponent(encoded)}`);
+}
+
 // ── Fare Negotiation ──────────────────────────────────────────────────────
 async function updateFare() {
   const activeDrop = dropoffs.slice(0, activeStops).find(d => d !== null);
@@ -2134,6 +2139,8 @@ async function bookRide() {
 function showWaitingPanel(ride) {
   stopNearbyDrivers(); // hide nearby markers once a ride is in progress
   document.getElementById('active-ride').style.display = 'block';
+  setupCustomerActiveRideSheet();
+  setCustomerActiveRideSheetState('compact');
   document.getElementById('bottom-panel').style.display = 'none';
   document.getElementById('ar-waiting').style.display = 'block';
   document.getElementById('ar-matched').style.display = 'none';
@@ -2141,10 +2148,15 @@ function showWaitingPanel(ride) {
   document.getElementById('ride-status-text').textContent = 'Broadcasting your offer…';
   document.getElementById('offers-list').innerHTML = '<div class="no-offers-msg">🔍 Waiting for nearby drivers to respond…</div>';
   document.getElementById('offers-count').textContent = '';
+  updateActiveSheetSummary('Broadcasting your ride offer', 'Waiting for nearby drivers');
 }
 
 // ── Matched Panel (after customer selects a driver) ────────────────────────
 function showMatchedPanel(driver, agreedFare) {
+  document.getElementById('active-ride').style.display = 'block';
+  document.getElementById('bottom-panel').style.display = 'none';
+  setupCustomerActiveRideSheet();
+  setCustomerActiveRideSheetState('compact');
   document.getElementById('ar-waiting').style.display = 'none';
   document.getElementById('ar-matched').style.display = 'block';
   document.getElementById('ar-status-text').textContent = 'Driver on the way! 🚗';
@@ -2171,6 +2183,81 @@ function showMatchedPanel(driver, agreedFare) {
        <a class="btn-whatsapp"  href="https://wa.me/${waPhone}" target="_blank" rel="noopener">💬 WhatsApp</a>`
     : `<div style="font-size:.78rem;color:#555;text-align:center;flex:1">Contact details not available</div>`;
   document.getElementById('ar-contact-btns').innerHTML = contactHtml;
+  updateActiveSheetSummary('Driver on the way', 'Live tracking · swipe up for ride details');
+}
+
+function updateActiveSheetSummary(title, meta) {
+  const titleEl = document.getElementById('ar-sheet-summary-title');
+  const metaEl = document.getElementById('ar-sheet-summary-meta');
+  if (titleEl && title) titleEl.textContent = title;
+  if (metaEl && meta) metaEl.textContent = meta;
+}
+
+function setCustomerActiveRideSheetState(state = 'compact') {
+  const panel = document.getElementById('active-ride');
+  const toggle = document.getElementById('active-sheet-toggle');
+  if (!panel) return;
+  const next = ['expanded', 'compact', 'collapsed'].includes(state) ? state : 'compact';
+  panel.classList.toggle('active-sheet-expanded', next === 'expanded');
+  panel.classList.toggle('active-sheet-compact', next === 'compact');
+  panel.classList.toggle('active-sheet-collapsed', next === 'collapsed');
+  panel.style.removeProperty('max-height');
+  panel.style.removeProperty('--active-sheet-offset');
+  panel.dataset.sheetState = next;
+  if (toggle) {
+    const expanded = next === 'expanded';
+    toggle.textContent = expanded ? '⌄' : '⌃';
+    toggle.setAttribute('aria-expanded', String(expanded));
+    toggle.setAttribute('aria-label', expanded ? 'Minimize active ride details' : 'Expand active ride details');
+  }
+  setTimeout(() => map?.invalidateSize(), 240);
+}
+
+function setupCustomerActiveRideSheet() {
+  const panel = document.getElementById('active-ride');
+  const handle = document.getElementById('active-sheet-handle');
+  const toggle = document.getElementById('active-sheet-toggle');
+  if (!panel || !handle || panel.dataset.sheetDragReady === 'true') return;
+  panel.dataset.sheetDragReady = 'true';
+  let drag = null;
+  const begin = (event, id, capture = false) => {
+    event.preventDefault();
+    const collapsed = panel.classList.contains('active-sheet-collapsed');
+    const compact = panel.classList.contains('active-sheet-compact');
+    panel.classList.add('active-sheet-dragging');
+    panel.classList.remove('active-sheet-collapsed', 'active-sheet-compact');
+    const fullHeight = Math.min(panel.scrollHeight, Math.min(window.innerHeight * .68, 620));
+    panel.style.maxHeight = `${fullHeight}px`;
+    const visibleHeight = collapsed ? 78 : compact ? 150 : fullHeight;
+    drag = { id, startY: event.clientY, startOffset: Math.max(0, fullHeight - visibleHeight), maxOffset: Math.max(0, fullHeight - 78), moved: false };
+    panel.style.setProperty('--active-sheet-offset', `${drag.startOffset}px`);
+    if (capture) handle.setPointerCapture?.(id);
+  };
+  const move = (event, id) => {
+    if (!drag || drag.id !== id) return;
+    const offset = Math.max(0, Math.min(drag.maxOffset, drag.startOffset + event.clientY - drag.startY));
+    drag.moved ||= Math.abs(event.clientY - drag.startY) > 8;
+    panel.style.setProperty('--active-sheet-offset', `${offset}px`);
+  };
+  const finish = (event, id, release = false) => {
+    if (!drag || drag.id !== id) return;
+    if (release) handle.releasePointerCapture?.(id);
+    const offset = Number.parseFloat(panel.style.getPropertyValue('--active-sheet-offset')) || 0;
+    const ratio = drag.maxOffset ? offset / drag.maxOffset : 0;
+    const moved = drag.moved;
+    drag = null;
+    panel.classList.remove('active-sheet-dragging');
+    setCustomerActiveRideSheetState(ratio > .7 ? 'collapsed' : ratio > .28 ? 'compact' : 'expanded');
+    if (!moved) setCustomerActiveRideSheetState(panel.dataset.sheetState === 'expanded' ? 'compact' : panel.dataset.sheetState);
+  };
+  handle.addEventListener('pointerdown', e => begin(e, e.pointerId, true));
+  handle.addEventListener('pointermove', e => move(e, e.pointerId));
+  handle.addEventListener('pointerup', e => finish(e, e.pointerId, true));
+  handle.addEventListener('pointercancel', e => finish(e, e.pointerId, true));
+  handle.addEventListener('mousedown', e => { if (!drag) begin(e, 'mouse'); });
+  window.addEventListener('mousemove', e => move(e, 'mouse'));
+  window.addEventListener('mouseup', e => finish(e, 'mouse'));
+  toggle.addEventListener('click', () => setCustomerActiveRideSheetState(panel.classList.contains('active-sheet-expanded') ? 'collapsed' : 'expanded'));
 }
 
 // ── Render offers list ─────────────────────────────────────────────────────
@@ -2432,6 +2519,10 @@ function clearLiveTripTracking() {
   lastDriverLocation = null;
   lastDriverLocationAt = 0;
   customerTrackingFollow = true;
+  liveTripRouteAt = 0;
+  liveTripRouteOrigin = null;
+  liveTripRouteDestinationKey = '';
+  liveTripRouteRequest++;
   if (liveTripFreshnessTimer) { clearInterval(liveTripFreshnessTimer); liveTripFreshnessTimer = null; }
 }
 
@@ -2462,7 +2553,7 @@ function focusCustomerTrip() {
   }
 }
 
-function updateLiveTripTracking(location, { recenter = false } = {}) {
+async function updateLiveTripTracking(location, { recenter = false } = {}) {
   const lat = Number(location?.lat), lng = Number(location?.lng);
   const destination = activeTripDestination();
   if (!Number.isFinite(lat) || !Number.isFinite(lng) || !destination || !map) return;
@@ -2478,9 +2569,29 @@ function updateLiveTripTracking(location, { recenter = false } = {}) {
     }).addTo(map);
   }
 
-  const linePoints = [[lat, lng], [destination.point.lat, destination.point.lng]];
-  if (liveTripLine) liveTripLine.setLatLngs(linePoints);
-  else liveTripLine = L.polyline(linePoints, { color: '#f26a4f', weight: 4, opacity: .9, dashArray: '8 8', lineCap: 'round' }).addTo(map);
+  const destinationKey = `${destination.point.lat},${destination.point.lng}`;
+  const routeNeedsRefresh = !liveTripLine || !liveTripRouteOrigin
+    || haversineKm(liveTripRouteOrigin, { lat, lng }) > .15
+    || Date.now() - liveTripRouteAt > 15000
+    || liveTripRouteDestinationKey !== destinationKey;
+  if (routeNeedsRefresh) {
+    const requestId = ++liveTripRouteRequest;
+    try {
+      const roadRoute = await requestRoadRoute([
+        { lat, lng },
+        destination.point
+      ]);
+      if (requestId === liveTripRouteRequest && roadRoute.coords?.length > 1) {
+        if (liveTripLine) liveTripLine.setLatLngs(roadRoute.coords);
+        else liveTripLine = L.polyline(roadRoute.coords, { color: '#f26a4f', weight: 4, opacity: .9, lineCap: 'round', lineJoin: 'round' }).addTo(map);
+        liveTripRouteAt = Date.now();
+        liveTripRouteOrigin = { lat, lng };
+        liveTripRouteDestinationKey = destinationKey;
+      }
+    } catch (error) {
+      console.warn('Live road route unavailable:', error.message);
+    }
+  }
 
   const distanceKm = haversineKm(lat, lng, destination.point.lat, destination.point.lng);
   const eta = formatLiveTripEta(distanceKm);

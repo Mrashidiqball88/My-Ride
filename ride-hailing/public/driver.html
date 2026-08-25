@@ -796,6 +796,7 @@ let navigationRoute = null;
 let lastNavigationRouteAt = 0;
 let lastNavigationRouteOrigin = null;
 let navigationFollowing = true;
+let navigationRouteRequest = 0;
 
 // ── Toast ──────────────────────────────────────────────────────────────────
 function showToast(msg, type = 'info') {
@@ -1478,6 +1479,11 @@ function haversineKm(a, b) {
   return 6371 * 2 * Math.atan2(Math.sqrt(q), Math.sqrt(1 - q));
 }
 
+async function requestRoadRoute(points) {
+  const encoded = points.map(point => `${Number(point.lng)},${Number(point.lat)}`).join(';');
+  return apiCall(`/api/routing/road?points=${encodeURIComponent(encoded)}`);
+}
+
 function activeNavigationDestination(ride = activeRide) {
   if (!ride) return null;
   const inProgress = ride.status === 'in-progress';
@@ -1561,15 +1567,26 @@ async function refreshActiveNavigation({ force = false, recenter = false } = {})
     return;
   }
 
-  // Keep live location and passenger destinations in the app: this visual
-  // navigation leg is calculated locally instead of sending precise trip data
-  // to a third-party route provider.
-  const coords = [[origin.lat, origin.lng], [destination.point.lat, destination.point.lng]];
-  drawNavigationLine(coords);
-  navigationRoute = { coords, distance: liveDistance, duration: liveDuration };
+  // Request road geometry through the authenticated app server. The browser
+  // never sends precise ride coordinates directly to the routing provider.
+  const requestOrigin = { ...origin };
+  const requestId = ++navigationRouteRequest;
+  try {
+    const roadRoute = await requestRoadRoute([requestOrigin, destination.point]);
+    if (requestId !== navigationRouteRequest) return;
+    if (requestOrigin.lat !== driverLocation?.lat || requestOrigin.lng !== driverLocation?.lng) return;
+    const coords = roadRoute.coords || [];
+    if (coords.length < 2) throw new Error('No road route found');
+    drawNavigationLine(coords);
+    navigationRoute = { coords, distance: roadRoute.distanceMeters, duration: roadRoute.durationSeconds };
+    updateNavigationDetails(roadRoute.distanceMeters, roadRoute.durationSeconds);
+  } catch (error) {
+    console.warn('Road navigation unavailable:', error.message);
+    if (!navigationRoute?.coords?.length) removeRouteLine();
+  }
   lastNavigationRouteAt = Date.now();
-  lastNavigationRouteOrigin = { ...origin };
-  updateNavigationDetails(liveDistance, liveDuration);
+  lastNavigationRouteOrigin = requestOrigin;
+  if (!navigationRoute?.coords?.length) updateNavigationDetails(liveDistance, liveDuration);
   if (recenter) focusActiveNavigation();
 }
 
@@ -1604,8 +1621,11 @@ function showRideOnMap(ride) {
     refreshActiveNavigation({ force: true, recenter: true });
     return;
   }
-  routeLine = L.polyline(latLngs, { color: '#f5c518', weight: 3, dashArray: '8,8' }).addTo(map);
-  if (latLngs.length >= 2) map.fitBounds(L.latLngBounds(latLngs), { padding: [60, 60] });
+  requestRoadRoute(allPts).then(roadRoute => {
+    if (!roadRoute.coords?.length) return;
+    const line = drawNavigationLine(roadRoute.coords, { dashed: true });
+    map.fitBounds(line.getBounds(), { padding: [60, 60] });
+  }).catch(error => console.warn('Road overview unavailable:', error.message));
 }
 
 function clearRideMap() {
