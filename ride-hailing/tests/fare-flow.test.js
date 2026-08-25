@@ -10,7 +10,7 @@ const {
   DEFAULT_RIDE_BROADCAST_RADIUS_KM, DEFAULT_RIDE_BROADCAST_REQUEST_DURATION_SECONDS, normalizeRideBroadcastSettings,
   validateRideBroadcastSettings, rideOfferIsStillOpenQuery, findRideBroadcastDrivers, findLongRangeBroadcastDrivers, emitRideRequestToDrivers, emitRideLifecycle, chargeLongRangeCommission,
   normalizeLongRangeSettings, validateLongRangeSettings, calculateRideFare
-   , normalizeTerms, normalizeFareVehicle, storedVehicleTypesForFareCategory
+   , normalizeTerms, normalizeFareVehicle, normalizeFareSettings, storedVehicleTypesForFareCategory
 } = fare;
 
 const JWT_SECRET = 'ride-hailing-secret-fallback';
@@ -227,7 +227,44 @@ test('Long Range settings keep independent minimum wallet balances by vehicle ca
   assert.equal(settings.minimumWalletBalances['Car Sedan'], 2000);
   assert.equal(settings.minimumWalletBalances['Toyota Highroof'], 4000);
   assert.equal(settings.minimumWalletBalances['Toyota Saloon Coaster'], 5000);
-  assert.equal(settings.minimumWalletBalances['Car Mini'], 500);
+  assert.equal(settings.minimumWalletBalances['Car Mini AC'], 500);
+  assert.equal(settings.minimumWalletBalances['Car Mini Non-AC'], 500);
+});
+
+test('Car Mini AC and Non-AC retain independent fares while legacy Mini data migrates safely', () => {
+  assert.ok(FARE_VEHICLE_CATEGORIES.includes('Car Mini AC'));
+  assert.ok(FARE_VEHICLE_CATEGORIES.includes('Car Mini Non-AC'));
+  assert.ok(!FARE_VEHICLE_CATEGORIES.includes('Car Mini'));
+  assert.equal(normalizeFareVehicle('Car Mini'), 'Car Mini Non-AC');
+  assert.ok(storedVehicleTypesForFareCategory('Car Mini Non-AC').includes('Car Mini'));
+  assert.ok(!storedVehicleTypesForFareCategory('Car Mini AC').includes('Car Mini'));
+
+  const legacyFare = {
+    baseFare: 180,
+    distanceSlabs: [{ minKm: 0, maxKm: null, rate: 50 }],
+    peakRules: []
+  };
+  const migratedFares = normalizeFareSettings({ 'Car Mini': legacyFare });
+  assert.deepEqual(migratedFares['Car Mini AC'], legacyFare);
+  assert.deepEqual(migratedFares['Car Mini Non-AC'], legacyFare);
+
+  const longRange = normalizeLongRangeSettings({
+    enabled: true,
+    distanceCutoffKm: 50,
+    minimumWalletBalances: { 'Car Mini': 850, 'Car Mini AC': 1200 },
+    perKmRates: { 'Car Mini': 95, 'Car Mini AC': 130 }
+  });
+  assert.equal(longRange.minimumWalletBalances['Car Mini AC'], 1200);
+  assert.equal(longRange.minimumWalletBalances['Car Mini Non-AC'], 850);
+  assert.equal(longRange.perKmRates['Car Mini AC'], 130);
+  assert.equal(longRange.perKmRates['Car Mini Non-AC'], 95);
+
+  const fares = settingsFor(200, 100);
+  const localRates = { 'Car Mini AC': 75, 'Car Mini Non-AC': 55 };
+  assert.equal(calculateRideFare(fares, longRange, 'Car Mini AC', 10, new Date(), localRates).totalFare, 950);
+  assert.equal(calculateRideFare(fares, longRange, 'Car Mini Non-AC', 10, new Date(), localRates).totalFare, 750);
+  assert.equal(calculateRideFare(fares, longRange, 'Car Mini AC', 50, new Date(), localRates).totalFare, 6500);
+  assert.equal(calculateRideFare(fares, longRange, 'Car Mini Non-AC', 50, new Date(), localRates).totalFare, 4750);
 });
 
 test('Toyota Highroof and Toyota Saloon Coaster are canonical categories with independent standard and Long Range rates', () => {
@@ -257,7 +294,7 @@ test('Toyota Highroof and Toyota Saloon Coaster are canonical categories with in
 
 test('Customer fare quote uses active Long Range rates without daily fare slabs', async () => {
   const expectedRates = {
-    Bike: 25, Riksha: 40, 'Car Mini': 80, 'Car Sedan': 100,
+    Bike: 25, Riksha: 40, 'Car Mini AC': 90, 'Car Mini Non-AC': 80, 'Car Sedan': 100,
     'Cary Dibba': 90, 'Car SUV': 120, 'Van Seven Seats': 150,
     'Toyota Highroof': 175, 'Toyota Saloon Coaster': 225
   };
@@ -566,7 +603,10 @@ test('the server-side offer guard excludes expired request windows', () => {
 });
 
 test('shared broadcast matcher only selects fresh, wallet-eligible drivers inside the configured radius', async () => {
-  models.User.find = () => ({
+  let driverQuery;
+  models.User.find = query => {
+    driverQuery = query;
+    return ({
     select: () => ({
       lean: async () => [
         { _id: 'near-driver', currentLocation: { lat: 31.5204, lng: 74.3587 }, expoPushToken: 'ExponentPushToken[near]' },
@@ -574,7 +614,8 @@ test('shared broadcast matcher only selects fresh, wallet-eligible drivers insid
         { _id: 'invalid-location', currentLocation: { lat: 0, lng: 0 }, expoPushToken: 'ExponentPushToken[invalid]' },
       ]
     })
-  });
+    });
+  };
   models.Wallet.find = () => ({
     select: () => ({
       lean: async () => [{ user: 'near-driver' }, { user: 'far-driver' }, { user: 'invalid-location' }]
@@ -588,6 +629,15 @@ test('shared broadcast matcher only selects fresh, wallet-eligible drivers insid
   );
   assert.equal(result.radiusKm, 5);
   assert.deepEqual(result.drivers.map(driver => driver._id), ['near-driver']);
+  assert.deepEqual(driverQuery.vehicleType.$in, ['Car Mini Non-AC', 'Car Mini', 'Car Mini Non AC', 'Car Mini NonAC']);
+
+  await findRideBroadcastDrivers(
+    { lat: 31.5204, lng: 74.3587 },
+    'Car Mini AC',
+    { maximumRideBroadcastRadiusKm: 5 }
+  );
+  assert.deepEqual(driverQuery.vehicleType.$in, ['Car Mini AC', 'Car Mini A/C']);
+  assert.ok(!driverQuery.vehicleType.$in.includes('Car Mini'));
 
   const emissions = [];
   io.to = room => ({ emit: (event, payload) => emissions.push({ room, event, payload }) });

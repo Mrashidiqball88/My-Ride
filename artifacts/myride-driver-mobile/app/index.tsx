@@ -15,7 +15,7 @@ function DriverHome() {
   const [, setClock] = useState(Date.now());
   const isWeb = Platform.OS === 'web';
   const report = (message: string) => Alert.alert('My Ride Driver', message);
-  const longRangeVehicle = runtime.longRange?.vehicleType || runtime.user?.vehicleType || 'Car Mini';
+  const longRangeVehicle = runtime.longRange?.vehicleType || runtime.user?.vehicleType || 'Car Mini Non-AC';
   const longRangeMinimum = Number(runtime.longRange?.settings?.minimumWalletBalances?.[longRangeVehicle] || 0);
   const remainingOfferSeconds = runtime.pendingRide
     ? Math.max(0, Math.ceil((new Date(runtime.pendingRide.broadcastExpiresAt || 0).getTime() - Date.now()) / 1000))

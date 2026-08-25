@@ -654,8 +654,11 @@ body{font-family:'Segoe UI',sans-serif;background:#0a0a0f;color:#fff;height:100d
         <button class="vehicle-btn" data-type="Riksha" onclick="selectVehicle(this)">
           <div class="v-icon">🛺</div><div class="v-name">Riksha</div><div class="v-fare">Admin-set fare</div>
         </button>
-        <button class="vehicle-btn" data-type="Car Mini" onclick="selectVehicle(this)">
-          <div class="v-icon">🚙</div><div class="v-name">Car Mini</div><div class="v-fare">Admin-set fare</div>
+        <button class="vehicle-btn" data-type="Car Mini AC" onclick="selectVehicle(this)">
+          <div class="v-icon">🚙</div><div class="v-name">Car Mini AC</div><div class="v-fare">Admin-set fare</div>
+        </button>
+        <button class="vehicle-btn" data-type="Car Mini Non-AC" onclick="selectVehicle(this)">
+          <div class="v-icon">🚙</div><div class="v-name">Car Mini Non-AC</div><div class="v-fare">Admin-set fare</div>
         </button>
         <button class="vehicle-btn" data-type="Car Sedan" onclick="selectVehicle(this)">
           <div class="v-icon">🚗</div><div class="v-name">Car Sedan</div><div class="v-fare">Admin-set fare</div>
@@ -1419,7 +1422,7 @@ function initMap() {
 
 // ── Nearby Drivers ────────────────────────────────────────────────────────
 const _vehicleIcons = {
-  'Bike': '🛵', 'Riksha': '🛺', 'Rickshaw': '🛺', 'Car Mini': '🚙',
+  'Bike': '🛵', 'Riksha': '🛺', 'Rickshaw': '🛺', 'Car Mini': '🚙', 'Car Mini AC': '🚙', 'Car Mini Non-AC': '🚙',
   'Car Sedan': '🚗', 'Car AC': '🚗', 'Car SUV': '🚘',
   'Van Seven Seats': '🚐', 'Cary Dibba': '🛻',
   'Toyota Highroof': '🚐', 'Toyota Saloon Coaster': '🚌'

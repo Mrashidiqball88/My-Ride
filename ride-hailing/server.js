@@ -257,7 +257,8 @@ function decryptSecret(value) {
 
 const FARE_VEHICLE_CATEGORIES = [
   'Car Sedan',
-  'Car Mini',
+  'Car Mini AC',
+  'Car Mini Non-AC',
   'Riksha',
   'Bike',
   'Car SUV',
@@ -270,7 +271,13 @@ const FARE_VEHICLE_ALIASES = {
   Sedan: 'Car Sedan',
   'Car AC': 'Car Sedan',
   Rickshaw: 'Riksha',
-  'Car Mini': 'Car Mini',
+  // Existing Mini vehicles were never marked with their air-conditioning
+  // status. Keep them serviceable as Non-AC while every new selection uses
+  // one of the two explicit canonical categories.
+  'Car Mini': 'Car Mini Non-AC',
+  'Car Mini Non AC': 'Car Mini Non-AC',
+  'Car Mini NonAC': 'Car Mini Non-AC',
+  'Car Mini A/C': 'Car Mini AC',
   Bike: 'Bike',
   SUV: 'Car SUV',
   Van: 'Van Seven Seats',
@@ -354,6 +361,15 @@ function normalizeFareVehicle(value) {
   return FARE_VEHICLE_CATEGORIES.includes(raw) ? raw : (FARE_VEHICLE_ALIASES[raw] || raw);
 }
 
+const LEGACY_CAR_MINI_CATEGORY = 'Car Mini';
+function isSplitCarMiniCategory(category) {
+  return category === 'Car Mini AC' || category === 'Car Mini Non-AC';
+}
+
+function legacyCarMiniSetting(value, category) {
+  return isSplitCarMiniCategory(category) ? value?.[LEGACY_CAR_MINI_CATEGORY] : undefined;
+}
+
 const DRIVER_RIDE_PREFERENCES = ['Short Range Only', 'Long Range Only', 'Both'];
 function normalizeRidePreference(value) {
   const raw = String(value || '').trim().toLowerCase();
@@ -389,7 +405,8 @@ function normalizeDailyFeeSettings(value = {}) {
     const legacyAlias = Object.keys(FARE_VEHICLE_ALIASES).find(alias =>
       FARE_VEHICLE_ALIASES[alias] === category && value?.[alias] !== undefined
     );
-    const source = value?.[category] ?? (legacyAlias ? value[legacyAlias] : undefined);
+    const source = value?.[category] ?? (legacyAlias ? value[legacyAlias] : undefined) ??
+      legacyCarMiniSetting(value, category);
     const amount = source && typeof source === 'object' ? source.amount : source;
     result[category] = amount === null || amount === undefined || amount === '' ? null : Number(amount);
   }
@@ -501,7 +518,8 @@ async function chargeDailyFeeForOnlineDriver(driverId, driver, dailyFeeSettings 
 const DEFAULT_PER_KM_RATES = {
   Bike: 30,
   Riksha: 40,
-  'Car Mini': 50,
+  'Car Mini AC': 50,
+  'Car Mini Non-AC': 50,
   'Car Sedan': 70,
   'Cary Dibba': 80,
   'Car SUV': 100,
@@ -513,7 +531,8 @@ const DEFAULT_PER_KM_RATES = {
 function normalizePerKmRates(value = {}) {
   return Object.fromEntries(FARE_VEHICLE_CATEGORIES.map(category => {
     const aliases = Object.keys(FARE_VEHICLE_ALIASES).filter(alias => FARE_VEHICLE_ALIASES[alias] === category);
-    const raw = value?.[category] ?? aliases.map(alias => value?.[alias]).find(item => item !== undefined);
+    const raw = value?.[category] ?? aliases.map(alias => value?.[alias]).find(item => item !== undefined) ??
+      legacyCarMiniSetting(value, category);
     const rate = raw === '' || raw === null || raw === undefined ? DEFAULT_PER_KM_RATES[category] : Number(raw);
     return [category, rate];
   }));
@@ -547,7 +566,7 @@ function normalizeFareSettings(input) {
   const output = emptyFareSettings();
   if (!input || typeof input !== 'object') return output;
   for (const category of FARE_VEHICLE_CATEGORIES) {
-    const source = input[category] || {};
+    const source = input[category] || legacyCarMiniSetting(input, category) || {};
     output[category] = {
       baseFare: Number.isFinite(Number(source.baseFare)) && Number(source.baseFare) >= 0
         ? Number(source.baseFare) : null,
@@ -649,7 +668,8 @@ function normalizeLongRangeSettings(input = {}) {
     distanceCutoffKm: numberInRange(source.distanceCutoffKm, DEFAULT_LONG_RANGE_SETTINGS.distanceCutoffKm, 1, 2000),
     minimumWalletBalances: Object.fromEntries(FARE_VEHICLE_CATEGORIES.map(category => {
       const legacyMinimum = source.minimumWalletBalance;
-      const configuredMinimum = source.minimumWalletBalances?.[category] ?? legacyMinimum;
+      const configuredMinimum = source.minimumWalletBalances?.[category] ??
+        legacyCarMiniSetting(source.minimumWalletBalances, category) ?? legacyMinimum;
       return [category, numberInRange(configuredMinimum, DEFAULT_LONG_RANGE_MINIMUM_WALLET_BALANCES[category], 0, 1000000)];
     })),
     broadcastRadiusKm: numberInRange(source.broadcastRadiusKm, DEFAULT_LONG_RANGE_SETTINGS.broadcastRadiusKm, 0.5, 500),
@@ -658,7 +678,7 @@ function normalizeLongRangeSettings(input = {}) {
     // finishes. Older accepted/started settings migrate to this policy.
     commissionTiming: 'completed',
     perKmRates: Object.fromEntries(FARE_VEHICLE_CATEGORIES.map(category => {
-      const rate = Number(source.perKmRates?.[category]);
+      const rate = Number(source.perKmRates?.[category] ?? legacyCarMiniSetting(source.perKmRates, category));
       return [category, Number.isFinite(rate) && rate > 0 ? Number(rate.toFixed(2)) : null];
     }))
   };
@@ -688,7 +708,7 @@ function isLongRangeDistance(distanceKm, settings) {
 }
 
 function getLongRangeMinimumWalletBalance(settings, vehicleType) {
-  const category = normalizeFareVehicle(vehicleType || 'Car Mini');
+  const category = normalizeFareVehicle(vehicleType || 'Car Mini Non-AC');
   return Number(settings?.minimumWalletBalances?.[category] ?? DEFAULT_LONG_RANGE_MINIMUM_WALLET_BALANCES[category] ?? 0);
 }
 
@@ -747,7 +767,7 @@ function calculateFareFromSettings(settings, vehicleType, distanceKm, at = new D
       };
     });
   const adjustmentPercent = activeRules.reduce((sum, item) => sum + item.adjustmentPercent, 0);
-  const perKmRate = Number(perKmRates[category]);
+  const perKmRate = Number(perKmRates[category] ?? legacyCarMiniSetting(perKmRates, category));
   if (!Number.isFinite(perKmRate) || perKmRate <= 0) {
     return { error: `/km rate is not configured for ${category}` };
   }
@@ -780,7 +800,7 @@ async function refreshPendingRideFares(settings, perKmRates = null) {
     ride.fareQuote = fareQuote;
     await ride.save();
     const payload = { id: ride._id, fare: ride.fare, fareQuote: ride.fareQuote };
-    io.to(`drivers:${normalizeFareVehicle(ride.vehicleType || 'Car Mini')}`).emit('ride:fare-updated', payload);
+    io.to(`drivers:${normalizeFareVehicle(ride.vehicleType || 'Car Mini Non-AC')}`).emit('ride:fare-updated', payload);
     io.to(`ride:${ride._id}`).emit('ride:fare-updated', payload);
   }
 }
@@ -816,7 +836,9 @@ const userSchema = new mongoose.Schema({
   password:{ type: String, required: true },
   phone:   { type: String, default: '', trim: true },
   role:    { type: String, enum: ['customer', 'driver'], default: 'customer' },
-  vehicleType:  { type: String, enum: [...FARE_VEHICLE_CATEGORIES, 'Rickshaw', 'Car AC', ''], default: '' },
+  // Keep the retired value in the schema enum so legacy documents can still be
+  // loaded and migrated through the explicit Non-AC compatibility alias.
+  vehicleType:  { type: String, enum: [...FARE_VEHICLE_CATEGORIES, 'Car Mini', 'Rickshaw', 'Car AC', ''], default: '' },
   ridePreference: { type: String, enum: DRIVER_RIDE_PREFERENCES, default: 'Both' },
   vehicleModel: { type: String, default: '' },
   vehiclePlate: { type: String, default: '' },
@@ -920,7 +942,7 @@ const rideSchema = new mongoose.Schema({
     lng: { type: Number, default: null }
   },
   passengerLocationUpdatedAt: { type: Date, default: null },
-  vehicleType:   { type: String, default: 'Car Mini' },
+  vehicleType:   { type: String, default: 'Car Mini Non-AC' },
   notes:         { type: String, default: '' },
   paymentMethod: { type: String, enum: ['cash', 'easypaisa', 'jazzcash', 'wallet'], default: 'cash' },
   mobileAccount: { type: String, default: '' },
@@ -1397,7 +1419,7 @@ function emitRideLifecycle(ride, event, detail = {}, { notifyVehicleDrivers = fa
   notifyDriverIds.forEach(driverId => {
     if (driverId) rooms.push(`user:${driverId}`);
   });
-  if (notifyVehicleDrivers) rooms.push(`drivers:${normalizeFareVehicle(ride.vehicleType || 'Car Mini')}`);
+  if (notifyVehicleDrivers) rooms.push(`drivers:${normalizeFareVehicle(ride.vehicleType || 'Car Mini Non-AC')}`);
   io.to([...new Set(rooms)]).emit(event, payload);
   return payload;
 }
@@ -2281,7 +2303,7 @@ app.post('/api/driver/availability', authMiddleware, async (req, res) => {
       ? { isOnline: true, lastOnlineHeartbeat: new Date() }
       : { isOnline: false };
     await User.updateOne({ _id: req.user.id }, update);
-    res.json({ isOnline, vehicleType: normalizeFareVehicle(driver.vehicleType || 'Car Mini'), ridePreference: normalizeRidePreference(driver.ridePreference), longRangeEnabled: !!driver.longRangeEnabled });
+    res.json({ isOnline, vehicleType: normalizeFareVehicle(driver.vehicleType || 'Car Mini Non-AC'), ridePreference: normalizeRidePreference(driver.ridePreference), longRangeEnabled: !!driver.longRangeEnabled });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -2294,7 +2316,7 @@ app.get('/api/driver/long-range', authMiddleware, driverOnly, async (req, res) =
       Wallet.findOne({ user: req.user.id }).select('balance').lean(),
       getLongRangeSettings()
     ]);
-    res.json({ enabled: !!driver?.longRangeEnabled, walletBalance: Number(wallet?.balance || 0), vehicleType: normalizeFareVehicle(driver?.vehicleType || 'Car Mini'), ridePreference: normalizeRidePreference(driver?.ridePreference), settings });
+    res.json({ enabled: !!driver?.longRangeEnabled, walletBalance: Number(wallet?.balance || 0), vehicleType: normalizeFareVehicle(driver?.vehicleType || 'Car Mini Non-AC'), ridePreference: normalizeRidePreference(driver?.ridePreference), settings });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
@@ -2308,7 +2330,7 @@ app.patch('/api/driver/long-range', authMiddleware, driverOnly, async (req, res)
         User.findById(req.user.id).select('vehicleType').lean(),
         Wallet.findOne({ user: req.user.id }).select('balance').lean()
       ]);
-      const category = normalizeFareVehicle(driver?.vehicleType || 'Car Mini');
+      const category = normalizeFareVehicle(driver?.vehicleType || 'Car Mini Non-AC');
       const minimumWalletBalance = getLongRangeMinimumWalletBalance(settings, category);
       if (Number(wallet?.balance || 0) < minimumWalletBalance) {
         return res.status(403).json({ error: `Minimum Wallet Balance of Rs ${minimumWalletBalance.toLocaleString()} required for ${category} to enable Long Range rides.` });
@@ -2715,7 +2737,7 @@ app.patch('/api/rides/:id/update-fare', authMiddleware, async (req, res) => {
     await ride.save();
 
     // Re-broadcast updated fare only to drivers of the same vehicle category
-    io.to(`drivers:${normalizeFareVehicle(ride.vehicleType || 'Car Mini')}`).emit('ride:fare-updated', {
+    io.to(`drivers:${normalizeFareVehicle(ride.vehicleType || 'Car Mini Non-AC')}`).emit('ride:fare-updated', {
       id:   ride._id,
       fare: ride.fare,
       fareQuote: ride.fareQuote
@@ -2755,7 +2777,7 @@ app.post('/api/user/update-profile', authMiddleware, async (req, res) => {
       if (user.role !== 'driver') return res.status(403).json({ error: 'Only Drivers can change vehicle information' });
       const model = String(vehicleModel || '').trim();
       const plate = String(vehiclePlate || '').trim().toUpperCase();
-      const category = normalizeFareVehicle(vehicleType || user.vehicleType || 'Car Mini');
+      const category = normalizeFareVehicle(vehicleType || user.vehicleType || 'Car Mini Non-AC');
       if (!model || !plate || !vehicleRegPhoto) {
         return res.status(400).json({ error: 'Vehicle model, number plate, and a new vehicle registration or ownership document are required' });
       }
@@ -2835,7 +2857,8 @@ app.post('/api/wallet/add-funds', authMiddleware, async (req, res) => {
 const DAILY_TARGETS   = {
   Bike: 2500,
   Rickshaw: 4000,
-  'Car Mini': 5500,
+  'Car Mini AC': 5500,
+  'Car Mini Non-AC': 5500,
   'Car AC': 6500,
   'Toyota Highroof': 8000,
   'Toyota Saloon Coaster': 9000
@@ -2907,7 +2930,7 @@ app.post('/api/payments/submit', authMiddleware, async (req, res) => {
       trxId:           cleanTrx,
       amount:          configuredFee,
       paymentType:     validTypes.includes(paymentType) ? paymentType : 'jazzcash',
-      vehicleCategory: driver.vehicleType || 'Car Mini',
+      vehicleCategory: normalizeFareVehicle(driver.vehicleType || 'Car Mini Non-AC'),
       submittedDate:   dateStr,
       proofScreenshot,
       auditLog: [{
@@ -3052,7 +3075,7 @@ app.get('/api/wallet/status', authMiddleware, async (req, res) => {
       return res.status(403).json({ error: 'Only drivers have a payment wallet status' });
     }
     const driver = await User.findById(req.user.id).select('vehicleType');
-    const category = driver?.vehicleType || 'Car Mini';
+    const category = normalizeFareVehicle(driver?.vehicleType || 'Car Mini Non-AC');
     const target   = DAILY_TARGETS[category] || 5500;
 
     // Sum all approved payments ever
@@ -3932,7 +3955,7 @@ app.get('/api/wallet/summary', authMiddleware, async (req, res) => {
   try {
     if (req.user.role !== 'driver') return res.status(403).json({ error: 'Drivers only' });
     const driver = await User.findById(req.user.id).select('vehicleType');
-    const vehicleType = driver?.vehicleType || 'Car Mini';
+    const vehicleType = normalizeFareVehicle(driver?.vehicleType || 'Car Mini Non-AC');
 
     const wallet = await Wallet.findOne({ user: req.user.id });
     const balance      = wallet?.balance || 0;
@@ -4023,7 +4046,13 @@ app.get('/api/admin/ratings', adminJwt, requirePerm('viewRatings'), async (req, 
 // Admin: Grant Free Trial Credit
 // ─────────────────────────────────────────────────────────────────────────────
 
-const TRIAL_AMOUNTS = { 'Bike': 2000, 'Rickshaw': 3000, 'Car Mini': 4500, 'Car AC': 6500 };
+const TRIAL_AMOUNTS = {
+  Bike: 2000,
+  Rickshaw: 3000,
+  'Car Mini AC': 4500,
+  'Car Mini Non-AC': 4500,
+  'Car AC': 6500
+};
 
 app.post('/api/admin/drivers/grant-trial', adminJwt, requirePerm('manageDriverPasses'), async (req, res) => {
   try {
@@ -4040,7 +4069,7 @@ app.post('/api/admin/drivers/grant-trial', adminJwt, requirePerm('manageDriverPa
     const drivers = await User.find({ _id: { $in: driverIds }, role: 'driver' }).select('vehicleType name');
     const results = [];
     for (const driver of drivers) {
-      const amount = TRIAL_AMOUNTS[driver.vehicleType] || 4500;
+      const amount = TRIAL_AMOUNTS[normalizeFareVehicle(driver.vehicleType)] || 4500;
       await Wallet.findOneAndUpdate(
         { user: driver._id },
         { $inc: { balance: amount, bonusWallet: amount },
@@ -4680,8 +4709,8 @@ io.on('connection', async (socket) => {
       if (driver?.isOnline && driver.accountStatus === 'active') {
         await User.updateOne({ _id: id }, { lastOnlineHeartbeat: new Date() }).catch(() => {});
         socket.join('drivers-online');
-        socket.join(`drivers:${normalizeFareVehicle(driver.vehicleType || 'Car Mini')}`);
-        socket.emit('driver:rehydrate', { isOnline: true, vehicleType: normalizeFareVehicle(driver.vehicleType || 'Car Mini') });
+        socket.join(`drivers:${normalizeFareVehicle(driver.vehicleType || 'Car Mini Non-AC')}`);
+        socket.emit('driver:rehydrate', { isOnline: true, vehicleType: normalizeFareVehicle(driver.vehicleType || 'Car Mini Non-AC') });
       }
       // Re-join the active ride room so location updates reach the passenger
       if (activeRide) {
@@ -4757,7 +4786,7 @@ io.on('connection', async (socket) => {
       ? { isOnline: true, lastOnlineHeartbeat: new Date() }
       : { isOnline: false }
     ).catch(() => {});
-    const vRoom = `drivers:${socket.vehicleType || 'Car Mini'}`;
+    const vRoom = `drivers:${socket.vehicleType || 'Car Mini Non-AC'}`;
     if (isOnline) { socket.join('drivers-online'); socket.join(vRoom); }
     else          { socket.leave('drivers-online'); socket.leave(vRoom); }
   });
@@ -4998,7 +5027,7 @@ async function seedDemoAccounts() {
         accountStatus: 'active',
         nationalIdHash: crypto.createHmac('sha256', JWT_SECRET).update('demo-driver-national-id').digest('hex'),
         nationalIdLast4: '0002',
-        vehicleType: 'Car Mini',
+        vehicleType: 'Car Mini Non-AC',
         vehicleModel: 'Toyota Corolla',
         vehiclePlate: 'DEMO-2026',
         isOnline: false,
@@ -5024,7 +5053,7 @@ async function seedDemoAccounts() {
       $set: {
         driver: driver._id,
         amount: 500,
-        vehicleCategory: 'Car Mini',
+        vehicleCategory: 'Car Mini Non-AC',
         paymentType: 'jazzcash',
         status: 'approved',
         proofScreenshot: 'data:image/png;base64,DEMO_PROOF',
@@ -5097,7 +5126,7 @@ async function seedTestAccounts() {
         password: TEST_ACCOUNT_PASSWORD_HASH,
         role: 'driver',
         accountStatus: 'active',
-        vehicleType: 'Car Mini',
+        vehicleType: 'Car Mini Non-AC',
         vehicleModel: 'Toyota Corolla',
         vehiclePlate: 'TEST-2026',
         isOnline: false,

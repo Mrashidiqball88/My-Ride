@@ -25,7 +25,7 @@ class SessionRevokedError extends Error {
 }
 
 export const DRIVER_VEHICLE_CATEGORIES = [
-  'Bike', 'Riksha', 'Car Mini', 'Car Sedan', 'Car SUV', 'Van Seven Seats',
+  'Bike', 'Riksha', 'Car Mini AC', 'Car Mini Non-AC', 'Car Sedan', 'Car SUV', 'Van Seven Seats',
   'Cary Dibba', 'Toyota Highroof', 'Toyota Saloon Coaster',
 ] as const;
 

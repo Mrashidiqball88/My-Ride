@@ -425,7 +425,8 @@ textarea.support-input{resize:vertical;min-height:85px}
           <select id="r-vehicle">
             <option value="Bike">🛵 Bike</option>
             <option value="Riksha">🛺 Riksha</option>
-            <option value="Car Mini" selected>🚙 Car Mini</option>
+            <option value="Car Mini AC">🚙 Car Mini AC</option>
+            <option value="Car Mini Non-AC" selected>🚙 Car Mini Non-AC</option>
             <option value="Car Sedan">🚗 Car Sedan</option>
             <option value="Car SUV">🚘 Car SUV</option>
             <option value="Van Seven Seats">🚐 Van Seven Seats</option>
@@ -799,7 +800,7 @@ function showToast(msg, type = 'info') {
 
 // ── Draggable Today’s Fare Widget ───────────────────────────────────────────
 function fareCategoryForDriver(vehicleType) {
-  return ({ Rickshaw: 'Riksha', 'Car AC': 'Car Sedan' }[vehicleType] || vehicleType);
+  return ({ Rickshaw: 'Riksha', 'Car AC': 'Car Sedan', 'Car Mini': 'Car Mini Non-AC' }[vehicleType] || vehicleType);
 }
 function fareRuleIsActive(rule) {
   if (!rule?.start || !rule?.end) return false;
@@ -861,7 +862,7 @@ function renderLongRangeState() {
   if (reminder) reminder.style.display = longRangeState.enabled ? 'block' : 'none';
   if (!settings.enabled) sub.textContent = 'Long Range rides are currently disabled by Admin.';
   else {
-    const vehicle = fareCategoryForDriver(user?.vehicleType || 'Car Mini');
+    const vehicle = fareCategoryForDriver(user?.vehicleType || 'Car Mini Non-AC');
     const minimum = Number(settings.minimumWalletBalances?.[vehicle] || 0);
     sub.textContent = `Opt in for trips of ${Number(settings.distanceCutoffKm || 0).toLocaleString()} km+ · ${vehicle} wallet minimum Rs ${minimum.toLocaleString()}`;
   }
@@ -3002,7 +3003,7 @@ if (token && user && user.role === 'driver') {
      <p style="color:#94a3b8;font-size:.75rem;line-height:1.45;margin:0 0 .9rem">A new registration or ownership document is required. Your account will be under review and unavailable for rides until Admin approval.</p>
     <input type="password" id="cv-current" placeholder="Current password" style="width:100%;padding:.7rem;border-radius:8px;border:1px solid #333;background:#0d0d1a;color:#fff;margin-bottom:.5rem;box-sizing:border-box;font-size:.875rem">
     <select id="cv-type" aria-label="Vehicle category" style="width:100%;padding:.7rem;border-radius:8px;border:1px solid #333;background:#0d0d1a;color:#fff;margin-bottom:.5rem;box-sizing:border-box;font-size:.875rem">
-      <option value="Bike">🛵 Bike</option><option value="Riksha">🛺 Riksha</option><option value="Car Mini">🚙 Car Mini</option><option value="Car Sedan">🚗 Car Sedan</option><option value="Car SUV">🚘 Car SUV</option><option value="Van Seven Seats">🚐 Van Seven Seats</option><option value="Cary Dibba">🛻 Cary Dibba</option><option value="Toyota Highroof">🚐 Toyota Highroof</option><option value="Toyota Saloon Coaster">🚌 Toyota Saloon Coaster</option>
+      <option value="Bike">🛵 Bike</option><option value="Riksha">🛺 Riksha</option><option value="Car Mini AC">🚙 Car Mini AC</option><option value="Car Mini Non-AC">🚙 Car Mini Non-AC</option><option value="Car Sedan">🚗 Car Sedan</option><option value="Car SUV">🚘 Car SUV</option><option value="Van Seven Seats">🚐 Van Seven Seats</option><option value="Cary Dibba">🛻 Cary Dibba</option><option value="Toyota Highroof">🚐 Toyota Highroof</option><option value="Toyota Saloon Coaster">🚌 Toyota Saloon Coaster</option>
     </select>
     <input type="text" id="cv-model" placeholder="Vehicle model (e.g. Suzuki Cultus 2022)" style="width:100%;padding:.7rem;border-radius:8px;border:1px solid #333;background:#0d0d1a;color:#fff;margin-bottom:.5rem;box-sizing:border-box;font-size:.875rem">
     <input type="text" id="cv-plate" placeholder="Number plate (e.g. LHR-1234)" style="width:100%;padding:.7rem;border-radius:8px;border:1px solid #333;background:#0d0d1a;color:#fff;margin-bottom:.4rem;box-sizing:border-box;font-size:.875rem;text-transform:uppercase">
@@ -3034,7 +3035,7 @@ function setUploadProgress(pct) {
 
 // ── Daily Platform Fee ─────────────────────────────────────────────────────
 function dailyFeeCategoryForDriver(vehicleType) {
-  return ({ Rickshaw: 'Riksha', 'Car AC': 'Car Sedan' }[vehicleType] || vehicleType);
+  return ({ Rickshaw: 'Riksha', 'Car AC': 'Car Sedan', 'Car Mini': 'Car Mini Non-AC' }[vehicleType] || vehicleType);
 }
 
 function getCurrentDailyFeeRate() {
@@ -3216,7 +3217,7 @@ async function submitChangePassword() {
 // Change Vehicle Info
 function openChangeVehicleModal() {
   document.getElementById('cv-current').value = '';
-  document.getElementById('cv-type').value    = fareCategoryForDriver(user?.vehicleType || 'Car Mini');
+  document.getElementById('cv-type').value    = fareCategoryForDriver(user?.vehicleType || 'Car Mini Non-AC');
   document.getElementById('cv-model').value   = user?.vehicleModel || '';
   document.getElementById('cv-plate').value   = user?.vehiclePlate || '';
   const documentInput = document.getElementById('cv-vehicle-reg');

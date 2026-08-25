@@ -674,7 +674,8 @@ input[type=date]:focus{border-color:#f5c518}
           </p>
           <div class="field-row">
             <div class="field-item"><div class="field-label">Car Sedan Daily Fee (PKR)</div><input class="modal-input daily-fee-input" data-category="Car Sedan" type="number" min="0.01" step="0.01" placeholder="Enter fee"></div>
-            <div class="field-item"><div class="field-label">Car Mini Daily Fee (PKR)</div><input class="modal-input daily-fee-input" data-category="Car Mini" type="number" min="0.01" step="0.01" placeholder="Enter fee"></div>
+            <div class="field-item"><div class="field-label">Car Mini AC Daily Fee (PKR)</div><input class="modal-input daily-fee-input" data-category="Car Mini AC" type="number" min="0.01" step="0.01" placeholder="Enter fee"></div>
+            <div class="field-item"><div class="field-label">Car Mini Non-AC Daily Fee (PKR)</div><input class="modal-input daily-fee-input" data-category="Car Mini Non-AC" type="number" min="0.01" step="0.01" placeholder="Enter fee"></div>
           </div>
           <div class="field-row">
             <div class="field-item"><div class="field-label">Riksha Daily Fee (PKR)</div><input class="modal-input daily-fee-input" data-category="Riksha" type="number" min="0.01" step="0.01" placeholder="Enter fee"></div>
@@ -709,7 +710,8 @@ input[type=date]:focus{border-color:#f5c518}
             <div class="field-item"><div class="field-label">Riksha (PKR /km)</div><input class="modal-input per-km-input" data-category="Riksha" type="number" min="0.01" step="0.01"></div>
           </div>
           <div class="field-row">
-            <div class="field-item"><div class="field-label">Car Mini (PKR /km)</div><input class="modal-input per-km-input" data-category="Car Mini" type="number" min="0.01" step="0.01"></div>
+            <div class="field-item"><div class="field-label">Car Mini AC (PKR /km)</div><input class="modal-input per-km-input" data-category="Car Mini AC" type="number" min="0.01" step="0.01"></div>
+            <div class="field-item"><div class="field-label">Car Mini Non-AC (PKR /km)</div><input class="modal-input per-km-input" data-category="Car Mini Non-AC" type="number" min="0.01" step="0.01"></div>
             <div class="field-item"><div class="field-label">Car Sedan (PKR /km)</div><input class="modal-input per-km-input" data-category="Car Sedan" type="number" min="0.01" step="0.01"></div>
           </div>
           <div class="field-row">
@@ -3072,11 +3074,11 @@ async function loadPaymentSettings() {
 }
 
 // ── Dynamic Daily Fee Settings ─────────────────────────────────────────────────
-const DAILY_FEE_CATEGORIES = ['Car Sedan', 'Car Mini', 'Riksha', 'Bike', 'Car SUV', 'Van Seven Seats', 'Cary Dibba', 'Toyota Highroof', 'Toyota Saloon Coaster'];
+const DAILY_FEE_CATEGORIES = ['Car Sedan', 'Car Mini AC', 'Car Mini Non-AC', 'Riksha', 'Bike', 'Car SUV', 'Van Seven Seats', 'Cary Dibba', 'Toyota Highroof', 'Toyota Saloon Coaster'];
 let dailyFeeSettingsState = {};
 
 function dailyFeeForVehicle(vehicleType) {
-  const category = ({ Rickshaw: 'Riksha', 'Car AC': 'Car Sedan' }[vehicleType] || vehicleType);
+  const category = ({ Rickshaw: 'Riksha', 'Car AC': 'Car Sedan', 'Car Mini': 'Car Mini Non-AC' }[vehicleType] || vehicleType);
   const amount = Number(dailyFeeSettingsState?.[category]);
   return Number.isFinite(amount) && amount > 0 ? amount : null;
 }
@@ -3202,7 +3204,7 @@ async function savePaymentSettings() {
 }
 
 // ── Daily Fare Settings ───────────────────────────────────────────────────────
-const FARE_CATEGORIES = ['Car Sedan', 'Car Mini', 'Riksha', 'Bike', 'Car SUV', 'Van Seven Seats', 'Cary Dibba', 'Toyota Highroof', 'Toyota Saloon Coaster'];
+const FARE_CATEGORIES = ['Car Sedan', 'Car Mini AC', 'Car Mini Non-AC', 'Riksha', 'Bike', 'Car SUV', 'Van Seven Seats', 'Cary Dibba', 'Toyota Highroof', 'Toyota Saloon Coaster'];
 let fareSettingsState = {};
 
 function fareCategoryCard(category, config = {}) {
@@ -3345,7 +3347,7 @@ async function saveFareCategory(category) {
   }
 }
 
-const LONG_RANGE_CATEGORIES = ['Car Sedan', 'Car Mini', 'Riksha', 'Bike', 'Car SUV', 'Van Seven Seats', 'Cary Dibba', 'Toyota Highroof', 'Toyota Saloon Coaster'];
+const LONG_RANGE_CATEGORIES = ['Car Sedan', 'Car Mini AC', 'Car Mini Non-AC', 'Riksha', 'Bike', 'Car SUV', 'Van Seven Seats', 'Cary Dibba', 'Toyota Highroof', 'Toyota Saloon Coaster'];
 function renderLongRangeRates(rates = {}, minimumWalletBalances = {}) {
   document.getElementById('lr-rates').innerHTML = LONG_RANGE_CATEGORIES.map(category =>
     `<div class="field-item" style="min-width:220px"><div class="field-label">${category} (Rs /km)</div><input class="modal-input lr-rate" data-category="${category}" type="number" min=".01" step=".01" value="${rates[category] ?? ''}"><div class="field-label" style="margin-top:.45rem">Minimum Wallet Balance (Rs)</div><input class="modal-input lr-min-wallet" data-category="${category}" type="number" min="0" step="1" value="${minimumWalletBalances[category] ?? 500}"></div>`
