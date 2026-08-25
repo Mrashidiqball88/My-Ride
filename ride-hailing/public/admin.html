@@ -2218,7 +2218,7 @@ function renderLiveLocation(location) {
   if (name) name.textContent = location.name || 'Live location';
   if (role) role.textContent = `${location.role === 'driver' ? 'Driver' : 'Customer'} · ${location.status || 'active'}`;
   if (updated) updated.textContent = formatLiveLocationTime(location.updatedAt);
-  if (meta) meta.textContent = `Coordinates received ${formatLiveLocationTime(location.updatedAt).toLowerCase()}. Refreshes every 15 seconds while open.`;
+  if (meta) meta.textContent = `Coordinates received ${formatLiveLocationTime(location.updatedAt).toLowerCase()}. Refreshes every 10 seconds while open.`;
   if (!mapEl || !window.L || !location.location) return showLiveLocationState('Map is unavailable. Please refresh and try again.');
   mapEl.style.display = 'block';
   state?.classList.remove('visible');
@@ -2266,7 +2266,7 @@ async function openLiveLocationMap(userId) {
   modal?.classList.add('open');
   await refreshLiveLocation();
   clearInterval(liveLocationRefreshTimer);
-  liveLocationRefreshTimer = setInterval(refreshLiveLocation, 15000);
+  liveLocationRefreshTimer = setInterval(refreshLiveLocation, 10000);
 }
 
 function closeLiveLocationMap() {
