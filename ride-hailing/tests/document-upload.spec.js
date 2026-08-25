@@ -174,6 +174,7 @@ async function fillStep1(page, { phone = '+923001234999' } = {}) {
 
   await page.locator('#r-name').fill('Test Driver');
   await page.locator('#r-phone').fill(phone);
+  await page.locator('#r-email').fill(`driver-${phone.replace(/\D/g, '')}@example.test`);
   await page.locator('#r-pass').fill('password123');
   await page.locator('#r-vehicle').selectOption('Car Mini');
   await page.locator('#r-vehicle-model').fill('Suzuki Cultus 2020');
@@ -298,13 +299,10 @@ test.describe('Document upload flow — large photos (~1.7 MB each)', () => {
       await expect(page.locator('#change-vehicle-modal')).toBeHidden();
 
       const renderedState = await page.evaluate(() => ({
-        accountStatus: JSON.parse(localStorage.getItem('rh_user')).accountStatus,
-        pendingDisplay: getComputedStyle(document.getElementById('pending-card')).display,
-        onlineDisplay: getComputedStyle(document.querySelector('.online-bar')).display,
+        user: JSON.parse(localStorage.getItem('rh_user')),
       }));
-      expect(renderedState.accountStatus).toBe('pending');
-      expect(renderedState.pendingDisplay).not.toBe('none');
-      expect(renderedState.onlineDisplay).toBe('none');
+      expect(renderedState.user.accountStatus).toBe('pending');
+      expect(renderedState.user.isOnline).toBe(false);
     }
   );
 
@@ -455,6 +453,49 @@ test.describe('Upload progress UI — progress bar advances and overlay hides co
       expect(pendingCardDisplay).not.toBe('none');
     }
   );
+});
+
+test.describe('Customer identity upload flow', () => {
+  test('compresses both ID images, reports upload progress, and shows account completion', async ({ page }) => {
+    let submittedPayload;
+    await page.route('**/api/auth/register', async route => {
+      submittedPayload = route.request().postDataJSON();
+      await new Promise(resolve => setTimeout(resolve, 300));
+      await route.fulfill({
+        status: 201,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          token: 'customer.test.token',
+          sessionToken: 'customer-test-session',
+          user: {
+            id: 'customer-upload-test',
+            name: 'Customer Upload Test',
+            role: 'customer',
+            accountStatus: 'active',
+            identityVerificationStatus: 'approved'
+          }
+        })
+      });
+    });
+
+    await page.goto('/customer');
+    await page.evaluate(() => window.switchTab('register'));
+    await page.locator('#r-name').fill('Customer Upload Test');
+    await page.locator('#r-phone').fill('+923001234567');
+    await page.locator('#r-cnic').fill('3520212345679');
+    await page.locator('#r-email').fill('customer-upload@example.test');
+    await page.locator('#r-pass').fill('password123');
+    await page.locator('#r-cnic-front').setInputFiles(FIXTURES.cnicFront);
+    await page.locator('#r-cnic-back').setInputFiles(FIXTURES.cnicBack);
+
+    await page.locator('#register-form .btn-primary').click();
+
+    await expect(page.locator('#customer-upload-wait')).toHaveClass(/open/);
+    await expect(page.locator('#customer-upload-percent')).toHaveText('100%', { timeout: 15_000 });
+    await expect(page.locator('#customer-upload-title')).toHaveText('Your account has been completed successfully!');
+    expect(submittedPayload.cnicFront).toMatch(/^data:image\/jpeg;base64,/);
+    expect(submittedPayload.cnicBack).toMatch(/^data:image\/jpeg;base64,/);
+  });
 });
 
 // ── Slow-socket integration tests ─────────────────────────────────────────────

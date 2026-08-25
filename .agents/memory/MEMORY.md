@@ -11,3 +11,4 @@
 - [Mockup preview routing](mockup-preview-routing.md) — sandbox previews need the artifact base path and component registry to avoid blank or fallback frames.
 - [Preview database persistence](preview-database-persistence.md) — without MONGO_URI, preview users live in the workflow's in-memory MongoDB and must be seeded on startup.
 - [Driver navigation privacy](driver-navigation-privacy.md) — keep live driver/passenger route calculations local until an approved routing provider is selected.
+- [Identity image preflight](identity-image-preflight.md) — validate image bytes before OCR so corrupt uploads return clean verification errors without late worker failures.

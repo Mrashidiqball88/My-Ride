@@ -1058,16 +1058,27 @@ async function doRegister() {
   if (!name)  return (document.getElementById('auth-error').textContent = 'Full name is required');
   if (!phone) return (document.getElementById('auth-error').textContent = 'Phone number is required');
   if (!cnic)  return (document.getElementById('auth-error').textContent = 'CNIC / Identity Card Number is required');
-  if (!frontFile || !backFile) return (document.getElementById('auth-error').textContent = 'Upload both the front and back of your National ID');
+  if (!frontFile) return (document.getElementById('auth-error').textContent = 'National ID Front is required');
+  if (!backFile) return (document.getElementById('auth-error').textContent = 'National ID Back is required');
+  if (!email) return (document.getElementById('auth-error').textContent = 'Email address is required');
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return (document.getElementById('auth-error').textContent = 'Enter a valid email address');
   if (pass.length < 6) return (document.getElementById('auth-error').textContent = 'Password must be at least 6 characters');
   try {
     const submitButton = document.querySelector('#register-form .btn-primary');
-    if (submitButton) { submitButton.disabled = true; submitButton.textContent = 'Verifying identity…'; }
-    const [cnicFront, cnicBack] = await Promise.all([imageFileToDataUrl(frontFile), imageFileToDataUrl(backFile)]);
     showCustomerUploadWait();
+    if (submitButton) { submitButton.disabled = true; submitButton.textContent = 'Preparing documents…'; }
+    document.getElementById('customer-upload-title').textContent = 'Preparing your documents…';
+    document.getElementById('customer-upload-copy').textContent = 'Optimizing your images for a faster, more reliable upload.';
+    const [cnicFront, cnicBack] = await Promise.all([
+      imageFileToDataUrl(frontFile, 'National ID Front', progress => setCustomerUploadProgress(5 + Math.round(progress * 18))),
+      imageFileToDataUrl(backFile, 'National ID Back', progress => setCustomerUploadProgress(23 + Math.round(progress * 18)))
+    ]);
+    document.getElementById('customer-upload-title').textContent = 'Uploading documents…';
+    document.getElementById('customer-upload-copy').textContent = 'Please wait while we securely process your ID.';
+    setCustomerUploadProgress(42);
     const res = await registerCustomerWithProgress({ name, phone, email, password: pass, role: 'customer', cnicNumber: cnic, cnicFront, cnicBack });
     setCustomerUploadProgress(100);
-    document.getElementById('customer-upload-title').textContent = 'Documents uploaded successfully!';
+    document.getElementById('customer-upload-title').textContent = 'Your account has been completed successfully!';
     const automaticallyApproved = res.user?.accountStatus === 'active' && res.user?.identityVerificationStatus === 'approved';
     document.getElementById('customer-upload-copy').textContent = automaticallyApproved
       ? 'Your identity matched successfully. Your account is approved and ready to book rides.'
@@ -1087,7 +1098,7 @@ async function doRegister() {
 function showCustomerUploadWait() {
   document.getElementById('customer-upload-wait').classList.add('open');
   document.getElementById('customer-upload-close').style.display = 'none';
-  setCustomerUploadProgress(2);
+  setCustomerUploadProgress(0);
 }
 function setCustomerUploadProgress(value) {
   document.getElementById('customer-upload-progress').style.width = `${value}%`;
@@ -1101,22 +1112,58 @@ function registerCustomerWithProgress(payload) {
   return new Promise((resolve, reject) => {
     const xhr = new XMLHttpRequest();
     xhr.open('POST', API + '/api/auth/register');
+    xhr.timeout = 600000;
     xhr.setRequestHeader('Content-Type', 'application/json');
-    xhr.upload.onprogress = event => { if (event.lengthComputable) setCustomerUploadProgress(Math.min(96, Math.round(event.loaded / event.total * 100))); };
-    xhr.onload = () => { let data = {}; try { data = JSON.parse(xhr.responseText); } catch {} if (xhr.status >= 200 && xhr.status < 300) resolve(data); else reject(new Error(data.error || 'Document upload failed')); };
+    xhr.upload.onprogress = event => {
+      if (event.lengthComputable) setCustomerUploadProgress(Math.min(96, 42 + Math.round(event.loaded / event.total * 54)));
+    };
+    xhr.upload.onload = () => setCustomerUploadProgress(98);
+    xhr.onload = () => {
+      let data = {};
+      try { data = JSON.parse(xhr.responseText); } catch {}
+      if (xhr.status >= 200 && xhr.status < 300) resolve(data);
+      else reject(new Error(data.error || `Document upload failed (${xhr.status})`));
+    };
     xhr.onerror = () => reject(new Error('Network error — check your connection'));
+    xhr.ontimeout = () => reject(new Error('Upload timed out. Check your connection and try again.'));
     xhr.send(JSON.stringify(payload));
   });
 }
 
-function imageFileToDataUrl(file) {
-  if (!['image/jpeg', 'image/png', 'image/webp'].includes(file.type) || file.size > 6 * 1024 * 1024) {
-    throw new Error('Use a JPEG, PNG, or WebP image under 6 MB');
+function imageFileToDataUrl(file, label = 'Document', onProgress = () => {}) {
+  if (!file) throw new Error(`${label} is required`);
+  if (!['image/jpeg', 'image/png', 'image/webp'].includes(file.type)) {
+    throw new Error(`${label} must be a JPEG, PNG, or WebP image`);
   }
+  if (file.size > 6 * 1024 * 1024) throw new Error(`${label} must be smaller than 6 MB`);
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
-    reader.onerror = () => reject(new Error('Unable to read ID document'));
-    reader.onload = () => resolve(reader.result);
+    reader.onerror = () => reject(new Error(`Unable to read ${label}`));
+    reader.onload = event => {
+      onProgress(20);
+      const image = new Image();
+      image.onerror = () => reject(new Error(`${label} could not be read as an image`));
+      image.onload = () => {
+        const maxDimension = 1600;
+        const scale = Math.min(1, maxDimension / Math.max(image.width, image.height));
+        const canvas = document.createElement('canvas');
+        canvas.width = Math.max(1, Math.round(image.width * scale));
+        canvas.height = Math.max(1, Math.round(image.height * scale));
+        const context = canvas.getContext('2d');
+        if (!context) return reject(new Error(`${label} could not be prepared for upload`));
+        context.drawImage(image, 0, 0, canvas.width, canvas.height);
+        try {
+          onProgress(70);
+          const compressed = canvas.toDataURL('image/jpeg', 0.78);
+          if (!compressed || compressed.length < 32) throw new Error('empty image output');
+          onProgress(100);
+          resolve(compressed);
+        } catch {
+          reject(new Error(`${label} could not be compressed for upload`));
+        }
+      };
+      image.src = event.target.result;
+    };
     reader.readAsDataURL(file);
   });
 }

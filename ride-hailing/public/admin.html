@@ -199,10 +199,13 @@ body{font-family:'Segoe UI',system-ui,sans-serif;background:#06060e;color:#e2e8f
 
 /* ── Doc viewer ── */
 .doc-grid{display:grid;grid-template-columns:1fr 1fr;gap:.75rem;margin-top:.75rem}
-.doc-item{background:#06060e;border:1px solid #1e1e2e;border-radius:10px;overflow:hidden;cursor:pointer;transition:border-color .2s}
+.doc-item{background:#06060e;border:1px solid #1e1e2e;border-radius:10px;overflow:hidden;transition:border-color .2s}
 .doc-item:hover{border-color:#f5c518}
-.doc-item img{width:100%;height:120px;object-fit:cover;background:#0f0f1e}
-.doc-label{font-size:.65rem;color:#475569;padding:.3rem .5rem;font-weight:700;text-transform:uppercase;letter-spacing:.05em}
+.doc-preview{display:block;width:100%;padding:0;border:0;background:#0f0f1e;cursor:zoom-in}
+.doc-item img{width:100%;height:120px;object-fit:cover;display:block;background:#0f0f1e}
+.doc-label{font-size:.65rem;color:#94a3b8;padding:.45rem .5rem;font-weight:700;text-transform:uppercase;letter-spacing:.05em;display:flex;align-items:center;justify-content:space-between;gap:.4rem}
+.doc-download{border:1px solid #334155;background:#172033;color:#dbeafe;border-radius:6px;padding:.25rem .4rem;font-size:.62rem;font-weight:800;cursor:pointer;text-transform:none;letter-spacing:0}
+.doc-download:hover{border-color:#60a5fa;color:#fff;background:#1d4ed8}
 .doc-item.no-doc{display:flex;flex-direction:column;align-items:center;justify-content:center;height:120px;color:#334155;font-size:.75rem;gap:.3rem;background:#0a0a14}
 
 /* ── Modal ── */
@@ -2190,13 +2193,20 @@ async function openCustomerIdentityReview(userId) {
   const grid = document.getElementById('doc-grid');
   grid.innerHTML = '<div class="loading-row">Loading protected documents…</div>';
   try {
+    releaseDocumentBlobUrls();
     const fetchDocument = async side => {
       const response = await fetch(`/api/admin/customer-identity/${userId}/${side}`, { headers: { Authorization: `Bearer ${adminToken}` } });
       if (!response.ok) throw new Error('Unable to load identity document');
-      return URL.createObjectURL(await response.blob());
+      const url = URL.createObjectURL(await response.blob());
+      documentBlobUrls.push(url);
+      return url;
     };
     const [front, back] = await Promise.all([fetchDocument('front'), fetchDocument('back')]);
-    grid.innerHTML = `<div class="doc-item"><img src="${front}" alt="Customer ID front"><div class="doc-label">National ID Front</div></div><div class="doc-item"><img src="${back}" alt="Customer ID back"><div class="doc-label">National ID Back</div></div>`;
+    grid.innerHTML = [
+      renderDocumentCard({ label: 'National ID Front', url: front }),
+      renderDocumentCard({ label: 'National ID Back', url: back })
+    ].join('');
+    bindDocumentActions(grid);
   } catch (e) { grid.innerHTML = `<div class="empty-state">${e.message}</div>`; }
   document.getElementById('doc-footer').innerHTML = `<button class="btn btn-gray" onclick="closeModal('doc-modal')">Close</button>`;
 }
@@ -2276,20 +2286,22 @@ async function viewDocs(userId, infoJson = null) {
       <div class="field-item"><div class="field-label">Status</div><div class="field-val">${badgeHtml(d.accountStatus||'pending')}</div></div>
     </div>`;
 
-    const docs = [
-      { key: 'profilePhoto',    label: 'Profile Photo',   url: d.profilePhoto },
-      { key: 'cnicFront',       label: 'CNIC Front',      url: d.cnicFront },
-      { key: 'cnicBack',        label: 'CNIC Back',       url: d.cnicBack  },
-      { key: 'licensePhoto',    label: 'Driving License', url: d.licensePhoto }
+    releaseDocumentBlobUrls();
+    const definitions = [
+      { key: 'profilePhoto',    label: 'Profile Photo', available: !!d.profilePhoto },
+      { key: 'cnicFront',       label: 'CNIC Front', available: !!d.cnicFront },
+      { key: 'cnicBack',        label: 'CNIC Back', available: !!d.cnicBack },
+      { key: 'licensePhoto',    label: 'Driving License', available: !!d.licensePhoto },
+      { key: 'vehicleRegPhoto', label: 'Vehicle Registration', available: !!d.vehicleRegPhoto }
     ];
-    grid.innerHTML = docs.map(doc =>
-      doc.url
-        ? `<div class="doc-item" onclick="window.open('${doc.url}','_blank')">
-             <img src="${doc.url}" alt="${doc.label}" onerror="this.style.display='none';this.nextElementSibling.style.display='flex'">
-             <div class="doc-label">📄 ${doc.label}</div>
-           </div>`
-        : `<div class="doc-item no-doc">📷<span>${doc.label}</span><span style="font-size:.62rem;color:#1e1e2e">Not uploaded</span></div>`
-    ).join('');
+    const docs = await Promise.all(definitions.map(async doc => ({
+      ...doc,
+      url: doc.available
+        ? await fetchProtectedDocument(`/api/admin/driver-documents/${encodeURIComponent(d._id)}/${doc.key}`)
+        : ''
+    })));
+    grid.innerHTML = docs.map(renderDocumentCard).join('');
+    bindDocumentActions(grid);
 
     footer.innerHTML = d.accountStatus === 'pending'
       ? `<button class="btn btn-gray" onclick="closeModal('doc-modal')">Close</button>
@@ -2299,11 +2311,79 @@ async function viewDocs(userId, infoJson = null) {
   } catch (e) { grid.innerHTML = `<div class="empty-state" style="color:#ef4444">${e.message}</div>`; }
 }
 
+let documentBlobUrls = [];
+function releaseDocumentBlobUrls() {
+  documentBlobUrls.forEach(url => URL.revokeObjectURL(url));
+  documentBlobUrls = [];
+}
+
+async function fetchProtectedDocument(url) {
+  const response = await fetch(url, { headers: { Authorization: `Bearer ${adminToken}` } });
+  if (!response.ok) throw new Error('Unable to load document');
+  const blobUrl = URL.createObjectURL(await response.blob());
+  documentBlobUrls.push(blobUrl);
+  return blobUrl;
+}
+
+function renderDocumentCard(doc) {
+  if (!doc.url || !doc.url.startsWith('blob:')) {
+    return `<div class="doc-item no-doc">📷<span>${escHtml(doc.label)}</span><span style="font-size:.62rem;color:#1e1e2e">Not uploaded</span></div>`;
+  }
+  const url = escHtml(doc.url);
+  const label = escHtml(doc.label);
+  return `<article class="doc-item">
+    <button type="button" class="doc-preview" data-preview-url="${url}" aria-label="Open ${label}">
+      <img src="${url}" alt="${label}">
+    </button>
+    <div class="doc-label"><span>📄 ${label}</span>
+      <button type="button" class="doc-download" data-download-url="${url}" data-download-name="${label}">Download</button>
+    </div>
+  </article>`;
+}
+
+function bindDocumentActions(container) {
+  container.querySelectorAll('.doc-preview').forEach(button => {
+    button.addEventListener('click', () => {
+      const url = button.dataset.previewUrl;
+      if (url?.startsWith('blob:')) window.open(url, '_blank', 'noopener');
+    });
+  });
+  container.querySelectorAll('.doc-download').forEach(button => {
+    button.addEventListener('click', async event => {
+      event.stopPropagation();
+      await downloadDocument(button.dataset.downloadUrl, button.dataset.downloadName);
+    });
+  });
+}
+
+async function downloadDocument(url, label) {
+  try {
+    const response = await fetch(url, url.startsWith('/api/admin/')
+      ? { headers: { Authorization: `Bearer ${adminToken}` } }
+      : undefined);
+    if (!response.ok) throw new Error('The document is no longer available');
+    const blob = await response.blob();
+    const downloadUrl = URL.createObjectURL(blob);
+    const anchor = document.createElement('a');
+    anchor.href = downloadUrl;
+    anchor.download = `${String(label || 'document').replace(/[^a-z0-9]+/gi, '-').replace(/^-|-$/g, '').toLowerCase() || 'document'}.jpg`;
+    document.body.appendChild(anchor);
+    anchor.click();
+    anchor.remove();
+    setTimeout(() => URL.revokeObjectURL(downloadUrl), 1000);
+  } catch (e) {
+    showToast(e.message || 'Unable to download document', 'error');
+  }
+}
+
 // ── Modal Helpers ─────────────────────────────────────────────────────────────
 function openModal(id)  { document.getElementById(id).classList.add('open'); }
-function closeModal(id) { document.getElementById(id).classList.remove('open'); }
+function closeModal(id) {
+  if (id === 'doc-modal') releaseDocumentBlobUrls();
+  document.getElementById(id).classList.remove('open');
+}
 document.querySelectorAll('.modal-backdrop').forEach(el =>
-  el.addEventListener('click', e => { if (e.target === el) el.classList.remove('open'); })
+  el.addEventListener('click', e => { if (e.target === el) closeModal(el.id); })
 );
 
 // ── Utility ───────────────────────────────────────────────────────────────────

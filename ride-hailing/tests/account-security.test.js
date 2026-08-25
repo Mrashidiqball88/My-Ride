@@ -82,8 +82,10 @@ function registrationBody(overrides = {}) {
     password: 'password123',
     role: 'customer',
     cnicNumber: '35202-1234567-9',
-    cnicFront: 'not-an-image',
-    cnicBack: 'not-an-image',
+    // Valid data-URL shape with unreadable image bytes. This reaches the
+    // identity-verification branch instead of failing client-upload parsing.
+    cnicFront: 'data:image/png;base64,AAAA',
+    cnicBack: 'data:image/png;base64,AAAA',
     ...overrides
   };
 }
@@ -93,8 +95,8 @@ test('unreadable and mismatched customer ID documents return the exact rider-fac
 
   await withServer(async server => {
     for (const documents of [
-      { cnicFront: 'not-an-image', cnicBack: 'not-an-image' },
-      { cnicFront: 'data:image/png;base64,not-a-real-image', cnicBack: 'data:image/png;base64,also-not-real' }
+      { cnicFront: 'data:image/png;base64,AAAA', cnicBack: 'data:image/png;base64,AAAA' },
+      { cnicFront: 'data:image/png;base64,AAAB', cnicBack: 'data:image/png;base64,AAAC' }
     ]) {
       const result = await request(server, '/api/auth/register', {
         method: 'POST',
@@ -137,7 +139,7 @@ test('email is required for both customer and driver registration', async () => 
         body: JSON.stringify(registrationBody({ role, email: '' }))
       });
       assert.equal(result.response.status, 400);
-      assert.equal(result.body.error, 'Name, email, and password are required');
+      assert.equal(result.body.error, 'Email address is required');
     }
   });
 });
@@ -180,6 +182,59 @@ test('customer identity files are not public and only a Super Admin can retrieve
     });
   } finally {
     fs.rmSync(path.join(identityDir, fileName), { force: true });
+  }
+});
+
+test('driver identity documents are private and unsafe document URLs are rejected', async () => {
+  const fs = require('fs');
+  const path = require('path');
+  const driverId = 'private-driver-document-test';
+  const fileName = 'cnicFront_private-test.jpg';
+  const fileContent = Buffer.from('private driver identity document');
+  const documentDir = path.resolve(__dirname, '..', 'uploads', 'driver_identity');
+  fs.mkdirSync(documentDir, { recursive: true });
+  fs.writeFileSync(path.join(documentDir, fileName), fileContent, { mode: 0o600 });
+
+  const security = { passwordHash: '', recoveryKeyHash: '', sessionVersion: 0 };
+  models.Settings.findOne = () => ({ lean: async () => ({ value: security }) });
+  models.User.findOne = queryInput => queryInput._id === driverId
+    ? { select: () => query({ _id: driverId, role: 'driver', cnicFront: fileName }) }
+    : query(null);
+
+  try {
+    await withServer(async server => {
+      const publicResult = await request(server, `/uploads/driver_docs/${fileName}`);
+      assert.equal(publicResult.response.status, 404);
+
+      const unauthenticatedResult = await request(server, `/api/admin/driver-documents/${driverId}/cnicFront`);
+      assert.equal(unauthenticatedResult.response.status, 401);
+
+      const adminResult = await request(server, `/api/admin/driver-documents/${driverId}/cnicFront`, {
+        headers: { authorization: `Bearer ${adminToken()}` }
+      });
+      assert.equal(adminResult.response.status, 200);
+      assert.deepEqual(Buffer.from(await adminResult.body), fileContent);
+      assert.equal(adminResult.response.headers.get('cache-control'), 'private, no-store');
+
+      const unsafeRegistration = await request(server, '/api/auth/register', {
+        method: 'POST',
+        body: JSON.stringify(registrationBody({
+          role: 'driver',
+          vehicleType: 'Car Mini',
+          vehicleModel: 'Test Car',
+          vehiclePlate: 'TEST-123',
+          profilePhoto: 'javascript:alert(1)',
+          licensePhoto: 'data:image/png;base64,AAAA',
+          cnicFront: 'data:image/png;base64,AAAA',
+          cnicBack: 'data:image/png;base64,AAAA',
+          vehicleRegPhoto: 'data:image/png;base64,AAAA'
+        }))
+      });
+      assert.equal(unsafeRegistration.response.status, 400);
+      assert.match(unsafeRegistration.body.error, /^Profile Photo: .*JPEG, PNG, or WebP image/i);
+    });
+  } finally {
+    fs.rmSync(path.join(documentDir, fileName), { force: true });
   }
 });
 

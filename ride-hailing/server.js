@@ -116,17 +116,23 @@ app.use(express.static(PUBLIC_DIR));
 // server refuses to start with a clear error rather than silently 500-ing.
 const fs = require('fs');
 
-// Driver files retain their existing public review path. Customer identity
-// documents are deliberately stored separately and are never exposed by static
-// middleware; only an authenticated super-admin can retrieve them.
-const UPLOADS_DIR = path.resolve(__dirname, 'uploads', 'driver_docs');
+// Driver identity documents and customer identity documents are private. Only
+// non-sensitive Driver profile photos are mounted publicly for ride matching.
+// LEGACY_DRIVER_DOCS_DIR is intentionally not mounted; it is read only through
+// the protected Admin download route so existing documents remain reviewable.
+const LEGACY_DRIVER_DOCS_DIR = path.resolve(__dirname, 'uploads', 'driver_docs');
+const DRIVER_PROFILE_UPLOADS_DIR = path.resolve(__dirname, 'uploads', 'driver_profiles');
+const DRIVER_ID_UPLOADS_DIR = path.resolve(__dirname, 'uploads', 'driver_identity');
 const CUSTOMER_ID_UPLOADS_DIR = path.resolve(__dirname, 'uploads', 'customer_identity');
-fs.mkdirSync(UPLOADS_DIR, { recursive: true });
+fs.mkdirSync(LEGACY_DRIVER_DOCS_DIR, { recursive: true });
+fs.mkdirSync(DRIVER_PROFILE_UPLOADS_DIR, { recursive: true });
+fs.mkdirSync(DRIVER_ID_UPLOADS_DIR, { recursive: true });
 fs.mkdirSync(CUSTOMER_ID_UPLOADS_DIR, { recursive: true });
-// Only driver review documents are public. Never mount the parent uploads
-// directory, because it also contains customer identity files.
+// Never mount identity document directories. Legacy Driver paths are now
+// deliberately denied, even when an old filename is known.
 app.use('/uploads/customer_identity', (_req, res) => res.status(404).end());
-app.use('/uploads/driver_docs', express.static(UPLOADS_DIR));
+app.use('/uploads/driver_docs', (_req, res) => res.status(404).end());
+app.use('/uploads/driver_profiles', express.static(DRIVER_PROFILE_UPLOADS_DIR));
 
 const MAX_ID_DOCUMENT_BYTES = 6 * 1024 * 1024;
 const ID_DOCUMENT_DATA_URL = /^data:image\/(jpeg|jpg|png|webp);base64,([A-Za-z0-9+/=\s]+)$/s;
@@ -141,8 +147,6 @@ function parseImageDataUrl(dataUrl) {
   return { ext: match[1] === 'jpeg' ? 'jpg' : match[1], bytes };
 }
 
-// Save a base64 data-URL to disk; return the public path.  If the value is
-// already a file path (not a data: URL) it is returned unchanged.
 async function compressImage(bytes) {
   return sharp(bytes)
     .rotate()
@@ -151,17 +155,40 @@ async function compressImage(bytes) {
     .toBuffer();
 }
 
-async function saveDocToDisk(dataUrl, fieldName) {
-  if (!dataUrl || !dataUrl.startsWith('data:')) return dataUrl || '';
-  const m = dataUrl.match(/^data:image\/(jpeg|jpg|png|webp);base64,(.+)$/s);
-  if (!m) return dataUrl;
+async function writeCompressedImage(dataUrl, fieldName, destinationDir) {
+  const { bytes } = parseImageDataUrl(dataUrl);
   const fname = `${fieldName}_${Date.now()}_${crypto.randomBytes(10).toString('hex')}.jpg`;
   try {
-    const compressed = await compressImage(Buffer.from(m[2], 'base64'));
-    fs.writeFileSync(path.join(UPLOADS_DIR, fname), compressed, { mode: 0o640 });
+    const compressed = await compressImage(bytes);
+    fs.writeFileSync(path.join(destinationDir, fname), compressed, { mode: 0o600 });
   }
-  catch { return dataUrl; } // fallback — keep base64 if disk write fails
-  return `/uploads/driver_docs/${fname}`;
+  catch (err) {
+    throw new Error(`Unable to save ${fieldName} document: ${err.message}`);
+  }
+  return fname;
+}
+
+async function saveDriverProfilePhoto(dataUrl) {
+  const filename = await writeCompressedImage(dataUrl, 'profile', DRIVER_PROFILE_UPLOADS_DIR);
+  return `/uploads/driver_profiles/${filename}`;
+}
+
+async function savePrivateDriverDocument(dataUrl, fieldName) {
+  return writeCompressedImage(dataUrl, fieldName, DRIVER_ID_UPLOADS_DIR);
+}
+
+function resolveStoredDriverDocument(value, fieldName) {
+  const filename = path.basename(String(value || ''));
+  if (!filename) return '';
+  const isProfile = fieldName === 'profilePhoto';
+  const primaryDirectory = isProfile ? DRIVER_PROFILE_UPLOADS_DIR : DRIVER_ID_UPLOADS_DIR;
+  const primaryPath = path.join(primaryDirectory, filename);
+  if (fs.existsSync(primaryPath)) return primaryPath;
+
+  // Files from before privacy hardening are never publicly served, but remain
+  // accessible through Admin review while the deployment transitions.
+  const legacyPath = path.join(LEGACY_DRIVER_DOCS_DIR, filename);
+  return fs.existsSync(legacyPath) ? legacyPath : '';
 }
 
 async function savePrivateIdentityDocument(dataUrl, label) {
@@ -1416,6 +1443,15 @@ async function verifyCustomerIdentityDocuments({ name, nationalId, front, back }
   const expectedName = normalizeNameForMatch(name);
   if (!/^\d{13}$/.test(expectedId) || expectedName.length < 4) return false;
   const [frontImage, backImage] = [parseImageDataUrl(front), parseImageDataUrl(back)];
+  try {
+    const [frontMetadata, backMetadata] = await Promise.all([
+      sharp(frontImage.bytes).metadata(),
+      sharp(backImage.bytes).metadata()
+    ]);
+    if (!frontMetadata.width || !frontMetadata.height || !backMetadata.width || !backMetadata.height) return false;
+  } catch {
+    return false;
+  }
   const [frontOcr, backOcr] = await Promise.all([
     Tesseract.recognize(frontImage.bytes, 'eng'),
     Tesseract.recognize(backImage.bytes, 'eng')
@@ -1587,31 +1623,60 @@ app.post('/api/auth/register', async (req, res) => {
   try {
     const { name, email, password, phone, role, vehicleType, vehicleModel, vehiclePlate, ridePreference,
              profilePhoto, licensePhoto, cnicFront, cnicBack, cnicNumber, vehicleRegPhoto } = req.body;
-    if (!name || !password || typeof email !== 'string' || !email.trim())
-      return res.status(400).json({ error: 'Name, email, and password are required' });
-    const normalizedPhone = normalizePhoneNumber(phone);
-    if (!normalizedPhone)   return res.status(400).json({ error: 'Enter a valid mobile number' });
     const resolvedRoleEarly = role || 'customer';
+    if (!['customer', 'driver'].includes(resolvedRoleEarly)) {
+      return res.status(400).json({ error: 'Account type must be Customer or Driver' });
+    }
+    if (!String(name || '').trim()) return res.status(400).json({ error: 'Full name is required' });
+    if (!password) return res.status(400).json({ error: 'Password is required' });
+    if (String(password).length < 6) return res.status(400).json({ error: 'Password must be at least 6 characters' });
+    if (typeof email !== 'string' || !email.trim()) return res.status(400).json({ error: 'Email address is required' });
+    const resolvedEmail = email.toLowerCase().trim();
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(resolvedEmail))
+      return res.status(400).json({ error: 'Enter a valid email address' });
+    const normalizedPhone = normalizePhoneNumber(phone);
+    if (!normalizedPhone) return res.status(400).json({ error: 'Enter a valid mobile number' });
     const resolvedRidePreference = resolvedRoleEarly === 'driver' ? normalizeRidePreference(ridePreference) : 'Both';
     const normalizedCustomerId = normalizeNationalId(cnicNumber);
     if (resolvedRoleEarly === 'customer') {
-      if (!cnicNumber || !cnicFront || !cnicBack) {
-        return res.status(400).json({ error: 'Full Name, CNIC/NIC, and both ID document images are required' });
-      }
+      if (!cnicNumber) return res.status(400).json({ error: 'CNIC / NIC number is required' });
       if (!/^\d{13}$/.test(normalizedCustomerId)) {
         return res.status(400).json({ error: 'Enter a valid 13-digit CNIC / NIC number' });
       }
+      if (!cnicFront) return res.status(400).json({ error: 'National ID Front is required' });
+      if (!cnicBack) return res.status(400).json({ error: 'National ID Back is required' });
     }
-    if (resolvedRoleEarly === 'driver' && (!profilePhoto || !licensePhoto || !cnicFront || !cnicBack || !vehicleRegPhoto)) {
-      return res.status(400).json({ error: 'Profile photo, CNIC front/back, driving license, and vehicle registration documents are required' });
+    if (resolvedRoleEarly === 'driver') {
+      if (!String(vehicleModel || '').trim()) return res.status(400).json({ error: 'Vehicle model is required' });
+      if (!String(vehiclePlate || '').trim()) return res.status(400).json({ error: 'Number plate is required' });
+      if (!profilePhoto) return res.status(400).json({ error: 'Profile Photo is required' });
+      if (!licensePhoto) return res.status(400).json({ error: 'Driving License is required' });
+      if (!cnicFront) return res.status(400).json({ error: 'CNIC Front is required' });
+      if (!cnicBack) return res.status(400).json({ error: 'CNIC Back is required' });
+      if (!vehicleRegPhoto) return res.status(400).json({ error: 'Vehicle Registration Document is required' });
     }
     if (resolvedRoleEarly === 'driver' && !FARE_VEHICLE_CATEGORIES.includes(normalizeFareVehicle(vehicleType))) {
       return res.status(400).json({ error: 'Choose a valid vehicle category' });
     }
-
-    const resolvedEmail = email.toLowerCase().trim();
-    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(resolvedEmail))
-      return res.status(400).json({ error: 'Enter a valid email address' });
+    const registrationDocuments = resolvedRoleEarly === 'customer'
+      ? [
+          [cnicFront, 'National ID Front'],
+          [cnicBack, 'National ID Back']
+        ]
+      : [
+          [profilePhoto, 'Profile Photo'],
+          [licensePhoto, 'Driving License'],
+          [cnicFront, 'CNIC Front'],
+          [cnicBack, 'CNIC Back'],
+          [vehicleRegPhoto, 'Vehicle Registration Document']
+        ];
+    for (const [document, label] of registrationDocuments) {
+      try {
+        parseImageDataUrl(document);
+      } catch (err) {
+        return res.status(400).json({ error: `${label}: ${err.message}` });
+      }
+    }
 
     if (await User.findOne({ email: resolvedEmail }))
       return res.status(409).json({ error: 'Email already registered' });
@@ -1640,8 +1705,15 @@ app.post('/api/auth/register', async (req, res) => {
 
     const hash = await bcrypt.hash(password, 12);
     const resolvedRole = role || 'customer';
-    const customerFrontFile = resolvedRole === 'customer' ? await savePrivateIdentityDocument(cnicFront, 'customer_id_front') : '';
-    const customerBackFile = resolvedRole === 'customer' ? await savePrivateIdentityDocument(cnicBack, 'customer_id_back') : '';
+    let customerFrontFile = '';
+    let customerBackFile = '';
+    try {
+      customerFrontFile = resolvedRole === 'customer' ? await savePrivateIdentityDocument(cnicFront, 'customer_id_front') : '';
+      customerBackFile = resolvedRole === 'customer' ? await savePrivateIdentityDocument(cnicBack, 'customer_id_back') : '';
+    } catch (err) {
+      deletePrivateIdentityDocuments([customerFrontFile, customerBackFile]);
+      throw new Error(`Identity document upload failed: ${err.message}`);
+    }
     const user = await User.create({
       name,
       email:         resolvedEmail,
@@ -1653,11 +1725,11 @@ app.post('/api/auth/register', async (req, res) => {
       ridePreference: resolvedRidePreference,
       vehicleModel:  vehicleModel   || '',
       vehiclePlate:  vehiclePlate   || '',
-      profilePhoto:  await saveDocToDisk(profilePhoto, 'profile'),
-      licensePhoto:  await saveDocToDisk(licensePhoto, 'license'),
-      vehicleRegPhoto: resolvedRole === 'driver' ? await saveDocToDisk(vehicleRegPhoto, 'vehicleReg') : '',
-      cnicFront:     resolvedRole === 'driver' ? await saveDocToDisk(cnicFront, 'cnicFront') : '',
-      cnicBack:      resolvedRole === 'driver' ? await saveDocToDisk(cnicBack, 'cnicBack') : '',
+      profilePhoto:  resolvedRole === 'driver' ? await saveDriverProfilePhoto(profilePhoto) : '',
+      licensePhoto:  resolvedRole === 'driver' ? await savePrivateDriverDocument(licensePhoto, 'license') : '',
+      vehicleRegPhoto: resolvedRole === 'driver' ? await savePrivateDriverDocument(vehicleRegPhoto, 'vehicleReg') : '',
+      cnicFront:     resolvedRole === 'driver' ? await savePrivateDriverDocument(cnicFront, 'cnicFront') : '',
+      cnicBack:      resolvedRole === 'driver' ? await savePrivateDriverDocument(cnicBack, 'cnicBack') : '',
       cnicNumber:    resolvedRole === 'driver' ? (cnicNumber || '') : '',
       nationalIdHash: nationalIdHash || undefined,
       nationalIdLast4: resolvedRole === 'customer' ? normalizedCustomerId.slice(-4) : '',
@@ -2567,7 +2639,7 @@ app.post('/api/user/update-profile', authMiddleware, async (req, res) => {
       // A vehicle document must be a freshly supplied image. Validate before
       // writing the file or changing any persisted driver state.
       parseImageDataUrl(vehicleRegPhoto);
-      const replacementDocument = await saveDocToDisk(vehicleRegPhoto, 'vehicleReg');
+      const replacementDocument = await savePrivateDriverDocument(vehicleRegPhoto, 'vehicleReg');
       if (!replacementDocument) return res.status(422).json({ error: 'Could not save the vehicle document' });
       Object.assign(updates, {
         vehicleModel: model,
@@ -3267,6 +3339,10 @@ app.get('/api/admin/search', adminJwt, requireProfileSearchAccess, async (req, r
       .lean();
     res.json(users.map(user => ({
       ...user,
+      cnicFront: user.role === 'driver' ? !!user.cnicFront : user.cnicFront,
+      cnicBack: user.role === 'driver' ? !!user.cnicBack : user.cnicBack,
+      licensePhoto: user.role === 'driver' ? !!user.licensePhoto : user.licensePhoto,
+      vehicleRegPhoto: user.role === 'driver' ? !!user.vehicleRegPhoto : user.vehicleRegPhoto,
       hasCustomerIdentityDocuments: user.role === 'customer' && !!(user.customerIdFront || user.customerIdBack),
       customerIdFront: undefined,
       customerIdBack: undefined
@@ -3283,8 +3359,39 @@ app.get('/api/admin/drivers', adminJwt, requirePerm('viewDrivers'), async (req, 
     const drivers = await User.find(filter)
       .select('-password -otpCode -otpExpiry')
       .sort('-createdAt').limit(200);
-    res.json(drivers);
+    // Keep private document filenames out of list/search payloads. The Admin
+    // document route below exposes bytes only after an authenticated check.
+    res.json(drivers.map(driver => {
+      const value = driver.toObject();
+      return {
+        ...value,
+        cnicFront: !!value.cnicFront,
+        cnicBack: !!value.cnicBack,
+        licensePhoto: !!value.licensePhoto,
+        vehicleRegPhoto: !!value.vehicleRegPhoto
+      };
+    }));
   } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// GET /api/admin/driver-documents/:id/:field — authenticated Admin document
+// preview/download. This also supports legacy files that were written before
+// driver identity documents were made private.
+app.get('/api/admin/driver-documents/:id/:field', adminJwt, requirePerm('viewDrivers'), async (req, res) => {
+  const allowedFields = new Set(['profilePhoto', 'cnicFront', 'cnicBack', 'licensePhoto', 'vehicleRegPhoto']);
+  if (!allowedFields.has(req.params.field)) return res.status(404).json({ error: 'Document not found' });
+  try {
+    const driver = await User.findOne({ _id: req.params.id, role: 'driver' })
+      .select('profilePhoto cnicFront cnicBack licensePhoto vehicleRegPhoto')
+      .lean();
+    if (!driver) return res.status(404).json({ error: 'Driver not found' });
+    const filePath = resolveStoredDriverDocument(driver[req.params.field], req.params.field);
+    if (!filePath) return res.status(404).json({ error: 'Document not found' });
+    res.set('Cache-Control', 'private, no-store');
+    res.type('image/jpeg').sendFile(filePath);
+  } catch (err) {
+    res.status(500).json({ error: 'Unable to retrieve document' });
+  }
 });
 
 // PATCH /api/admin/drivers/:id/ride-preference — an administrator can correct
@@ -3576,13 +3683,15 @@ app.get('/api/admin/audit-logs', adminJwt, requirePerm('viewAuditLogs'), async (
 
 app.put('/api/auth/profile/photos', authMiddleware, async (req, res) => {
   try {
+    if (req.user.role !== 'driver') return res.status(403).json({ error: 'Only Drivers can update driver documents' });
     const { profilePhoto, licensePhoto, cnicFront, cnicBack, vehicleRegPhoto } = req.body;
     const update = {};
-    if (profilePhoto    !== undefined) update.profilePhoto    = await saveDocToDisk(profilePhoto,    'profile');
-    if (licensePhoto    !== undefined) update.licensePhoto    = await saveDocToDisk(licensePhoto,    'license');
-    if (cnicFront       !== undefined) update.cnicFront       = await saveDocToDisk(cnicFront,       'cnicFront');
-    if (cnicBack        !== undefined) update.cnicBack        = await saveDocToDisk(cnicBack,        'cnicBack');
-    if (vehicleRegPhoto !== undefined) update.vehicleRegPhoto = await saveDocToDisk(vehicleRegPhoto, 'vehicleReg');
+    if (profilePhoto    !== undefined) update.profilePhoto    = await saveDriverProfilePhoto(profilePhoto);
+    if (licensePhoto    !== undefined) update.licensePhoto    = await savePrivateDriverDocument(licensePhoto,    'license');
+    if (cnicFront       !== undefined) update.cnicFront       = await savePrivateDriverDocument(cnicFront,       'cnicFront');
+    if (cnicBack        !== undefined) update.cnicBack        = await savePrivateDriverDocument(cnicBack,        'cnicBack');
+    if (vehicleRegPhoto !== undefined) update.vehicleRegPhoto = await savePrivateDriverDocument(vehicleRegPhoto, 'vehicleReg');
+    if (!Object.keys(update).length) return res.status(400).json({ error: 'No documents provided' });
     await User.updateOne({ _id: req.user.id }, update);
     res.json({ success: true });
   } catch (err) { res.status(500).json({ error: err.message }); }

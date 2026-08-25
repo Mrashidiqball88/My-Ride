@@ -1057,21 +1057,34 @@ const _photos = {};   // { inputId: base64DataUrl }
  * Compress a File using an off-screen canvas.
  * Max dimension 800 px, JPEG quality 0.7 → ~150-250 KB from a 5 MB photo.
  */
-function compressImage(file, maxWidth = 800, quality = 0.7) {
+function compressImage(file, maxWidth = 1200, quality = 0.76, label = 'Document') {
   return new Promise((resolve, reject) => {
+    if (!file) return reject(new Error(`${label} is required`));
+    if (!['image/jpeg', 'image/png', 'image/webp'].includes(file.type)) {
+      return reject(new Error(`${label} must be a JPEG, PNG, or WebP image`));
+    }
+    if (file.size > 6 * 1024 * 1024) return reject(new Error(`${label} must be smaller than 6 MB`));
     const reader = new FileReader();
-    reader.onerror = () => reject(new Error('Could not read the selected file'));
+    reader.onerror = () => reject(new Error(`Could not read ${label}`));
     reader.onload = ev => {
       const img = new Image();
-      img.onerror = () => reject(new Error('Could not decode image'));
+      img.onerror = () => reject(new Error(`${label} could not be read as an image`));
       img.onload = () => {
         // Scale down so the longest side ≤ maxWidth; never upscale
         const scale   = Math.min(1, maxWidth / Math.max(img.width, img.height));
         const canvas  = document.createElement('canvas');
         canvas.width  = Math.round(img.width  * scale);
         canvas.height = Math.round(img.height * scale);
-        canvas.getContext('2d').drawImage(img, 0, 0, canvas.width, canvas.height);
-        const dataUrl = canvas.toDataURL('image/jpeg', quality);
+        const context = canvas.getContext('2d');
+        if (!context) return reject(new Error(`${label} could not be prepared for upload`));
+        context.drawImage(img, 0, 0, canvas.width, canvas.height);
+        let dataUrl;
+        try {
+          dataUrl = canvas.toDataURL('image/jpeg', quality);
+        } catch {
+          return reject(new Error(`${label} could not be compressed for upload`));
+        }
+        if (!dataUrl || dataUrl.length < 32) return reject(new Error(`${label} could not be compressed for upload`));
         // Sanity-check: warn in console if still large after compression
         const kb = Math.round(dataUrl.length * 0.75 / 1024);
         if (kb > 500) console.warn(`compressImage: ${file.name} still ${kb} KB after compression`);
@@ -1091,10 +1104,20 @@ async function previewPhoto(input, previewId) {
   const file    = input.files[0];
   const preview = document.getElementById(previewId);
   if (!file) return;
+  const labels = {
+    'r-profile-photo': 'Profile Photo',
+    'r-license-photo': 'Driving License',
+    'r-cnic-front': 'CNIC Front',
+    'r-cnic-back': 'CNIC Back',
+    'r-vehicle-reg': 'Vehicle Registration Document',
+    'cv-vehicle-reg': 'Vehicle Registration Document'
+  };
+  const label = labels[input.id] || 'Document';
+  delete _photos[input.id];
   // Show a loading state on the preview element
   if (preview) { preview.style.opacity = '0.4'; preview.style.display = 'block'; }
   try {
-    const compressed = await compressImage(file);
+    const compressed = await compressImage(file, 1200, 0.76, label);
     _photos[input.id]  = compressed;           // cache for doRegister()
     if (preview) { preview.src = compressed; preview.style.opacity = '1'; }
   } catch (e) {
@@ -1120,43 +1143,47 @@ async function doRegister() {
     if (_photos[inputId]) return _photos[inputId];
     const file = document.getElementById(inputId)?.files[0];
     if (!file) throw new Error(`${label} is required`);
-    const compressed = await compressImage(file);
+    const compressed = await compressImage(file, 1200, 0.76, label);
     _photos[inputId] = compressed;
     return compressed;
   };
 
   errEl.textContent = '';
-  if (submitBtn) { submitBtn.disabled = true; submitBtn.textContent = '⏳ Preparing…'; }
+  if (!name) return (errEl.textContent = 'Full name is required');
+  if (!phone) return (errEl.textContent = 'Phone number is required');
+  if (!email) return (errEl.textContent = 'Email address is required');
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return (errEl.textContent = 'Enter a valid email address');
+  if (pass.length < 6) return (errEl.textContent = 'Password must be at least 6 characters');
+  if (!vehicleModel) return (errEl.textContent = 'Vehicle model is required');
+  if (!vehiclePlate) return (errEl.textContent = 'Number plate is required');
+  if (submitBtn) { submitBtn.disabled = true; submitBtn.textContent = '⏳ Preparing documents…'; }
 
-  // Phase 1: compress photos client-side (before showing progress screen)
+  // Phase 1: compress photos client-side before the request so uploads stay
+  // small enough for slow mobile networks and server limits.
   let profilePhoto, licensePhoto, cnicFront, cnicBack, vehicleRegPhoto;
   try {
-    [profilePhoto, licensePhoto, cnicFront, cnicBack, vehicleRegPhoto] = await Promise.all([
-      getPhoto('r-profile-photo', 'Profile photo'),
-      getPhoto('r-license-photo', 'Driving license photo'),
-      getPhoto('r-cnic-front',    'CNIC Front photo'),
-      getPhoto('r-cnic-back',     'CNIC Back photo'),
-      getPhoto('r-vehicle-reg',   'Vehicle registration document'),
-    ]);
-  } catch (e) { errEl.textContent = e.message; resetBtn(); return; }
-
-  if (!name)  { errEl.textContent = 'Full name is required';    resetBtn(); return; }
-  if (!phone) { errEl.textContent = 'Phone number is required'; resetBtn(); return; }
-  if (!email) { errEl.textContent = 'Email is required';        resetBtn(); return; }
-  if (pass.length < 6) { errEl.textContent = 'Password must be at least 6 characters'; resetBtn(); return; }
+    showUploadProgress('Preparing your documents…', 'Optimizing each image for a faster, more reliable upload.');
+    setUploadProgress(4);
+    profilePhoto = await getPhoto('r-profile-photo', 'Profile Photo'); setUploadProgress(12);
+    licensePhoto = await getPhoto('r-license-photo', 'Driving License'); setUploadProgress(20);
+    cnicFront = await getPhoto('r-cnic-front', 'CNIC Front'); setUploadProgress(28);
+    cnicBack = await getPhoto('r-cnic-back', 'CNIC Back'); setUploadProgress(36);
+    vehicleRegPhoto = await getPhoto('r-vehicle-reg', 'Vehicle Registration Document'); setUploadProgress(44);
+  } catch (e) { hideUploadProgress(); errEl.textContent = e.message; resetBtn(); return; }
 
   // Phase 2: navigate to upload progress screen and send via XHR (has upload.progress events)
-  showUploadProgress();
-  setUploadProgress(0);
+  document.getElementById('upload-progress-title').textContent = 'Uploading documents…';
+  document.getElementById('upload-progress-copy').textContent = 'Please wait while your files are securely uploaded.';
 
   const xhr = new XMLHttpRequest();
   xhr.open('POST', '/api/auth/register');
+  xhr.timeout = 600000;
   xhr.setRequestHeader('Content-Type', 'application/json');
   if (token)        xhr.setRequestHeader('Authorization',   `Bearer ${token}`);
   if (sessionToken) xhr.setRequestHeader('X-Session-Token', sessionToken);
 
   xhr.upload.addEventListener('progress', e => {
-    if (e.lengthComputable) setUploadProgress(Math.min(95, Math.round(e.loaded / e.total * 100)));
+    if (e.lengthComputable) setUploadProgress(Math.min(96, 44 + Math.round(e.loaded / e.total * 52)));
   });
   xhr.upload.addEventListener('load', () => setUploadProgress(98));
 
@@ -1165,7 +1192,9 @@ async function doRegister() {
     try { res = JSON.parse(xhr.responseText); } catch {}
     if (xhr.status >= 200 && xhr.status < 300) {
       setUploadProgress(100);
-      setTimeout(() => { hideUploadProgress(); saveSession(res); }, 600);
+      document.getElementById('upload-progress-title').textContent = 'Your account has been completed successfully!';
+      document.getElementById('upload-progress-copy').textContent = 'Your Driver profile is ready for Admin review.';
+      setTimeout(() => { hideUploadProgress(); saveSession(res); }, 900);
     } else {
       hideUploadProgress();
       errEl.textContent = res.error || `Upload failed (${xhr.status})`;
@@ -1175,6 +1204,11 @@ async function doRegister() {
   xhr.onerror = () => {
     hideUploadProgress();
     errEl.textContent = 'Network error — check your connection';
+    resetBtn();
+  };
+  xhr.ontimeout = () => {
+    hideUploadProgress();
+    errEl.textContent = 'Upload timed out. Check your connection and try again.';
     resetBtn();
   };
 
@@ -2923,8 +2957,8 @@ if (token && user && user.role === 'driver') {
 <!-- ── Upload Progress Overlay ───────────────────────────────────────────── -->
 <div id="upload-progress-screen" style="display:none;position:fixed;inset:0;background:#0a0a0f;z-index:1100;flex-direction:column;align-items:center;justify-content:center;padding:2rem;text-align:center">
   <div style="font-size:3.5rem;margin-bottom:1rem">📤</div>
-  <h2 style="color:#f5c518;margin:0 0 .35rem;font-size:1.25rem">Uploading Documents</h2>
-  <p style="color:#666;font-size:.83rem;margin-bottom:2rem;max-width:280px">Please wait while your files are uploading to our servers…</p>
+  <h2 id="upload-progress-title" style="color:#f5c518;margin:0 0 .35rem;font-size:1.25rem">Uploading Documents</h2>
+  <p id="upload-progress-copy" style="color:#666;font-size:.83rem;margin-bottom:2rem;max-width:280px">Please wait while your files are uploading to our servers…</p>
   <div style="width:280px;background:#1a1a2a;border-radius:999px;height:14px;overflow:hidden;margin-bottom:.75rem">
     <div id="upload-progress-bar" style="height:100%;background:linear-gradient(90deg,#f5c518,#ff9900);border-radius:999px;transition:width .25s ease;width:0%"></div>
   </div>
@@ -2985,7 +3019,11 @@ if (token && user && user.role === 'driver') {
 
 <script>
 // ── Upload Progress ────────────────────────────────────────────────────────
-function showUploadProgress() { document.getElementById('upload-progress-screen').style.display = 'flex'; }
+function showUploadProgress(title = 'Uploading Documents', copy = 'Please wait while your files are uploading to our servers…') {
+  document.getElementById('upload-progress-title').textContent = title;
+  document.getElementById('upload-progress-copy').textContent = copy;
+  document.getElementById('upload-progress-screen').style.display = 'flex';
+}
 function hideUploadProgress() { document.getElementById('upload-progress-screen').style.display = 'none'; }
 function setUploadProgress(pct) {
   const bar = document.getElementById('upload-progress-bar');
