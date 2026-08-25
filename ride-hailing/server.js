@@ -1625,6 +1625,38 @@ async function customerCanBook(req, res, next) {
   next();
 }
 
+// Road geometry is requested through the authenticated app server rather than
+// exposing pickup, drop-off, or live driver coordinates to a public router
+// directly from a browser.
+app.get('/api/routing/road', authMiddleware, async (req, res) => {
+  const rawPoints = String(req.query.points || '').split(';').filter(Boolean);
+  if (rawPoints.length < 2 || rawPoints.length > 8) {
+    return res.status(400).json({ error: 'Provide between 2 and 8 route points' });
+  }
+  const points = rawPoints.map(raw => {
+    const [lng, lat] = raw.split(',').map(Number);
+    return Number.isFinite(lat) && Number.isFinite(lng) && lat >= -90 && lat <= 90 && lng >= -180 && lng <= 180
+      ? { lat, lng } : null;
+  });
+  if (points.some(point => !point)) return res.status(400).json({ error: 'Invalid route coordinates' });
+  const coordinates = points.map(point => `${point.lng},${point.lat}`).join(';');
+  try {
+    const response = await fetch(`https://router.project-osrm.org/route/v1/driving/${coordinates}?overview=full&geometries=geojson&steps=false`);
+    if (!response.ok) return res.status(502).json({ error: 'Road routing service unavailable' });
+    const payload = await response.json();
+    const route = payload.routes?.[0];
+    if (!route?.geometry?.coordinates?.length) return res.status(502).json({ error: 'No road route found' });
+    return res.json({
+      coords: route.geometry.coordinates.map(([lng, lat]) => [lat, lng]),
+      distanceMeters: Number(route.distance) || 0,
+      durationSeconds: Number(route.duration) || 0
+    });
+  } catch (error) {
+    console.warn(`[routing] road route failed: ${error.message}`);
+    return res.status(502).json({ error: 'Road routing service unavailable' });
+  }
+});
+
 // Legacy: used by /api/payments/* routes (needs authMiddleware first)
 async function adminMiddleware(req, res, next) {
   try {
