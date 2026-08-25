@@ -932,6 +932,7 @@ let liveTripLine = null;
 let lastDriverLocation = null;
 let customerTrackingFollow = true;
 let lastDriverLocationAt = 0;
+let liveTripFreshnessTimer = null;
 const CUSTOMER_OFFER_MIN_MULTIPLIER = 0.5;
 const CUSTOMER_OFFER_MAX_MULTIPLIER = 2;
 const CUSTOMER_OFFER_INCREMENT = 10;
@@ -2429,6 +2430,20 @@ function clearLiveTripTracking() {
   lastDriverLocation = null;
   lastDriverLocationAt = 0;
   customerTrackingFollow = true;
+  if (liveTripFreshnessTimer) { clearInterval(liveTripFreshnessTimer); liveTripFreshnessTimer = null; }
+}
+
+function renderLiveTripFreshness() {
+  const label = document.getElementById('ar-tracking-freshness');
+  if (!label || !lastDriverLocationAt) return;
+  const elapsedSeconds = Math.max(0, Math.floor((Date.now() - lastDriverLocationAt) / 1000));
+  const phase = activeRide?.status === 'in-progress' ? 'Tracking to drop-off' : 'Tracking to pickup';
+  const age = elapsedSeconds < 6
+    ? 'Updated just now'
+    : elapsedSeconds < 60
+      ? `Updated ${elapsedSeconds}s ago`
+      : `Last update ${Math.floor(elapsedSeconds / 60)}m ago`;
+  label.textContent = `${age} · ${phase}`;
 }
 
 function focusCustomerTrip() {
@@ -2451,6 +2466,7 @@ function updateLiveTripTracking(location, { recenter = false } = {}) {
   if (!Number.isFinite(lat) || !Number.isFinite(lng) || !destination || !map) return;
   lastDriverLocation = { lat, lng };
   lastDriverLocationAt = Date.now();
+  if (!liveTripFreshnessTimer) liveTripFreshnessTimer = setInterval(renderLiveTripFreshness, 5000);
 
   if (driverMarker) {
     driverMarker.setLatLng([lat, lng]);
@@ -2472,7 +2488,7 @@ function updateLiveTripTracking(location, { recenter = false } = {}) {
   document.getElementById('ar-trip-destination').textContent = destination.address;
   document.getElementById('ar-live-distance').textContent = distance;
   document.getElementById('ar-live-eta').textContent = eta;
-  document.getElementById('ar-tracking-freshness').textContent = `Updated just now · ${isInProgress ? 'Tracking to drop-off' : 'Tracking to pickup'}`;
+  renderLiveTripFreshness();
 
   const etaBar = document.getElementById('ar-eta-bar');
   const etaTxt = document.getElementById('ar-eta-text');
