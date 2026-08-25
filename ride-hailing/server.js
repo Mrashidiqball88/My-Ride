@@ -4649,6 +4649,24 @@ const DEMO_ACCOUNTS = Object.freeze({
   }
 });
 
+// These accounts are intentionally limited to the preview/demo database. Store
+// only the bcrypt hash in source; never persist the requested test password.
+const TEST_ACCOUNT_PASSWORD_HASH = '$2a$12$CByloTMQfIwC393QDR.TH.bruF.52lOlDbr1yEmbuQDSA4q8ePKZe';
+const TEST_ACCOUNTS = Object.freeze({
+  customer: {
+    name: 'Customer Test Account',
+    phone: '+923000000011',
+    email: 'customer@test.com',
+    role: 'customer'
+  },
+  driver: {
+    name: 'Driver Test Account',
+    phone: '+923000000012',
+    email: 'driver@test.com',
+    role: 'driver'
+  }
+});
+
 async function seedDemoAccounts() {
   if (process.env.DEMO_ACCOUNTS_ENABLED !== 'true' || process.env.NODE_ENV === 'production') return;
   const now = new Date();
@@ -4751,6 +4769,56 @@ async function seedDemoAccounts() {
     },
     { upsert: true, new: true, setDefaultsOnInsert: true }
   );
+  await seedTestAccounts();
+  return { customer, driver };
+}
+
+async function seedTestAccounts() {
+  const now = new Date();
+  const customer = await User.findOneAndUpdate(
+    { email: TEST_ACCOUNTS.customer.email },
+    {
+      $set: {
+        name: TEST_ACCOUNTS.customer.name,
+        email: TEST_ACCOUNTS.customer.email,
+        phone: TEST_ACCOUNTS.customer.phone,
+        password: TEST_ACCOUNT_PASSWORD_HASH,
+        role: 'customer',
+        accountStatus: 'active',
+        identityVerificationStatus: 'approved',
+        identityVerifiedAt: now
+      }
+    },
+    { upsert: true, new: true, setDefaultsOnInsert: true }
+  );
+  const driver = await User.findOneAndUpdate(
+    { email: TEST_ACCOUNTS.driver.email },
+    {
+      $set: {
+        name: TEST_ACCOUNTS.driver.name,
+        email: TEST_ACCOUNTS.driver.email,
+        phone: TEST_ACCOUNTS.driver.phone,
+        password: TEST_ACCOUNT_PASSWORD_HASH,
+        role: 'driver',
+        accountStatus: 'active',
+        vehicleType: 'Car Mini',
+        vehicleModel: 'Toyota Corolla',
+        vehiclePlate: 'TEST-2026',
+        isOnline: false,
+        lastDailyFeePaidAt: now,
+        paidUntilDate: new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000),
+        isFreeTrial: true,
+        trialStartDate: now
+      }
+    },
+    { upsert: true, new: true, setDefaultsOnInsert: true }
+  );
+  await Wallet.findOneAndUpdate(
+    { user: driver._id },
+    { $setOnInsert: { balance: 0, transactions: [] } },
+    { upsert: true, new: true }
+  );
+  console.log('✓ Test customer and driver accounts seeded');
   return { customer, driver };
 }
 

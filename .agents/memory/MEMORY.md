@@ -9,3 +9,4 @@
 - [Optional unique identity fields](optional-unique-identity-fields.md) — sparse unique fields must be omitted for inapplicable roles, never persisted as empty strings.
 - [Ride offer expiry authority](ride-offer-expiry-authority.md) — offer windows are persisted server timestamps, never client-only countdowns.
 - [Mockup preview routing](mockup-preview-routing.md) — sandbox previews need the artifact base path and component registry to avoid blank or fallback frames.
+- [Preview database persistence](preview-database-persistence.md) — without MONGO_URI, preview users live in the workflow's in-memory MongoDB and must be seeded on startup.
