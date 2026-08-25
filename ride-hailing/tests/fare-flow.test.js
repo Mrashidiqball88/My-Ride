@@ -372,6 +372,119 @@ test('ride creation uses the server-calculated fare and records the authoritativ
   }
 });
 
+test('Customer fare adjustments are server-bounded negotiation offers', async () => {
+  const settings = settingsFor(300, 125);
+  models.User.findById = () => ({
+    select: () => ({
+      lean: async () => ({
+        activeSessionToken: TEST_SESSION,
+        accountStatus: 'active',
+        identityVerificationStatus: 'approved'
+      })
+    })
+  });
+  models.Settings.findOne = ({ key }) => ({
+    lean: async () => ({ value: key === 'per_km_rates' ? DEFAULT_PER_KM_RATES : settings })
+  });
+  let created;
+  models.Ride.create = async input => {
+    created = { ...input, _id: 'offered-ride', createdAt: new Date(), save: async function save() { return this; } };
+    return created;
+  };
+  io.to = () => ({ emit() {} });
+
+  const server = app.listen(0);
+  try {
+    const accepted = await request(server, '/api/rides', {
+      method: 'POST',
+      headers: { authorization: `Bearer ${customerToken()}`, 'x-session-token': TEST_SESSION },
+      body: JSON.stringify({
+        pickupLocation: { lat: 1, lng: 2 },
+        dropoffLocation: { lat: 3, lng: 4 },
+        distance: 7,
+        vehicleType: 'Car Mini',
+        customerOffer: 780
+      })
+    });
+    assert.equal(accepted.response.status, 201);
+    assert.equal(created.fareQuote.totalFare, 650);
+    assert.equal(created.fare, 780);
+
+    const rejected = await request(server, '/api/rides', {
+      method: 'POST',
+      headers: { authorization: `Bearer ${customerToken()}`, 'x-session-token': TEST_SESSION },
+      body: JSON.stringify({
+        pickupLocation: { lat: 1, lng: 2 },
+        dropoffLocation: { lat: 3, lng: 4 },
+        distance: 7,
+        vehicleType: 'Car Mini',
+        customerOffer: 100
+      })
+    });
+    assert.equal(rejected.response.status, 422);
+    assert.match(rejected.body.error, /between Rs 330 and Rs 1,300/);
+  } finally {
+    await new Promise(resolve => server.close(resolve));
+  }
+});
+
+test('Customer fare offset is added to the authoritative Admin quote', async () => {
+  const settings = settingsFor(300, 125);
+  models.User.findById = () => ({
+    select: () => ({
+      lean: async () => ({
+        activeSessionToken: TEST_SESSION,
+        accountStatus: 'active',
+        identityVerificationStatus: 'approved'
+      })
+    })
+  });
+  models.Settings.findOne = ({ key }) => ({
+    lean: async () => ({ value: key === 'per_km_rates' ? DEFAULT_PER_KM_RATES : settings })
+  });
+  let created;
+  models.Ride.create = async input => {
+    created = { ...input, _id: 'offset-ride', createdAt: new Date(), save: async function save() { return this; } };
+    return created;
+  };
+  io.to = () => ({ emit() {} });
+
+  const server = app.listen(0);
+  try {
+    const accepted = await request(server, '/api/rides', {
+      method: 'POST',
+      headers: { authorization: `Bearer ${customerToken()}`, 'x-session-token': TEST_SESSION },
+      body: JSON.stringify({
+        pickupLocation: { lat: 1, lng: 2 },
+        dropoffLocation: { lat: 3, lng: 4 },
+        distance: 7,
+        vehicleType: 'Car Mini',
+        customerFareOffset: 130
+      })
+    });
+    assert.equal(accepted.response.status, 201);
+    assert.equal(created.fareQuote.totalFare, 650);
+    assert.equal(created.customerFareOffset, 130);
+    assert.equal(created.fare, created.fareQuote.totalFare + created.customerFareOffset);
+
+    const rejected = await request(server, '/api/rides', {
+      method: 'POST',
+      headers: { authorization: `Bearer ${customerToken()}`, 'x-session-token': TEST_SESSION },
+      body: JSON.stringify({
+        pickupLocation: { lat: 1, lng: 2 },
+        dropoffLocation: { lat: 3, lng: 4 },
+        distance: 7,
+        vehicleType: 'Car Mini',
+        customerFareOffset: -400
+      })
+    });
+    assert.equal(rejected.response.status, 422);
+    assert.match(rejected.body.error, /between Rs 330 and Rs 1,300/);
+  } finally {
+    await new Promise(resolve => server.close(resolve));
+  }
+});
+
 test('refreshing a pending ride emits the new fare to its customer and normalized driver room', async () => {
   const ride = {
     _id: 'ride-2',

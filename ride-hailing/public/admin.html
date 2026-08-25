@@ -4,7 +4,9 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>My Ride Admin Panel</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" crossorigin="">
 <script src="/socket.io/socket.io.js"></script>
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" crossorigin=""></script>
 <style>
 *{margin:0;padding:0;box-sizing:border-box}
 body{font-family:'Segoe UI',system-ui,sans-serif;background:#06060e;color:#e2e8f0;height:100vh;overflow:hidden;display:flex}
@@ -92,6 +94,9 @@ body{font-family:'Segoe UI',system-ui,sans-serif;background:#06060e;color:#e2e8f
 .retention-feedback{min-height:1.1rem;font-size:.75rem;color:#94a3b8;margin-top:.7rem}
 .admin-search{max-width:850px;background:#0f0f1e;border:1px solid #1e1e2e;border-radius:14px;padding:1rem;margin-top:1.25rem}
 .admin-search-row{display:flex;gap:.55rem;align-items:center}
+.admin-search-dual{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:.8rem}
+.admin-search-field{min-width:0}
+.admin-search-field-label{display:block;font-size:.68rem;color:#94a3b8;font-weight:800;letter-spacing:.05em;text-transform:uppercase;margin:0 0 .35rem}
 .admin-search-input{flex:1;min-width:0;background:#06060e;border:1px solid #1e1e3a;border-radius:9px;padding:.65rem .8rem;color:#e2e8f0;font-size:.85rem;outline:none}
 .admin-search-input:focus{border-color:#38bdf8}
 .search-results{margin-top:.75rem;display:grid;gap:.55rem}
@@ -99,6 +104,19 @@ body{font-family:'Segoe UI',system-ui,sans-serif;background:#06060e;color:#e2e8f
 .search-result-main{min-width:0;flex:1}
 .search-result-name{font-size:.82rem;font-weight:800;color:#e2e8f0}
 .search-result-meta{font-size:.7rem;color:#64748b;margin-top:.2rem;word-break:break-word}
+.map-search-result{cursor:pointer;text-align:left;width:100%;font:inherit;color:inherit}
+.map-search-result:hover{border-color:#38bdf8;background:#0a1020}
+.map-search-result:focus-visible{outline:2px solid #38bdf8;outline-offset:2px}
+.map-status{display:inline-flex;align-items:center;gap:.25rem;font-size:.62rem;font-weight:800;color:#67e8f9;background:#083344;border:1px solid #155e75;border-radius:999px;padding:.14rem .42rem;text-transform:capitalize}
+.live-map-modal{max-width:920px;width:min(96vw,920px);overflow:hidden}
+.live-map-modal .modal-body{padding:0}
+.live-map-summary{padding:1rem 1.25rem .8rem;display:flex;align-items:flex-start;justify-content:space-between;gap:1rem;border-bottom:1px solid #1e1e2e}
+.live-map-summary strong{display:block;font-size:.9rem;color:#e2e8f0}
+.live-map-summary span{display:block;font-size:.72rem;color:#94a3b8;margin-top:.2rem}
+#live-location-map{height:420px;width:100%;background:#090b14}
+.live-map-state{display:none;min-height:180px;align-items:center;justify-content:center;padding:1.25rem;text-align:center;color:#94a3b8;font-size:.8rem;line-height:1.5}
+.live-map-state.visible{display:flex}
+.live-map-meta{padding:.7rem 1.25rem;font-size:.72rem;color:#94a3b8;border-top:1px solid #1e1e2e}
 
 /* ── Stats Cards ── */
 .stats-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:.9rem;margin-bottom:1.5rem}
@@ -268,6 +286,11 @@ textarea.modal-input{resize:vertical;min-height:70px}
   .radius-control .modal-input{width:100%;flex-basis:100%}
   .admin-search-row{align-items:stretch;flex-direction:column}
   .admin-search-row .btn{width:100%;justify-content:center}
+  .admin-search-dual{grid-template-columns:1fr}
+  .live-map-modal{width:100%;max-height:calc(100dvh - 1.5rem)}
+  #live-location-map{height:300px}
+  .live-map-summary{padding:.85rem 1rem;flex-direction:column;gap:.3rem}
+  .live-map-meta{padding:.7rem 1rem}
   .retention-actions{align-items:stretch;flex-direction:column}
   .retention-actions .btn{width:100%;justify-content:center}
 }
@@ -418,11 +441,24 @@ input[type=date]:focus{border-color:#f5c518}
               <div style="font-size:.72rem;color:#64748b;margin-top:.2rem">Search customers and drivers by name, phone, CNIC/NIC, or vehicle.</div>
             </div>
           </div>
-          <div class="admin-search-row">
-            <input class="admin-search-input" id="global-search-input" type="search" placeholder="Name, phone, CNIC, vehicle model or plate…" autocomplete="off">
-            <button class="btn btn-primary" id="global-search-btn" type="button" onclick="runGlobalSearch()">Search</button>
+          <div class="admin-search-dual">
+            <div class="admin-search-field">
+              <label class="admin-search-field-label" for="global-search-input">Profile Search</label>
+              <div class="admin-search-row">
+                <input class="admin-search-input" id="global-search-input" type="search" placeholder="Name, phone, CNIC, vehicle model or plate…" autocomplete="off" onkeydown="if(event.key==='Enter')runGlobalSearch()">
+                <button class="btn btn-primary" id="global-search-btn" type="button" onclick="runGlobalSearch()">Search</button>
+              </div>
+            </div>
+            <div class="admin-search-field">
+              <label class="admin-search-field-label" for="map-search-input">Search on Map</label>
+              <div class="admin-search-row">
+                <input class="admin-search-input" id="map-search-input" type="search" placeholder="Find active driver or customer…" autocomplete="off" onkeydown="if(event.key==='Enter')runMapSearch()">
+                <button class="btn btn-blue" id="map-search-btn" type="button" onclick="runMapSearch()">Search on Map</button>
+              </div>
+            </div>
           </div>
           <div class="search-results" id="global-search-results"><div style="font-size:.75rem;color:#475569">Enter at least two characters to search.</div></div>
+          <div class="search-results" id="map-search-results" aria-live="polite"></div>
         </div>
         <!-- Daily income strip -->
         <div class="sec-hdr"><h2>💰 Last 7 Days Income</h2><button class="btn-refresh" onclick="loadOverview()">↻ Refresh</button></div>
@@ -1176,6 +1212,25 @@ input[type=date]:focus{border-color:#f5c518}
   </div>
 </div>
 
+<!-- ── Live Location Map Modal ── -->
+<div class="modal-backdrop" id="live-location-modal" role="dialog" aria-modal="true" aria-labelledby="live-location-title">
+  <div class="modal-box live-map-modal">
+    <div class="modal-header">
+      <div class="modal-title" id="live-location-title">📍 Live Location</div>
+      <button class="btn-close" type="button" aria-label="Close live location map" onclick="closeLiveLocationMap()">✕</button>
+    </div>
+    <div class="modal-body">
+      <div class="live-map-summary">
+        <div><strong id="live-location-name">Loading…</strong><span id="live-location-role"></span></div>
+        <span id="live-location-updated"></span>
+      </div>
+      <div id="live-location-map"></div>
+      <div class="live-map-state" id="live-location-state"></div>
+      <div class="live-map-meta" id="live-location-meta">Locations refresh automatically while this panel is open.</div>
+    </div>
+  </div>
+</div>
+
 <script>
 // ── Constants / State ─────────────────────────────────────────────────────────
 const API = '';
@@ -1193,6 +1248,10 @@ let maxIncome = 0;
 let selectedDriverIds   = new Set();
 let isSuperAdmin = true;   // false when a sub-admin is logged in
 let adminPerms   = {};     // permission flags from JWT payload
+let liveLocationMap = null;
+let liveLocationMarker = null;
+let selectedMapUserId = null;
+let liveLocationRefreshTimer = null;
 const SUB_ADMIN_PERMISSION_CATALOG = [
   ['Dashboard', 'viewOverview', 'View overview dashboard'],
   ['Drivers', 'viewDrivers', 'View drivers & vehicle categories'],
@@ -1298,6 +1357,7 @@ async function adminLogin() {
 function adminLogout() {
   // Disconnect live socket
   if (socket) { socket.disconnect(); socket = null; }
+  closeLiveLocationMap();
 
   // Wipe all auth state from memory and storage
   localStorage.clear();
@@ -2096,6 +2156,134 @@ async function runGlobalSearch() {
     button.disabled = false; button.textContent = 'Search';
   }
 }
+
+async function runMapSearch() {
+  const input = document.getElementById('map-search-input');
+  const button = document.getElementById('map-search-btn');
+  const results = document.getElementById('map-search-results');
+  const query = input?.value.trim() || '';
+  if (query.length < 2) {
+    results.innerHTML = '<div style="font-size:.75rem;color:#f59e0b">Enter at least two characters to search on the map.</div>';
+    return;
+  }
+  button.disabled = true; button.textContent = 'Searching…';
+  results.innerHTML = '<div class="loading-row">Finding fresh live locations…</div>';
+  try {
+    const users = await api(`/api/admin/map-search?q=${encodeURIComponent(query)}`);
+    if (!users.length) {
+      results.innerHTML = '<div style="font-size:.75rem;color:#64748b">No active user with a fresh shared location matched. Drivers must be online; Customers must be sharing location during an active ride.</div>';
+      return;
+    }
+    results.innerHTML = users.map(user => {
+      const role = user.role === 'driver' ? 'Driver' : 'Customer';
+      const detail = user.role === 'driver'
+        ? [user.vehicleType, user.vehicleModel, user.vehiclePlate].filter(Boolean).join(' · ')
+        : `Active ride: ${String(user.status || '').replace('-', ' ')}`;
+      return `<button class="search-result map-search-result" type="button" onclick="openLiveLocationMap('${user._id}')">
+        <div class="search-result-main">
+          <div class="search-result-name">${escHtml(user.name)} <span class="map-status">● ${escHtml(role)} · ${escHtml(user.status || 'live')}</span></div>
+          <div class="search-result-meta">${escHtml(user.phone || 'No contact')} ${detail ? `· ${escHtml(detail)}` : ''}</div>
+        </div>
+        <span class="btn btn-blue">View map</span>
+      </button>`;
+    }).join('');
+  } catch (e) {
+    results.innerHTML = `<div style="font-size:.75rem;color:#ef4444">${escHtml(e.message || 'Map search failed')}</div>`;
+  } finally {
+    button.disabled = false; button.textContent = 'Search on Map';
+  }
+}
+
+function formatLiveLocationTime(value) {
+  const time = new Date(value);
+  if (Number.isNaN(time.getTime())) return 'Location time unavailable';
+  const seconds = Math.max(0, Math.floor((Date.now() - time.getTime()) / 1000));
+  return seconds < 60 ? 'Updated just now' : `Updated ${Math.floor(seconds / 60)}m ago`;
+}
+
+function showLiveLocationState(message) {
+  const mapEl = document.getElementById('live-location-map');
+  const state = document.getElementById('live-location-state');
+  if (mapEl) mapEl.style.display = 'none';
+  if (state) { state.textContent = message; state.classList.add('visible'); }
+}
+
+function renderLiveLocation(location) {
+  const mapEl = document.getElementById('live-location-map');
+  const state = document.getElementById('live-location-state');
+  const name = document.getElementById('live-location-name');
+  const role = document.getElementById('live-location-role');
+  const updated = document.getElementById('live-location-updated');
+  const meta = document.getElementById('live-location-meta');
+  if (name) name.textContent = location.name || 'Live location';
+  if (role) role.textContent = `${location.role === 'driver' ? 'Driver' : 'Customer'} · ${location.status || 'active'}`;
+  if (updated) updated.textContent = formatLiveLocationTime(location.updatedAt);
+  if (meta) meta.textContent = `Coordinates received ${formatLiveLocationTime(location.updatedAt).toLowerCase()}. Refreshes every 15 seconds while open.`;
+  if (!mapEl || !window.L || !location.location) return showLiveLocationState('Map is unavailable. Please refresh and try again.');
+  mapEl.style.display = 'block';
+  state?.classList.remove('visible');
+  const latLng = [Number(location.location.lat), Number(location.location.lng)];
+  if (!liveLocationMap) {
+    liveLocationMap = L.map(mapEl, { zoomControl: true, attributionControl: true });
+    L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
+      attribution: '© OpenStreetMap contributors © CARTO',
+      maxZoom: 20,
+      subdomains: 'abcd'
+    }).addTo(liveLocationMap);
+  }
+  if (liveLocationMarker) liveLocationMarker.remove();
+  const icon = L.divIcon({
+    className: 'live-map-marker',
+    html: `<div style="width:34px;height:34px;border-radius:50%;display:grid;place-items:center;background:${location.role === 'driver' ? '#38bdf8' : '#f5c518'};border:3px solid #fff;box-shadow:0 3px 12px rgba(0,0,0,.45);font-size:16px">${location.role === 'driver' ? '🚗' : '👤'}</div>`,
+    iconSize: [34, 34],
+    iconAnchor: [17, 17]
+  });
+  liveLocationMarker = L.marker(latLng, { icon }).addTo(liveLocationMap);
+  liveLocationMarker.bindTooltip(`${location.name || 'User'} · ${location.role}`, { direction: 'top', offset: [0, -17] });
+  liveLocationMap.setView(latLng, Math.max(liveLocationMap.getZoom() || 0, 16), { animate: false });
+  setTimeout(() => liveLocationMap?.invalidateSize(), 80);
+}
+
+async function refreshLiveLocation() {
+  if (!selectedMapUserId || !document.getElementById('live-location-modal')?.classList.contains('open')) return;
+  try {
+    const location = await api(`/api/admin/map-location/${encodeURIComponent(selectedMapUserId)}`);
+    renderLiveLocation(location);
+  } catch (e) {
+    showLiveLocationState(e.message || 'This live location is no longer available.');
+    const updated = document.getElementById('live-location-updated');
+    if (updated) updated.textContent = 'Unavailable';
+  }
+}
+
+async function openLiveLocationMap(userId) {
+  selectedMapUserId = userId;
+  const modal = document.getElementById('live-location-modal');
+  const name = document.getElementById('live-location-name');
+  const role = document.getElementById('live-location-role');
+  if (name) name.textContent = 'Loading live location…';
+  if (role) role.textContent = '';
+  modal?.classList.add('open');
+  await refreshLiveLocation();
+  clearInterval(liveLocationRefreshTimer);
+  liveLocationRefreshTimer = setInterval(refreshLiveLocation, 15000);
+}
+
+function closeLiveLocationMap() {
+  clearInterval(liveLocationRefreshTimer);
+  liveLocationRefreshTimer = null;
+  selectedMapUserId = null;
+  document.getElementById('live-location-modal')?.classList.remove('open');
+}
+
+document.getElementById('live-location-modal')?.addEventListener('click', event => {
+  if (event.target === event.currentTarget) closeLiveLocationMap();
+});
+document.addEventListener('keydown', event => {
+  if (event.key === 'Escape' && document.getElementById('live-location-modal')?.classList.contains('open')) {
+    closeLiveLocationMap();
+  }
+});
 
 // ── 9. SOS MONITOR ────────────────────────────────────────────────────────────
 async function loadSOS(resolved = 'false') {

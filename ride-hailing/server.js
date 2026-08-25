@@ -886,6 +886,9 @@ const rideSchema = new mongoose.Schema({
     address: { type: String, default: 'Stop' }
   }],
   fare:        { type: Number, required: true },
+  // Customer negotiation is stored separately from the Admin quote so the
+  // final price can always be reconstructed as quote.totalFare + offset.
+  customerFareOffset: { type: Number, default: 0 },
   fareQuote: {
     vehicleType: String,
     distanceKm: Number,
@@ -910,6 +913,13 @@ const rideSchema = new mongoose.Schema({
     lat: { type: Number, default: null },
     lng: { type: Number, default: null }
   },
+  // A passenger location exists only while an active ride explicitly shares it.
+  // It is not a background location trail for Customer accounts.
+  passengerLocation: {
+    lat: { type: Number, default: null },
+    lng: { type: Number, default: null }
+  },
+  passengerLocationUpdatedAt: { type: Date, default: null },
   vehicleType:   { type: String, default: 'Car Mini' },
   notes:         { type: String, default: '' },
   paymentMethod: { type: String, enum: ['cash', 'easypaisa', 'jazzcash', 'wallet'], default: 'cash' },
@@ -1121,6 +1131,10 @@ async function getRideRetentionDays() {
 // absorbs OS/radio jitter while failing closed after a force-stop or prolonged
 // connectivity loss.
 const DRIVER_HEARTBEAT_MAX_AGE_MS = 90 * 1000;
+const CUSTOMER_SHARED_LOCATION_MAX_AGE_MS = 2 * 60 * 1000;
+const CUSTOMER_OFFER_MIN_MULTIPLIER = 0.5;
+const CUSTOMER_OFFER_MAX_MULTIPLIER = 2;
+const CUSTOMER_OFFER_INCREMENT = 10;
 const DEFAULT_RIDE_BROADCAST_RADIUS_KM = 5;
 const MIN_RIDE_BROADCAST_RADIUS_KM = 0.5;
 const MAX_RIDE_BROADCAST_RADIUS_KM = 100;
@@ -1221,6 +1235,45 @@ function hasValidCoordinates(location) {
   return Number.isFinite(lat) && lat >= -90 && lat <= 90
     && Number.isFinite(lng) && lng >= -180 && lng <= 180
     && !(lat === 0 && lng === 0);
+}
+
+function roundFareOfferBoundary(amount) {
+  return Math.max(
+    CUSTOMER_OFFER_INCREMENT,
+    Math.ceil(Number(amount || 0) / CUSTOMER_OFFER_INCREMENT) * CUSTOMER_OFFER_INCREMENT
+  );
+}
+
+function resolveCustomerFareOffer(value, authoritativeFare, offsetValue = undefined) {
+  const hasOffset = offsetValue !== undefined && offsetValue !== null && offsetValue !== '';
+  const hasOffer = value !== undefined && value !== null && value !== '';
+  if (!hasOffset && !hasOffer) {
+    return { value: authoritativeFare, offset: 0 };
+  }
+
+  const min = roundFareOfferBoundary(authoritativeFare * CUSTOMER_OFFER_MIN_MULTIPLIER);
+  const max = roundFareOfferBoundary(authoritativeFare * CUSTOMER_OFFER_MAX_MULTIPLIER);
+  let proposed;
+  let offset;
+  if (hasOffset) {
+    offset = Number(offsetValue);
+    if (!Number.isFinite(offset) || !Number.isInteger(offset)) {
+      return { error: 'Fare adjustment must be a whole-number offset.' };
+    }
+    proposed = authoritativeFare + offset;
+  } else {
+    // Backward compatibility for older web clients that sent the final offer
+    // as customerOffer instead of sending the offset separately.
+    proposed = Number(value);
+    if (!Number.isFinite(proposed) || !Number.isInteger(proposed)) {
+      return { error: 'Enter a whole-number fare offer.' };
+    }
+    offset = proposed - authoritativeFare;
+  }
+  if (!Number.isFinite(proposed) || proposed <= 0 || proposed < min || proposed > max) {
+    return { error: `Fare offer must be between Rs ${min.toLocaleString()} and Rs ${max.toLocaleString()}.` };
+  }
+  return { value: proposed, offset };
 }
 
 async function findRideBroadcastDrivers(pickupLocation, vehicleType, settings = null) {
@@ -1615,6 +1668,72 @@ function requireProfileSearchAccess(req, res, next) {
   return res.status(403).json({ error: 'Permission denied: customer or driver view access required' });
 }
 
+function adminSearchableRoles(admin) {
+  return admin?.isSuperAdmin
+    ? ['customer', 'driver']
+    : [
+        hasAdminPermission(admin, 'viewCustomers') && 'customer',
+        hasAdminPermission(admin, 'viewDrivers') && 'driver'
+      ].filter(Boolean);
+}
+
+function adminCanViewUserLocation(admin, role) {
+  return !!admin?.isSuperAdmin || (
+    role === 'driver'
+      ? hasAdminPermission(admin, 'viewDrivers')
+      : hasAdminPermission(admin, 'viewCustomers')
+  );
+}
+
+function liveLocationSearchFields(matcher) {
+  return [
+    { name: matcher }, { phone: matcher }, { email: matcher },
+    { cnicNumber: matcher }, { nationalIdLast4: matcher },
+    { vehicleType: matcher }, { vehicleModel: matcher }, { vehiclePlate: matcher }
+  ];
+}
+
+async function getAdminMapLocationForUser(user, now = new Date()) {
+  if (user.role === 'driver') {
+    const heartbeat = user.lastOnlineHeartbeat ? new Date(user.lastOnlineHeartbeat) : null;
+    if (
+      user.accountStatus !== 'active' || !user.isOnline || !heartbeat ||
+      heartbeat.getTime() < now.getTime() - DRIVER_HEARTBEAT_MAX_AGE_MS ||
+      !hasValidCoordinates(user.currentLocation)
+    ) return null;
+    return {
+      _id: user._id,
+      name: user.name,
+      role: 'driver',
+      phone: user.phone || '',
+      vehicleType: user.vehicleType || '',
+      vehicleModel: user.vehicleModel || '',
+      vehiclePlate: user.vehiclePlate || '',
+      status: 'online',
+      location: { lat: Number(user.currentLocation.lat), lng: Number(user.currentLocation.lng) },
+      updatedAt: heartbeat
+    };
+  }
+
+  if (user.role !== 'customer' || user.accountStatus !== 'active') return null;
+  const sharedAfter = new Date(now.getTime() - CUSTOMER_SHARED_LOCATION_MAX_AGE_MS);
+  const ride = await Ride.findOne({
+    passenger: user._id,
+    status: { $in: ['accepted', 'arrived', 'in-progress'] },
+    passengerLocationUpdatedAt: { $gte: sharedAfter }
+  }).select('passengerLocation passengerLocationUpdatedAt status').sort('-passengerLocationUpdatedAt').lean();
+  if (!ride || !hasValidCoordinates(ride.passengerLocation)) return null;
+  return {
+    _id: user._id,
+    name: user.name,
+    role: 'customer',
+    phone: user.phone || '',
+    status: ride.status,
+    location: { lat: Number(ride.passengerLocation.lat), lng: Number(ride.passengerLocation.lng) },
+    updatedAt: ride.passengerLocationUpdatedAt
+  };
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Auth Routes
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1961,7 +2080,7 @@ app.get('/api/fare-settings', async (req, res) => {
 
 app.post('/api/rides', authMiddleware, customerOnly, customerCanBook, async (req, res) => {
   try {
-    const { pickupLocation, dropoffLocation, dropoffLocations, distance, vehicleType, notes, paymentMethod, mobileAccount } = req.body;
+    const { pickupLocation, dropoffLocation, dropoffLocations, distance, vehicleType, notes, paymentMethod, mobileAccount, customerOffer, customerFareOffset } = req.body;
     if (!pickupLocation) {
       return res.status(400).json({ error: 'Pickup is required' });
     }
@@ -1982,6 +2101,8 @@ app.post('/api/rides', authMiddleware, customerOnly, customerCanBook, async (req
       normalizePerKmRates(ratesDoc?.value)
     );
     if (fareQuote.error) return res.status(422).json({ error: fareQuote.error });
+    const offerResult = resolveCustomerFareOffer(customerOffer, fareQuote.totalFare, customerFareOffset);
+    if (offerResult.error) return res.status(422).json({ error: offerResult.error });
     // Resolve stops: prefer dropoffLocations array; fall back to single dropoffLocation
     const stops = Array.isArray(dropoffLocations) && dropoffLocations.length
       ? dropoffLocations
@@ -1994,7 +2115,11 @@ app.post('/api/rides', authMiddleware, customerOnly, customerCanBook, async (req
       pickupLocation,
       dropoffLocation:  stops[0],        // primary stop
       dropoffLocations: stops,
-      fare:          fareQuote.totalFare,
+      // The quote remains the server-authoritative pricing baseline. A customer
+      // may publish a bounded negotiation offer, which drivers can accept or
+      // counter through the existing offer flow.
+      fare:          offerResult.value,
+      customerFareOffset: offerResult.offset,
       fareQuote,
       isLongRange:       !!fareQuote.isLongRange,
       distance:      fareQuote.distanceKm,
@@ -2585,6 +2710,7 @@ app.patch('/api/rides/:id/update-fare', authMiddleware, async (req, res) => {
     );
     if (fareQuote.error) return res.status(422).json({ error: fareQuote.error });
     ride.fare = fareQuote.totalFare;
+    ride.customerFareOffset = 0;
     ride.fareQuote = fareQuote;
     await ride.save();
 
@@ -3317,20 +3443,11 @@ app.get('/api/admin/search', adminJwt, requireProfileSearchAccess, async (req, r
     if (query.length < 2) return res.json([]);
     const escaped = query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
     const matcher = new RegExp(escaped, 'i');
-    const allowedRoles = req.admin?.isSuperAdmin
-      ? ['customer', 'driver']
-      : [
-          hasAdminPermission(req.admin, 'viewCustomers') && 'customer',
-          hasAdminPermission(req.admin, 'viewDrivers') && 'driver'
-        ].filter(Boolean);
+    const allowedRoles = adminSearchableRoles(req.admin);
     const users = await User.find({
       $and: [
         { role: { $in: allowedRoles } },
-        { $or: [
-          { name: matcher }, { phone: matcher }, { email: matcher },
-          { cnicNumber: matcher }, { nationalIdLast4: matcher },
-          { vehicleType: matcher }, { vehicleModel: matcher }, { vehiclePlate: matcher }
-        ] }
+         { $or: liveLocationSearchFields(matcher) }
       ]
     })
       .select('name email phone role cnicNumber vehicleType vehicleModel vehiclePlate accountStatus suspendReason suspendedAt isOnline rating totalRides createdAt profilePhoto cnicFront cnicBack licensePhoto vehicleRegPhoto identityVerificationStatus identityVerifiedAt +customerIdFront +customerIdBack')
@@ -3347,6 +3464,47 @@ app.get('/api/admin/search', adminJwt, requireProfileSearchAccess, async (req, r
       customerIdFront: undefined,
       customerIdBack: undefined
     })));
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// GET /api/admin/map-search?q= — only returns users whose coordinates are both
+// authorized and fresh. Customer results are limited to active rides that
+// explicitly share their location; idle Customers are never tracked for Admin
+// map search.
+app.get('/api/admin/map-search', adminJwt, requireProfileSearchAccess, async (req, res) => {
+  try {
+    const query = String(req.query.q || '').trim();
+    if (query.length < 2) return res.json([]);
+    const escaped = query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const matcher = new RegExp(escaped, 'i');
+    const users = await User.find({
+      role: { $in: adminSearchableRoles(req.admin) },
+      accountStatus: 'active',
+      $or: liveLocationSearchFields(matcher)
+    })
+      .select('name phone role accountStatus isOnline lastOnlineHeartbeat currentLocation vehicleType vehicleModel vehiclePlate')
+      .sort({ role: 1, name: 1 })
+      .limit(50)
+      .lean();
+    const locations = await Promise.all(users.map(user => getAdminMapLocationForUser(user)));
+    res.json(locations.filter(Boolean));
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// GET /api/admin/map-location/:userId — refreshes the selected map pin from
+// authoritative persisted coordinates. Role permissions are checked again on
+// each poll so permission revocations take effect without a page reload.
+app.get('/api/admin/map-location/:userId', adminJwt, requireProfileSearchAccess, async (req, res) => {
+  try {
+    if (!mongoose.isValidObjectId(req.params.userId)) return res.status(400).json({ error: 'Invalid user id' });
+    const user = await User.findById(req.params.userId)
+      .select('name phone role accountStatus isOnline lastOnlineHeartbeat currentLocation vehicleType vehicleModel vehiclePlate')
+      .lean();
+    if (!user) return res.status(404).json({ error: 'Person not found' });
+    if (!adminCanViewUserLocation(req.admin, user.role)) return res.status(403).json({ error: 'Permission denied for this person' });
+    const location = await getAdminMapLocationForUser(user);
+    if (!location) return res.status(404).json({ error: 'No fresh live location is available for this person.' });
+    res.json(location);
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
@@ -4620,11 +4778,24 @@ io.on('connection', async (socket) => {
 
   // Share passenger location only with an active ride's authorized room.
   socket.on('location:share', async ({ lat, lng, rideId }) => {
-    if (role !== 'customer' || !rideId || !Number.isFinite(Number(lat)) || !Number.isFinite(Number(lng))) return;
+    if (role !== 'customer' || !rideId || !hasValidCoordinates({ lat, lng })) return;
     const activeRide = await Ride.findOne({
       _id: rideId, passenger: id, status: { $in: ['accepted', 'arrived', 'in-progress'] }
     }).select('_id').lean().catch(() => null);
-    if (activeRide) io.to(`ride:${rideId}`).emit('passenger:location', { lat, lng });
+    if (activeRide) {
+      const updatedAt = new Date();
+      await Ride.updateOne(
+        { _id: rideId, passenger: id, status: { $in: ['accepted', 'arrived', 'in-progress'] } },
+        {
+          $set: {
+            'passengerLocation.lat': Number(lat),
+            'passengerLocation.lng': Number(lng),
+            passengerLocationUpdatedAt: updatedAt
+          }
+        }
+      ).catch(() => {});
+      io.to(`ride:${rideId}`).emit('passenger:location', { lat: Number(lat), lng: Number(lng) });
+    }
   });
 
   socket.on('disconnect', async () => {
@@ -4758,6 +4929,17 @@ const DEMO_ACCOUNTS = Object.freeze({
   }
 });
 
+// Development previews seed accounts automatically, so they also need a usable
+// quote baseline. This is insert-only, runs only with DEMO_ACCOUNTS_ENABLED,
+// and never replaces an Admin's stored production or preview pricing rules.
+const PREVIEW_DEMO_FARE_SETTINGS = Object.freeze(
+  Object.fromEntries(FARE_VEHICLE_CATEGORIES.map(category => [category, {
+    baseFare: 100,
+    distanceSlabs: [{ minKm: 0, maxKm: null, rate: DEFAULT_PER_KM_RATES[category] }],
+    peakRules: []
+  }]))
+);
+
 // These accounts are intentionally limited to the preview/demo database. Store
 // only the bcrypt hash in source; never persist the requested test password.
 const TEST_ACCOUNT_PASSWORD_HASH = '$2a$12$CByloTMQfIwC393QDR.TH.bruF.52lOlDbr1yEmbuQDSA4q8ePKZe';
@@ -4779,6 +4961,11 @@ const TEST_ACCOUNTS = Object.freeze({
 async function seedDemoAccounts() {
   if (process.env.DEMO_ACCOUNTS_ENABLED !== 'true' || process.env.NODE_ENV === 'production') return;
   const now = new Date();
+  await Settings.findOneAndUpdate(
+    { key: 'daily_fare_settings' },
+    { $setOnInsert: { key: 'daily_fare_settings', value: PREVIEW_DEMO_FARE_SETTINGS } },
+    { upsert: true, new: true, setDefaultsOnInsert: true }
+  );
   const customerPassword = await bcrypt.hash(DEMO_ACCOUNTS.customer.password, 12);
   const driverPassword = await bcrypt.hash(DEMO_ACCOUNTS.driver.password, 12);
   const subAdminPassword = await bcrypt.hash('DemoOps-2026!', 12);

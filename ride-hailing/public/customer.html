@@ -689,11 +689,21 @@ body{font-family:'Segoe UI',sans-serif;background:#0a0a0f;color:#fff;height:100d
             <div style="margin-top:.25rem"><span class="dist-badge" id="dist-badge" style="display:none">📍 <span id="dist-km-val">0</span> km</span></div>
           </div>
           <div class="fare-suggested">
-            <div class="fare-suggested-lbl">Final fare</div>
+            <div class="fare-suggested-lbl">Admin quote</div>
             <div class="fare-suggested-val" id="fare-suggested-val">—</div>
           </div>
         </div>
-        <div class="fare-stepper"><div class="fare-offered-val" id="fare-display">Rs 0</div></div>
+        <div class="fare-stepper">
+          <button class="fare-adj-btn" type="button" data-fare-adjustment aria-label="Lower fare offer" onclick="adjustOfferedFare(-fareAdjustmentStep())">−</button>
+          <div class="fare-offered-val" id="fare-display" aria-live="polite">Rs 0</div>
+          <button class="fare-adj-btn" type="button" data-fare-adjustment aria-label="Raise fare offer" onclick="adjustOfferedFare(fareAdjustmentStep())">+</button>
+        </div>
+        <div class="fare-quick-row" aria-label="Quick fare adjustments">
+          <button class="fare-quick neg" type="button" data-fare-adjustment onclick="setOfferedFarePercent(-10)">−10%</button>
+          <button class="fare-quick" type="button" data-fare-adjustment onclick="resetOfferedFare()">Admin fare</button>
+          <button class="fare-quick" type="button" data-fare-adjustment onclick="setOfferedFarePercent(10)">+10%</button>
+          <button class="fare-quick" type="button" data-fare-adjustment onclick="setOfferedFarePercent(20)">+20%</button>
+        </div>
         <div class="fare-min-note" id="fare-min-note"></div>
       </div>
 
@@ -889,6 +899,7 @@ let mapMode = 'pickup';
 let selectedVehicle = 'Bike';
 let routeDistanceKm = null;
 let offeredFare = 0;
+let customerFareOffset = 0;
 let activeRide = null;
 let socket = null;
 let customerTerms = '';
@@ -907,6 +918,9 @@ let currentFareQuote = null;
 let fareQuoteRequest = 0;
 let customerPerKmRates = {};
 let customerLongRangeSettings = null;
+const CUSTOMER_OFFER_MIN_MULTIPLIER = 0.5;
+const CUSTOMER_OFFER_MAX_MULTIPLIER = 2;
+const CUSTOMER_OFFER_INCREMENT = 10;
 
 function setBookingSheetExpanded(expanded) {
   const panel = document.getElementById('bottom-panel');
@@ -1853,7 +1867,8 @@ async function updateFare() {
     });
     if (requestId !== fareQuoteRequest) return;
     currentFareQuote = quote;
-    offeredFare = quote.totalFare;
+    customerFareOffset = 0;
+    offeredFare = quote.totalFare + customerFareOffset;
     const stopCount = dropoffs.slice(0, activeStops).filter(d => d).length;
     const distLabel = stopCount > 1 ? `📍 ${dist.toFixed(1)} km total · ${stopCount} stops` : `📍 ${dist.toFixed(1)} km`;
     const adjustment = quote.adjustmentPercent
@@ -1871,22 +1886,95 @@ async function updateFare() {
   } catch (e) {
     if (requestId !== fareQuoteRequest) return;
     currentFareQuote = null;
+    customerFareOffset = 0;
     offeredFare = 0;
     document.getElementById('fare-meta').textContent = `Fare unavailable: ${e.message}`;
     document.getElementById('fare-suggested-val').textContent = '—';
     document.getElementById('fare-display').textContent = '—';
     document.getElementById('fare-min-note').textContent = 'Ask Admin to configure this vehicle’s base fare and distance slabs.';
+    document.querySelectorAll('[data-fare-adjustment]').forEach(button => {
+      button.disabled = true;
+      button.setAttribute('aria-disabled', 'true');
+    });
   }
 }
 
 function renderOfferedFare() {
-  document.getElementById('fare-display').textContent = `Rs ${offeredFare.toLocaleString()}`;
+  const display = document.getElementById('fare-display');
+  if (!display) return;
+  display.textContent = `Rs ${Number(offeredFare || 0).toLocaleString()}`;
   const rules = currentFareQuote?.activeRules || [];
-  document.getElementById('fare-min-note').textContent = rules.length
+  const quoteNote = rules.length
     ? `Active ${rules.map(r => `${r.adjustmentType === 'down' ? 'discount' : 'surge'} ${r.percentage}%`).join(', ')} applied by Admin rules.`
     : currentFareQuote?.isLongRange
       ? 'Long Range fare calculated from the active Admin rate for this vehicle.'
       : 'Calculated from the active Admin fare rules.';
+  const bounds = customerOfferBounds();
+  const note = document.getElementById('fare-min-note');
+  if (note) {
+    const adjustment = Number(customerFareOffset || 0);
+    const calculation = `Admin quote Rs ${bounds?.base?.toLocaleString?.() || 0} ${adjustment >= 0 ? '+' : '−'} Rs ${Math.abs(adjustment).toLocaleString()} = final Rs ${Number(offeredFare || 0).toLocaleString()}`;
+    note.textContent = bounds
+      ? `${quoteNote} ${calculation}. Your final fare can be adjusted from Rs ${bounds.min.toLocaleString()} to Rs ${bounds.max.toLocaleString()}.`
+      : quoteNote;
+  }
+  document.querySelectorAll('[data-fare-adjustment]').forEach(button => {
+    button.disabled = !bounds;
+    button.setAttribute('aria-disabled', String(!bounds));
+  });
+}
+
+function customerOfferBounds() {
+  const base = Number(currentFareQuote?.totalFare);
+  if (!Number.isFinite(base) || base <= 0) return null;
+  return {
+    base,
+    min: Math.max(CUSTOMER_OFFER_INCREMENT, Math.ceil((base * CUSTOMER_OFFER_MIN_MULTIPLIER) / CUSTOMER_OFFER_INCREMENT) * CUSTOMER_OFFER_INCREMENT),
+    max: Math.ceil((base * CUSTOMER_OFFER_MAX_MULTIPLIER) / CUSTOMER_OFFER_INCREMENT) * CUSTOMER_OFFER_INCREMENT)
+  };
+}
+
+function fareAdjustmentStep() {
+  const bounds = customerOfferBounds();
+  if (!bounds) return CUSTOMER_OFFER_INCREMENT;
+  return Math.max(CUSTOMER_OFFER_INCREMENT, Math.round((bounds.base * 0.05) / CUSTOMER_OFFER_INCREMENT) * CUSTOMER_OFFER_INCREMENT);
+}
+
+function setOfferedFare(nextFare) {
+  const bounds = customerOfferBounds();
+  if (!bounds) return showToast('Wait for the Admin fare calculation first.', 'info');
+  offeredFare = Math.min(bounds.max, Math.max(bounds.min, Number(nextFare)));
+  customerFareOffset = offeredFare - bounds.base;
+  renderOfferedFare();
+}
+
+function adjustOfferedFare(amount) {
+  const bounds = customerOfferBounds();
+  if (!bounds) return showToast('Wait for the Admin fare calculation first.', 'info');
+  setCustomerFareOffset(customerFareOffset + Number(amount || 0));
+}
+
+function setOfferedFarePercent(percent) {
+  const bounds = customerOfferBounds();
+  if (!bounds) return showToast('Wait for the Admin fare calculation first.', 'info');
+  const rawOffset = bounds.base * Number(percent || 0) / 100;
+  const offset = Math.round(rawOffset / CUSTOMER_OFFER_INCREMENT) * CUSTOMER_OFFER_INCREMENT;
+  setCustomerFareOffset(offset);
+}
+
+function resetOfferedFare() {
+  const bounds = customerOfferBounds();
+  if (!bounds) return;
+  setCustomerFareOffset(0);
+}
+
+function setCustomerFareOffset(nextOffset) {
+  const bounds = customerOfferBounds();
+  if (!bounds) return showToast('Wait for the Admin fare calculation first.', 'info');
+  const nextFare = bounds.base + Number(nextOffset || 0);
+  offeredFare = Math.min(bounds.max, Math.max(bounds.min, nextFare));
+  customerFareOffset = offeredFare - bounds.base;
+  renderOfferedFare();
 }
 
 function selectVehicle(btn) {
@@ -1969,7 +2057,9 @@ async function bookRide() {
       dropoffLocations: activeDropoffsList.map(d => ({ ...d })), // full list
       distance:         +dist.toFixed(2),
       vehicleType:      selectedVehicle,
-      paymentMethod:    'cash'
+      paymentMethod:    'cash',
+      customerFareOffset,
+      customerOffer:    offeredFare
     });
     activeRide = ride;
     activeLiveFare = ride.fare;
@@ -2089,7 +2179,7 @@ async function cancelRide() {
 }
 
 function endRide() {
-  activeRide = null; routeDistanceKm = null; offeredFare = 0;
+  activeRide = null; routeDistanceKm = null; offeredFare = 0; customerFareOffset = 0;
   activeLiveFare = 0; driverOffers = []; activeDriverInfo = null;
   // Hide PIN card and reset it for the next ride
   const pinCard = document.getElementById('ar-pin-card');
