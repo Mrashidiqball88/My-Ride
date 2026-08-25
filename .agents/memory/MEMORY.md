@@ -7,6 +7,7 @@
 - [Reconnect state reconciliation](reconnect-state-reconciliation.md) — realtime clients must recheck authoritative state after reconnect because missed events can leave stale local UI.
 - [Ride preference fee policy](ride-preference-fee-policy.md) — Long Range Only is exempt from Daily Fees and must not receive local rides.
 - [Customer fare offsets](customer-fare-offsets.md) — keep the Admin quote immutable and persist Customer negotiation as a bounded offset added to it.
+- [Customer PWA shell updates](customer-pwa-shell-updates.md) — bump the Service Worker cache version when repairing cached Customer HTML or JavaScript.
 - [Optional unique identity fields](optional-unique-identity-fields.md) — sparse unique fields must be omitted for inapplicable roles, never persisted as empty strings.
 - [Ride offer expiry authority](ride-offer-expiry-authority.md) — offer windows are persisted server timestamps, never client-only countdowns.
 - [Mockup preview routing](mockup-preview-routing.md) — sandbox previews need the artifact base path and component registry to avoid blank or fallback frames.
