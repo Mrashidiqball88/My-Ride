@@ -22,10 +22,10 @@
 body{font-family:'Segoe UI',sans-serif;background:#0a0a0f;color:#fff;height:100dvh;overflow:hidden;display:flex;flex-direction:column}
 
 /* ── Auth ── */
-#auth-screen{position:fixed;inset:0;z-index:1000;background:#0a0a0f;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:1.5rem}
+#auth-screen{position:fixed;inset:0;z-index:1000;background:#0a0a0f;display:flex;flex-direction:column;align-items:center;justify-content:flex-start;overflow-y:auto;overscroll-behavior-y:contain;scroll-padding-bottom:1.5rem;-webkit-overflow-scrolling:touch;padding:max(1.25rem, env(safe-area-inset-top)) 1.5rem max(4.5rem, calc(env(safe-area-inset-bottom) + 2.5rem))}
 .auth-logo{font-size:2rem;font-weight:800;margin-bottom:.25rem}.auth-logo span{color:#38bdf8}.brand-lockup{display:flex;align-items:center;gap:.55rem}.brand-mark{width:34px;height:34px;border-radius:10px}.brand-role{font-size:.58rem;color:#64748b;font-weight:800;letter-spacing:.1em;margin-left:.3rem}
 .auth-subtitle{color:#555;font-size:.85rem;margin-bottom:2rem}
-.auth-card{background:#13131a;border:1px solid #222;border-radius:20px;padding:1.5rem;width:100%;max-width:360px}
+.auth-card{background:#13131a;border:1px solid #222;border-radius:20px;padding:1.5rem;width:100%;max-width:360px;flex:0 0 auto;margin:auto 0}
 .auth-tabs{display:flex;gap:.5rem;margin-bottom:1.5rem;background:#0a0a0f;border-radius:10px;padding:.25rem}
 .auth-tab{flex:1;padding:.6rem;border:none;background:transparent;color:#666;border-radius:8px;font-size:.9rem;cursor:pointer;transition:all .2s}
 .auth-tab.active{background:#1e3a5f;color:#fff;font-weight:700}
