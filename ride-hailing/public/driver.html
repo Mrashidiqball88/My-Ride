@@ -334,6 +334,7 @@ textarea.support-input{resize:vertical;min-height:85px}
 .bottom-tab{color:var(--dc-dim);padding:.6rem;font-size:.7rem}.bottom-tab.active{color:var(--dc-cyan);border-color:var(--dc-cyan)}
 #info-panel,#active-panel,#payments-panel{position:absolute;left:10px;right:10px;bottom:143px;z-index:13;border:1px solid var(--dc-line);border-radius:20px;background:rgba(24,32,34,.96);box-shadow:0 12px 32px rgba(0,0,0,.25);padding:15px;max-height:calc(100vh - 245px);overflow-y:auto}
 #info-panel{min-height:138px}
+#info-panel{display:none!important}
 .idle-msg{padding:.1rem;text-align:left;color:var(--dc-muted)}.idle-msg .idle-icon{display:none}
 .idle-msg strong{color:var(--dc-cyan)}
 .idle-refresh-btn{background:var(--dc-cyan);border:0;color:#10201f;border-radius:12px;padding:12px;width:100%;margin-top:10px}
@@ -362,7 +363,7 @@ textarea.support-input{resize:vertical;min-height:85px}
 .btn-accept{background:var(--dc-cyan);border-color:var(--dc-cyan);color:#10201f}.btn-accept:hover{background:#9aeee2}.btn-counter{background:#182c35;border-color:#376c72;color:var(--dc-cyan)}
 .btn-reject{background:transparent;border-color:var(--dc-line);color:var(--dc-muted)}
 .support-fab{background:var(--dc-panel);border-color:var(--dc-line);color:var(--dc-ink)}
-#today-fare-widget{top:130px!important;right:16px!important}#today-fare-handle{background:var(--dc-yellow)!important;border:0!important;color:#10201f!important}
+#today-fare-widget{z-index:24!important;touch-action:none}#today-fare-handle{background:var(--dc-yellow)!important;border:0!important;color:#10201f!important;touch-action:none}
 @media (max-width:430px){.driver-ops-control{width:min(276px,calc(100vw - 24px));right:12px}.driver-ops-head{border-radius:15px}.stats-strip{width:calc(100% - 24px);bottom:76px}.stat-item{padding:5px 2px}.stat-val{font-size:.72rem}.nav-metric-value{font-size:15px}}
 @media (min-width:800px){
   #info-panel,#active-panel,#payments-panel,#ride-request{left:50%;right:auto;transform:translateX(-50%);width:min(560px,calc(100% - 32px))}
@@ -606,12 +607,7 @@ textarea.support-input{resize:vertical;min-height:85px}
   </div>
 
   <!-- Info Panel (idle) -->
-  <div id="info-panel">
-    <div class="idle-msg" id="idle-msg">
-      <div class="idle-icon">🛑</div>
-      <div>Toggle <strong>Online</strong> above to start receiving ride requests</div>
-    </div>
-  </div>
+  <div id="info-panel" style="display:none" aria-hidden="true"></div>
 
   <!-- Active Ride Panel -->
   <div id="active-panel">
@@ -919,8 +915,6 @@ async function agreeAndActivateLongRange() {
   await setLongRangeEnabled(true, document.getElementById('long-range-toggle'));
 }
 function toggleTodayFareWidget() {
-  const widget = document.getElementById('today-fare-widget');
-  if (widget?._wasDragged) { widget._wasDragged = false; return; }
   const panel = document.getElementById('today-fare-panel');
   if (panel) panel.style.display = panel.style.display === 'block' ? 'none' : 'block';
 }
@@ -934,18 +928,27 @@ function initTodayFareWidget() {
       widget.style.left = `${saved.left}px`; widget.style.top = `${saved.top}px`; widget.style.right = 'auto';
     }
   } catch {}
-  let originX, originY, startLeft, startTop, moved;
+  let originX, originY, startLeft, startTop, moved, suppressNextClick = false;
+  widget.addEventListener('click', event => {
+    if (!suppressNextClick || !event.target.closest('#today-fare-handle')) return;
+    event.preventDefault();
+    event.stopImmediatePropagation();
+    suppressNextClick = false;
+  }, true);
   widget.addEventListener('pointerdown', event => {
     if (event.target.closest('#today-fare-panel')) return;
+    suppressNextClick = false;
     originX = event.clientX; originY = event.clientY;
     const rect = widget.getBoundingClientRect();
     startLeft = rect.left; startTop = rect.top; moved = false;
-    widget.setPointerCapture?.(event.pointerId);
+    event.target.closest('#today-fare-handle')?.setPointerCapture?.(event.pointerId);
   });
   widget.addEventListener('pointermove', event => {
     if (originX === undefined) return;
-    const left = Math.max(4, Math.min(window.innerWidth - 110, startLeft + event.clientX - originX));
-    const top = Math.max(4, Math.min(window.innerHeight - 50, startTop + event.clientY - originY));
+    const widgetWidth = widget.getBoundingClientRect().width;
+    const widgetHeight = widget.getBoundingClientRect().height;
+    const left = Math.max(4, Math.min(window.innerWidth - widgetWidth - 4, startLeft + event.clientX - originX));
+    const top = Math.max(4, Math.min(window.innerHeight - widgetHeight - 4, startTop + event.clientY - originY));
     if (Math.abs(event.clientX - originX) + Math.abs(event.clientY - originY) > 5) moved = true;
     if (moved) {
       widget.style.left = `${left}px`; widget.style.top = `${top}px`; widget.style.right = 'auto';
@@ -954,7 +957,8 @@ function initTodayFareWidget() {
   widget.addEventListener('pointerup', () => {
     if (originX === undefined) return;
     if (moved) {
-      widget._wasDragged = true;
+      suppressNextClick = true;
+      setTimeout(() => { suppressNextClick = false; }, 0);
       const rect = widget.getBoundingClientRect();
       localStorage.setItem('rh_today_fare_widget', JSON.stringify({ left: Math.round(rect.left), top: Math.round(rect.top) }));
     }
@@ -1262,6 +1266,7 @@ function doLogout() {
 function bootApp() {
   document.getElementById('auth-screen').style.display = 'none';
   document.getElementById('app').style.display = 'flex';
+  hideIdleInfoPanel();
   // Show driver avatar in header
   const avatarEl = document.getElementById('driver-avatar-header');
   if (avatarEl && user) {
@@ -1585,6 +1590,13 @@ function syncDriverOpsState() {
   control?.classList.toggle('is-online', isOnline);
 }
 
+function hideIdleInfoPanel() {
+  const panel = document.getElementById('info-panel');
+  if (!panel) return;
+  panel.style.display = 'none';
+  panel.setAttribute('aria-hidden', 'true');
+}
+
 function renderAvailabilityState({ reason = '' } = {}) {
   const toggle = document.getElementById('online-toggle');
   if (toggle) toggle.checked = isOnline;
@@ -1604,7 +1616,7 @@ function renderAvailabilityState({ reason = '' } = {}) {
   if (statusSub) statusSub.textContent = isOnline ? 'Searching nearby ride requests' : 'Tap to manage availability';
   if (idleMessage) idleMessage.innerHTML = isOnline
     ? '<div><strong>Online and ready</strong><div style="font-size:.72rem;color:#667174;margin-top:.3rem">Your map and available rides refresh from the button above.</div></div>'
-    : '<div class="idle-icon">🛑</div><div>Toggle <strong>Online</strong> above to start receiving ride requests</div>';
+    : '';
 }
 
 function setupDriverOpsControl() {
@@ -2204,7 +2216,7 @@ async function sendCounter() {
 // ── Active Ride Panel ──────────────────────────────────────────────────────
 function showActivePanel(ride) {
   activeRide = ride;
-  document.getElementById('info-panel').style.display   = 'none';
+  hideIdleInfoPanel();
   document.getElementById('active-panel').style.display = 'block';
   document.getElementById('app').classList.add('navigation-active');
   // Repaint map tiles — the panel swap can leave a black frame on slow devices
@@ -2288,7 +2300,7 @@ function endActiveRide() {
   activeRide = null;
 
   document.getElementById('active-panel').style.display = 'none';
-  document.getElementById('info-panel').style.display   = 'block';
+  hideIdleInfoPanel();
   document.getElementById('app').classList.remove('navigation-active');
   clearRideMap();
 
@@ -2351,7 +2363,7 @@ function switchBottomTab(tab) {
       document.getElementById('active-panel').style.display = 'block';
       document.getElementById('info-panel').style.display   = 'none';
     } else {
-      document.getElementById('info-panel').style.display   = 'block';
+      hideIdleInfoPanel();
       document.getElementById('active-panel').style.display = 'none';
     }
   } else {
