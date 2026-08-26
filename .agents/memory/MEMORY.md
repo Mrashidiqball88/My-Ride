@@ -21,3 +21,4 @@
 - [Ride cancellation events](ride-cancellation-events.md) — fan out a dedicated cancellation event to pending and assigned Drivers; make client cleanup idempotent with the generic status event.
 - [Driver alert recovery race](driver-alert-recovery-race.md) — queue a second rehydration pass when reconnect status refresh overlaps the initial socket recovery read.
 - [Pakistan geofence enforcement](pakistan-geofence-enforcement.md) — national polygon validation is mandatory for every coordinate ingress; browser checks do not replace server authority.
+- [Map rendering and GPS follow](map-rendering-and-gps-follow.md) — native dark tiles and first-fix centering prevent mobile lag and keep manual panning stable.

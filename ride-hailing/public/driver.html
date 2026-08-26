@@ -1404,8 +1404,6 @@ function bootApp() {
   requestAnimationFrame(() => requestAnimationFrame(() => {
     initMap();
     renderAvailabilityState();
-    setTimeout(() => map?.invalidateSize(), 300);
-    setTimeout(() => map?.invalidateSize(), 700);
   }));
   // Show pending approval card if not yet approved
   const pendingCard = document.getElementById('pending-card');

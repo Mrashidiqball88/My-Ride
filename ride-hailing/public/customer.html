@@ -313,7 +313,7 @@ body{font-family:'Segoe UI',sans-serif;background:#0a0a0f;color:#fff;height:100d
   --lr-line:#ded5ca;--lr-blue:#376f9b;
 }
 #app{position:relative;display:none;background:var(--lr-paper);color:var(--lr-ink);overflow:hidden}
-#map{position:absolute;inset:0;width:100%;height:100%;z-index:1;filter:saturate(.72) sepia(.08);background:#d8ddd9}
+#map{position:absolute;inset:0;width:100%;height:100%;z-index:1;filter:none;background:#d8ddd9}
 .leaflet-container{background:#d8ddd9}
 .leaflet-control-zoom{margin-top:5.6rem!important;margin-right:1rem!important;border:0!important;box-shadow:0 8px 20px rgba(16,35,55,.12)!important}
 .leaflet-control-zoom a{background:rgba(246,241,233,.94)!important;color:var(--lr-ink)!important;border:0!important}
@@ -965,6 +965,11 @@ let liveTripRouteRequest = 0;
 let liveTripRouteAt = 0;
 let liveTripRouteOrigin = null;
 let liveTripRouteDestinationKey = '';
+let customerGpsWatchId = null;
+let customerGpsHasFix = false;
+let customerMapAutoCenter = true;
+let customerLocation = null;
+let customerLocationMarker = null;
 const CUSTOMER_FOLLOW_INTERVAL_MS = 2500;
 const CUSTOMER_OFFER_MIN_MULTIPLIER = 0.5;
 const CUSTOMER_OFFER_MAX_MULTIPLIER = 2;
@@ -1295,6 +1300,7 @@ function doLogout() {
   // 2. Disconnect live connections
   if (socket) { socket.disconnect(); socket = null; }
   if (locationWatchId) { navigator.geolocation.clearWatch(locationWatchId); locationWatchId = null; }
+  if (customerGpsWatchId) { navigator.geolocation.clearWatch(customerGpsWatchId); customerGpsWatchId = null; }
   stopNearbyDrivers();
 
   // 3. Clear every login / register field so nothing persists visually
@@ -1401,9 +1407,6 @@ function bootApp() {
   // Leaflet measures #map — fixes the 0×0 container race condition.
   requestAnimationFrame(() => requestAnimationFrame(() => {
     initMap();
-    // Belt-and-suspenders: re-invalidate at 300 ms and 700 ms for iOS Safari
-    setTimeout(() => map?.invalidateSize(), 300);
-    setTimeout(() => map?.invalidateSize(), 700);
   }));
 }
 
@@ -1436,18 +1439,29 @@ async function loadCustomerPerKmRates() {
 function initMap() {
   if (map) return;
   map = L.map('map', { zoomControl: false, preferCanvas: true }).setView([31.5204, 74.3587], 15);
-  L.tileLayer(TILE_URL, TILE_OPTS).addTo(map);
+  L.tileLayer(TILE_URL, {
+    ...TILE_OPTS,
+    detectRetina: false,
+    maxZoom: 19,
+    updateWhenIdle: true,
+    keepBuffer: 1
+  }).addTo(map);
   L.control.zoom({ position: 'topright' }).addTo(map);
 
-  // Staggered invalidations catch every rendering phase (especially iOS Safari)
+  // Repaint once after Leaflet has a real container size. Avoid a cascade of
+  // invalidations that reloads tiles on slower phones.
   requestAnimationFrame(() => map.invalidateSize());
-  setTimeout(() => map.invalidateSize(), 150);
-  setTimeout(() => map.invalidateSize(), 500);
-  window.addEventListener('resize', () => map.invalidateSize());
-  map.on('dragstart', () => { if (activeRide) customerTrackingFollow = false; });
-  // Re-fire when the page becomes visible again (e.g. switching tabs/apps)
-  document.addEventListener('visibilitychange', () => {
-    if (document.visibilityState === 'visible') map?.invalidateSize();
+  let resizeFrame = null;
+  window.addEventListener('resize', () => {
+    if (resizeFrame) return;
+    resizeFrame = requestAnimationFrame(() => {
+      resizeFrame = null;
+      map?.invalidateSize({ pan: false });
+    });
+  });
+  map.on('dragstart', () => {
+    customerMapAutoCenter = false;
+    if (activeRide) customerTrackingFollow = false;
   });
 
   map.on('click', (e) => {
@@ -1460,10 +1474,39 @@ function initMap() {
       setStop(idx, lat, lng);
     }
   });
-  // Do not request GPS on page load. Pickup is explicit: the customer can
-  // choose “Pin-Point / My Location” or search for a custom address.
+  startCustomerGpsTracking();
   // Start showing nearby online drivers after map is ready
   setTimeout(startNearbyDrivers, 800);
+}
+
+function applyCustomerGpsPosition(pos, { forceCenter = false } = {}) {
+  const { latitude: lat, longitude: lng } = pos.coords;
+  if (!ensurePakistanLocation(lat, lng) || !map) return false;
+  const previousLocation = customerLocation;
+  const isFirstFix = !customerGpsHasFix;
+  customerGpsHasFix = true;
+  customerLocation = { lat, lng };
+
+  if (customerLocationMarker) customerLocationMarker.setLatLng([lat, lng]);
+  else {
+    customerLocationMarker = L.circleMarker([lat, lng], {
+      radius: 7, color: '#fff', weight: 2, fillColor: '#2d8cff', fillOpacity: .95
+    }).addTo(map);
+  }
+
+  const movedEnough = !previousLocation || haversineKm(previousLocation, customerLocation) >= .02;
+  if (forceCenter || (customerMapAutoCenter && !pickup && (isFirstFix || movedEnough))) {
+    const zoom = Math.max(15, map.getZoom());
+    map.setView([lat, lng], zoom, { animate: !isFirstFix, duration: .35 });
+  }
+  return true;
+}
+
+function startCustomerGpsTracking() {
+  if (!navigator.geolocation || customerGpsWatchId) return;
+  const gpsOptions = { enableHighAccuracy: true, maximumAge: 10000, timeout: 10000 };
+  navigator.geolocation.getCurrentPosition(applyCustomerGpsPosition, () => {}, gpsOptions);
+  customerGpsWatchId = navigator.geolocation.watchPosition(applyCustomerGpsPosition, () => {}, gpsOptions);
 }
 
 // ── Nearby Drivers ────────────────────────────────────────────────────────
@@ -1835,6 +1878,8 @@ function locateMe() {
   const inp = document.getElementById('pickup-input');
   if (inp) { inp.value = '📍 Locating…'; inp.classList.add('has-val'); }
   navigator.geolocation.getCurrentPosition(pos => {
+    customerMapAutoCenter = true;
+    applyCustomerGpsPosition(pos, { forceCenter: true });
     setPickup(pos.coords.latitude, pos.coords.longitude).then(applied => {
       if (!applied && inp?.value === '📍 Locating…') {
         inp.value = '';
