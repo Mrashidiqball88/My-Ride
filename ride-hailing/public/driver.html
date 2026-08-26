@@ -816,7 +816,7 @@ function isPakistanLocation(lat, lng) {
   const latitude = Number(lat), longitude = Number(lng);
   if (!Number.isFinite(latitude) || !Number.isFinite(longitude)) return false;
   const validator = window.MyRidePakistanGeofence?.isWithinPakistan;
-  return typeof validator !== 'function' || validator(latitude, longitude) === true;
+  return typeof validator === 'function' && validator(latitude, longitude) === true;
 }
 
 function sendDriverHeartbeat() {

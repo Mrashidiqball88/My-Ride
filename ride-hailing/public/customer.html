@@ -913,9 +913,9 @@ function isPakistanLocation(lat, lng) {
   const latitude = Number(lat), longitude = Number(lng);
   if (!Number.isFinite(latitude) || !Number.isFinite(longitude)) return false;
   const validator = window.MyRidePakistanGeofence?.isWithinPakistan;
-  // The server remains authoritative. A stale/missing cached helper must not
-  // falsely block every valid Pakistani address in the browser.
-  return typeof validator !== 'function' || validator(latitude, longitude) === true;
+  // Explicit pins must fail closed if the local boundary helper is missing.
+  // The same polygon is loaded locally and enforced again by the server.
+  return typeof validator === 'function' && validator(latitude, longitude) === true;
 }
 
 function ensurePakistanLocation(lat, lng) {
