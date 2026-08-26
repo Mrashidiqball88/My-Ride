@@ -155,6 +155,7 @@ test('audits registration, scheduled fees, wallet gates, completion commission, 
   const longRangeRide = await models.Ride.create({
     passenger: customer._id, driver: null, status: 'requested', vehicleType: 'Toyota Highroof',
     isLongRange: true, fare: 1000, pickupLocation: { lat: 31.52, lng: 74.35 }, dropoffLocation: { lat: 32.0, lng: 74.7 },
+    driverLocation: { lat: 31.52, lng: 74.35 },
     notifiedDriverIds: [driverB._id]
   });
   const beforeCompletion = await models.Wallet.findOne({ user: driverB._id }).lean();
@@ -167,8 +168,9 @@ test('audits registration, scheduled fees, wallet gates, completion commission, 
     token: driverToken(driverB), method: 'PATCH', body: { status: 'arrived' }
   });
   assert.equal(arrived.response.status, 200);
+  const storedPin = (await models.Ride.findById(longRangeRide._id).select('verificationPin').lean()).verificationPin;
   const started = await json(`/api/rides/${longRangeRide._id}/status`, {
-    token: driverToken(driverB), method: 'PATCH', body: { status: 'in-progress', pin: accepted.body.verificationPin }
+    token: driverToken(driverB), method: 'PATCH', body: { status: 'in-progress', pin: storedPin }
   });
   assert.equal(started.response.status, 200);
   const afterStart = await models.Wallet.findOne({ user: driverB._id }).lean();

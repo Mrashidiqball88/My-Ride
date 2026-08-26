@@ -24,3 +24,4 @@
 - [Map rendering and GPS follow](map-rendering-and-gps-follow.md) — native dark tiles and first-fix centering prevent mobile lag and keep manual panning stable.
 - [Socket room reference normalization](socket-room-reference-normalization.md) — resolve populated MongoDB references before building Socket.io personal-room names.
 - [Strict active-ride tracking](strict-active-ride-tracking.md) — serialize one three-second GPS cycle and restore native availability mode when rides end.
+- [Pickup PIN authority](pickup-pin-authority.md) — release the ride PIN only from persisted server-side pickup proximity, never from client GPS calculations.

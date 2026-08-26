@@ -193,7 +193,7 @@ test.describe('live Mongo fare refresh', () => {
     );
   });
 
-  test('keeps active-trip cameras stable without repeating follow timers and gates the ride PIN by pickup proximity', async ({ browser }) => {
+  test('keeps active-trip cameras stable and waits for the server pickup gate before showing the PIN', async ({ browser }) => {
     const baseURL = `http://127.0.0.1:${httpServer.address().port}`;
     const customerPage = await browser.newPage();
     const driverPage = await browser.newPage();
@@ -243,11 +243,13 @@ test.describe('live Mongo fare refresh', () => {
         followCustomerTrip();
         const callsAfterManualPan = calls.length;
         focusCustomerTrip();
+        showMatchedPanel({ name: 'Driver Test', phone: '03000000000' }, 400);
         pendingVerificationPin = '2468';
         hideRidePin();
         const hiddenOnAcceptance = document.getElementById('ar-pin-card').style.display === 'none';
-        const hiddenAwayFromPickup = !revealRidePinIfAtPickup({ lat: 31.53, lng: 74.37 });
-        const visibleAtPickup = revealRidePinIfAtPickup({ lat: 31.5205, lng: 74.3588 });
+        const hiddenWithoutServerGate = !revealRidePinIfAtPickup({ lat: 31.5205, lng: 74.3588 });
+        activeRide.pickupReachedAt = new Date().toISOString();
+        const visibleAfterServerGate = revealRidePinIfAtPickup();
         const contactBeforePin = Boolean(
           document.getElementById('ar-contact-btns').compareDocumentPosition(document.getElementById('ar-pin-card'))
           & Node.DOCUMENT_POSITION_FOLLOWING
@@ -258,10 +260,13 @@ test.describe('live Mongo fare refresh', () => {
           autoCenterAfterZoom,
           focusCall: calls.at(-1),
           hiddenOnAcceptance,
-          hiddenAwayFromPickup,
-          visibleAtPickup,
+          hiddenWithoutServerGate,
+          visibleAfterServerGate,
           displayedPin: document.getElementById('ar-pin-value').textContent,
-          contactBeforePin
+          contactBeforePin,
+          cancellationLocked: document.getElementById('ar-cancel-btn').disabled,
+          contactButtonsVisible: document.getElementById('ar-contact-btns').style.display === 'flex',
+          contactText: document.getElementById('ar-contact-btns').textContent
         };
       }, { pickup, dropoff });
 
@@ -270,10 +275,14 @@ test.describe('live Mongo fare refresh', () => {
       expect(customerCamera.autoCenterAfterZoom).toBe(false);
       expect(customerCamera.focusCall.zoom).toBe(17);
       expect(customerCamera.hiddenOnAcceptance).toBe(true);
-      expect(customerCamera.hiddenAwayFromPickup).toBe(true);
-      expect(customerCamera.visibleAtPickup).toBe(true);
+      expect(customerCamera.hiddenWithoutServerGate).toBe(true);
+      expect(customerCamera.visibleAfterServerGate).toBe(true);
       expect(customerCamera.displayedPin).toBe('2468');
       expect(customerCamera.contactBeforePin).toBe(true);
+      expect(customerCamera.cancellationLocked).toBe(true);
+      expect(customerCamera.contactButtonsVisible).toBe(true);
+      expect(customerCamera.contactText).toContain('Phone Call');
+      expect(customerCamera.contactText).toContain('WhatsApp');
 
       const driverCamera = await driverPage.evaluate(({ pickup, dropoff }) => {
         const calls = [];
@@ -311,6 +320,101 @@ test.describe('live Mongo fare refresh', () => {
       expect(driverCamera.routeColors).toEqual(['#092c62', '#2688ff']);
     } finally {
       await Promise.all([customerPage.close(), driverPage.close()]);
+    }
+  });
+
+  test('releases the PIN from authoritative pickup GPS and rejects Customer cancellation', async ({ browser }) => {
+    const baseURL = `http://127.0.0.1:${httpServer.address().port}`;
+    const customerPage = await browser.newPage();
+    const pickup = { lat: 31.5204, lng: 74.3587, address: 'Pickup' };
+    const dropoff = { lat: 31.5304, lng: 74.3687, address: 'Drop-off' };
+    let ride;
+
+    try {
+      await models.User.updateOne({ _id: matchingDriver._id }, {
+        $set: {
+          isOnline: true,
+          lastOnlineHeartbeat: new Date(),
+          currentLocation: { lat: 31.53, lng: 74.37 }
+        }
+      });
+      ride = await models.Ride.create({
+        passenger: customer._id,
+        driver: matchingDriver._id,
+        pickupLocation: pickup,
+        dropoffLocation: dropoff,
+        dropoffLocations: [dropoff],
+        fare: 400,
+        vehicleType: 'Car Mini Non-AC',
+        status: 'accepted',
+        verificationPin: '2468'
+      });
+
+      await openAuthenticatedClient(customerPage, baseURL, '/customer', customer, token(customer));
+      await customerPage.evaluate(({ rideId, pickup, dropoff }) => {
+        activeRide = {
+          _id: rideId,
+          status: 'accepted',
+          pickupLocation: pickup,
+          dropoffLocation: dropoff,
+          fare: 400,
+          driver: { name: 'Matching Driver', phone: '03000000000' }
+        };
+        activeDriverInfo = activeRide.driver;
+        window.__pickupEvents = [];
+        showMatchedPanel(activeRide.driver, activeRide.fare);
+        connectToRideRoom(rideId);
+        socket.on('ride:pickup-reached', payload => window.__pickupEvents.push(payload));
+      }, { rideId: String(ride._id), pickup, dropoff });
+
+      const farLocation = await fetch(`${baseURL}/api/driver/location`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', ...authHeaders(matchingDriver) },
+        body: JSON.stringify({ rideId: String(ride._id), lat: 31.53, lng: 74.37 })
+      });
+      expect(farLocation.status).toBe(200);
+      await customerPage.waitForTimeout(150);
+      expect(await customerPage.evaluate(() => window.__pickupEvents.length)).toBe(0);
+      expect((await models.Ride.findById(ride._id).select('pickupReachedAt').lean()).pickupReachedAt).toBeNull();
+
+      const beforeRelease = await fetch(`${baseURL}/api/rides/${ride._id}`, {
+        headers: authHeaders(customer)
+      });
+      const beforeReleaseBody = await beforeRelease.json();
+      expect(beforeReleaseBody.verificationPin).toBeUndefined();
+
+      const releaseEvent = customerPage.waitForFunction(() => window.__pickupEvents.length === 1);
+      const atPickup = await fetch(`${baseURL}/api/driver/location`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', ...authHeaders(matchingDriver) },
+        body: JSON.stringify({ rideId: String(ride._id), ...pickup })
+      });
+      expect(atPickup.status).toBe(200);
+      await releaseEvent;
+
+      const pickupEvent = await customerPage.evaluate(() => window.__pickupEvents[0]);
+      expect(pickupEvent.verificationPin).toBe('2468');
+      expect(await customerPage.locator('#ar-pin-card').isVisible()).toBe(true);
+      expect(await customerPage.locator('#ar-cancel-btn').isDisabled()).toBe(true);
+      expect(await customerPage.locator('#ar-contact-btns').textContent()).toContain('Phone Call');
+      expect(await customerPage.locator('#ar-contact-btns').textContent()).toContain('WhatsApp');
+
+      const afterRelease = await fetch(`${baseURL}/api/rides/${ride._id}`, {
+        headers: authHeaders(customer)
+      });
+      const afterReleaseBody = await afterRelease.json();
+      expect(afterReleaseBody.verificationPin).toBe('2468');
+      expect(afterReleaseBody.pickupReachedAt).toBeTruthy();
+
+      const cancelAttempt = await fetch(`${baseURL}/api/rides/${ride._id}/cancel`, {
+        method: 'PATCH',
+        headers: authHeaders(customer)
+      });
+      expect(cancelAttempt.status).toBe(400);
+      expect((await cancelAttempt.json()).error).toBe('Cannot cancel at this stage');
+      expect((await models.Ride.findById(ride._id).select('status').lean()).status).toBe('accepted');
+    } finally {
+      await customerPage.close();
     }
   });
 

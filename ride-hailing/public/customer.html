@@ -978,7 +978,6 @@ let customerMapAutoCenter = true;
 let customerLocation = null;
 let customerLocationMarker = null;
 let pendingVerificationPin = null;
-const PICKUP_PIN_REVEAL_DISTANCE_KM = .1;
 const CUSTOMER_OFFER_MIN_MULTIPLIER = 0.5;
 const CUSTOMER_OFFER_MAX_MULTIPLIER = 2;
 const CUSTOMER_OFFER_INCREMENT = 10;
@@ -2275,7 +2274,8 @@ function showMatchedPanel(driver, agreedFare) {
 }
 
 function updateCustomerCancellationControl(status = activeRide?.status) {
-  const locked = ['arrived', 'in-progress', 'completed', 'cancelled'].includes(status);
+  const locked = Boolean(activeRide?.pickupReachedAt)
+    || ['arrived', 'in-progress', 'completed', 'cancelled'].includes(status);
   [
     document.getElementById('ar-waiting-cancel-btn'),
     document.getElementById('ar-cancel-btn')
@@ -2294,15 +2294,13 @@ function hideRidePin() {
 }
 
 function revealRidePinIfAtPickup(driverLocation = lastDriverLocation) {
-  if (!pendingVerificationPin || !activeRide?.pickupLocation || !driverLocation) return false;
-  const pickup = activeRide.pickupLocation;
-  const distanceKm = haversineKm(
-    Number(driverLocation.lat), Number(driverLocation.lng),
-    Number(pickup.lat), Number(pickup.lng)
-  );
-  if (!Number.isFinite(distanceKm) || distanceKm > PICKUP_PIN_REVEAL_DISTANCE_KM) return false;
+  // The server sets pickupReachedAt and sends the PIN only after its own
+  // validated GPS proximity check. Do not repeat that authorization in the
+  // browser or reveal a PIN from a locally calculated distance.
+  if (!pendingVerificationPin || !activeRide?.pickupReachedAt) return false;
   document.getElementById('ar-pin-value').textContent = pendingVerificationPin;
   document.getElementById('ar-pin-card').style.display = 'block';
+  updateCustomerCancellationControl(activeRide.status);
   return true;
 }
 
@@ -2439,7 +2437,7 @@ function statusLabel(s) {
 
 async function cancelRide() {
   if (!activeRide) return;
-  if (['arrived', 'in-progress', 'completed', 'cancelled'].includes(activeRide.status)) {
+  if (activeRide.pickupReachedAt || ['arrived', 'in-progress', 'completed', 'cancelled'].includes(activeRide.status)) {
     updateCustomerCancellationControl(activeRide.status);
     return showToast('Cancellation is unavailable after the driver arrives at pickup.', 'error');
   }
@@ -2509,11 +2507,13 @@ function connectSocket() {
     apiCall(`/api/rides/${activeRide._id}`).then(ride => {
       if (!ride || !activeRide || String(ride._id) !== String(activeRide._id)) return;
       activeRide = ride;
-      pendingVerificationPin = ride.verificationPin || pendingVerificationPin;
+      pendingVerificationPin = ride.pickupReachedAt ? (ride.verificationPin || pendingVerificationPin) : null;
       if (ride.driver && typeof ride.driver === 'object') {
         activeDriverInfo = ride.driver;
         showMatchedPanel(ride.driver, ride.fare);
       }
+      updateCustomerCancellationControl(ride.status);
+      if (ride.pickupReachedAt) revealRidePinIfAtPickup();
       const loc = ride?.driverLocation;
       if (loc?.lat && loc?.lng) updateLiveTripTracking(loc, { recenter: false });
     }).catch(() => {});
@@ -2578,15 +2578,29 @@ function connectToRideRoom(rideId) {
   });
 
   // Customer selected a driver — full driver profile arrives here
-  socket.on('ride:accepted', ({ driver, rideId: acceptedRideId, verificationPin }) => {
+  socket.on('ride:accepted', ({ driver, rideId: acceptedRideId }) => {
     if (activeRide && String(activeRide._id) === String(acceptedRideId)) {
       activeDriverInfo = driver;
       activeRide.status = 'accepted';
-      pendingVerificationPin = verificationPin || null;
+      activeRide.pickupReachedAt = null;
+      pendingVerificationPin = null;
       hideRidePin();
       showMatchedPanel(driver, activeRide.fare);
       showToast(`${driver.name} is on the way!`, 'success');
     }
+  });
+
+  socket.on('ride:pickup-reached', ({ rideId, pickupReachedAt, verificationPin }) => {
+    if (!activeRide || String(activeRide._id) !== String(rideId) || !verificationPin) return;
+    activeRide.pickupReachedAt = pickupReachedAt || new Date().toISOString();
+    pendingVerificationPin = verificationPin;
+    // The PIN is a required handoff action, so make the authorized release
+    // visible even if the Customer had collapsed the active-ride sheet.
+    setCustomerActiveRideSheetState('expanded');
+    revealRidePinIfAtPickup();
+    document.getElementById('ar-status-text').textContent = 'Driver has arrived! 📍';
+    updateActiveSheetSummary('Driver has arrived', 'PIN unlocked · cancellation unavailable');
+    showToast('Your driver has reached the pickup point. Share the PIN to start.', 'success');
   });
 
   socket.on('ride:status', ({ rideId, status }) => {

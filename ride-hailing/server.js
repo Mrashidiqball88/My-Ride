@@ -971,6 +971,9 @@ const rideSchema = new mongoose.Schema({
   customerRating:  { type: Number, default: null },
   customerReview:  { type: String,  default: '' },
   verificationPin: { type: String,  default: null },  // 4-digit PIN for ride start
+  // Set only after the server verifies the assigned Driver is at pickup.
+  // This is the authoritative gate for PIN release and Customer cancellation.
+  pickupReachedAt: { type: Date, default: null },
   // The exact driver audience that received ride:new. Lifecycle retirement
   // events target these personal rooms too, so a room-membership race cannot
   // leave a delivered offer actionable after it is cancelled or taken.
@@ -1173,6 +1176,7 @@ const MAX_RIDE_BROADCAST_RADIUS_KM = 100;
 const DEFAULT_RIDE_BROADCAST_REQUEST_DURATION_SECONDS = 60;
 const MIN_RIDE_BROADCAST_REQUEST_DURATION_SECONDS = 30;
 const MAX_RIDE_BROADCAST_REQUEST_DURATION_SECONDS = 120;
+const PICKUP_PIN_REVEAL_DISTANCE_KM = 0.1;
 
 async function sendExpoPush(tokens, message) {
   const recipients = [...new Set(tokens.filter(token => /^ExponentPushToken\[.+\]$|^ExpoPushToken\[.+\]$/.test(String(token || ''))))];
@@ -1265,6 +1269,27 @@ function hasValidCoordinates(location) {
   const lat = Number(location?.lat);
   const lng = Number(location?.lng);
   return isWithinPakistan(lat, lng);
+}
+
+function isAtRidePickup(ride, location) {
+  if (!ride?.pickupLocation || !hasValidCoordinates(location) || !hasValidCoordinates(ride.pickupLocation)) {
+    return false;
+  }
+  return haversineKm(
+    Number(location.lat),
+    Number(location.lng),
+    Number(ride.pickupLocation.lat),
+    Number(ride.pickupLocation.lng)
+  ) <= PICKUP_PIN_REVEAL_DISTANCE_KM;
+}
+
+function rideResponseForUser(ride, role) {
+  const payload = typeof ride?.toObject === 'function' ? ride.toObject() : { ...ride };
+  // Never expose the PIN before the server has persisted the pickup-arrival
+  // gate. The Driver learns it from the passenger in person, not from an API.
+  // Once released, only the Customer needs the PIN in a response payload.
+  if (role !== 'customer' || !payload.pickupReachedAt) delete payload.verificationPin;
+  return payload;
 }
 
 function roundFareOfferBoundary(amount) {
@@ -1554,13 +1579,57 @@ function emitRideLifecycle(ride, event, detail = {}, { notifyVehicleDrivers = fa
 }
 
 function emitRideAccepted(ride, verificationPin, driver) {
-  emitRideLifecycle(ride, 'ride:accepted', { verificationPin, driver });
+  // The PIN is deliberately not part of acceptance. It is released only by
+  // emitRidePickupReached after the server verifies pickup proximity.
+  emitRideLifecycle(ride, 'ride:accepted', { driver });
   // This intentionally reaches every eligible driver, including drivers who
   // never joined the ride room because they had only received ride:new.
   emitRideLifecycle(ride, 'ride:taken', {}, {
     notifyVehicleDrivers: true,
     notifyDriverIds: ride.notifiedDriverIds || []
   });
+}
+
+function emitRidePickupReached(ride) {
+  const referenceId = value => value?._id || value?.id || value;
+  const passengerId = referenceId(ride?.passenger);
+  if (!passengerId || !ride?.verificationPin) return null;
+  const revision = new Date(ride.updatedAt || Date.now()).toISOString();
+  const payload = {
+    rideId: String(ride._id),
+    eventId: `ride:pickup-reached:${ride._id}:${revision}`,
+    revision,
+    pickupReachedAt: ride.pickupReachedAt,
+    verificationPin: ride.verificationPin
+  };
+  // Send the usable PIN only to the Customer's personal room. The Driver
+  // receives no PIN from the server and must obtain it from the passenger.
+  io.to(`user:${passengerId}`).emit('ride:pickup-reached', payload);
+  return payload;
+}
+
+async function releaseRidePinAtPickup(ride, location) {
+  if (!ride || ride.pickupReachedAt || !isAtRidePickup(ride, location)) return false;
+  const pickupReachedAt = new Date();
+  const updatedRide = await Ride.findOneAndUpdate(
+    {
+      _id: ride._id,
+      driver: ride.driver,
+      status: { $in: ['accepted', 'arrived'] },
+      pickupReachedAt: null
+    },
+    {
+      $set: {
+        'driverLocation.lat': Number(location.lat),
+        'driverLocation.lng': Number(location.lng),
+        pickupReachedAt
+      }
+    },
+    { new: true }
+  );
+  if (!updatedRide) return false;
+  emitRidePickupReached(updatedRide);
+  return true;
 }
 
 const ADMIN_SECURITY_KEY = 'admin_security';
@@ -2519,9 +2588,10 @@ app.post('/api/driver/location', authMiddleware, driverOnly, async (req, res) =>
         _id: rideId,
         driver: req.user.id,
         status: { $in: ['accepted', 'arrived', 'in-progress'] }
-      }).select('_id').lean();
+      }).select('_id driver passenger pickupLocation status pickupReachedAt verificationPin driverLocation').lean();
       if (ride) {
         await Ride.updateOne({ _id: rideId }, { 'driverLocation.lat': lat, 'driverLocation.lng': lng });
+        await releaseRidePinAtPickup(ride, { lat, lng });
         io.to(`ride:${rideId}`).emit('driver:location', { lat, lng });
       }
     }
@@ -2549,7 +2619,7 @@ app.get('/api/rides/my', authMiddleware, async (req, res) => {
       .populate('passenger driver', 'name phone vehicleType rating')
       .sort({ createdAt: -1 })
       .limit(20);
-    res.json(rides);
+    res.json(rides.map(ride => rideResponseForUser(ride, req.user.role)));
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -2565,7 +2635,7 @@ app.get('/api/rides/:id', authMiddleware, async (req, res) => {
     if (!isPassenger && !isDriver) {
       return res.status(403).json({ error: 'You are not authorized to view this ride' });
     }
-    res.json(ride);
+    res.json(rideResponseForUser(ride, isPassenger ? 'customer' : 'driver'));
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -2633,7 +2703,7 @@ app.patch('/api/rides/:id/accept', authMiddleware, async (req, res) => {
       profilePhoto: driverUser.profilePhoto || ''
     });
 
-    res.json(ride);
+    res.json(rideResponseForUser(ride, 'driver'));
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -2648,7 +2718,7 @@ const STATUS_TRANSITIONS = {
 app.patch('/api/rides/:id/status', authMiddleware, driverOnly, async (req, res) => {
   try {
     const { status } = req.body;
-    const ride = await Ride.findById(req.params.id);
+    let ride = await Ride.findById(req.params.id);
     if (!ride) return res.status(404).json({ error: 'Ride not found' });
 
     // Only the assigned driver may advance the ride status
@@ -2659,6 +2729,18 @@ app.patch('/api/rides/:id/status', authMiddleware, driverOnly, async (req, res) 
     const allowed = STATUS_TRANSITIONS[ride.status] || [];
     if (!allowed.includes(status)) {
       return res.status(400).json({ error: `Cannot transition from "${ride.status}" to "${status}"` });
+    }
+
+    // A Driver may not claim arrival while still outside the pickup gate.
+    // A recent GPS fix can satisfy the gate here if the location event and
+    // button press race each other.
+    if (status === 'arrived' && !ride.pickupReachedAt) {
+      if (!isAtRidePickup(ride, ride.driverLocation)) {
+        return res.status(409).json({ error: 'PICKUP_NOT_REACHED', message: 'You must reach the pickup point before marking arrival.' });
+      }
+      await releaseRidePinAtPickup(ride, ride.driverLocation);
+      ride = await Ride.findById(ride._id);
+      if (!ride) return res.status(404).json({ error: 'Ride not found' });
     }
 
     // Validate verification PIN before starting the ride
@@ -2706,7 +2788,7 @@ app.patch('/api/rides/:id/cancel', authMiddleware, async (req, res) => {
   try {
     const ride = await Ride.findById(req.params.id);
     if (!ride) return res.status(404).json({ error: 'Ride not found' });
-    if (!['requested', 'accepted'].includes(ride.status)) {
+    if (!['requested', 'accepted'].includes(ride.status) || ride.pickupReachedAt) {
       return res.status(400).json({ error: 'Cannot cancel at this stage' });
     }
 
@@ -2736,7 +2818,7 @@ app.patch('/api/rides/:id/cancel', authMiddleware, async (req, res) => {
     if (isPassenger) {
       emitRideLifecycle(ride, 'ride_cancelled', cancellationDetail, cancellationAudience);
     }
-    res.json(ride);
+    res.json(rideResponseForUser(ride, isPassenger ? 'customer' : 'driver'));
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -2861,7 +2943,7 @@ app.patch('/api/rides/:id/accept-driver', authMiddleware, async (req, res) => {
       profilePhoto: driverUser.profilePhoto || ''
     });
 
-    res.json(ride);
+    res.json(rideResponseForUser(ride, 'customer'));
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -4903,9 +4985,10 @@ io.on('connection', async (socket) => {
     if (rideId) {
       const activeRide = await Ride.findOne({
         _id: rideId, driver: id, status: { $in: ['accepted', 'arrived', 'in-progress'] }
-      }).select('_id').lean().catch(() => null);
+      }).select('_id driver passenger pickupLocation status pickupReachedAt verificationPin driverLocation').lean().catch(() => null);
       if (!activeRide) return;
       await Ride.updateOne({ _id: rideId }, { 'driverLocation.lat': lat, 'driverLocation.lng': lng }).catch(() => {});
+      await releaseRidePinAtPickup(activeRide, { lat, lng }).catch(() => {});
       io.to(`ride:${rideId}`).emit('driver:location', { lat, lng });
     }
     await User.updateOne({ _id: id }, {
