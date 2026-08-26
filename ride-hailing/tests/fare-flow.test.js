@@ -389,8 +389,8 @@ test('ride creation uses the server-calculated fare and records the authoritativ
       method: 'POST',
       headers: { authorization: `Bearer ${customerToken()}`, 'x-session-token': TEST_SESSION },
       body: JSON.stringify({
-        pickupLocation: { lat: 1, lng: 2 },
-        dropoffLocation: { lat: 3, lng: 4 },
+        pickupLocation: { lat: 31.5204, lng: 74.3587 },
+        dropoffLocation: { lat: 33.6844, lng: 73.0479 },
         distance: 7,
         vehicleType: 'Car Mini',
         fare: 1
@@ -436,8 +436,8 @@ test('Customer fare adjustments are server-bounded negotiation offers', async ()
       method: 'POST',
       headers: { authorization: `Bearer ${customerToken()}`, 'x-session-token': TEST_SESSION },
       body: JSON.stringify({
-        pickupLocation: { lat: 1, lng: 2 },
-        dropoffLocation: { lat: 3, lng: 4 },
+        pickupLocation: { lat: 31.5204, lng: 74.3587 },
+        dropoffLocation: { lat: 33.6844, lng: 73.0479 },
         distance: 7,
         vehicleType: 'Car Mini',
         customerOffer: 780
@@ -451,8 +451,8 @@ test('Customer fare adjustments are server-bounded negotiation offers', async ()
       method: 'POST',
       headers: { authorization: `Bearer ${customerToken()}`, 'x-session-token': TEST_SESSION },
       body: JSON.stringify({
-        pickupLocation: { lat: 1, lng: 2 },
-        dropoffLocation: { lat: 3, lng: 4 },
+        pickupLocation: { lat: 31.5204, lng: 74.3587 },
+        dropoffLocation: { lat: 33.6844, lng: 73.0479 },
         distance: 7,
         vehicleType: 'Car Mini',
         customerOffer: 100
@@ -492,8 +492,8 @@ test('Customer fare offset is added to the authoritative Admin quote', async () 
       method: 'POST',
       headers: { authorization: `Bearer ${customerToken()}`, 'x-session-token': TEST_SESSION },
       body: JSON.stringify({
-        pickupLocation: { lat: 1, lng: 2 },
-        dropoffLocation: { lat: 3, lng: 4 },
+        pickupLocation: { lat: 31.5204, lng: 74.3587 },
+        dropoffLocation: { lat: 33.6844, lng: 73.0479 },
         distance: 7,
         vehicleType: 'Car Mini',
         customerFareOffset: 130
@@ -508,8 +508,8 @@ test('Customer fare offset is added to the authoritative Admin quote', async () 
       method: 'POST',
       headers: { authorization: `Bearer ${customerToken()}`, 'x-session-token': TEST_SESSION },
       body: JSON.stringify({
-        pickupLocation: { lat: 1, lng: 2 },
-        dropoffLocation: { lat: 3, lng: 4 },
+        pickupLocation: { lat: 31.5204, lng: 74.3587 },
+        dropoffLocation: { lat: 33.6844, lng: 73.0479 },
         distance: 7,
         vehicleType: 'Car Mini',
         customerFareOffset: -400

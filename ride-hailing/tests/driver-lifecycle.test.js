@@ -349,7 +349,7 @@ test('vehicle document replacement requires an image and immediately returns the
       vehicleType: 'Toyota Saloon Coaster',
       vehicleModel: 'New Model',
       vehiclePlate: 'new-456',
-      vehicleRegPhoto: 'data:image/png;base64,aGVsbG8='
+      vehicleRegPhoto: 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAEAAAABAAQMAAACQp+OdAAAAIGNIUk0AAHomAACAhAAA+gAAAIDoAAB1MAAA6mAAADqYAAAXcJy6UTwAAAAGUExURTq3qf///5K8OZ0AAAABYktHRAH/Ai3eAAAAB3RJTUUH6ggaDiQlxK12lQAAAA9JREFUKM9jYBgFo4B8AAACQAABjMWrdwAAACV0RVh0ZGF0ZTpjcmVhdGUAMjAyNi0wOC0yNlQxNDozNjozNyswMDowMHIDfB8AAAAldEVYdGRhdGU6bW9kaWZ5ADIwMjYtMDgtMjZUMTQ6MzY6MzcrMDA6MDADXsSjAAAAKHRFWHRkYXRlOnRpbWVzdGFtcAAyMDI2LTA4LTI2VDE0OjM2OjM3KzAwOjAwVEvlfAAAAABJRU5ErkJggg=='
     });
     assert.equal(submitted.response.status, 200);
     assert.equal(persisted.vehicleModel, 'New Model');
@@ -360,7 +360,7 @@ test('vehicle document replacement requires an image and immediately returns the
     assert.equal(persisted.isOnline, false);
     assert.equal(persisted.longRangeEnabled, false);
     assert.ok(persisted.vehicleReviewRequestedAt instanceof Date);
-    assert.match(persisted.vehicleRegPhoto, /^data:image\/png;base64,/);
+    assert.match(persisted.vehicleRegPhoto, /^vehicleReg_.+\.jpg$/);
   } finally {
     await new Promise(resolve => server.close(resolve));
   }

@@ -7,6 +7,7 @@ const TOKEN_KEY = 'myride.driver.token';
 const SESSION_KEY = 'myride.driver.session';
 const ONLINE_KEY = 'myride.driver.online';
 const ACTIVE_RIDE_KEY = 'myride.driver.activeRide';
+const PAKISTAN_ONLY_MESSAGE = 'Please select a location inside Pakistan.';
 const DOMAIN = process.env.EXPO_PUBLIC_RIDE_API_URL ||
   (process.env.EXPO_PUBLIC_DOMAIN ? `https://${process.env.EXPO_PUBLIC_DOMAIN}` : '');
 
@@ -36,6 +37,14 @@ async function postLocation(location: Location.LocationObject) {
   if (response.status === 401 || response.status === 403) {
     await SecureStore.setItemAsync(ONLINE_KEY, 'false');
     await Location.stopLocationUpdatesAsync(BACKGROUND_LOCATION_TASK).catch(() => undefined);
+    return;
+  }
+  if (response.status === 422) {
+    const payload = await response.json().catch(() => ({}));
+    if (payload?.error === PAKISTAN_ONLY_MESSAGE) {
+      await SecureStore.setItemAsync(ONLINE_KEY, 'false');
+      await Location.stopLocationUpdatesAsync(BACKGROUND_LOCATION_TASK).catch(() => undefined);
+    }
   }
 }
 

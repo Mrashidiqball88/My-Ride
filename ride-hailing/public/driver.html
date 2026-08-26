@@ -15,6 +15,7 @@
 <title>My Ride - Driver</title>
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script src="/pakistan-geofence.js"></script>
 <script src="/socket.io/socket.io.js"></script>
 <style>
 @import url('https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Space+Mono:wght@400;700&display=swap');
@@ -382,10 +383,16 @@ textarea.support-input{resize:vertical;min-height:85px}
 <svg aria-hidden="true" width="0" height="0" style="position:absolute;overflow:hidden">
   <defs>
     <filter id="driver-map-charcoal-filter" color-interpolation-filters="sRGB">
-      <feComponentTransfer result="highContrast">
-        <feFuncR type="linear" slope="4" intercept="-1.2"/>
-        <feFuncG type="linear" slope="4" intercept="-1.2"/>
-        <feFuncB type="linear" slope="4" intercept="-1.2"/>
+      <feComponentTransfer result="inverted">
+        <feFuncR type="linear" slope="-1" intercept="1"/>
+        <feFuncG type="linear" slope="-1" intercept="1"/>
+        <feFuncB type="linear" slope="-1" intercept="1"/>
+      </feComponentTransfer>
+      <feColorMatrix in="inverted" type="saturate" values="0" result="monochrome"/>
+      <feComponentTransfer in="monochrome" result="highContrast">
+        <feFuncR type="linear" slope="4" intercept="-.4"/>
+        <feFuncG type="linear" slope="4" intercept="-.4"/>
+        <feFuncB type="linear" slope="4" intercept="-.4"/>
       </feComponentTransfer>
       <feComponentTransfer in="highContrast">
         <feFuncR type="linear" slope=".875" intercept=".125"/>
@@ -818,12 +825,31 @@ let navigationFollowing = true;
 let navigationRouteRequest = 0;
 let navigationFollowTimer = null;
 const DRIVER_FOLLOW_INTERVAL_MS = 2500;
+const PAKISTAN_ONLY_MESSAGE = window.MyRidePakistanGeofence?.PAKISTAN_ONLY_MESSAGE
+  || 'Please select a location inside Pakistan.';
+let pakistanLocationNoticeShown = false;
 
 // ── Toast ──────────────────────────────────────────────────────────────────
 function showToast(msg, type = 'info') {
   const el = document.getElementById('toast');
   el.textContent = msg; el.className = `toast ${type} show`;
   setTimeout(() => el.className = 'toast', 3000);
+}
+
+function isPakistanLocation(lat, lng) {
+  return window.MyRidePakistanGeofence?.isWithinPakistan(lat, lng) === true;
+}
+
+function ensurePakistanLocation(lat, lng) {
+  if (isPakistanLocation(lat, lng)) {
+    pakistanLocationNoticeShown = false;
+    return true;
+  }
+  if (!pakistanLocationNoticeShown) {
+    pakistanLocationNoticeShown = true;
+    showToast(PAKISTAN_ONLY_MESSAGE, 'error');
+  }
+  return false;
 }
 
 function sendDriverHeartbeat() {
@@ -1474,10 +1500,11 @@ function urlBase64ToUint8Array(base64String) {
 function initMap() {
   if (map) return;
   map = L.map('map', { zoomControl: false, preferCanvas: true, attributionControl: true }).setView([31.5204, 74.3587], 16);
-  L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Dark_Gray_Base/MapServer/tile/{z}/{y}/{x}', {
-    attribution : 'Tiles © Esri — Esri, DeLorme, NAVTEQ',
-    maxNativeZoom: 16,
+  L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Street_Map/MapServer/tile/{z}/{y}/{x}', {
+    attribution : 'Tiles © Esri — Esri, HERE, Garmin, FAO, NOAA, USGS, OpenStreetMap contributors',
+    maxNativeZoom: 19,
     maxZoom      : 20,
+    detectRetina : true,
     errorTileUrl: 'data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 width=%22256%22 height=%22256%22%3E%3Crect width=%22256%22 height=%22256%22 fill=%22%23202a2c%22/%3E%3C/svg%3E',
     crossOrigin  : true
   }).addTo(map);
@@ -1497,6 +1524,7 @@ function initMap() {
   if (navigator.geolocation) {
     locationWatch = navigator.geolocation.watchPosition(pos => {
       const { latitude: lat, longitude: lng } = pos.coords;
+      if (!ensurePakistanLocation(lat, lng)) return;
       driverLocation = { lat, lng };
       if (myMarker) myMarker.setLatLng([lat, lng]);
       else myMarker = L.marker([lat, lng], {
@@ -1515,6 +1543,7 @@ function initMap() {
     }, () => {}, { enableHighAccuracy: true, maximumAge: 3000 });
 
     navigator.geolocation.getCurrentPosition(pos => {
+      if (!ensurePakistanLocation(pos.coords.latitude, pos.coords.longitude)) return;
       driverLocation = { lat: pos.coords.latitude, lng: pos.coords.longitude };
       if (!activeRide) map.setView([pos.coords.latitude, pos.coords.longitude], 15);
     }, () => {});
@@ -1533,7 +1562,7 @@ function centerDriverMapPreservingZoom(point, { animate = true, duration = .45 }
   if (!map || !point) return;
   const lat = Number(point.lat), lng = Number(point.lng);
   const zoom = map.getZoom();
-  if (!Number.isFinite(lat) || !Number.isFinite(lng) || !Number.isFinite(zoom)) return;
+  if (!isPakistanLocation(lat, lng) || !Number.isFinite(zoom)) return;
   map.setView([lat, lng], zoom, { animate, duration });
 }
 
@@ -1562,6 +1591,9 @@ function haversineKm(a, b) {
 }
 
 async function requestRoadRoute(points) {
+  if (points.some(point => !isPakistanLocation(point?.lat, point?.lng))) {
+    throw new Error(PAKISTAN_ONLY_MESSAGE);
+  }
   const encoded = points.map(point => `${Number(point.lng)},${Number(point.lat)}`).join(';');
   return apiCall(`/api/routing/road?points=${encodeURIComponent(encoded)}`);
 }
@@ -1573,7 +1605,7 @@ function activeNavigationDestination(ride = activeRide) {
     ? ride.dropoffLocations
     : (ride.dropoffLocation ? [ride.dropoffLocation] : []);
   const point = inProgress ? stops[0] : ride.pickupLocation;
-  if (!point?.lat || !point?.lng) return null;
+  if (!point?.lat || !point?.lng || !isPakistanLocation(point.lat, point.lng)) return null;
   return {
     point,
     label: inProgress ? 'To drop-off' : 'To pickup',

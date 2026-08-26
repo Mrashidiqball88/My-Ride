@@ -13,6 +13,7 @@ const SESSION_KEY = 'myride.driver.session';
 const USER_KEY = 'myride.driver.user';
 const ONLINE_KEY = 'myride.driver.online';
 const ACTIVE_RIDE_KEY = 'myride.driver.activeRide';
+const PAKISTAN_ONLY_MESSAGE = 'Please select a location inside Pakistan.';
 const API_URL = process.env.EXPO_PUBLIC_RIDE_API_URL ||
   (process.env.EXPO_PUBLIC_DOMAIN ? `https://${process.env.EXPO_PUBLIC_DOMAIN}` : '');
 let sessionRevokedHandler: (() => void) | null = null;
@@ -289,14 +290,22 @@ export function DriverRuntimeProvider({ children }: { children: ReactNode }) {
 
   const sendCurrentLocation = useCallback(async (location: Location.LocationObject) => {
     if (!tokenRef.current || !isOnline) return;
-    await api('/api/driver/location', tokenRef.current, sessionRef.current || undefined, {
-      method: 'POST', body: JSON.stringify({
+    try {
+      await api('/api/driver/location', tokenRef.current, sessionRef.current || undefined, {
+        method: 'POST', body: JSON.stringify({
+          lat: location.coords.latitude, lng: location.coords.longitude, rideId: activeRideId || undefined,
+        }),
+      });
+      socket.current?.emit('driver:location', {
         lat: location.coords.latitude, lng: location.coords.longitude, rideId: activeRideId || undefined,
-      }),
-    });
-    socket.current?.emit('driver:location', {
-      lat: location.coords.latitude, lng: location.coords.longitude, rideId: activeRideId || undefined,
-    });
+      });
+    } catch (error) {
+      if (error instanceof Error && error.message === PAKISTAN_ONLY_MESSAGE) {
+        setError(PAKISTAN_ONLY_MESSAGE);
+        return;
+      }
+      throw error;
+    }
   }, [activeRideId, isOnline]);
 
   const startLocationService = useCallback(async () => {

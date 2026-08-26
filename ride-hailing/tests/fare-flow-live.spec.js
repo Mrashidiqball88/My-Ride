@@ -114,7 +114,7 @@ test.describe('live Mongo fare refresh', () => {
       role: 'driver',
       vehicleType: 'Car Mini',
       isOnline: true,
-      currentLocation: { lat: 1, lng: 2 },
+      currentLocation: { lat: 31.5204, lng: 74.3587 },
       accountStatus: 'active'
     });
     otherDriver = await models.User.create({
@@ -124,7 +124,7 @@ test.describe('live Mongo fare refresh', () => {
       role: 'driver',
       vehicleType: 'Bike',
       isOnline: true,
-      currentLocation: { lat: 50, lng: 50 },
+      currentLocation: { lat: 24.8607, lng: 67.0011 },
       accountStatus: 'active'
     });
     highroofDriver = await models.User.create({
@@ -134,7 +134,7 @@ test.describe('live Mongo fare refresh', () => {
       role: 'driver',
       vehicleType: 'Toyota Highroof',
       isOnline: true,
-      currentLocation: { lat: 1, lng: 2 },
+      currentLocation: { lat: 31.5204, lng: 74.3587 },
       accountStatus: 'active'
     });
     highroofTakeoverDriver = await models.User.create({
@@ -144,7 +144,7 @@ test.describe('live Mongo fare refresh', () => {
       role: 'driver',
       vehicleType: 'Toyota Highroof',
       isOnline: true,
-      currentLocation: { lat: 1, lng: 2 },
+      currentLocation: { lat: 31.5204, lng: 74.3587 },
       accountStatus: 'active'
     });
     coasterDriver = await models.User.create({
@@ -154,7 +154,7 @@ test.describe('live Mongo fare refresh', () => {
       role: 'driver',
       vehicleType: 'Toyota Saloon Coaster',
       isOnline: true,
-      currentLocation: { lat: 1, lng: 2 },
+      currentLocation: { lat: 31.5204, lng: 74.3587 },
       accountStatus: 'active'
     });
     await models.Wallet.create([
@@ -323,8 +323,8 @@ test.describe('live Mongo fare refresh', () => {
       const rideResponse = await request.post('/api/rides', {
         headers: authHeaders(customer),
         data: {
-          pickupLocation: { lat: 1, lng: 2, address: 'Live pickup' },
-          dropoffLocation: { lat: 3, lng: 4, address: 'Live dropoff' },
+          pickupLocation: { lat: 31.5204, lng: 74.3587, address: 'Live pickup' },
+          dropoffLocation: { lat: 31.5304, lng: 74.3687, address: 'Live dropoff' },
           distance: 7,
           vehicleType: 'Car Mini',
           fare: 1
@@ -552,14 +552,14 @@ test.describe('live Mongo fare refresh', () => {
       // snapshot must still permit a real eligible driver to take over while
       // the originally alerted driver is disconnected.
       await models.User.updateOne({ _id: highroofTakeoverDriver._id }, {
-        $set: { isOnline: true, lastOnlineHeartbeat: new Date(), currentLocation: { lat: 1, lng: 2 } }
+        $set: { isOnline: true, lastOnlineHeartbeat: new Date(), currentLocation: { lat: 31.5204, lng: 74.3587 } }
       });
 
       const rideResponse = await request.post('/api/rides', {
         headers: authHeaders(customer),
         data: {
-          pickupLocation: { lat: 1, lng: 2, address: 'Highroof takeover pickup' },
-          dropoffLocation: { lat: 3, lng: 4, address: 'Highroof takeover dropoff' },
+          pickupLocation: { lat: 31.5204, lng: 74.3587, address: 'Highroof takeover pickup' },
+          dropoffLocation: { lat: 31.5304, lng: 74.3687, address: 'Highroof takeover dropoff' },
           distance: 7,
           vehicleType: 'Toyota Highroof',
           fare: 1
@@ -614,7 +614,7 @@ test.describe('live Mongo fare refresh', () => {
     try {
       const heartbeat = new Date();
       await models.User.updateOne({ _id: matchingDriver._id }, {
-        $set: { isOnline: true, lastOnlineHeartbeat: heartbeat, currentLocation: { lat: 1, lng: 2 } }
+        $set: { isOnline: true, lastOnlineHeartbeat: heartbeat, currentLocation: { lat: 31.5204, lng: 74.3587 } }
       });
       await models.User.updateOne({ _id: otherDriver._id }, {
         $set: {
@@ -627,8 +627,8 @@ test.describe('live Mongo fare refresh', () => {
       const created = await request.post('/api/rides', {
         headers: authHeaders(customer),
         data: {
-          pickupLocation: { lat: 1, lng: 2, address: 'Private pickup' },
-          dropoffLocation: { lat: 3, lng: 4, address: 'Private dropoff' },
+          pickupLocation: { lat: 31.5204, lng: 74.3587, address: 'Private pickup' },
+          dropoffLocation: { lat: 31.5304, lng: 74.3687, address: 'Private dropoff' },
           distance: 7,
           vehicleType: 'Car Mini',
           fare: 1
@@ -672,8 +672,8 @@ test.describe('live Mongo fare refresh', () => {
       const response = await request.post('/api/rides', {
         headers: authHeaders(customer),
         data: {
-          pickupLocation: { lat: 1, lng: 2, address: `${label} pickup` },
-          dropoffLocation: { lat: 3, lng: 4, address: `${label} dropoff` },
+          pickupLocation: { lat: 31.5204, lng: 74.3587, address: `${label} pickup` },
+          dropoffLocation: { lat: 31.5304, lng: 74.3687, address: `${label} dropoff` },
           distance: 7,
           vehicleType: 'Car Mini',
           fare: 1
@@ -726,6 +726,85 @@ test.describe('live Mongo fare refresh', () => {
     } finally {
       await driverPage.close();
       await request.dispose();
+    }
+  });
+
+  test('rejects out-of-Pakistan customer locations in the browser and API', async ({ browser, playwright }) => {
+    const baseURL = `http://127.0.0.1:${httpServer.address().port}`;
+    const request = await playwright.request.newContext({ baseURL });
+    const customerPage = await browser.newPage();
+
+    try {
+      await openAuthenticatedClient(customerPage, baseURL, '/customer', customer, token(customer));
+      const selection = await customerPage.evaluate(async () => ({
+        accepted: await setPickup(28.6139, 77.2090, 'Delhi'),
+        message: document.getElementById('toast')?.textContent
+      }));
+      expect(selection).toEqual({
+        accepted: false,
+        message: 'Please select a location inside Pakistan.'
+      });
+
+      const routing = await request.get(`/api/routing/road?points=${encodeURIComponent('77.2090,28.6139;74.3587,31.5204')}`, {
+        headers: authHeaders(customer)
+      });
+      expect(routing.status()).toBe(422);
+      await expect(routing.json()).resolves.toMatchObject({
+        error: 'Please select a location inside Pakistan.',
+        code: 'OUTSIDE_PAKISTAN'
+      });
+
+      const multiStopRide = await request.post('/api/rides', {
+        headers: authHeaders(customer),
+        data: {
+          pickupLocation: { lat: 31.5204, lng: 74.3587, address: 'Lahore' },
+          dropoffLocations: [
+            { lat: 31.5304, lng: 74.3687, address: 'Local stop' },
+            { lat: 28.6139, lng: 77.2090, address: 'Delhi' }
+          ],
+          distance: 10,
+          vehicleType: 'Car Mini'
+        }
+      });
+      expect(multiStopRide.status()).toBe(422);
+      await expect(multiStopRide.json()).resolves.toMatchObject({
+        error: 'Please select a location inside Pakistan.',
+        code: 'OUTSIDE_PAKISTAN'
+      });
+    } finally {
+      await customerPage.close();
+      await request.dispose();
+    }
+  });
+
+  test('loads high-density charcoal Driver street-map tiles', async ({ browser }) => {
+    const baseURL = `http://127.0.0.1:${httpServer.address().port}`;
+    const context = await browser.newContext({
+      viewport: { width: 430, height: 900 },
+      deviceScaleFactor: 2
+    });
+    const driverPage = await context.newPage();
+
+    try {
+      await openAuthenticatedClient(driverPage, baseURL, '/driver', matchingDriver, token(matchingDriver));
+      await driverPage.evaluate(() => {
+        if (!map) initMap();
+      });
+      await driverPage.waitForFunction(() =>
+        [...document.querySelectorAll('#map .leaflet-tile')].some(tile => tile.complete && tile.naturalWidth > 0)
+      );
+      const tiles = await driverPage.evaluate(() => [...document.querySelectorAll('#map .leaflet-tile')].map(tile => ({
+        src: tile.src,
+        loaded: tile.complete && tile.naturalWidth > 0
+      })));
+      const loadedStreetTiles = tiles.filter(tile =>
+        tile.loaded && tile.src.includes('World_Street_Map/MapServer/tile/')
+      );
+      expect(loadedStreetTiles.length).toBeGreaterThan(0);
+      expect(Math.max(...loadedStreetTiles.map(tile => Number(tile.src.match(/tile\/(\d+)\//)?.[1] || 0)))).toBeGreaterThanOrEqual(17);
+      await expect(driverPage.locator('#map .leaflet-tile-pane')).toHaveCSS('filter', /driver-map-charcoal-filter/);
+    } finally {
+      await context.close();
     }
   });
 });
