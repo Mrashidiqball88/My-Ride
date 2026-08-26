@@ -2608,10 +2608,21 @@ app.patch('/api/rides/:id/cancel', authMiddleware, async (req, res) => {
     await ride.save();
     // Requested riders are usually only in their vehicle room, not the ride
     // room, so cancellation must fan out to both audiences immediately.
-    emitRideLifecycle(ride, 'ride:status', { status: 'cancelled' }, {
+    const cancellationDetail = {
+      status: 'cancelled',
+      cancelledBy: isPassenger ? 'customer' : 'driver'
+    };
+    const cancellationAudience = {
       notifyVehicleDrivers: true,
       notifyDriverIds: ride.notifiedDriverIds || []
-    });
+    };
+    emitRideLifecycle(ride, 'ride:status', cancellationDetail, cancellationAudience);
+    // Keep a dedicated event for the Driver incoming-offer surface. This is
+    // emitted in addition to ride:status for backwards compatibility with
+    // existing Customer and Driver ride lifecycle consumers.
+    if (isPassenger) {
+      emitRideLifecycle(ride, 'ride_cancelled', cancellationDetail, cancellationAudience);
+    }
     res.json(ride);
   } catch (err) {
     res.status(500).json({ error: err.message });
