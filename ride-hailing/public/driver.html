@@ -297,11 +297,11 @@ textarea.support-input{resize:vertical;min-height:85px}
 /* ── Driver Console production skin ──
    The approved console design is layered over the existing live driver DOM.
    IDs and handlers stay intact for realtime offers, payments and ride status. */
-:root{--dc-ink:#f7f7f3;--dc-muted:#9aa3a5;--dc-dim:#667174;--dc-line:rgba(255,255,255,.11);--dc-night:#111718;--dc-panel:#182022;--dc-panel2:#202a2c;--dc-cyan:#74e0d1;--dc-yellow:#f5cc68;--dc-coral:#ff8e78}
+:root{--dc-ink:#f7f7f3;--dc-muted:#9aa3a5;--dc-dim:#667174;--dc-line:rgba(255,255,255,.11);--dc-night:#111718;--dc-panel:#182022;--dc-panel2:#202a2c;--dc-map-charcoal:#202a2c;--dc-cyan:#74e0d1;--dc-yellow:#f5cc68;--dc-coral:#ff8e78}
 #app{position:relative;display:none;background:var(--dc-night);color:var(--dc-ink);overflow:hidden;font-family:'DM Sans','Segoe UI',sans-serif}
-#map{position:absolute;inset:0;width:100%;height:100%;z-index:1;filter:none;background:#3b4650}
-.leaflet-container{background:#3b4650}
-#map .leaflet-tile-pane{filter:brightness(1.48) contrast(1.12) grayscale(.2)}
+#map{position:absolute;inset:0;width:100%;height:100%;z-index:1;filter:none;background:var(--dc-map-charcoal)}
+.leaflet-container{background:var(--dc-map-charcoal)}
+#map .leaflet-tile-pane{filter:url("#driver-map-charcoal-filter");opacity:1}
 .header{position:absolute;top:0;left:0;right:0;height:62px;padding:14px 16px 12px;background:linear-gradient(180deg,rgba(17,23,24,.96),rgba(17,23,24,.55),transparent);border:0;z-index:20}
 .header-logo{font-size:20px;letter-spacing:-.04em;color:var(--dc-ink)}
 .header-logo span{color:var(--dc-cyan)}
@@ -379,6 +379,22 @@ textarea.support-input{resize:vertical;min-height:85px}
 <body>
 
 <!-- ── AUTH ── -->
+<svg aria-hidden="true" width="0" height="0" style="position:absolute;overflow:hidden">
+  <defs>
+    <filter id="driver-map-charcoal-filter" color-interpolation-filters="sRGB">
+      <feComponentTransfer result="highContrast">
+        <feFuncR type="linear" slope="4" intercept="-1.2"/>
+        <feFuncG type="linear" slope="4" intercept="-1.2"/>
+        <feFuncB type="linear" slope="4" intercept="-1.2"/>
+      </feComponentTransfer>
+      <feComponentTransfer in="highContrast">
+        <feFuncR type="linear" slope=".875" intercept=".125"/>
+        <feFuncG type="linear" slope=".835" intercept=".165"/>
+        <feFuncB type="linear" slope=".827" intercept=".173"/>
+      </feComponentTransfer>
+    </filter>
+  </defs>
+</svg>
 <div id="auth-screen">
   <div class="auth-logo brand-lockup"><img class="brand-mark" src="/logo-driver.svg" alt="My Ride Driver"><span>My <span>Ride</span><small class="brand-role">DRIVER</small></span></div>
   <p class="auth-subtitle">Driver Portal</p>
@@ -1458,12 +1474,11 @@ function urlBase64ToUint8Array(base64String) {
 function initMap() {
   if (map) return;
   map = L.map('map', { zoomControl: false, preferCanvas: true, attributionControl: true }).setView([31.5204, 74.3587], 16);
-  L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
-    attribution : '© OpenStreetMap contributors © CARTO',
-    maxNativeZoom: 19,
+  L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Dark_Gray_Base/MapServer/tile/{z}/{y}/{x}', {
+    attribution : 'Tiles © Esri — Esri, DeLorme, NAVTEQ',
+    maxNativeZoom: 16,
     maxZoom      : 20,
-    subdomains   : 'abc',
-    detectRetina : true,
+    errorTileUrl: 'data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 width=%22256%22 height=%22256%22%3E%3Crect width=%22256%22 height=%22256%22 fill=%22%23202a2c%22/%3E%3C/svg%3E',
     crossOrigin  : true
   }).addTo(map);
 

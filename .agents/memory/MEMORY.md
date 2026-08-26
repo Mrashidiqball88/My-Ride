@@ -8,7 +8,7 @@
 - [Ride preference fee policy](ride-preference-fee-policy.md) — Long Range Only is exempt from Daily Fees and must not receive local rides.
 - [Car Mini category migration](car-mini-category-migration.md) — legacy Car Mini records resolve as Non-AC while old pricing settings seed both split categories.
 - [Customer fare offsets](customer-fare-offsets.md) — keep the Admin quote immutable and persist Customer negotiation as a bounded offset added to it.
-- [Customer PWA shell updates](customer-pwa-shell-updates.md) — bump the Service Worker cache version when repairing cached Customer HTML or JavaScript.
+- [PWA shell updates](customer-pwa-shell-updates.md) — bump the Service Worker cache version when repairing cached Customer or Driver HTML and inline JavaScript.
 - [Mobile location search focus](mobile-location-search-focus.md) — restoring focus after moving a live location input into its search sheet prevents mobile keyboard dismissal.
 - [Optional unique identity fields](optional-unique-identity-fields.md) — sparse unique fields must be omitted for inapplicable roles, never persisted as empty strings.
 - [Ride offer expiry authority](ride-offer-expiry-authority.md) — offer windows are persisted server timestamps, never client-only countdowns.
