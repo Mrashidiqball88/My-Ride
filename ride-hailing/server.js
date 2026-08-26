@@ -5,6 +5,7 @@
 
 require('dotenv').config({ path: require('path').resolve(__dirname, '..', '.env') });
 const { computeBackfillPaidUntil } = require('./lib/backfillPaidUntil');
+const { PAKISTAN_ONLY_MESSAGE, isWithinPakistan } = require('./public/pakistan-geofence');
 
 // ─── Global crash protection ──────────────────────────────────────────────────
 // Catch any unhandled error/rejection so the server never exits unexpectedly.
@@ -1263,9 +1264,7 @@ async function getRideBroadcastSettings() {
 function hasValidCoordinates(location) {
   const lat = Number(location?.lat);
   const lng = Number(location?.lng);
-  return Number.isFinite(lat) && lat >= -90 && lat <= 90
-    && Number.isFinite(lng) && lng >= -180 && lng <= 180
-    && !(lat === 0 && lng === 0);
+  return isWithinPakistan(lat, lng);
 }
 
 function roundFareOfferBoundary(amount) {
@@ -1760,10 +1759,11 @@ app.get('/api/routing/road', authMiddleware, async (req, res) => {
   }
   const points = rawPoints.map(raw => {
     const [lng, lat] = raw.split(',').map(Number);
-    return Number.isFinite(lat) && Number.isFinite(lng) && lat >= -90 && lat <= 90 && lng >= -180 && lng <= 180
-      ? { lat, lng } : null;
+    return hasValidCoordinates({ lat, lng }) ? { lat, lng } : null;
   });
-  if (points.some(point => !point)) return res.status(400).json({ error: 'Invalid route coordinates' });
+  if (points.some(point => !point)) {
+    return res.status(422).json({ error: PAKISTAN_ONLY_MESSAGE, code: 'OUTSIDE_PAKISTAN' });
+  }
   const coordinates = points.map(point => `${point.lng},${point.lat}`).join(';');
   try {
     const response = await fetch(`https://router.project-osrm.org/route/v1/driving/${coordinates}?overview=full&geometries=geojson&steps=false`);
@@ -2263,6 +2263,14 @@ app.post('/api/rides', authMiddleware, customerOnly, customerCanBook, async (req
     if (!pickupLocation) {
       return res.status(400).json({ error: 'Pickup is required' });
     }
+    // Resolve stops: prefer dropoffLocations array; fall back to single dropoffLocation
+    const stops = Array.isArray(dropoffLocations) && dropoffLocations.length
+      ? dropoffLocations
+      : (dropoffLocation ? [dropoffLocation] : []);
+    if (!stops.length) return res.status(400).json({ error: 'At least one dropoff stop is required' });
+    if (!hasValidCoordinates(pickupLocation) || stops.some(stop => !hasValidCoordinates(stop))) {
+      return res.status(422).json({ error: PAKISTAN_ONLY_MESSAGE, code: 'OUTSIDE_PAKISTAN' });
+    }
     const [settingsDoc, ratesDoc, longRangeDoc, rideBroadcastDoc] = await Promise.all([
       Settings.findOne({ key: 'daily_fare_settings' }).lean(),
       Settings.findOne({ key: 'per_km_rates' }).lean(),
@@ -2282,12 +2290,6 @@ app.post('/api/rides', authMiddleware, customerOnly, customerCanBook, async (req
     if (fareQuote.error) return res.status(422).json({ error: fareQuote.error });
     const offerResult = resolveCustomerFareOffer(customerOffer, fareQuote.totalFare, customerFareOffset);
     if (offerResult.error) return res.status(422).json({ error: offerResult.error });
-    // Resolve stops: prefer dropoffLocations array; fall back to single dropoffLocation
-    const stops = Array.isArray(dropoffLocations) && dropoffLocations.length
-      ? dropoffLocations
-      : (dropoffLocation ? [dropoffLocation] : []);
-    if (!stops.length) return res.status(400).json({ error: 'At least one dropoff stop is required' });
-
     const broadcastExpiresAt = new Date(Date.now() + rideBroadcastSettings.broadcastRequestDurationSeconds * 1000);
     const ride = await Ride.create({
       passenger:        req.user.id,
@@ -2498,8 +2500,8 @@ app.post('/api/driver/location', authMiddleware, driverOnly, async (req, res) =>
     const lat = Number(req.body?.lat);
     const lng = Number(req.body?.lng);
     const rideId = req.body?.rideId;
-    if (!Number.isFinite(lat) || lat < -90 || lat > 90 || !Number.isFinite(lng) || lng < -180 || lng > 180) {
-      return res.status(422).json({ error: 'A valid GPS location is required' });
+    if (!hasValidCoordinates({ lat, lng })) {
+      return res.status(422).json({ error: PAKISTAN_ONLY_MESSAGE, code: 'OUTSIDE_PAKISTAN' });
     }
     const driver = await User.findById(req.user.id).select('accountStatus isOnline').lean();
     if (!driver || driver.accountStatus !== 'active' || !driver.isOnline) {
@@ -3367,7 +3369,10 @@ app.get('/api/geocode', async (req, res) => {
     const r = await fetch(url, { headers, signal: AbortSignal.timeout(5000) });
     if (!r.ok) throw new Error(`Geocode upstream ${r.status}`);
     const data = await r.json();
-    res.json(Array.isArray(data) ? data : []);
+    const pakistanResults = Array.isArray(data)
+      ? data.filter(result => hasValidCoordinates({ lat: result?.lat, lng: result?.lon }))
+      : [];
+    res.json(pakistanResults);
   } catch (err) {
     console.error('Geocode error:', err.message);
     res.json([]);
@@ -4306,7 +4311,9 @@ app.get('/api/drivers/nearby', authMiddleware, async (req, res) => {
   try {
     const lat = parseFloat(req.query.lat);
     const lng = parseFloat(req.query.lng);
-    if (isNaN(lat) || isNaN(lng)) return res.status(400).json({ error: 'lat and lng required' });
+    if (!hasValidCoordinates({ lat, lng })) {
+      return res.status(422).json({ error: PAKISTAN_ONLY_MESSAGE, code: 'OUTSIDE_PAKISTAN' });
+    }
     const { maximumRideBroadcastRadiusKm: radiusKm } = await getRideBroadcastSettings();
     const drivers = await User.find({
       role: 'driver', isOnline: true, accountStatus: 'active',
@@ -4872,7 +4879,10 @@ io.on('connection', async (socket) => {
   // Driver sends location updates during a ride
   socket.on('driver:location', async ({ rideId, lat, lng }) => {
     if (role !== 'driver') return;
-    if (!Number.isFinite(Number(lat)) || !Number.isFinite(Number(lng))) return;
+    if (!hasValidCoordinates({ lat, lng })) {
+      socket.emit('location:rejected', { error: PAKISTAN_ONLY_MESSAGE, code: 'OUTSIDE_PAKISTAN' });
+      return;
+    }
     if (rideId) {
       const activeRide = await Ride.findOne({
         _id: rideId, driver: id, status: { $in: ['accepted', 'arrived', 'in-progress'] }
