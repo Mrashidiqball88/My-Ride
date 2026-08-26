@@ -1,0 +1,30 @@
+uploads = []
+generated = []
+
+[[outputs]]
+id = "2ZSH0yhawJRHTC3RhxXtn"
+uri = "file://android-webview-wrappers/dist/myride-customer-release.apk"
+type = "unspecified"
+title = "My Ride - Customer APK"
+description = "Installable Android release wrapper locked to https://myride.duckdns.org/customer."
+logical_id = "b0bd53dd-db2d-4513-8f05-ac9c0acd34e4"
+content_hash = "sha256:a0bf42d4819917e0d4a55ef2bf491c83c2c6aabeb75e6ce2f35438d21a06ed63"
+size = 633952
+mtime_ms = 1787713149539
+storage_uri = "gcs://replit-rams-assets-pike/rams/assets/repl:4ac5798f-1f7b-4ed9-bb06-0857d254da4b/b0bd53dd-db2d-4513-8f05-ac9c0acd34e4/c963ae33-b0f5-4ce9-b86c-86321766dc5c"
+storage_version_token = "1787713167611232"
+content_type = "application/octet-stream"
+
+[[outputs]]
+id = "hRsrtSYNRl_ukYOH7UpfJ"
+uri = "file://android-webview-wrappers/dist/myride-driver-release.apk"
+type = "unspecified"
+title = "My Ride - Driver APK"
+description = "Installable Android release wrapper locked to https://myride.duckdns.org/driver."
+logical_id = "dd4bf0f1-2812-43d1-87e4-b05b59421c36"
+content_hash = "sha256:6e0251fd05bc78521b10ba3f2141244ce5b734325bd9a9f9cf36b456df3382d0"
+size = 633943
+mtime_ms = 1787713149555
+storage_uri = "gcs://replit-rams-assets-pike/rams/assets/repl:4ac5798f-1f7b-4ed9-bb06-0857d254da4b/dd4bf0f1-2812-43d1-87e4-b05b59421c36/d0163012-724c-4fa6-9108-17b32c5c3671"
+storage_version_token = "1787713169040945"
+content_type = "application/octet-stream"

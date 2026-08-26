@@ -22,9 +22,23 @@ The script installs/validates the Android SDK locally when needed, then builds:
 - `dist/myride-customer-release.apk`
 - `dist/myride-driver-release.apk`
 
-These are unsigned release APKs suitable for direct device installation. For
-Google Play or managed distribution, sign the same release artifacts with the
-organization's Android upload key in CI.
+When no signing variables are present, the script uses a short-lived local
+install key so the generated APKs can be installed immediately on test devices.
+That key is created outside the repository and deleted after the build, so those
+APKs are not suitable for future updates or Google Play distribution.
+
+For production releases, provide the organization's signing key without placing
+it in the repository:
+
+```bash
+export MYRIDE_RELEASE_KEYSTORE=/secure/path/myride-upload.jks
+export MYRIDE_RELEASE_KEYSTORE_PASSWORD='...'
+export MYRIDE_RELEASE_KEY_ALIAS='myride'
+export MYRIDE_RELEASE_KEY_PASSWORD='...'
+./scripts/build-apks.sh
+```
+
+The resulting `dist` files are then signed production release APKs.
 
 ## Runtime capabilities
 

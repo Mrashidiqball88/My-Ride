@@ -1,0 +1,45 @@
+{
+    "logs": [
+        {
+            "outputFile": "com.myride.wrapper.app-driverRelease-4:/values_values.arsc.flat",
+            "map": [
+                {
+                    "source": "/home/runner/workspace/android-webview-wrappers/app/src/main/res/values/styles.xml",
+                    "from": {
+                        "startLines": "1",
+                        "startColumns": "4",
+                        "startOffsets": "16",
+                        "endLines": "8",
+                        "endColumns": "12",
+                        "endOffsets": "466"
+                    },
+                    "to": {
+                        "startLines": "4",
+                        "startColumns": "4",
+                        "startOffsets": "228",
+                        "endLines": "11",
+                        "endColumns": "12",
+                        "endOffsets": "678"
+                    }
+                },
+                {
+                    "source": "/home/runner/workspace/android-webview-wrappers/app/build/generated/res/resValues/driver/release/values/gradleResValues.xml",
+                    "from": {
+                        "startLines": "6,8",
+                        "startColumns": "4,4",
+                        "startOffsets": "161,283",
+                        "endColumns": "74,97",
+                        "endOffsets": "231,376"
+                    },
+                    "to": {
+                        "startLines": "2,3",
+                        "startColumns": "4,4",
+                        "startOffsets": "55,130",
+                        "endColumns": "74,97",
+                        "endOffsets": "125,223"
+                    }
+                }
+            ]
+        }
+    ]
+}

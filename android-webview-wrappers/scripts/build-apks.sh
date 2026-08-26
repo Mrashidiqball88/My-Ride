@@ -25,6 +25,7 @@ require_command() {
 require_command java
 require_command unzip
 require_command curl
+require_command keytool
 
 if [ ! -x "$ANDROID_SDK_DIR/platform-tools/adb" ] || \
    [ ! -d "$ANDROID_SDK_DIR/platforms/android-$ANDROID_API_LEVEL" ] || \
@@ -64,13 +65,46 @@ if [ ! -x ./gradlew ]; then
   gradle wrapper --gradle-version 8.14.2 --distribution-type bin
 fi
 
+SIGNING_DIR="$(mktemp -d)"
+cleanup() {
+  rm -rf "$SIGNING_DIR"
+}
+trap cleanup EXIT
+
+if [ -n "${MYRIDE_RELEASE_KEYSTORE:-}" ]; then
+  log "Using the organization's configured release signing key"
+  GRADLE_SIGNING_ARGS=()
+else
+  log "Creating an ephemeral install key for local device installation"
+  keytool -genkeypair \
+    -keystore "$SIGNING_DIR/myride-install.keystore" \
+    -storepass android \
+    -keypass android \
+    -alias myride-install \
+    -dname "CN=My Ride Local Install, OU=Mobile, O=My Ride" \
+    -keyalg RSA \
+    -keysize 2048 \
+    -validity 2 \
+    -noprompt >/dev/null 2>&1
+  GRADLE_SIGNING_ARGS=(
+    "-PmyrideKeystore=$SIGNING_DIR/myride-install.keystore"
+    "-PmyrideKeystorePassword=android"
+    "-PmyrideKeyAlias=myride-install"
+    "-PmyrideKeyPassword=android"
+  )
+fi
+
 log "Building customer and driver release APKs"
-./gradlew --no-daemon clean assembleCustomerRelease assembleDriverRelease
+./gradlew --no-daemon clean assembleCustomerRelease assembleDriverRelease "${GRADLE_SIGNING_ARGS[@]}"
 
 mkdir -p dist
-cp -f app/build/outputs/apk/customer/release/app-customer-release.apk \
+CUSTOMER_APK="$(find app/build/outputs/apk/customer/release -maxdepth 1 -type f -name '*.apk' -print -quit)"
+DRIVER_APK="$(find app/build/outputs/apk/driver/release -maxdepth 1 -type f -name '*.apk' -print -quit)"
+[ -n "$CUSTOMER_APK" ] || fail "Customer APK was not produced"
+[ -n "$DRIVER_APK" ] || fail "Driver APK was not produced"
+cp -f "$CUSTOMER_APK" \
   dist/myride-customer-release.apk
-cp -f app/build/outputs/apk/driver/release/app-driver-release.apk \
+cp -f "$DRIVER_APK" \
   dist/myride-driver-release.apk
 
 log "Validating APK outputs"

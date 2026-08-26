@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+
+    <!-- Automatically generated file. DO NOT MODIFY -->
+
+    <!-- Value from product flavor: customer -->
+    <string name="app_name" translatable="false">My Ride - Customer</string>
+    <!-- Value from product flavor: customer -->
+    <string name="production_url" translatable="false">https://myride.duckdns.org/customer</string>
+
+</resources>

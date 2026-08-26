@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+
+    <!-- Automatically generated file. DO NOT MODIFY -->
+
+    <!-- Value from product flavor: driver -->
+    <string name="app_name" translatable="false">My Ride - Driver</string>
+    <!-- Value from product flavor: driver -->
+    <string name="production_url" translatable="false">https://myride.duckdns.org/driver</string>
+
+</resources>

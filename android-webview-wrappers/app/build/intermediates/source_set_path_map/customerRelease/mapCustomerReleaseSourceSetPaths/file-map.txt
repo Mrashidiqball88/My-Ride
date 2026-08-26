@@ -1,0 +1,9 @@
+com.myride.wrapper.app-customer-0 /home/runner/workspace/android-webview-wrappers/app/build/generated/res/pngs/customer/release
+com.myride.wrapper.app-customer-1 /home/runner/workspace/android-webview-wrappers/app/build/generated/res/resValues/customer/release
+com.myride.wrapper.app-packageCustomerReleaseResources-2 /home/runner/workspace/android-webview-wrappers/app/build/intermediates/incremental/customerRelease/packageCustomerReleaseResources/merged.dir
+com.myride.wrapper.app-packageCustomerReleaseResources-3 /home/runner/workspace/android-webview-wrappers/app/build/intermediates/incremental/customerRelease/packageCustomerReleaseResources/stripped.dir
+com.myride.wrapper.app-customerRelease-4 /home/runner/workspace/android-webview-wrappers/app/build/intermediates/merged_res/customerRelease/mergeCustomerReleaseResources
+com.myride.wrapper.app-customer-5 /home/runner/workspace/android-webview-wrappers/app/src/customer/res
+com.myride.wrapper.app-customerRelease-6 /home/runner/workspace/android-webview-wrappers/app/src/customerRelease/res
+com.myride.wrapper.app-main-7 /home/runner/workspace/android-webview-wrappers/app/src/main/res
+com.myride.wrapper.app-release-8 /home/runner/workspace/android-webview-wrappers/app/src/release/res

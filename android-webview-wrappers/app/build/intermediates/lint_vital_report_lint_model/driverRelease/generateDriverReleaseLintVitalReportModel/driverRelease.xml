@@ -1,0 +1,41 @@
+<variant
+    name="driverRelease"
+    package="com.myride.wrapper"
+    minSdkVersion="23"
+    targetSdkVersion="35"
+    mergedManifest="build/intermediates/merged_manifest/driverRelease/processDriverReleaseMainManifest/AndroidManifest.xml"
+    manifestMergeReport="build/outputs/logs/manifest-merger-driver-release-report.txt"
+    proguardFiles="build/intermediates/default_proguard_files/global/proguard-android.txt-8.7.3"
+    partialResultsDir="build/intermediates/lint_vital_partial_results/driverRelease/lintVitalAnalyzeDriverRelease/out">
+  <buildFeatures
+      namespacing="REQUIRED"/>
+  <sourceProviders>
+    <sourceProvider
+        manifests="src/main/AndroidManifest.xml"
+        javaDirectories="src/main/java:src/driver/java:src/release/java:src/driverRelease/java:src/main/kotlin:src/driver/kotlin:src/release/kotlin:src/driverRelease/kotlin"
+        resDirectories="src/main/res:src/driver/res:src/release/res:src/driverRelease/res"
+        assetsDirectories="src/main/assets:src/driver/assets:src/release/assets:src/driverRelease/assets"/>
+  </sourceProviders>
+  <testSourceProviders>
+  </testSourceProviders>
+  <testFixturesSourceProviders>
+  </testFixturesSourceProviders>
+  <resValues>
+    <resValue
+        type="string"
+        name="app_name"
+        value="My Ride - Driver" />
+    <resValue
+        type="string"
+        name="production_url"
+        value="https://myride.duckdns.org/driver" />
+  </resValues>
+  <artifact
+      classOutputs="build/intermediates/javac/driverRelease/compileDriverReleaseJavaWithJavac/classes:build/intermediates/compile_and_runtime_not_namespaced_r_class_jar/driverRelease/processDriverReleaseResources/R.jar"
+      type="MAIN"
+      applicationId="com.myride.driver"
+      generatedSourceFolders="build/generated/ap_generated_sources/driverRelease/out"
+      generatedResourceFolders="build/generated/res/resValues/driver/release"
+      desugaredMethodsFiles="/home/runner/.gradle/caches/8.14.2/transforms/2e0863a800dbd05693549224c2a84599/transformed/D8BackportedDesugaredMethods.txt">
+  </artifact>
+</variant>

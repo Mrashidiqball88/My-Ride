@@ -41,7 +41,7 @@ timeoutMs = 20000
 
 [nix]
 channel = "stable-25_05"
-packages = ["glib", "gtk3", "nss", "nspr", "dbus", "atk", "at-spi2-atk", "cups", "libdrm", "pango", "cairo", "xorg.libX11", "xorg.libXcomposite", "xorg.libXdamage", "xorg.libXext", "xorg.libXfixes", "xorg.libXrandr", "xorg.libxcb", "mesa", "libgbm", "libxkbcommon", "alsa-lib", "chromium", "gradle"]
+packages = ["glib", "gtk3", "nss", "nspr", "dbus", "atk", "at-spi2-atk", "cups", "libdrm", "pango", "cairo", "xorg.libX11", "xorg.libXcomposite", "xorg.libXdamage", "xorg.libXext", "xorg.libXfixes", "xorg.libXrandr", "xorg.libxcb", "mesa", "libgbm", "libxkbcommon", "alsa-lib", "chromium", "gradle", "jdk17"]
 
 [[ports]]
 localPort = 3000

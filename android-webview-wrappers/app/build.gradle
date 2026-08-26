@@ -2,6 +2,21 @@ plugins {
     id "com.android.application"
 }
 
+def productionKeystorePath = System.getenv("MYRIDE_RELEASE_KEYSTORE")
+def productionKeystorePassword = System.getenv("MYRIDE_RELEASE_KEYSTORE_PASSWORD")
+def productionKeyAlias = System.getenv("MYRIDE_RELEASE_KEY_ALIAS")
+def productionKeyPassword = System.getenv("MYRIDE_RELEASE_KEY_PASSWORD")
+def localKeystorePath = providers.gradleProperty("myrideKeystore").orNull
+def localKeystorePassword = providers.gradleProperty("myrideKeystorePassword").orNull
+def localKeyAlias = providers.gradleProperty("myrideKeyAlias").orNull
+def localKeyPassword = providers.gradleProperty("myrideKeyPassword").orNull
+def hasProductionSigning = [
+        productionKeystorePath,
+        productionKeystorePassword,
+        productionKeyAlias,
+        productionKeyPassword
+].every { value -> value != null && !value.trim().isEmpty() }
+
 android {
     namespace "com.myride.wrapper"
     compileSdk 35
@@ -30,6 +45,25 @@ android {
         }
     }
 
+    signingConfigs {
+        if (hasProductionSigning) {
+            production {
+                storeFile file(productionKeystorePath)
+                storePassword productionKeystorePassword
+                keyAlias productionKeyAlias
+                keyPassword productionKeyPassword
+            }
+        }
+        if (localKeystorePath) {
+            workspaceInstall {
+                storeFile file(localKeystorePath)
+                storePassword localKeystorePassword
+                keyAlias localKeyAlias
+                keyPassword localKeyPassword
+            }
+        }
+    }
+
     buildTypes {
         debug {
             applicationIdSuffix ".debug"
@@ -38,8 +72,11 @@ android {
         release {
             minifyEnabled false
             shrinkResources false
-            // Release APKs are intentionally unsigned in this workspace.
-            // Use the organization's upload/signing key in CI or Android Studio.
+            if (hasProductionSigning) {
+                signingConfig signingConfigs.production
+            } else if (localKeystorePath) {
+                signingConfig signingConfigs.workspaceInstall
+            }
         }
     }
 

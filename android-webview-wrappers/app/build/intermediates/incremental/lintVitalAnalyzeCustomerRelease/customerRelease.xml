@@ -1,0 +1,41 @@
+<variant
+    name="customerRelease"
+    package="com.myride.wrapper"
+    minSdkVersion="23"
+    targetSdkVersion="35"
+    mergedManifest="build/intermediates/merged_manifest/customerRelease/processCustomerReleaseMainManifest/AndroidManifest.xml"
+    proguardFiles="build/intermediates/default_proguard_files/global/proguard-android.txt-8.7.3"
+    partialResultsDir="build/intermediates/lint_vital_partial_results/customerRelease/lintVitalAnalyzeCustomerRelease/out"
+    desugaredMethodsFiles="/home/runner/.gradle/caches/8.14.2/transforms/2e0863a800dbd05693549224c2a84599/transformed/D8BackportedDesugaredMethods.txt">
+  <buildFeatures
+      namespacing="REQUIRED"/>
+  <sourceProviders>
+    <sourceProvider
+        manifests="src/main/AndroidManifest.xml"
+        javaDirectories="src/main/java:src/customer/java:src/release/java:src/customerRelease/java:src/main/kotlin:src/customer/kotlin:src/release/kotlin:src/customerRelease/kotlin"
+        resDirectories="src/main/res:src/customer/res:src/release/res:src/customerRelease/res"
+        assetsDirectories="src/main/assets:src/customer/assets:src/release/assets:src/customerRelease/assets"/>
+  </sourceProviders>
+  <testSourceProviders>
+  </testSourceProviders>
+  <testFixturesSourceProviders>
+  </testFixturesSourceProviders>
+  <resValues>
+    <resValue
+        type="string"
+        name="app_name"
+        value="My Ride - Customer" />
+    <resValue
+        type="string"
+        name="production_url"
+        value="https://myride.duckdns.org/customer" />
+  </resValues>
+  <artifact
+      classOutputs="build/intermediates/javac/customerRelease/compileCustomerReleaseJavaWithJavac/classes:build/intermediates/compile_and_runtime_not_namespaced_r_class_jar/customerRelease/processCustomerReleaseResources/R.jar"
+      type="MAIN"
+      applicationId="com.myride.customer"
+      generatedSourceFolders="build/generated/ap_generated_sources/customerRelease/out"
+      generatedResourceFolders="build/generated/res/resValues/customer/release"
+      desugaredMethodsFiles="/home/runner/.gradle/caches/8.14.2/transforms/2e0863a800dbd05693549224c2a84599/transformed/D8BackportedDesugaredMethods.txt">
+  </artifact>
+</variant>

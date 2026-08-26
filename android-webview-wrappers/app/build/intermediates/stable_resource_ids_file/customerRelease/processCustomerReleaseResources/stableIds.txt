@@ -1,0 +1,5 @@
+com.myride.customer:xml/network_security_config = 0x7f040000
+com.myride.customer:style/AppTheme = 0x7f030000
+com.myride.customer:string/production_url = 0x7f020001
+com.myride.customer:string/app_name = 0x7f020000
+com.myride.customer:drawable/myride_icon = 0x7f010000

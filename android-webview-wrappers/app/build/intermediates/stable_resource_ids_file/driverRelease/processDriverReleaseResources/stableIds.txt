@@ -1,0 +1,5 @@
+com.myride.driver:string/production_url = 0x7f020001
+com.myride.driver:string/app_name = 0x7f020000
+com.myride.driver:xml/network_security_config = 0x7f040000
+com.myride.driver:style/AppTheme = 0x7f030000
+com.myride.driver:drawable/myride_icon = 0x7f010000

@@ -1,0 +1,101 @@
+-- Merging decision tree log ---
+manifest
+ADDED from /home/runner/workspace/android-webview-wrappers/app/src/main/AndroidManifest.xml:1:1-43:12
+INJECTED from /home/runner/workspace/android-webview-wrappers/app/src/main/AndroidManifest.xml:1:1-43:12
+INJECTED from /home/runner/workspace/android-webview-wrappers/app/src/main/AndroidManifest.xml:1:1-43:12
+INJECTED from /home/runner/workspace/android-webview-wrappers/app/src/main/AndroidManifest.xml:1:1-43:12
+	package
+		INJECTED from /home/runner/workspace/android-webview-wrappers/app/src/main/AndroidManifest.xml
+	android:versionName
+		INJECTED from /home/runner/workspace/android-webview-wrappers/app/src/main/AndroidManifest.xml
+	android:versionCode
+		INJECTED from /home/runner/workspace/android-webview-wrappers/app/src/main/AndroidManifest.xml
+	xmlns:android
+		ADDED from /home/runner/workspace/android-webview-wrappers/app/src/main/AndroidManifest.xml:1:11-69
+uses-permission#android.permission.INTERNET
+ADDED from /home/runner/workspace/android-webview-wrappers/app/src/main/AndroidManifest.xml:4:5-67
+	android:name
+		ADDED from /home/runner/workspace/android-webview-wrappers/app/src/main/AndroidManifest.xml:4:22-64
+uses-permission#android.permission.ACCESS_COARSE_LOCATION
+ADDED from /home/runner/workspace/android-webview-wrappers/app/src/main/AndroidManifest.xml:7:5-81
+	android:name
+		ADDED from /home/runner/workspace/android-webview-wrappers/app/src/main/AndroidManifest.xml:7:22-78
+uses-permission#android.permission.ACCESS_FINE_LOCATION
+ADDED from /home/runner/workspace/android-webview-wrappers/app/src/main/AndroidManifest.xml:8:5-79
+	android:name
+		ADDED from /home/runner/workspace/android-webview-wrappers/app/src/main/AndroidManifest.xml:8:22-76
+uses-permission#android.permission.READ_MEDIA_IMAGES
+ADDED from /home/runner/workspace/android-webview-wrappers/app/src/main/AndroidManifest.xml:11:5-76
+	android:name
+		ADDED from /home/runner/workspace/android-webview-wrappers/app/src/main/AndroidManifest.xml:11:22-73
+uses-permission#android.permission.READ_MEDIA_VIDEO
+ADDED from /home/runner/workspace/android-webview-wrappers/app/src/main/AndroidManifest.xml:12:5-75
+	android:name
+		ADDED from /home/runner/workspace/android-webview-wrappers/app/src/main/AndroidManifest.xml:12:22-72
+uses-permission#android.permission.READ_EXTERNAL_STORAGE
+ADDED from /home/runner/workspace/android-webview-wrappers/app/src/main/AndroidManifest.xml:13:5-15:38
+	android:maxSdkVersion
+		ADDED from /home/runner/workspace/android-webview-wrappers/app/src/main/AndroidManifest.xml:15:9-35
+	android:name
+		ADDED from /home/runner/workspace/android-webview-wrappers/app/src/main/AndroidManifest.xml:14:9-64
+uses-permission#android.permission.WRITE_EXTERNAL_STORAGE
+ADDED from /home/runner/workspace/android-webview-wrappers/app/src/main/AndroidManifest.xml:16:5-18:38
+	android:maxSdkVersion
+		ADDED from /home/runner/workspace/android-webview-wrappers/app/src/main/AndroidManifest.xml:18:9-35
+	android:name
+		ADDED from /home/runner/workspace/android-webview-wrappers/app/src/main/AndroidManifest.xml:17:9-65
+uses-permission#android.permission.POST_NOTIFICATIONS
+ADDED from /home/runner/workspace/android-webview-wrappers/app/src/main/AndroidManifest.xml:20:5-77
+	android:name
+		ADDED from /home/runner/workspace/android-webview-wrappers/app/src/main/AndroidManifest.xml:20:22-74
+application
+ADDED from /home/runner/workspace/android-webview-wrappers/app/src/main/AndroidManifest.xml:22:5-42:19
+INJECTED from /home/runner/workspace/android-webview-wrappers/app/src/main/AndroidManifest.xml:22:5-42:19
+	android:extractNativeLibs
+		INJECTED from /home/runner/workspace/android-webview-wrappers/app/src/main/AndroidManifest.xml
+	android:supportsRtl
+		ADDED from /home/runner/workspace/android-webview-wrappers/app/src/main/AndroidManifest.xml:28:9-35
+	android:label
+		ADDED from /home/runner/workspace/android-webview-wrappers/app/src/main/AndroidManifest.xml:26:9-41
+	android:hardwareAccelerated
+		ADDED from /home/runner/workspace/android-webview-wrappers/app/src/main/AndroidManifest.xml:24:9-43
+	android:icon
+		ADDED from /home/runner/workspace/android-webview-wrappers/app/src/main/AndroidManifest.xml:25:9-45
+	android:allowBackup
+		ADDED from /home/runner/workspace/android-webview-wrappers/app/src/main/AndroidManifest.xml:23:9-36
+	android:theme
+		ADDED from /home/runner/workspace/android-webview-wrappers/app/src/main/AndroidManifest.xml:29:9-40
+	android:networkSecurityConfig
+		ADDED from /home/runner/workspace/android-webview-wrappers/app/src/main/AndroidManifest.xml:27:9-69
+	android:usesCleartextTraffic
+		ADDED from /home/runner/workspace/android-webview-wrappers/app/src/main/AndroidManifest.xml:30:9-45
+activity#com.myride.wrapper.MainActivity
+ADDED from /home/runner/workspace/android-webview-wrappers/app/src/main/AndroidManifest.xml:31:9-41:20
+	android:screenOrientation
+		ADDED from /home/runner/workspace/android-webview-wrappers/app/src/main/AndroidManifest.xml:35:13-49
+	android:windowSoftInputMode
+		ADDED from /home/runner/workspace/android-webview-wrappers/app/src/main/AndroidManifest.xml:36:13-55
+	android:exported
+		ADDED from /home/runner/workspace/android-webview-wrappers/app/src/main/AndroidManifest.xml:34:13-36
+	android:configChanges
+		ADDED from /home/runner/workspace/android-webview-wrappers/app/src/main/AndroidManifest.xml:33:13-74
+	android:name
+		ADDED from /home/runner/workspace/android-webview-wrappers/app/src/main/AndroidManifest.xml:32:13-41
+intent-filter#action:name:android.intent.action.MAIN+category:name:android.intent.category.LAUNCHER
+ADDED from /home/runner/workspace/android-webview-wrappers/app/src/main/AndroidManifest.xml:37:13-40:29
+action#android.intent.action.MAIN
+ADDED from /home/runner/workspace/android-webview-wrappers/app/src/main/AndroidManifest.xml:38:17-69
+	android:name
+		ADDED from /home/runner/workspace/android-webview-wrappers/app/src/main/AndroidManifest.xml:38:25-66
+category#android.intent.category.LAUNCHER
+ADDED from /home/runner/workspace/android-webview-wrappers/app/src/main/AndroidManifest.xml:39:17-77
+	android:name
+		ADDED from /home/runner/workspace/android-webview-wrappers/app/src/main/AndroidManifest.xml:39:27-74
+uses-sdk
+INJECTED from /home/runner/workspace/android-webview-wrappers/app/src/main/AndroidManifest.xml reason: use-sdk injection requested
+INJECTED from /home/runner/workspace/android-webview-wrappers/app/src/main/AndroidManifest.xml
+INJECTED from /home/runner/workspace/android-webview-wrappers/app/src/main/AndroidManifest.xml
+	android:targetSdkVersion
+		INJECTED from /home/runner/workspace/android-webview-wrappers/app/src/main/AndroidManifest.xml
+	android:minSdkVersion
+		INJECTED from /home/runner/workspace/android-webview-wrappers/app/src/main/AndroidManifest.xml

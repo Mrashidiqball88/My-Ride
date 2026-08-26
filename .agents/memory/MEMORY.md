@@ -17,3 +17,4 @@
 - [Driver navigation privacy](driver-navigation-privacy.md) — keep live driver/passenger route calculations local until an approved routing provider is selected.
 - [Identity image preflight](identity-image-preflight.md) — validate image bytes before OCR so corrupt uploads return clean verification errors without late worker failures.
 - [Draggable sheet geometry](draggable-sheet-geometry.md) — collapsed panels need their scroll height measured before a drag starts to avoid a zero travel range.
+- [Android WebView APK builds](android-webview-apk-build.md) — use standard JDK 17 for Android SDK 35 Gradle builds; GraalVM can fail during jlink system-module transforms.
