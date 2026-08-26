@@ -279,6 +279,150 @@ test.describe('live Mongo fare refresh', () => {
     }
   });
 
+  test('publishes active Driver locations on one strict three-second lifecycle timer', async ({ browser }) => {
+    const baseURL = `http://127.0.0.1:${httpServer.address().port}`;
+    const driverPage = await browser.newPage();
+
+    try {
+      await openAuthenticatedClient(driverPage, baseURL, '/driver', matchingDriver, token(matchingDriver));
+      await driverPage.evaluate(() => {
+        stopActiveRideLocationSync();
+        activeRide = { _id: 'three-second-cadence-ride', status: 'accepted' };
+        window.__activeRideLocationTicks = [];
+        readCurrentDriverLocation = async () => {
+          window.__activeRideLocationTicks.push(performance.now());
+          return true;
+        };
+        startActiveRideLocationSync();
+      });
+
+      await driverPage.waitForTimeout(6250);
+      const cadence = await driverPage.evaluate(() => {
+        const ticks = window.__activeRideLocationTicks.slice();
+        const intervals = ticks.slice(1).map((tick, index) => tick - ticks[index]);
+        endActiveRide();
+        return {
+          tickCount: ticks.length,
+          intervals,
+          timerStopped: activeRideLocationTimer === null
+        };
+      });
+
+      expect(cadence.tickCount).toBe(3);
+      expect(cadence.timerStopped).toBe(true);
+      cadence.intervals.forEach(interval => {
+        expect(interval).toBeGreaterThanOrEqual(2850);
+        expect(interval).toBeLessThanOrEqual(3250);
+      });
+
+      await driverPage.waitForTimeout(3200);
+      const ticksAfterEnd = await driverPage.evaluate(() => window.__activeRideLocationTicks.length);
+      expect(ticksAfterEnd).toBe(3);
+    } finally {
+      await driverPage.close();
+    }
+  });
+
+  test('does not overlap GPS reads or route requests during reconnect and slow routing', async ({ browser }) => {
+    const baseURL = `http://127.0.0.1:${httpServer.address().port}`;
+    const customerPage = await browser.newPage();
+    const driverPage = await browser.newPage();
+    const pickup = { lat: 31.5204, lng: 74.3587, address: 'Pickup' };
+    const dropoff = { lat: 31.5304, lng: 74.3687, address: 'Drop-off' };
+
+    try {
+      await Promise.all([
+        openAuthenticatedClient(customerPage, baseURL, '/customer', customer, token(customer)),
+        openAuthenticatedClient(driverPage, baseURL, '/driver', matchingDriver, token(matchingDriver))
+      ]);
+
+      const initialReadState = await driverPage.evaluate(() => {
+        stopActiveRideLocationSync();
+        activeRide = { _id: 'delayed-gps-ride', status: 'accepted' };
+        window.__delayedGpsReadCount = 0;
+        window.__resolveDelayedGpsRead = null;
+        readCurrentDriverLocation = () => {
+          window.__delayedGpsReadCount++;
+          if (window.__delayedGpsReadCount === 1) {
+            return new Promise(resolve => { window.__resolveDelayedGpsRead = resolve; });
+          }
+          return Promise.resolve(true);
+        };
+        startActiveRideLocationSync();
+        const firstTimer = activeRideLocationTimer;
+        startActiveRideLocationSync();
+        const sameRideKeptTimer = firstTimer === activeRideLocationTimer;
+        stopActiveRideLocationSync();
+        startActiveRideLocationSync();
+        return {
+          reads: window.__delayedGpsReadCount,
+          sameRideKeptTimer,
+          inFlight: activeRideLocationRequestInFlight
+        };
+      });
+
+      expect(initialReadState).toEqual({ reads: 1, sameRideKeptTimer: true, inFlight: true });
+      await driverPage.evaluate(() => window.__resolveDelayedGpsRead(true));
+      await driverPage.waitForTimeout(3150);
+      const readsAfterRestart = await driverPage.evaluate(() => {
+        const reads = window.__delayedGpsReadCount;
+        stopActiveRideLocationSync();
+        activeRide = null;
+        return reads;
+      });
+      expect(readsAfterRestart).toBe(2);
+
+      const driverRouteRequests = await driverPage.evaluate(async ({ pickup, dropoff }) => {
+        activeRide = { _id: 'driver-route-ride', status: 'accepted', pickupLocation: pickup, dropoffLocation: dropoff };
+        driverLocation = { lat: 31.521, lng: 74.359 };
+        map = { getZoom: () => 17 };
+        navigationRoute = null;
+        navigationRouteInFlight = false;
+        const originalRequestRoadRoute = requestRoadRoute;
+        let requests = 0;
+        let release;
+        requestRoadRoute = () => {
+          requests++;
+          return new Promise(resolve => { release = resolve; });
+        };
+        const first = refreshActiveNavigation();
+        const second = refreshActiveNavigation();
+        release({ coords: [] });
+        await Promise.all([first, second]);
+        requestRoadRoute = originalRequestRoadRoute;
+        activeRide = null;
+        return requests;
+      }, { pickup, dropoff });
+      expect(driverRouteRequests).toBe(1);
+
+      const customerRouteRequests = await customerPage.evaluate(async ({ pickup, dropoff }) => {
+        activeRide = { _id: 'customer-route-ride', status: 'accepted', pickupLocation: pickup, dropoffLocation: dropoff };
+        map = { getZoom: () => 17, setView() {} };
+        driverMarker = { setLatLng() {}, remove() {}, getElement: () => ({ style: {} }) };
+        liveTripLine = null;
+        liveTripRouteOrigin = null;
+        liveTripRouteInFlight = false;
+        const originalRequestRoadRoute = requestRoadRoute;
+        let requests = 0;
+        let release;
+        requestRoadRoute = () => {
+          requests++;
+          return new Promise(resolve => { release = resolve; });
+        };
+        const first = updateLiveTripTracking({ lat: 31.521, lng: 74.359 });
+        const second = updateLiveTripTracking({ lat: 31.522, lng: 74.36 });
+        release({ coords: [] });
+        await Promise.all([first, second]);
+        requestRoadRoute = originalRequestRoadRoute;
+        endRide();
+        return requests;
+      }, { pickup, dropoff });
+      expect(customerRouteRequests).toBe(1);
+    } finally {
+      await Promise.all([customerPage.close(), driverPage.close()]);
+    }
+  });
+
   test('clears completed ride panels and locks customer cancellation after pickup arrival', async ({ browser }) => {
     const baseURL = `http://127.0.0.1:${httpServer.address().port}`;
     const customerPage = await browser.newPage();

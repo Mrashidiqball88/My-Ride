@@ -6,7 +6,11 @@ import * as Notifications from 'expo-notifications';
 import * as SecureStore from 'expo-secure-store';
 import Constants from 'expo-constants';
 import { io, Socket } from 'socket.io-client';
-import { BACKGROUND_LOCATION_TASK, backgroundLocationOptions } from '@/lib/background-location';
+import {
+  BACKGROUND_LOCATION_TASK,
+  activeRideLocationOptions,
+  availabilityLocationOptions,
+} from '@/lib/background-location';
 
 const TOKEN_KEY = 'myride.driver.token';
 const SESSION_KEY = 'myride.driver.session';
@@ -130,6 +134,8 @@ export function DriverRuntimeProvider({ children }: { children: ReactNode }) {
   const localRideNotificationIds = useRef(new Map<string, string>());
   const receivedRideEvents = useRef(new Map<string, number>());
   const lastHeartbeatAckAt = useRef(0);
+  const locationServiceMode = useRef<'stopped' | 'availability' | 'active-ride'>('stopped');
+  const locationServiceTransition = useRef<Promise<void>>(Promise.resolve());
 
   useEffect(() => { isOnlineRef.current = isOnline; }, [isOnline]);
   useEffect(() => { activeRideIdRef.current = activeRideId; }, [activeRideId]);
@@ -289,15 +295,12 @@ export function DriverRuntimeProvider({ children }: { children: ReactNode }) {
   }, [clearRideAlert, hydrateAvailableRides]);
 
   const sendCurrentLocation = useCallback(async (location: Location.LocationObject) => {
-    if (!tokenRef.current || !isOnline) return;
+    if (!tokenRef.current || !isOnlineRef.current) return;
     try {
       await api('/api/driver/location', tokenRef.current, sessionRef.current || undefined, {
         method: 'POST', body: JSON.stringify({
-          lat: location.coords.latitude, lng: location.coords.longitude, rideId: activeRideId || undefined,
+          lat: location.coords.latitude, lng: location.coords.longitude, rideId: activeRideIdRef.current || undefined,
         }),
-      });
-      socket.current?.emit('driver:location', {
-        lat: location.coords.latitude, lng: location.coords.longitude, rideId: activeRideId || undefined,
       });
     } catch (error) {
       if (error instanceof Error && error.message === PAKISTAN_ONLY_MESSAGE) {
@@ -306,9 +309,9 @@ export function DriverRuntimeProvider({ children }: { children: ReactNode }) {
       }
       throw error;
     }
-  }, [activeRideId, isOnline]);
+  }, []);
 
-  const startLocationService = useCallback(async () => {
+  const startLocationService = useCallback(async (activeRideTracking = Boolean(activeRideIdRef.current)) => {
     if (Platform.OS === 'web') {
       throw new Error('Persistent driver service requires the native My Ride Driver app.');
     }
@@ -317,17 +320,39 @@ export function DriverRuntimeProvider({ children }: { children: ReactNode }) {
     const background = await Location.requestBackgroundPermissionsAsync();
     if (!background.granted) throw new Error('Allow location access all the time to remain online while the screen is off.');
     await configureNotifications();
-    if (!await Location.hasStartedLocationUpdatesAsync(BACKGROUND_LOCATION_TASK)) {
-      await Location.startLocationUpdatesAsync(BACKGROUND_LOCATION_TASK, backgroundLocationOptions);
-    }
-    const latest = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Highest });
-    await sendCurrentLocation(latest);
+    const desiredMode = activeRideTracking ? 'active-ride' : 'availability';
+    const transition = locationServiceTransition.current
+      .catch(() => undefined)
+      .then(async () => {
+        const isStarted = await Location.hasStartedLocationUpdatesAsync(BACKGROUND_LOCATION_TASK);
+        if (isStarted && locationServiceMode.current !== desiredMode) {
+          await Location.stopLocationUpdatesAsync(BACKGROUND_LOCATION_TASK);
+        }
+        if (!isStarted || locationServiceMode.current !== desiredMode) {
+          await Location.startLocationUpdatesAsync(
+            BACKGROUND_LOCATION_TASK,
+            activeRideTracking ? activeRideLocationOptions : availabilityLocationOptions
+          );
+        }
+        locationServiceMode.current = desiredMode;
+        const latest = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Highest });
+        await sendCurrentLocation(latest);
+      });
+    locationServiceTransition.current = transition;
+    await transition;
   }, [sendCurrentLocation]);
 
   const stopLocationService = useCallback(async () => {
-    if (Platform.OS !== 'web' && await Location.hasStartedLocationUpdatesAsync(BACKGROUND_LOCATION_TASK)) {
-      await Location.stopLocationUpdatesAsync(BACKGROUND_LOCATION_TASK);
-    }
+    const transition = locationServiceTransition.current
+      .catch(() => undefined)
+      .then(async () => {
+        if (Platform.OS !== 'web' && await Location.hasStartedLocationUpdatesAsync(BACKGROUND_LOCATION_TASK)) {
+          await Location.stopLocationUpdatesAsync(BACKGROUND_LOCATION_TASK);
+        }
+        locationServiceMode.current = 'stopped';
+      });
+    locationServiceTransition.current = transition;
+    await transition;
   }, []);
 
   const clearRevokedSession = useCallback(() => {
@@ -362,18 +387,23 @@ export function DriverRuntimeProvider({ children }: { children: ReactNode }) {
       await api('/api/driver/availability', token, sessionRef.current || undefined, {
         method: 'POST', body: JSON.stringify({ isOnline: next }),
       });
-      if (next) await startLocationService();
+      if (next) {
+        isOnlineRef.current = true;
+        await startLocationService(Boolean(activeRideIdRef.current));
+      }
       await SecureStore.setItemAsync(ONLINE_KEY, String(next));
       setIsOnline(next);
       socket.current?.emit('driver:status', { isOnline: next });
       if (next) socket.current?.emit('driver:heartbeat');
       else {
+        isOnlineRef.current = false;
         setPendingRide(null);
         clearAllRideAlerts();
         await stopLocationService();
       }
     } catch (cause) {
       if (next) {
+        isOnlineRef.current = false;
         await api('/api/driver/availability', token, sessionRef.current || undefined, {
           method: 'POST', body: JSON.stringify({ isOnline: false }),
         }).catch(() => undefined);
@@ -501,11 +531,11 @@ export function DriverRuntimeProvider({ children }: { children: ReactNode }) {
     if (!ready || !user || !isOnline || Platform.OS === 'web') return;
     // Restore the existing foreground/background location task after a normal
     // process restart. If Android permissions were revoked, fail closed.
-    void startLocationService().catch(async cause => {
+    void startLocationService(Boolean(activeRideId)).catch(async cause => {
       setError(cause instanceof Error ? cause.message : 'Background location is no longer available.');
       await setOnlineState(false).catch(() => undefined);
     });
-  }, [isOnline, ready, startLocationService, user]);
+  }, [activeRideId, isOnline, ready, startLocationService, user]);
 
   const signIn = useCallback(async (identifier: string, password: string) => {
     const response = await api('/api/auth/login', undefined, undefined, { method: 'POST', body: JSON.stringify({ identifier, password }) });

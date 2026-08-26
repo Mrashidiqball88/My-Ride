@@ -4890,8 +4890,8 @@ io.on('connection', async (socket) => {
         _id: rideId, driver: id, status: { $in: ['accepted', 'arrived', 'in-progress'] }
       }).select('_id').lean().catch(() => null);
       if (!activeRide) return;
-      io.to(`ride:${rideId}`).emit('driver:location', { lat, lng });
       await Ride.updateOne({ _id: rideId }, { 'driverLocation.lat': lat, 'driverLocation.lng': lng }).catch(() => {});
+      io.to(`ride:${rideId}`).emit('driver:location', { lat, lng });
     }
     await User.updateOne({ _id: id }, {
       'currentLocation.lat': lat,

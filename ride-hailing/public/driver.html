@@ -800,8 +800,15 @@ let lastNavigationRouteAt = 0;
 let lastNavigationRouteOrigin = null;
 let navigationFollowing = true;
 let navigationRouteRequest = 0;
+let navigationRouteInFlight = false;
 let driverGpsHasFix = false;
 let driverMapAutoCenter = true;
+const ACTIVE_RIDE_LOCATION_INTERVAL_MS = 3000;
+let activeRideLocationTimer = null;
+let activeRideLocationRequestInFlight = false;
+let readCurrentDriverLocation = null;
+let activeRideLocationGeneration = 0;
+let activeRideLocationRideId = null;
 const PAKISTAN_ONLY_MESSAGE = window.MyRidePakistanGeofence?.PAKISTAN_ONLY_MESSAGE
   || 'Please select a location inside Pakistan.';
 
@@ -817,6 +824,37 @@ function isPakistanLocation(lat, lng) {
   if (!Number.isFinite(latitude) || !Number.isFinite(longitude)) return false;
   const validator = window.MyRidePakistanGeofence?.isWithinPakistan;
   return typeof validator === 'function' && validator(latitude, longitude) === true;
+}
+
+function stopActiveRideLocationSync() {
+  activeRideLocationGeneration++;
+  if (activeRideLocationTimer) clearInterval(activeRideLocationTimer);
+  activeRideLocationTimer = null;
+  activeRideLocationRideId = null;
+}
+
+function startActiveRideLocationSync() {
+  const rideId = String(activeRide?._id || '');
+  if (!rideId || typeof readCurrentDriverLocation !== 'function') return;
+  if (activeRideLocationTimer && activeRideLocationRideId === rideId) return;
+  stopActiveRideLocationSync();
+  const generation = activeRideLocationGeneration;
+  activeRideLocationRideId = rideId;
+
+  const publishLatestPosition = async () => {
+    if (generation !== activeRideLocationGeneration
+      || String(activeRide?._id || '') !== rideId
+      || activeRideLocationRequestInFlight) return;
+    activeRideLocationRequestInFlight = true;
+    try {
+      await readCurrentDriverLocation({ generation, rideId });
+    } finally {
+      activeRideLocationRequestInFlight = false;
+    }
+  };
+
+  void publishLatestPosition();
+  activeRideLocationTimer = setInterval(publishLatestPosition, ACTIVE_RIDE_LOCATION_INTERVAL_MS);
 }
 
 function sendDriverHeartbeat() {
@@ -1324,6 +1362,7 @@ function saveSession(res) {
 
 function doLogout() {
   // 1. Go offline and disconnect before clearing state
+  stopActiveRideLocationSync();
   if (socket) { socket.emit('driver:status', { isOnline: false }); socket.disconnect(); socket = null; }
   if (locationWatch) { navigator.geolocation.clearWatch(locationWatch); locationWatch = null; }
 
@@ -1494,7 +1533,7 @@ function initMap() {
 
   // Watch driver's own location
   if (navigator.geolocation) {
-    const applyDriverLocation = pos => {
+    const applyDriverLocation = (pos, { publish = true, activeRideTick = false } = {}) => {
       const { latitude: lat, longitude: lng } = pos.coords;
       // GPS can briefly report 0,0, a stale location, or a location outside
       // the service area during startup. Ignore those fixes silently; the
@@ -1502,19 +1541,24 @@ function initMap() {
       if (!isPakistanLocation(lat, lng)) return;
       const isFirstFix = !driverGpsHasFix;
       driverGpsHasFix = true;
-      driverLocation = { lat, lng };
+      const previousLocation = driverLocation;
+      const nextLocation = { lat, lng };
+      const movedKm = previousLocation ? haversineKm(previousLocation, nextLocation) : Infinity;
+      driverLocation = nextLocation;
       if (myMarker) myMarker.setLatLng([lat, lng]);
       else myMarker = L.marker([lat, lng], {
         icon: L.divIcon({ html: '<span class="driver-location-marker"><i></i></span>', className: 'map-marker-shell', iconSize: [30, 30], iconAnchor: [15, 15] })
       }).addTo(map);
+      const markerElement = myMarker.getElement?.();
+      if (markerElement) markerElement.style.transition = 'transform .8s linear';
 
-      if (socket && (isOnline || activeRide)) {
+      if (publish && socket?.connected && (isOnline || activeRide)) {
         socket.emit('driver:location', { lat, lng, rideId: activeRide?._id });
       }
-      if (activeRide) {
+      if (activeRide && activeRideTick) {
         refreshActiveNavigation({ recenter: false });
-        if (navigationFollowing && driverMapAutoCenter) {
-          map.panTo([lat, lng], { animate: true, duration: .35 });
+        if (navigationFollowing && driverMapAutoCenter && movedKm >= .003) {
+          map.panTo([lat, lng], { animate: true, duration: .55, easeLinearity: .35 });
         }
       } else if (driverMapAutoCenter && isFirstFix) {
         const zoom = Math.max(15, map.getZoom());
@@ -1523,8 +1567,29 @@ function initMap() {
     };
 
     const gpsOptions = { enableHighAccuracy: true, maximumAge: 10000, timeout: 10000 };
-    navigator.geolocation.getCurrentPosition(applyDriverLocation, () => {}, gpsOptions);
-    locationWatch = navigator.geolocation.watchPosition(applyDriverLocation, () => {}, gpsOptions);
+    readCurrentDriverLocation = ({ generation, rideId }) => new Promise(resolve => {
+      navigator.geolocation.getCurrentPosition(
+        position => {
+          if (generation === activeRideLocationGeneration
+            && String(activeRide?._id || '') === rideId) {
+            applyDriverLocation(position, { publish: true, activeRideTick: true });
+          }
+          resolve(true);
+        },
+        () => resolve(false),
+        { enableHighAccuracy: true, maximumAge: 0, timeout: 2500 }
+      );
+    });
+    navigator.geolocation.getCurrentPosition(
+      position => applyDriverLocation(position, { publish: !activeRide, activeRideTick: false }),
+      () => {},
+      gpsOptions
+    );
+    locationWatch = navigator.geolocation.watchPosition(
+      position => applyDriverLocation(position, { publish: !activeRide, activeRideTick: false }),
+      () => {},
+      gpsOptions
+    );
   }
   setupDriverOpsControl();
 }
@@ -1628,6 +1693,11 @@ async function refreshActiveNavigation({ force = false, recenter = false } = {})
   const routeAge = Date.now() - lastNavigationRouteAt;
   const liveDistance = haversineKm(origin, destination.point) * 1000;
   const liveDuration = liveDistance / 1000 / 28 * 3600;
+  if (navigationRouteInFlight) {
+    updateNavigationDetails(liveDistance, liveDuration);
+    if (recenter) focusActiveNavigation();
+    return;
+  }
   if (!force && navigationRoute && movedKm < .08 && routeAge < 18000) {
     updateNavigationDetails(liveDistance, liveDuration);
     if (recenter) focusActiveNavigation();
@@ -1638,6 +1708,7 @@ async function refreshActiveNavigation({ force = false, recenter = false } = {})
   // never sends precise ride coordinates directly to the routing provider.
   const requestOrigin = { ...origin };
   const requestId = ++navigationRouteRequest;
+  navigationRouteInFlight = true;
   try {
     const roadRoute = await requestRoadRoute([requestOrigin, destination.point]);
     if (requestId !== navigationRouteRequest) return;
@@ -1650,6 +1721,8 @@ async function refreshActiveNavigation({ force = false, recenter = false } = {})
   } catch (error) {
     console.warn('Road navigation unavailable:', error.message);
     if (!navigationRoute?.coords?.length) removeRouteLine();
+  } finally {
+    navigationRouteInFlight = false;
   }
   lastNavigationRouteAt = Date.now();
   lastNavigationRouteOrigin = requestOrigin;
@@ -1869,6 +1942,7 @@ function toggleOnline(online) {
   }
   isOnline = online;
   if (!online) {
+    stopActiveRideLocationSync();
     pendingRide = null;
     sentOffer = null;
     hideRideRequest();
@@ -1878,6 +1952,7 @@ function toggleOnline(online) {
   if (online) {
     startDriverHeartbeat();
     sendDriverHeartbeat();
+    if (activeRide) startActiveRideLocationSync();
   } else {
     clearInterval(driverHeartbeatTimer);
     driverHeartbeatTimer = null;
@@ -2046,6 +2121,7 @@ function connectSocket() {
   // Account suspended / balance too low
   socket.on('account:suspended', ({ reason }) => {
     showToast(reason, 'error');
+    stopActiveRideLocationSync();
     isOnline = false;
     pendingRide = null;
     sentOffer = null;
@@ -2498,6 +2574,7 @@ function showActivePanel(ride) {
       : '';
   }
   renderActiveButtons(ride.status || 'accepted');
+  startActiveRideLocationSync();
 }
 
 function renderActiveButtons(status) {
@@ -2549,6 +2626,7 @@ async function cancelActiveRide() {
 
 function endActiveRide() {
   const finishedRideId = activeRide?._id;
+  stopActiveRideLocationSync();
   activeRide = null;
   navigationFollowing = false;
 
@@ -2562,11 +2640,8 @@ function endActiveRide() {
   // (bell + audio alerts) keep working without requiring a logout/login cycle.
   if (finishedRideId && socket) socket.emit('ride:leave', String(finishedRideId));
 
-  // Map tiles go blank when the container was re-shown after being hidden.
-  // Three staggered calls cover slow repaints on Android and low-end iOS.
-  setTimeout(() => map?.invalidateSize(), 150);
-  setTimeout(() => map?.invalidateSize(), 600);
-  setTimeout(() => map?.invalidateSize(), 1200);
+  // One layout-synchronized repaint avoids the old staggered redraw loop.
+  requestAnimationFrame(() => map?.invalidateSize({ pan: false }));
 
   // Re-check support-ticket badge so the bell reflects the real unread count
   checkUnreadDriverTickets();

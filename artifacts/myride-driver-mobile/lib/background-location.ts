@@ -8,6 +8,7 @@ const SESSION_KEY = 'myride.driver.session';
 const ONLINE_KEY = 'myride.driver.online';
 const ACTIVE_RIDE_KEY = 'myride.driver.activeRide';
 const PAKISTAN_ONLY_MESSAGE = 'Please select a location inside Pakistan.';
+export const ACTIVE_RIDE_LOCATION_INTERVAL_MS = 3_000;
 const DOMAIN = process.env.EXPO_PUBLIC_RIDE_API_URL ||
   (process.env.EXPO_PUBLIC_DOMAIN ? `https://${process.env.EXPO_PUBLIC_DOMAIN}` : '');
 
@@ -77,10 +78,8 @@ TaskManager.defineTask(BACKGROUND_LOCATION_TASK, async ({ data, error }) => {
   else await postHeartbeat();
 });
 
-export const backgroundLocationOptions: Location.LocationTaskOptions = {
+const sharedLocationOptions = {
   accuracy: Location.Accuracy.Highest,
-  distanceInterval: 25,
-  timeInterval: 15_000,
   pausesUpdatesAutomatically: false,
   showsBackgroundLocationIndicator: true,
   foregroundService: {
@@ -88,4 +87,16 @@ export const backgroundLocationOptions: Location.LocationTaskOptions = {
     notificationBody: 'Waiting for rides and sharing your location.',
     notificationColor: '#38BDF8',
   },
+} satisfies Omit<Location.LocationTaskOptions, 'distanceInterval' | 'timeInterval'>;
+
+export const availabilityLocationOptions: Location.LocationTaskOptions = {
+  ...sharedLocationOptions,
+  distanceInterval: 25,
+  timeInterval: 15_000,
+};
+
+export const activeRideLocationOptions: Location.LocationTaskOptions = {
+  ...sharedLocationOptions,
+  distanceInterval: 0,
+  timeInterval: ACTIVE_RIDE_LOCATION_INTERVAL_MS,
 };
