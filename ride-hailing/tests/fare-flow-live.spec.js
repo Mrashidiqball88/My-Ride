@@ -777,7 +777,7 @@ test.describe('live Mongo fare refresh', () => {
     }
   });
 
-  test('loads high-density charcoal Driver street-map tiles', async ({ browser }) => {
+  test('loads native charcoal Driver map tiles without CSS inversion', async ({ browser }) => {
     const baseURL = `http://127.0.0.1:${httpServer.address().port}`;
     const context = await browser.newContext({
       viewport: { width: 430, height: 900 },
@@ -797,12 +797,12 @@ test.describe('live Mongo fare refresh', () => {
         src: tile.src,
         loaded: tile.complete && tile.naturalWidth > 0
       })));
-      const loadedStreetTiles = tiles.filter(tile =>
-        tile.loaded && tile.src.includes('World_Street_Map/MapServer/tile/')
+      const loadedDarkTiles = tiles.filter(tile =>
+        tile.loaded && tile.src.includes('Canvas/World_Dark_Gray_Base/MapServer/tile/')
       );
-      expect(loadedStreetTiles.length).toBeGreaterThan(0);
-      expect(Math.max(...loadedStreetTiles.map(tile => Number(tile.src.match(/tile\/(\d+)\//)?.[1] || 0)))).toBeGreaterThanOrEqual(17);
-      await expect(driverPage.locator('#map .leaflet-tile-pane')).toHaveCSS('filter', /driver-map-charcoal-filter/);
+      expect(loadedDarkTiles.length).toBeGreaterThan(0);
+      expect(Math.max(...loadedDarkTiles.map(tile => Number(tile.src.match(/tile\/(\d+)\//)?.[1] || 0)))).toBeGreaterThanOrEqual(15);
+      await expect(driverPage.locator('#map .leaflet-tile-pane')).toHaveCSS('filter', 'none');
     } finally {
       await context.close();
     }
