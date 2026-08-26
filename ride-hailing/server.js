@@ -1532,16 +1532,21 @@ async function rehydrateDriverSocket(socket, driverId, { replayOffers = true } =
 // their union so every recipient sees one authoritative, idempotent update.
 function emitRideLifecycle(ride, event, detail = {}, { notifyVehicleDrivers = false, notifyDriverIds = [] } = {}) {
   const revision = new Date(ride.updatedAt || Date.now()).toISOString();
+  const referenceId = value => value?._id || value?.id || value;
   const payload = {
     rideId: String(ride._id),
     eventId: `${event}:${ride._id}:${revision}`,
     revision,
     ...detail
   };
-  const rooms = [`ride:${ride._id}`, `user:${ride.passenger}`];
-  if (ride.driver) rooms.push(`user:${ride.driver}`);
+  const passengerId = referenceId(ride.passenger);
+  const driverId = referenceId(ride.driver);
+  const rooms = [`ride:${ride._id}`];
+  if (passengerId) rooms.push(`user:${passengerId}`);
+  if (driverId) rooms.push(`user:${driverId}`);
   notifyDriverIds.forEach(driverId => {
-    if (driverId) rooms.push(`user:${driverId}`);
+    const recipientId = referenceId(driverId);
+    if (recipientId) rooms.push(`user:${recipientId}`);
   });
   if (notifyVehicleDrivers) rooms.push(`drivers:${normalizeFareVehicle(ride.vehicleType || 'Car Mini Non-AC')}`);
   io.to([...new Set(rooms)]).emit(event, payload);
@@ -4323,7 +4328,8 @@ app.get('/api/drivers/nearby', authMiddleware, async (req, res) => {
       'currentLocation.lat': { $ne: 0 }, 'currentLocation.lng': { $ne: 0 }
     }).select('vehicleType currentLocation').lean();
     const nearby = drivers
-      .filter(d => haversineKm(lat, lng, d.currentLocation.lat, d.currentLocation.lng) <= radiusKm)
+      .filter(d => hasValidCoordinates(d.currentLocation)
+        && haversineKm(lat, lng, d.currentLocation.lat, d.currentLocation.lng) <= radiusKm)
       .map(d => ({ vehicleType: d.vehicleType, lat: d.currentLocation.lat, lng: d.currentLocation.lng }));
     res.json(nearby);
   } catch (err) { res.status(500).json({ error: err.message }); }

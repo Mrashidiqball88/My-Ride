@@ -205,16 +205,41 @@ test.describe('live Mongo fare refresh', () => {
         openAuthenticatedClient(customerPage, baseURL, '/customer', customer, token(customer)),
         openAuthenticatedClient(driverPage, baseURL, '/driver', matchingDriver, token(matchingDriver))
       ]);
+      await Promise.all([
+        customerPage.evaluate(() => { if (!map) initMap(); }),
+        driverPage.evaluate(() => { if (!map) initMap(); })
+      ]);
+
+      const realZoomBehavior = await Promise.all([
+        customerPage.evaluate(({ pickup, dropoff }) => {
+          activeRide = { status: 'accepted', pickupLocation: pickup, dropoffLocation: dropoff };
+          customerTrackingFollow = true;
+          customerMapAutoCenter = true;
+          map.setZoom(map.getZoom() + 1, { animate: false });
+          return { follow: customerTrackingFollow, autoCenter: customerMapAutoCenter };
+        }, { pickup, dropoff }),
+        driverPage.evaluate(({ pickup, dropoff }) => {
+          activeRide = { status: 'accepted', pickupLocation: pickup, dropoffLocation: dropoff };
+          navigationFollowing = true;
+          driverMapAutoCenter = true;
+          map.setZoom(map.getZoom() + 1, { animate: false });
+          return { following: navigationFollowing, autoCenter: driverMapAutoCenter };
+        }, { pickup, dropoff })
+      ]);
+      expect(realZoomBehavior[0]).toEqual({ follow: false, autoCenter: false });
+      expect(realZoomBehavior[1]).toEqual({ following: false, autoCenter: false });
 
       const customerCamera = await customerPage.evaluate(({ pickup, dropoff }) => {
         const calls = [];
-        map = {
-          getZoom: () => 17,
-          setView: (center, zoom) => calls.push({ center, zoom })
-        };
+        map.getZoom = () => 17;
+        map.setView = (center, zoom) => calls.push({ center, zoom });
         activeRide = { status: 'accepted', pickupLocation: pickup, dropoffLocation: dropoff };
         lastDriverLocation = { lat: 31.521, lng: 74.359 };
-        customerTrackingFollow = false;
+        customerTrackingFollow = true;
+        customerMapAutoCenter = true;
+        map.fire('zoomstart');
+        const followAfterZoom = customerTrackingFollow;
+        const autoCenterAfterZoom = customerMapAutoCenter;
         followCustomerTrip();
         const callsAfterManualPan = calls.length;
         focusCustomerTrip();
@@ -229,6 +254,8 @@ test.describe('live Mongo fare refresh', () => {
         );
         return {
           callsAfterManualPan,
+          followAfterZoom,
+          autoCenterAfterZoom,
           focusCall: calls.at(-1),
           hiddenOnAcceptance,
           hiddenAwayFromPickup,
@@ -239,6 +266,8 @@ test.describe('live Mongo fare refresh', () => {
       }, { pickup, dropoff });
 
       expect(customerCamera.callsAfterManualPan).toBe(0);
+      expect(customerCamera.followAfterZoom).toBe(false);
+      expect(customerCamera.autoCenterAfterZoom).toBe(false);
       expect(customerCamera.focusCall.zoom).toBe(17);
       expect(customerCamera.hiddenOnAcceptance).toBe(true);
       expect(customerCamera.hiddenAwayFromPickup).toBe(true);
@@ -248,13 +277,15 @@ test.describe('live Mongo fare refresh', () => {
 
       const driverCamera = await driverPage.evaluate(({ pickup, dropoff }) => {
         const calls = [];
-        map = {
-          getZoom: () => 18,
-          setView: (center, zoom) => calls.push({ center, zoom })
-        };
+        map.getZoom = () => 18;
+        map.setView = (center, zoom) => calls.push({ center, zoom });
         activeRide = { status: 'accepted', pickupLocation: pickup, dropoffLocation: dropoff };
         driverLocation = { lat: 31.521, lng: 74.359 };
-        navigationFollowing = false;
+        navigationFollowing = true;
+        driverMapAutoCenter = true;
+        map.fire('zoomstart');
+        const followingAfterZoom = navigationFollowing;
+        const autoCenterAfterZoom = driverMapAutoCenter;
         focusActiveNavigation();
         const originalPolyline = L.polyline;
         const routeColors = [];
@@ -268,11 +299,15 @@ test.describe('live Mongo fare refresh', () => {
         clearRideMap();
         return {
           focusCall: calls[0],
+          followingAfterZoom,
+          autoCenterAfterZoom,
           routeColors
         };
       }, { pickup, dropoff });
 
       expect(driverCamera.focusCall.zoom).toBe(18);
+      expect(driverCamera.followingAfterZoom).toBe(false);
+      expect(driverCamera.autoCenterAfterZoom).toBe(false);
       expect(driverCamera.routeColors).toEqual(['#092c62', '#2688ff']);
     } finally {
       await Promise.all([customerPage.close(), driverPage.close()]);
@@ -522,7 +557,7 @@ test.describe('live Mongo fare refresh', () => {
       await expect.poll(async () => (await models.User.findById(matchingDriver._id).lean()).isOnline).toBe(true);
       await expect.poll(() => io.sockets.adapter.rooms.get('drivers:Car Mini Non-AC')?.size || 0).toBeGreaterThan(0);
       await expect.poll(async () => {
-        const broadcast = await findRideBroadcastDrivers({ lat: 1, lng: 2 }, 'Car Mini');
+        const broadcast = await findRideBroadcastDrivers({ lat: 31.5204, lng: 74.3587 }, 'Car Mini');
         return broadcast.drivers.some(driver => String(driver._id) === String(matchingDriver._id));
       }).toBe(true);
 
@@ -675,17 +710,18 @@ test.describe('live Mongo fare refresh', () => {
           isOnline, activeRide: !!activeRide, sentOffer: !!sentOffer, pendingRide: !!pendingRide
         }))).toEqual({ isOnline: true, activeRide: false, sentOffer: false, pendingRide: false });
         await customerPage.evaluate(() => {
-          pickup = { lat: 1, lng: 2, address: 'Toyota pickup' };
-          dropoffs[0] = { lat: 1.05, lng: 2.05, address: 'Toyota dropoff' };
+          pickup = { lat: 31.5204, lng: 74.3587, address: 'Toyota pickup' };
+          dropoffs[0] = { lat: 31.5304, lng: 74.3687, address: 'Toyota dropoff' };
           activeStops = 1;
           routeDistanceKm = 7;
         });
-        await customerPage.locator(`.vehicle-btn[data-type="${category}"]`).click();
+        await customerPage.locator(`.vehicle-btn[data-type="${category}"]`)
+          .evaluate(button => button.click());
         const expectedFareLabel = `Rs ${expectedFare.toLocaleString()}`;
         await expect(customerPage.locator('#fare-suggested-val')).toHaveText(expectedFareLabel);
         await expect(customerPage.locator('#book-btn')).toBeVisible();
 
-        await customerPage.locator('#book-btn').click();
+        await customerPage.locator('#book-btn').evaluate(button => button.click());
         const availableRides = await driverPage.evaluate(async () => {
           const response = await fetch('/api/rides/available', {
             headers: {
@@ -983,7 +1019,7 @@ test.describe('live Mongo fare refresh', () => {
     }
   });
 
-  test('loads native charcoal Driver map tiles without CSS inversion', async ({ browser }) => {
+  test('loads native no-key OpenStreetMap Driver map tiles without CSS inversion', async ({ browser }) => {
     const baseURL = `http://127.0.0.1:${httpServer.address().port}`;
     const context = await browser.newContext({
       viewport: { width: 430, height: 900 },
@@ -1003,11 +1039,11 @@ test.describe('live Mongo fare refresh', () => {
         src: tile.src,
         loaded: tile.complete && tile.naturalWidth > 0
       })));
-      const loadedDarkTiles = tiles.filter(tile =>
-        tile.loaded && tile.src.includes('Canvas/World_Dark_Gray_Base/MapServer/tile/')
+      const loadedOpenStreetMapTiles = tiles.filter(tile =>
+        tile.loaded && /\.tile\.openstreetmap\.org\/\d+\//.test(tile.src)
       );
-      expect(loadedDarkTiles.length).toBeGreaterThan(0);
-      expect(Math.max(...loadedDarkTiles.map(tile => Number(tile.src.match(/tile\/(\d+)\//)?.[1] || 0)))).toBeGreaterThanOrEqual(15);
+      expect(loadedOpenStreetMapTiles.length).toBeGreaterThan(0);
+      expect(Math.max(...loadedOpenStreetMapTiles.map(tile => Number(tile.src.match(/openstreetmap\.org\/(\d+)\//)?.[1] || 0)))).toBeGreaterThanOrEqual(15);
       await expect(driverPage.locator('#map .leaflet-tile-pane')).toHaveCSS('filter', 'none');
     } finally {
       await context.close();

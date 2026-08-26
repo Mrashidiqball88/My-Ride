@@ -1465,6 +1465,10 @@ function initMap() {
     customerMapAutoCenter = false;
     if (activeRide) customerTrackingFollow = false;
   });
+  map.on('zoomstart', () => {
+    customerMapAutoCenter = false;
+    if (activeRide) customerTrackingFollow = false;
+  });
 
   map.on('click', (e) => {
     const { lat, lng } = e.latlng;

@@ -1530,6 +1530,10 @@ function initMap() {
     driverMapAutoCenter = false;
     if (activeRide) navigationFollowing = false;
   });
+  map.on('zoomstart', () => {
+    driverMapAutoCenter = false;
+    if (activeRide) navigationFollowing = false;
+  });
 
   // Watch driver's own location
   if (navigator.geolocation) {
