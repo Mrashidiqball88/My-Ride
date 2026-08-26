@@ -1481,7 +1481,10 @@ function initMap() {
 
 function applyCustomerGpsPosition(pos, { forceCenter = false } = {}) {
   const { latitude: lat, longitude: lng } = pos.coords;
-  if (!ensurePakistanLocation(lat, lng) || !map) return false;
+  // Startup/browser GPS can briefly return an unavailable or out-of-area
+  // fix. Ignore it silently; only explicit pickup/dropoff selection should
+  // show the Pakistan-only validation message.
+  if (!isPakistanLocation(lat, lng) || !map) return false;
   const previousLocation = customerLocation;
   const isFirstFix = !customerGpsHasFix;
   customerGpsHasFix = true;

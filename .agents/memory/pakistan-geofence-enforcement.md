@@ -7,4 +7,4 @@ All Customer and Driver location coordinates must be inside the national Pakista
 
 **Why:** Coordinates can arrive from search results, GPS, API calls, realtime events, native background updates, and legacy clients. A latitude/longitude rectangle would also admit neighboring countries.
 
-**How to apply:** Use the reusable polygon helper for every new coordinate-bearing route, event, or persisted location. Reject failures with `OUTSIDE_PAKISTAN` and the exact user message “Please select a location inside Pakistan.”
+**How to apply:** Use the reusable polygon helper for every new coordinate-bearing route, event, or persisted location. Reject failures with `OUTSIDE_PAKISTAN`. Show “Please select a location inside Pakistan.” only after an explicit user location selection; silently ignore invalid startup, background, or transient GPS fixes.

@@ -806,7 +806,6 @@ let driverGpsHasFix = false;
 let driverMapAutoCenter = true;
 const PAKISTAN_ONLY_MESSAGE = window.MyRidePakistanGeofence?.PAKISTAN_ONLY_MESSAGE
   || 'Please select a location inside Pakistan.';
-let pakistanLocationNoticeShown = false;
 
 // ── Toast ──────────────────────────────────────────────────────────────────
 function showToast(msg, type = 'info') {
@@ -817,18 +816,6 @@ function showToast(msg, type = 'info') {
 
 function isPakistanLocation(lat, lng) {
   return window.MyRidePakistanGeofence?.isWithinPakistan(lat, lng) === true;
-}
-
-function ensurePakistanLocation(lat, lng) {
-  if (isPakistanLocation(lat, lng)) {
-    pakistanLocationNoticeShown = false;
-    return true;
-  }
-  if (!pakistanLocationNoticeShown) {
-    pakistanLocationNoticeShown = true;
-    showToast(PAKISTAN_ONLY_MESSAGE, 'error');
-  }
-  return false;
 }
 
 function sendDriverHeartbeat() {
@@ -1508,7 +1495,10 @@ function initMap() {
   if (navigator.geolocation) {
     const applyDriverLocation = pos => {
       const { latitude: lat, longitude: lng } = pos.coords;
-      if (!ensurePakistanLocation(lat, lng)) return;
+      // GPS can briefly report 0,0, a stale location, or a location outside
+      // the service area during startup. Ignore those fixes silently; the
+      // Pakistan warning is reserved for explicit user-selected locations.
+      if (!isPakistanLocation(lat, lng)) return;
       const previousLocation = driverLocation;
       const isFirstFix = !driverGpsHasFix;
       driverGpsHasFix = true;
@@ -1521,10 +1511,16 @@ function initMap() {
       if (socket && (isOnline || activeRide)) {
         socket.emit('driver:location', { lat, lng, rideId: activeRide?._id });
       }
+      const shouldCenter = driverMapAutoCenter
+        && (isFirstFix || !previousLocation || haversineKm(previousLocation, driverLocation) >= .02);
       if (activeRide) {
         refreshActiveNavigation({ recenter: false });
         startNavigationFollow();
-      } else if (driverMapAutoCenter && (isFirstFix || !previousLocation || haversineKm(previousLocation, driverLocation) >= .02)) {
+        if (shouldCenter) {
+          const zoom = Math.max(15, map.getZoom());
+          map.setView([lat, lng], zoom, { animate: !isFirstFix, duration: .35 });
+        }
+      } else if (shouldCenter) {
         const zoom = Math.max(15, map.getZoom());
         map.setView([lat, lng], zoom, { animate: !isFirstFix, duration: .35 });
       }
