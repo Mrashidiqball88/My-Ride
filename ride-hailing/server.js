@@ -42,7 +42,16 @@ app.get('/health', (_req, res) => res.status(200).send('OK'));
 app.get('/api',    (_req, res) => res.status(200).json({ status: 'ok' }));
 
 const server = http.createServer(app);
-const io     = new Server(server, { cors: { origin: '*', methods: ['GET', 'POST'] } });
+const io     = new Server(server, {
+  cors: { origin: '*', methods: ['GET', 'POST'] },
+  // Keep the transport-level connection responsive while allowing the
+  // application-level driver heartbeat to remain the source of truth for
+  // online eligibility.
+  pingInterval: 10_000,
+  pingTimeout: 25_000,
+  connectTimeout: 20_000,
+  transports: ['websocket', 'polling']
+});
 
 const SMTP_HOST = process.env.SMTP_HOST || '';
 const SMTP_PORT = Number(process.env.SMTP_PORT || 587);
@@ -1403,6 +1412,122 @@ function emitRideRequestToDrivers(drivers, payload) {
   }
 }
 
+function driverRidePayload(ride) {
+  return {
+    id: String(ride._id),
+    _id: String(ride._id),
+    pickupLocation: ride.pickupLocation,
+    dropoffLocation: ride.dropoffLocation,
+    dropoffLocations: ride.dropoffLocations,
+    fare: ride.fare,
+    distance: ride.distance,
+    duration: ride.duration,
+    paymentMethod: ride.paymentMethod,
+    vehicleType: normalizeFareVehicle(ride.vehicleType),
+    isLongRange: !!ride.isLongRange,
+    broadcastExpiresAt: ride.broadcastExpiresAt,
+    offerExpiresAt: ride.offerExpiresAt,
+    passenger: ride.passenger
+  };
+}
+
+async function getAvailableRidesForDriver(driver) {
+  if (!driver || driver.accountStatus !== 'active' || !driver.isOnline) return [];
+  const hasFreshHeartbeat = driver.lastOnlineHeartbeat &&
+    new Date(driver.lastOnlineHeartbeat).getTime() >= Date.now() - DRIVER_HEARTBEAT_MAX_AGE_MS;
+  if (!hasFreshHeartbeat || !hasValidCoordinates(driver.currentLocation)) return [];
+
+  const [{ maximumRideBroadcastRadiusKm: radiusKm }, longRangeSettings] = await Promise.all([
+    getRideBroadcastSettings(),
+    getLongRangeSettings()
+  ]);
+  const rides = await Ride.find({
+    status: 'requested',
+    vehicleType: { $in: storedVehicleTypesForFareCategory(driver.vehicleType) },
+    ...rideOfferIsStillOpenQuery()
+  })
+    .populate('passenger', 'name phone rating')
+    .sort({ createdAt: -1 });
+  const hasLongRangeRides = rides.some(ride => ride.isLongRange);
+  const wallet = hasLongRangeRides
+    ? await Wallet.findOne({ user: driver._id }).select('balance').lean()
+    : null;
+
+  return rides.filter(ride => hasValidCoordinates(ride.pickupLocation)
+    && canDriverReceiveRideForPreference(driver.ridePreference, ride.isLongRange)
+    && (!ride.isLongRange || (
+      longRangeSettings.enabled &&
+      driver.longRangeEnabled &&
+      Number(wallet?.balance || 0) >= getLongRangeMinimumWalletBalance(longRangeSettings, driver.vehicleType)
+    ))
+    && haversineKm(
+      Number(driver.currentLocation.lat),
+      Number(driver.currentLocation.lng),
+      Number(ride.pickupLocation.lat),
+      Number(ride.pickupLocation.lng)
+    ) <= (ride.isLongRange ? longRangeSettings.broadcastRadiusKm : radiusKm));
+}
+
+async function rehydrateDriverSocket(socket, driverId, { replayOffers = true } = {}) {
+  if (socket._driverRecoveryPromise) {
+    // The client normally sends driver:status immediately after connect. If
+    // that refresh races the initial DB read, run one more pass after the
+    // status update instead of replaying the stale pre-refresh result.
+    socket._driverRecoveryQueued = true;
+    return socket._driverRecoveryPromise;
+  }
+  const recovery = (async () => {
+    const [driver, activeRide] = await Promise.all([
+      User.findById(driverId)
+        .select('isOnline accountStatus vehicleType ridePreference longRangeEnabled lastOnlineHeartbeat currentLocation')
+        .lean()
+        .catch(() => null),
+      Ride.findOne({ driver: driverId, status: { $in: ['accepted', 'arrived', 'in-progress'] } })
+        .select('_id')
+        .lean()
+        .catch(() => null)
+    ]);
+    const hasFreshHeartbeat = driver?.lastOnlineHeartbeat &&
+      new Date(driver.lastOnlineHeartbeat).getTime() >= Date.now() - DRIVER_HEARTBEAT_MAX_AGE_MS;
+    const isOnline = !!(driver && driver.accountStatus === 'active' && driver.isOnline && hasFreshHeartbeat);
+    const vehicleType = normalizeFareVehicle(driver?.vehicleType || socket.vehicleType || 'Car Mini Non-AC');
+
+    if (driver?.vehicleType) socket.vehicleType = vehicleType;
+    if (isOnline) {
+      socket.join('drivers-online');
+      socket.join(`drivers:${vehicleType}`);
+    } else {
+      socket.leave('drivers-online');
+      socket.leave(`drivers:${vehicleType}`);
+    }
+    if (activeRide) socket.join(`ride:${activeRide._id}`);
+
+    const pendingRides = isOnline && replayOffers
+      ? await getAvailableRidesForDriver(driver).catch(() => [])
+      : [];
+    socket.emit('driver:rehydrate', {
+      isOnline,
+      vehicleType,
+      activeRideId: activeRide ? String(activeRide._id) : null,
+      pendingRideIds: pendingRides.map(ride => String(ride._id))
+    });
+    // Replay the same ride:new contract used for first delivery. Clients
+    // deduplicate by ride id, so reconnects cannot duplicate alert effects.
+    for (const ride of pendingRides) {
+      if (socket.connected) socket.emit('ride:new', driverRidePayload(ride));
+    }
+    return { isOnline, activeRide };
+  })();
+  socket._driverRecoveryPromise = recovery.finally(() => {
+    socket._driverRecoveryPromise = null;
+    if (socket._driverRecoveryQueued && socket.connected) {
+      socket._driverRecoveryQueued = false;
+      void rehydrateDriverSocket(socket, driverId, { replayOffers }).catch(() => {});
+    }
+  });
+  return socket._driverRecoveryPromise;
+}
+
 // Ride state can be visible through a personal room, an active ride room, and
 // the vehicle broadcast room at the same time. Emit each lifecycle mutation to
 // their union so every recipient sees one authoritative, idempotent update.
@@ -2277,34 +2402,13 @@ app.post('/api/rides', authMiddleware, customerOnly, customerCanBook, async (req
 app.get('/api/rides/available', authMiddleware, driverOnly, async (req, res) => {
   try {
     const driver = await User.findById(req.user.id).select('vehicleType ridePreference accountStatus isOnline longRangeEnabled lastOnlineHeartbeat currentLocation').lean();
+    const rides = await getAvailableRidesForDriver(driver);
     const hasFreshHeartbeat = driver?.lastOnlineHeartbeat &&
       new Date(driver.lastOnlineHeartbeat).getTime() >= Date.now() - DRIVER_HEARTBEAT_MAX_AGE_MS;
     if (!driver || driver.accountStatus !== 'active' || !driver.isOnline || !hasFreshHeartbeat || !hasValidCoordinates(driver.currentLocation)) {
       return res.status(403).json({ error: 'You must be an approved online driver to receive rides' });
     }
-    const [{ maximumRideBroadcastRadiusKm: radiusKm }, longRangeSettings] = await Promise.all([
-      getRideBroadcastSettings(), getLongRangeSettings()
-    ]);
-    const rides = await Ride.find({
-      status: 'requested',
-      vehicleType: { $in: storedVehicleTypesForFareCategory(driver.vehicleType) },
-      ...rideOfferIsStillOpenQuery()
-    })
-      .populate('passenger', 'name phone rating')
-      .sort({ createdAt: -1 });
-    const hasLongRangeRides = rides.some(ride => ride.isLongRange);
-    const wallet = hasLongRangeRides
-      ? await Wallet.findOne({ user: req.user.id }).select('balance').lean()
-      : null;
-    res.json(rides.filter(ride => hasValidCoordinates(ride.pickupLocation)
-      && canDriverReceiveRideForPreference(driver.ridePreference, ride.isLongRange)
-      && (!ride.isLongRange || (longRangeSettings.enabled && driver.longRangeEnabled && Number(wallet?.balance || 0) >= getLongRangeMinimumWalletBalance(longRangeSettings, driver.vehicleType)))
-      && haversineKm(
-        Number(driver.currentLocation.lat),
-        Number(driver.currentLocation.lng),
-        Number(ride.pickupLocation.lat),
-        Number(ride.pickupLocation.lng)
-      ) <= (ride.isLongRange ? longRangeSettings.broadcastRadiusKm : radiusKm)));
+    res.json(rides);
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -4741,25 +4845,8 @@ io.on('connection', async (socket) => {
   // We persist isOnline and active ride state to MongoDB so we can restore both
   // here without requiring the client to manually re-send status events first.
   if (role === 'driver') {
-    Promise.all([
-      User.findById(id).select('isOnline accountStatus vehicleType').lean().catch(() => null),
-      Ride.findOne({ driver: id, status: { $in: ['accepted', 'arrived', 'in-progress'] } })
-          .select('_id').lean().catch(() => null)
-    ]).then(async ([driver, activeRide]) => {
-      // Cache vehicle type on socket for fast room management
-        if (driver?.vehicleType) socket.vehicleType = normalizeFareVehicle(driver.vehicleType);
-      // Restore online rooms — only if DB says online and account is active
-      if (driver?.isOnline && driver.accountStatus === 'active') {
-        await User.updateOne({ _id: id }, { lastOnlineHeartbeat: new Date() }).catch(() => {});
-        socket.join('drivers-online');
-        socket.join(`drivers:${normalizeFareVehicle(driver.vehicleType || 'Car Mini Non-AC')}`);
-        socket.emit('driver:rehydrate', { isOnline: true, vehicleType: normalizeFareVehicle(driver.vehicleType || 'Car Mini Non-AC') });
-      }
-      // Re-join the active ride room so location updates reach the passenger
-      if (activeRide) {
-        socket.join(`ride:${activeRide._id}`);
-        console.log('Driver rejoined an active ride room after reconnect');
-      }
+    void rehydrateDriverSocket(socket, id).then(({ activeRide }) => {
+      if (activeRide) console.log('Driver rejoined an active ride room after reconnect');
     }).catch(() => {});
   }
 
@@ -4832,12 +4919,13 @@ io.on('connection', async (socket) => {
     const vRoom = `drivers:${socket.vehicleType || 'Car Mini Non-AC'}`;
     if (isOnline) { socket.join('drivers-online'); socket.join(vRoom); }
     else          { socket.leave('drivers-online'); socket.leave(vRoom); }
+    if (isOnline) await rehydrateDriverSocket(socket, id, { replayOffers: true }).catch(() => {});
   });
 
   // Native clients explicitly heartbeat while their foreground service is
   // active. This lets the server detect policy/account changes without treating
   // short radio reconnects as an offline transition.
-  socket.on('driver:heartbeat', async () => {
+  socket.on('driver:heartbeat', async (client = {}) => {
     if (role !== 'driver') return;
     const driver = await User.findById(id).select('accountStatus isOnline').lean().catch(() => null);
     if (!driver || driver.accountStatus !== 'active' || !driver.isOnline) {
@@ -4845,7 +4933,10 @@ io.on('connection', async (socket) => {
       return;
     }
     await User.updateOne({ _id: id }, { lastOnlineHeartbeat: new Date() }).catch(() => {});
-    socket.emit('driver:heartbeat:ack', { serverTime: new Date().toISOString() });
+    socket.emit('driver:heartbeat:ack', {
+      serverTime: new Date().toISOString(),
+      clientSentAt: typeof client.clientSentAt === 'string' ? client.clientSentAt : null
+    });
   });
 
   // Share passenger location only with an active ride's authorized room.
@@ -5338,6 +5429,8 @@ module.exports = {
   findRideBroadcastDrivers,
   findLongRangeBroadcastDrivers,
   emitRideRequestToDrivers,
+  getAvailableRidesForDriver,
+  driverRidePayload,
   emitRideLifecycle,
   chargeLongRangeCommission,
   refreshPendingRideFares,

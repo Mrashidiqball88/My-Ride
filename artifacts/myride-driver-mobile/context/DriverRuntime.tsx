@@ -127,6 +127,8 @@ export function DriverRuntimeProvider({ children }: { children: ReactNode }) {
   const activeRideIdRef = useRef<string | null>(null);
   const alertedRideIds = useRef(new Set<string>());
   const localRideNotificationIds = useRef(new Map<string, string>());
+  const receivedRideEvents = useRef(new Map<string, number>());
+  const lastHeartbeatAckAt = useRef(0);
 
   useEffect(() => { isOnlineRef.current = isOnline; }, [isOnline]);
   useEffect(() => { activeRideIdRef.current = activeRideId; }, [activeRideId]);
@@ -151,15 +153,22 @@ export function DriverRuntimeProvider({ children }: { children: ReactNode }) {
     });
   }, []);
 
-  const hydrateAvailableRides = useCallback(async () => {
-    if (!tokenRef.current || !isOnlineRef.current) return;
+  const hydrateAvailableRides = useCallback(async (requestedRideId?: string) => {
+    if (!tokenRef.current || !isOnlineRef.current) return false;
     try {
       const rides = await api('/api/rides/available', tokenRef.current, sessionRef.current || undefined);
-      const nextRide = Array.isArray(rides)
-        ? rides.map(ride => normalizeRideRequest(ride as RideRequest & { _id?: string })).find(isRideOfferLive)
-        : undefined;
+      const liveRides = Array.isArray(rides)
+        ? rides.map(ride => normalizeRideRequest(ride as RideRequest & { _id?: string })).filter(isRideOfferLive)
+        : [];
+      const nextRide = requestedRideId
+        ? liveRides.find(ride => ride.id === requestedRideId)
+        : liveRides[0];
       setPendingRide(current => nextRide || (isRideOfferLive(current) ? current : null));
-    } catch { /* A reconnect can race the availability change; socket retry continues. */ }
+      return Boolean(nextRide);
+    } catch {
+      // A reconnect can race the availability change; socket retry continues.
+      return false;
+    }
   }, []);
 
   const loadLongRange = useCallback(async () => {
@@ -174,6 +183,7 @@ export function DriverRuntimeProvider({ children }: { children: ReactNode }) {
     const nextSocket = io(API_URL, {
       path: '/socket.io', auth: { token: tokenRef.current, sessionToken: sessionRef.current }, transports: ['websocket'],
       reconnection: true, reconnectionAttempts: Infinity, reconnectionDelay: 1000, reconnectionDelayMax: 15_000,
+      timeout: 20_000, forceNew: true,
     });
     socket.current = nextSocket;
     nextSocket.on('connect', () => {
@@ -185,12 +195,29 @@ export function DriverRuntimeProvider({ children }: { children: ReactNode }) {
       if (activeRideIdRef.current) nextSocket.emit('ride:join', activeRideIdRef.current);
       void hydrateAvailableRides();
     });
-    nextSocket.on('disconnect', () => setConnection('connecting'));
+    nextSocket.on('disconnect', () => {
+      lastHeartbeatAckAt.current = 0;
+      setConnection('connecting');
+    });
     nextSocket.on('connect_error', () => setConnection('connecting'));
+    nextSocket.on('driver:heartbeat:ack', () => {
+      // The REST heartbeat remains the background fallback. This timestamp is
+      // used only to detect a foreground socket that needs a clean reconnect.
+      lastHeartbeatAckAt.current = Date.now();
+    });
     nextSocket.on('driver:rehydrate', () => void hydrateAvailableRides());
     nextSocket.on('ride:new', (ride: RideRequest) => {
       const nextRide = normalizeRideRequest(ride);
       if (!isOnlineRef.current || activeRideIdRef.current || !isRideOfferLive(nextRide)) return;
+      const previousEventAt = receivedRideEvents.current.get(nextRide.id) || 0;
+      if (Date.now() - previousEventAt < 120_000) return;
+      const receivedAt = Date.now();
+      receivedRideEvents.current.set(nextRide.id, receivedAt);
+      setTimeout(() => {
+        if (receivedRideEvents.current.get(nextRide.id) === receivedAt) {
+          receivedRideEvents.current.delete(nextRide.id);
+        }
+      }, 120_000);
       setPendingRide(current => current?.id === nextRide.id ? current : nextRide);
       void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning);
       // Expo's remote notification already displays in the foreground. Only
@@ -374,20 +401,31 @@ export function DriverRuntimeProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     const subscription = Notifications.addNotificationResponseReceivedListener(response => {
-      const data = response.notification.request.content.data as { type?: string; ride?: RideRequest & { _id?: string } };
-      if (data.type === 'ride:new' && data.ride) {
-        const ride = normalizeRideRequest(data.ride);
-        if (response.actionIdentifier !== 'dismiss' && isRideOfferLive(ride)) setPendingRide(ride);
+      const data = response.notification.request.content.data as {
+        type?: string; ride?: RideRequest & { _id?: string }; rideId?: string;
+      };
+      if (data.type === 'ride:new') {
+        const rideId = String(data.rideId || data.ride?.id || data.ride?._id || '');
+        if (response.actionIdentifier === 'dismiss') {
+          if (rideId) clearRideAlert(rideId);
+        } else if (rideId) {
+          // Notification payloads can be stale after background suspension.
+          // Recheck the authoritative available-rides list before showing it.
+          void hydrateAvailableRides(rideId);
+        }
       }
     });
     void Notifications.getLastNotificationResponseAsync().then(response => {
-      const data = response?.notification.request.content.data as { type?: string; ride?: RideRequest & { _id?: string } } | undefined;
-      if (data?.type === 'ride:new' && data.ride && isRideOfferLive(normalizeRideRequest(data.ride))) {
-        setPendingRide(normalizeRideRequest(data.ride));
+      const data = response?.notification.request.content.data as {
+        type?: string; ride?: RideRequest & { _id?: string }; rideId?: string;
+      } | undefined;
+      const rideId = String(data?.rideId || data?.ride?.id || data?.ride?._id || '');
+      if (data?.type === 'ride:new' && rideId) {
+        void hydrateAvailableRides(rideId);
       }
     }).catch(() => undefined);
     return () => subscription.remove();
-  }, []);
+  }, [clearRideAlert, hydrateAvailableRides]);
 
   useEffect(() => {
     if (!ready || !tokenRef.current) return;
@@ -403,18 +441,37 @@ export function DriverRuntimeProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     if (!isOnline) return;
     const interval = setInterval(() => {
-      socket.current?.emit('driver:heartbeat');
-      if (tokenRef.current) void api('/api/driver/heartbeat', tokenRef.current, sessionRef.current || undefined, { method: 'POST' }).catch(() => undefined);
+      const clientSentAt = new Date().toISOString();
+      if (socket.current?.connected) {
+        if (lastHeartbeatAckAt.current && Date.now() - lastHeartbeatAckAt.current > 60_000) {
+          // A transport can look connected while the foreground app has
+          // stopped receiving application frames. Recreate it once, then let
+          // Socket.io's normal reconnect and server rehydration take over.
+          socket.current.disconnect();
+          socket.current.connect();
+          return;
+        }
+        socket.current.emit('driver:heartbeat', { clientSentAt });
+      }
+      // This REST heartbeat is intentionally retained for Android background
+      // suspension, where the JavaScript Socket.io timer may stop running.
+      if (tokenRef.current) {
+        void api('/api/driver/heartbeat', tokenRef.current, sessionRef.current || undefined, {
+          method: 'POST',
+        }).catch(() => undefined);
+      }
     }, 25_000);
     const subscription = AppState.addEventListener('change', state => {
       if (state === 'active') {
         socket.current?.connect();
         socket.current?.emit('driver:status', { isOnline: true });
+        socket.current?.emit('driver:heartbeat', { clientSentAt: new Date().toISOString() });
+        void registerExpoToken();
         void hydrateAvailableRides();
       }
     });
     return () => { clearInterval(interval); subscription.remove(); };
-  }, [hydrateAvailableRides, isOnline]);
+  }, [hydrateAvailableRides, isOnline, registerExpoToken]);
 
   useEffect(() => {
     if (!pendingRide) return;

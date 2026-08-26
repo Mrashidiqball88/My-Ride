@@ -39,11 +39,33 @@ async function postLocation(location: Location.LocationObject) {
   }
 }
 
+async function postHeartbeat() {
+  const [token, session, online] = await Promise.all([
+    SecureStore.getItemAsync(TOKEN_KEY),
+    SecureStore.getItemAsync(SESSION_KEY),
+    SecureStore.getItemAsync(ONLINE_KEY),
+  ]);
+  if (!token || online !== 'true' || !DOMAIN) return;
+  const response = await fetch(`${DOMAIN}/api/driver/heartbeat`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${token}`,
+      ...(session ? { 'X-Session-Token': session } : {}),
+    },
+  });
+  if (response.status === 401 || response.status === 403) {
+    await SecureStore.setItemAsync(ONLINE_KEY, 'false');
+    await Location.stopLocationUpdatesAsync(BACKGROUND_LOCATION_TASK).catch(() => undefined);
+  }
+}
+
 TaskManager.defineTask(BACKGROUND_LOCATION_TASK, async ({ data, error }) => {
   if (error) return;
   const locations = (data as { locations?: Location.LocationObject[] } | undefined)?.locations ?? [];
   const latest = locations[locations.length - 1];
   if (latest) await postLocation(latest);
+  else await postHeartbeat();
 });
 
 export const backgroundLocationOptions: Location.LocationTaskOptions = {

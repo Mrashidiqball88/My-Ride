@@ -211,7 +211,7 @@ test.describe('live Mongo fare refresh', () => {
         data: { dailyFareSettings: initial }
       });
       expect(savedInitial.ok()).toBeTruthy();
-      expect((await models.Settings.findOne({ key: 'daily_fare_settings' }).lean()).value['Car Mini'].baseFare)
+      expect((await models.Settings.findOne({ key: 'daily_fare_settings' }).lean()).value['Car Mini Non-AC'].baseFare)
         .toBe(200);
 
       await Promise.all([
@@ -222,7 +222,7 @@ test.describe('live Mongo fare refresh', () => {
 
       await matchingPage.evaluate(() => toggleOnline(true));
       await expect.poll(async () => (await models.User.findById(matchingDriver._id).lean()).isOnline).toBe(true);
-      await expect.poll(() => io.sockets.adapter.rooms.get('drivers:Car Mini')?.size || 0).toBeGreaterThan(0);
+      await expect.poll(() => io.sockets.adapter.rooms.get('drivers:Car Mini Non-AC')?.size || 0).toBeGreaterThan(0);
       await expect.poll(async () => {
         const broadcast = await findRideBroadcastDrivers({ lat: 1, lng: 2 }, 'Car Mini');
         return broadcast.drivers.some(driver => String(driver._id) === String(matchingDriver._id));
@@ -283,7 +283,7 @@ test.describe('live Mongo fare refresh', () => {
       await expect(matchingPage.locator('#rr-fare')).toHaveText(`Rs ${refreshedFare}`);
       await expect(otherPage.locator('body')).not.toContainText(`Rs ${refreshedFare}`);
       expect((await models.Ride.findById(ride._id).lean()).fare).toBe(refreshedFare);
-      expect((await models.Settings.findOne({ key: 'daily_fare_settings' }).lean()).value['Car Mini'])
+      expect((await models.Settings.findOne({ key: 'daily_fare_settings' }).lean()).value['Car Mini Non-AC'])
         .toMatchObject({ baseFare: 500 });
     } finally {
       await Promise.all([matchingPage.close(), otherPage.close(), customerPage.close()]);
@@ -595,7 +595,7 @@ test.describe('live Mongo fare refresh', () => {
       await openAuthenticatedClient(driverPage, baseURL, '/driver', matchingDriver, matchingToken);
       await driverPage.evaluate(() => toggleOnline(true));
       await expect.poll(() => driverPage.evaluate(() => isOnline)).toBe(true);
-      await expect.poll(() => io.sockets.adapter.rooms.get('drivers:Car Mini')?.size || 0).toBeGreaterThan(0);
+      await expect.poll(() => io.sockets.adapter.rooms.get('drivers:Car Mini Non-AC')?.size || 0).toBeGreaterThan(0);
 
       const cancelledRide = await createRide('Instant cancellation');
       await expect(driverPage.locator('#ride-request')).toBeVisible();

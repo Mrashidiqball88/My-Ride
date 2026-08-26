@@ -62,6 +62,16 @@ sound/vibration, radio recovery, or force-stop behavior.
 4. Accept the offer and confirm the active ride is not duplicated after
    reconnecting.
 
+### Background notification tap reconciliation
+
+1. Put the native Driver app online, background it, and lock the device.
+2. Create a nearby ride and tap the resulting high-priority notification.
+3. Confirm the app rechecks the server before showing the offer, and that the
+   pickup, drop-off, fare, and expiry match the still-open server record.
+4. Cancel or let another driver take a second ride before tapping its
+   notification.
+5. Pass only when the stale notification does not restore an actionable offer.
+
 ### Force-stop and revoked permission fail closed
 
 1. Switch the driver online, then force-stop the app from Android Settings (or
@@ -100,8 +110,8 @@ native device build, so it cannot satisfy the scenarios below.
 | --- | --- | --- | --- | --- |
 | Android locked location | No approved Android device or native build available | **Blocked — no device evidence** (2026-08-22T15:31:49Z); no lock-screen movement, foreground-service notification screenshot, ride ID, or timestamped GPS update can be recorded in this workspace. Supporting config enables Android background location and foreground service; background updates request 25 m / 15 s intervals. | Blocked | Replit workspace |
 | iOS locked location | No approved iOS device or native build available | **Blocked — no device evidence** (2026-08-22T15:31:49Z); no lock-screen movement, system location indicator, Settings permission screenshot, ride ID, or timestamped GPS update can be recorded in this workspace. Supporting config declares When In Use and Always usage descriptions and enables the background indicator. | Blocked | Replit workspace |
-| Alert and matching offer | No approved Android/iOS device or native build available | **Blocked — no device evidence** (2026-08-23); sound, vibration, lock-screen tap-through, ride ID, pickup/drop-off, fare, server-expiry countdown, and full-screen-intent permission behavior cannot be observed or captured. Supporting implementation uses the maximum-importance public Android channel, a high-priority push payload, action category, deep-link payload, and the declared Android full-screen-intent permission. Expo does not provide a supported API that guarantees a full-screen intent; OS/OEM and Do Not Disturb policy remains authoritative. | Blocked | Replit workspace |
-| Network interruption | No approved Android/iOS device or native build available | **Blocked — no device evidence** (2026-08-22T15:31:49Z); Wi-Fi/mobile-data switching, reconnect timing, duplicate visible offers, and an accepted ride ID cannot be observed or logged. Supporting implementation enables Socket.io reconnection and refreshes available rides after reconnect. | Blocked | Replit workspace |
+| Alert and matching offer | No approved Android/iOS device or native build available | **Blocked — no device evidence** (2026-08-23); sound, vibration, lock-screen tap-through, ride ID, pickup/drop-off, fare, server-expiry countdown, and full-screen-intent permission behavior cannot be observed or captured. Supporting implementation uses the maximum-importance public Android channel, a high-priority push payload, action category, server-side tap revalidation, and the declared Android full-screen-intent permission. Expo does not provide a supported API that guarantees a full-screen intent; OS/OEM and Do Not Disturb policy remains authoritative. | Blocked | Replit workspace |
+| Network interruption | No approved Android/iOS device or native build available | **Blocked — no device evidence** (2026-08-22T15:31:49Z); Wi-Fi/mobile-data switching, reconnect timing, duplicate visible offers, and an accepted ride ID cannot be observed or logged. Supporting implementation enables Socket.io reconnection, server replay of open offers, idempotent ride-event handling, heartbeat acknowledgement, and REST reconciliation after reconnect. | Blocked | Replit workspace |
 | Force-stop / permission revoke | No approved Android/iOS device or native build available | **Blocked — no device evidence** (2026-08-22T15:31:49Z); force-stop/termination, permission revocation, the >90-second wait, and absence of a new offer cannot be observed or captured. Supporting server contracts verify heartbeat persistence; background GPS fails closed on 401/403. | Blocked | Replit workspace |
 
 ## Sign-off status

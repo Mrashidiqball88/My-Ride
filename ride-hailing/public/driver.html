@@ -792,6 +792,8 @@ let driverPerKmRates = {};
 let longRangeState = { enabled: false, walletBalance: 0, settings: {} };
 let driverTerms = '';
 let driverLocation = null;
+let driverHeartbeatTimer = null;
+const receivedRideEvents = new Map();
 let navigationRoute = null;
 let lastNavigationRouteAt = 0;
 let lastNavigationRouteOrigin = null;
@@ -803,6 +805,36 @@ function showToast(msg, type = 'info') {
   const el = document.getElementById('toast');
   el.textContent = msg; el.className = `toast ${type} show`;
   setTimeout(() => el.className = 'toast', 3000);
+}
+
+function sendDriverHeartbeat() {
+  if (!isOnline || !token) return;
+  const clientSentAt = new Date().toISOString();
+  socket?.emit('driver:heartbeat', { clientSentAt });
+  // Keep availability alive even when geolocation is stationary or denied.
+  apiCall('/api/driver/heartbeat', 'POST').catch(error => {
+    if (document.visibilityState === 'visible') console.warn('Driver heartbeat failed:', error.message);
+  });
+}
+
+function startDriverHeartbeat() {
+  clearInterval(driverHeartbeatTimer);
+  driverHeartbeatTimer = setInterval(sendDriverHeartbeat, 25_000);
+}
+
+function recoverDriverConnection() {
+  if (!token) return;
+  if (!socket) connectSocket();
+  if (isOnline) {
+    socket?.connect();
+    socket?.emit('driver:status', { isOnline: true });
+    sendDriverHeartbeat();
+    reconcileActiveRideAfterReconnect();
+    reconcileRideRequestsAfterReconnect();
+  }
+  if ('Notification' in window && Notification.permission === 'granted') {
+    registerPushSubscription();
+  }
 }
 
 // ── Draggable Today’s Fare Widget ───────────────────────────────────────────
@@ -1319,6 +1351,14 @@ function bootApp() {
     }
   }
   connectSocket();
+  if (isOnline) startDriverHeartbeat();
+  if (!window.__myRideDriverRecoveryBound) {
+    window.__myRideDriverRecoveryBound = true;
+    window.addEventListener('online', recoverDriverConnection);
+    document.addEventListener('visibilitychange', () => {
+      if (document.visibilityState === 'visible') recoverDriverConnection();
+    });
+  }
   loadStats();
   checkUnreadDriverTickets();
   checkDailyFee();
@@ -1808,6 +1848,13 @@ function toggleOnline(online) {
     clearRideMap();
   }
   socket?.emit('driver:status', { isOnline: online });
+  if (online) {
+    startDriverHeartbeat();
+    sendDriverHeartbeat();
+  } else {
+    clearInterval(driverHeartbeatTimer);
+    driverHeartbeatTimer = null;
+  }
   renderAvailabilityState();
   showToast(online ? 'You are now Online' : 'You went Offline', online ? 'success' : 'info');
 }
@@ -1824,6 +1871,7 @@ function connectSocket() {
   socket.on('connect', () => {
     if (isOnline) {
       socket.emit('driver:status', { isOnline: true });
+      sendDriverHeartbeat();
     }
     if (activeRide) {
       socket.emit('ride:join', activeRide._id);
@@ -1837,10 +1885,18 @@ function connectSocket() {
   });
 
   socket.on('driver:rehydrate', ({ isOnline: restoredOnline }) => {
-    isOnline = !!restoredOnline;
-    renderAvailabilityState();
-    if (isOnline) {
+    // Do not turn the local toggle off on the first stale reconnect packet:
+    // the following driver:status event refreshes the authoritative heartbeat.
+    if (restoredOnline || !isOnline) {
+      isOnline = !!restoredOnline;
+      renderAvailabilityState();
+    }
+    if (restoredOnline) {
+      startDriverHeartbeat();
       reconcileRideRequestsAfterReconnect();
+    } else if (!isOnline) {
+      clearInterval(driverHeartbeatTimer);
+      driverHeartbeatTimer = null;
     }
   });
 
@@ -1974,7 +2030,14 @@ function connectSocket() {
   // New ride request from passenger
   socket.on('ride:new', (ride) => {
     if (!isOnline || activeRide || sentOffer || !rideOfferIsLive(ride)) return;
-    if (pendingRide && String(pendingRide.id || pendingRide._id) === String(ride.id || ride._id)) return;
+    const rideId = String(ride.id || ride._id || '');
+    const previousEventAt = receivedRideEvents.get(rideId) || 0;
+    if (Date.now() - previousEventAt < 120_000) return;
+    const receivedAt = Date.now();
+    receivedRideEvents.set(rideId, receivedAt);
+    setTimeout(() => {
+      if (receivedRideEvents.get(rideId) === receivedAt) receivedRideEvents.delete(rideId);
+    }, 120_000);
     pendingRide = ride;
     showRideRequest(ride);
   });
