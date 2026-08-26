@@ -679,6 +679,45 @@ test('ride lifecycle events reach vehicle, rider, driver, and ride audiences onc
   }]);
 });
 
+test('customer cancellation event reaches the assigned and previously notified driver audiences', () => {
+  const emissions = [];
+  io.to = rooms => ({ emit: (event, payload) => emissions.push({ rooms, event, payload }) });
+  const ride = {
+    _id: 'ride-cancelled',
+    passenger: 'customer-cancelled',
+    driver: 'driver-cancelled',
+    vehicleType: 'Car Mini Non-AC',
+    notifiedDriverIds: ['driver-cancelled', 'driver-notified'],
+    updatedAt: new Date('2026-08-24T05:00:00.000Z')
+  };
+
+  emitRideLifecycle(ride, 'ride_cancelled', {
+    status: 'cancelled',
+    cancelledBy: 'customer'
+  }, {
+    notifyVehicleDrivers: true,
+    notifyDriverIds: ride.notifiedDriverIds
+  });
+
+  assert.deepEqual(emissions, [{
+    rooms: [
+      'ride:ride-cancelled',
+      'user:customer-cancelled',
+      'user:driver-cancelled',
+      'user:driver-notified',
+      'drivers:Car Mini Non-AC'
+    ],
+    event: 'ride_cancelled',
+    payload: {
+      rideId: 'ride-cancelled',
+      eventId: 'ride_cancelled:ride-cancelled:2026-08-24T05:00:00.000Z',
+      revision: '2026-08-24T05:00:00.000Z',
+      status: 'cancelled',
+      cancelledBy: 'customer'
+    }
+  }]);
+});
+
 test('Long Range broadcast only returns opted-in drivers for Socket.io and push delivery', async () => {
   let driverQuery;
   models.User.find = query => {

@@ -2032,27 +2032,42 @@ function connectSocket() {
     }
   });
 
-  // Ride status from passenger cancel — covers all three driver states
-  socket.on('ride:status', ({ rideId, status }) => {
-    if (status !== 'cancelled') return;
+  function handleRideCancelled({ rideId, status, cancelledBy = 'customer' } = {}) {
+    if (status && status !== 'cancelled') return;
+    const cancelledId = String(rideId || '');
+    if (!cancelledId) return;
 
-    if (activeRide && String(activeRide._id) === String(rideId)) {
-      // Passenger cancelled an in-progress/accepted ride
-      showToast('⚠️ Passenger cancelled the ride', 'error');
+    const matchesActive = activeRide && String(activeRide._id || activeRide.id) === cancelledId;
+    const matchesOffer = sentOffer && String(sentOffer.rideId) === cancelledId;
+    const matchesPending = pendingRide && String(pendingRide.id || pendingRide._id) === cancelledId;
+    if (!matchesActive && !matchesOffer && !matchesPending) return;
+
+    // Stop every incoming-offer side effect immediately. hideRideRequest()
+    // also performs this cleanup, but keeping it explicit protects the
+    // cancellation path if the popup is already being dismissed.
+    clearInterval(requestTimer);
+    requestTimer = null;
+    stopRideAlert();
+
+    const message = cancelledBy === 'customer'
+      ? 'Ride cancelled by customer'
+      : 'Ride cancelled';
+    if (matchesActive) {
       endActiveRide();
-    } else if (sentOffer && String(sentOffer.rideId) === String(rideId)) {
-      // Passenger cancelled while driver was waiting for their counter-offer to be picked
+    } else {
       sentOffer = null;
       hideRideRequest();
       clearRideMap();
-      showToast('⚠️ Passenger cancelled — your offer was not chosen', 'error');
-    } else if (pendingRide && String(pendingRide.id) === String(rideId)) {
-      // Passenger cancelled while the ride card was still showing
-      hideRideRequest();
-      clearRideMap();
-      showToast('⚠️ Passenger cancelled the ride request', 'error');
     }
-  });
+    showToast(message, 'info');
+  }
+
+  // Dedicated immediate cancellation event for the incoming-request modal.
+  socket.on('ride_cancelled', handleRideCancelled);
+
+  // Backwards-compatible lifecycle event for clients/servers that still use
+  // the generic status channel.
+  socket.on('ride:status', handleRideCancelled);
 }
 
 async function reconcileRideRequestsAfterReconnect() {
@@ -2210,6 +2225,7 @@ function showRideRequest(ride) {
 function hideRideRequest() {
   document.getElementById('ride-request').style.display = 'none';
   clearInterval(requestTimer);
+  requestTimer = null;
   stopRideAlert();
   pendingRide = null;
   document.getElementById('rr-counter-input').value = '';
