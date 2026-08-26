@@ -1504,8 +1504,8 @@ function urlBase64ToUint8Array(base64String) {
 function initMap() {
   if (map) return;
   map = L.map('map', { zoomControl: false, preferCanvas: true, attributionControl: true }).setView([31.5204, 74.3587], 16);
-  L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
-    attribution : '© OpenStreetMap contributors © CARTO',
+  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+    attribution : '© <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
     maxNativeZoom: 19,
     maxZoom      : 20,
     subdomains   : 'abc',

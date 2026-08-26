@@ -2227,10 +2227,15 @@ function renderLiveLocation(location) {
   const latLng = [Number(location.location.lat), Number(location.location.lng)];
   if (!liveLocationMap) {
     liveLocationMap = L.map(mapEl, { zoomControl: true, attributionControl: true });
-    L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
-      attribution: '© OpenStreetMap contributors © CARTO',
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+      attribution: '© <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
+      maxNativeZoom: 19,
       maxZoom: 20,
-      subdomains: 'abcd'
+      subdomains: 'abc',
+      detectRetina: false,
+      updateWhenIdle: true,
+      keepBuffer: 1,
+      crossOrigin: true
     }).addTo(liveLocationMap);
   }
   if (liveLocationMarker) liveLocationMarker.remove();
