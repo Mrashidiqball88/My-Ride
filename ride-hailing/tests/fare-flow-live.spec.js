@@ -193,7 +193,7 @@ test.describe('live Mongo fare refresh', () => {
     );
   });
 
-  test('keeps active-trip camera zoom stable and follows only on the managed live cadence', async ({ browser }) => {
+  test('keeps active-trip cameras stable without repeating follow timers and gates the ride PIN by pickup proximity', async ({ browser }) => {
     const baseURL = `http://127.0.0.1:${httpServer.address().port}`;
     const customerPage = await browser.newPage();
     const driverPage = await browser.newPage();
@@ -218,26 +218,33 @@ test.describe('live Mongo fare refresh', () => {
         followCustomerTrip();
         const callsAfterManualPan = calls.length;
         focusCustomerTrip();
-        customerFollowTimer = null;
-        startCustomerTripFollow();
-        const firstTimer = customerFollowTimer;
-        startCustomerTripFollow();
-        const singleTimer = firstTimer === customerFollowTimer;
-        clearLiveTripTracking();
+        pendingVerificationPin = '2468';
+        hideRidePin();
+        const hiddenOnAcceptance = document.getElementById('ar-pin-card').style.display === 'none';
+        const hiddenAwayFromPickup = !revealRidePinIfAtPickup({ lat: 31.53, lng: 74.37 });
+        const visibleAtPickup = revealRidePinIfAtPickup({ lat: 31.5205, lng: 74.3588 });
+        const contactBeforePin = Boolean(
+          document.getElementById('ar-contact-btns').compareDocumentPosition(document.getElementById('ar-pin-card'))
+          & Node.DOCUMENT_POSITION_FOLLOWING
+        );
         return {
           callsAfterManualPan,
           focusCall: calls.at(-1),
-          cadence: CUSTOMER_FOLLOW_INTERVAL_MS,
-          singleTimer,
-          cleared: customerFollowTimer === null
+          hiddenOnAcceptance,
+          hiddenAwayFromPickup,
+          visibleAtPickup,
+          displayedPin: document.getElementById('ar-pin-value').textContent,
+          contactBeforePin
         };
       }, { pickup, dropoff });
 
       expect(customerCamera.callsAfterManualPan).toBe(0);
       expect(customerCamera.focusCall.zoom).toBe(17);
-      expect(customerCamera.cadence).toBe(2500);
-      expect(customerCamera.singleTimer).toBe(true);
-      expect(customerCamera.cleared).toBe(true);
+      expect(customerCamera.hiddenOnAcceptance).toBe(true);
+      expect(customerCamera.hiddenAwayFromPickup).toBe(true);
+      expect(customerCamera.visibleAtPickup).toBe(true);
+      expect(customerCamera.displayedPin).toBe('2468');
+      expect(customerCamera.contactBeforePin).toBe(true);
 
       const driverCamera = await driverPage.evaluate(({ pickup, dropoff }) => {
         const calls = [];
@@ -248,8 +255,6 @@ test.describe('live Mongo fare refresh', () => {
         activeRide = { status: 'accepted', pickupLocation: pickup, dropoffLocation: dropoff };
         driverLocation = { lat: 31.521, lng: 74.359 };
         navigationFollowing = false;
-        followActiveNavigation();
-        const callsAfterManualPan = calls.length;
         focusActiveNavigation();
         const originalPolyline = L.polyline;
         const routeColors = [];
@@ -260,25 +265,14 @@ test.describe('live Mongo fare refresh', () => {
         routeLine = null;
         drawNavigationLine([[31.521, 74.359], [31.5204, 74.3587]]);
         L.polyline = originalPolyline;
-        const firstTimer = navigationFollowTimer;
-        startNavigationFollow();
-        const singleTimer = firstTimer === navigationFollowTimer;
         clearRideMap();
         return {
-          callsAfterManualPan,
           focusCall: calls[0],
-          cadence: DRIVER_FOLLOW_INTERVAL_MS,
-          singleTimer,
-          cleared: navigationFollowTimer === null,
           routeColors
         };
       }, { pickup, dropoff });
 
-      expect(driverCamera.callsAfterManualPan).toBe(0);
       expect(driverCamera.focusCall.zoom).toBe(18);
-      expect(driverCamera.cadence).toBe(2500);
-      expect(driverCamera.singleTimer).toBe(true);
-      expect(driverCamera.cleared).toBe(true);
       expect(driverCamera.routeColors).toEqual(['#092c62', '#2688ff']);
     } finally {
       await Promise.all([customerPage.close(), driverPage.close()]);

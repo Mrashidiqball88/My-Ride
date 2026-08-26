@@ -737,6 +737,9 @@ body{font-family:'Segoe UI',sans-serif;background:#0a0a0f;color:#fff;height:100d
     <div class="active-sheet-summary"><div class="active-sheet-summary-title" id="ar-sheet-summary-title">Ride request active</div><div class="active-sheet-summary-meta" id="ar-sheet-summary-meta">Swipe up for details</div></div>
     <button type="button" class="active-sheet-toggle" id="active-sheet-toggle" aria-expanded="false" aria-label="Expand active ride details">⌃</button>
   </div>
+  <div class="contact-btns" id="ar-contact-btns" style="display:none">
+    <!-- kept outside the expandable content so ride contact actions stay visible -->
+  </div>
   <div class="ar-sheet-content">
 
   <!-- ── State: Waiting for driver offers ── -->
@@ -800,15 +803,11 @@ body{font-family:'Segoe UI',sans-serif;background:#0a0a0f;color:#fff;height:100d
       <div class="matched-pay-row" id="ar-payment">—</div>
     </div>
 
-    <!-- Ride Verification PIN (shown after driver accepts) -->
+    <!-- Ride Verification PIN (shown only when driver reaches pickup) -->
     <div id="ar-pin-card" style="display:none;background:#0a1a0a;border:1.5px solid #22c55e;border-radius:10px;padding:.75rem 1rem;margin-bottom:.75rem;text-align:center">
       <div style="font-size:.7rem;color:#22c55e;font-weight:700;letter-spacing:.07em;margin-bottom:.3rem">🔐 YOUR RIDE PIN — share with driver</div>
       <div id="ar-pin-value" style="font-size:2.4rem;font-weight:900;letter-spacing:.5em;color:#22c55e;font-family:monospace;line-height:1.1">—</div>
       <div style="font-size:.7rem;color:#475569;margin-top:.3rem">Driver must enter this PIN to start the ride</div>
-    </div>
-
-    <div class="contact-btns" id="ar-contact-btns">
-      <!-- populated by JS after driver phone is known -->
     </div>
 
     <div class="ride-actions">
@@ -911,7 +910,12 @@ const PAKISTAN_ONLY_MESSAGE = window.MyRidePakistanGeofence?.PAKISTAN_ONLY_MESSA
   || 'Please select a location inside Pakistan.';
 
 function isPakistanLocation(lat, lng) {
-  return window.MyRidePakistanGeofence?.isWithinPakistan(lat, lng) === true;
+  const latitude = Number(lat), longitude = Number(lng);
+  if (!Number.isFinite(latitude) || !Number.isFinite(longitude)) return false;
+  const validator = window.MyRidePakistanGeofence?.isWithinPakistan;
+  // The server remains authoritative. A stale/missing cached helper must not
+  // falsely block every valid Pakistani address in the browser.
+  return typeof validator !== 'function' || validator(latitude, longitude) === true;
 }
 
 function ensurePakistanLocation(lat, lng) {
@@ -957,7 +961,6 @@ let customerLongRangeSettings = null;
 let liveTripLine = null;
 let lastDriverLocation = null;
 let customerTrackingFollow = true;
-let customerFollowTimer = null;
 let lastDriverLocationAt = 0;
 let liveTripFreshnessTimer = null;
 let customerSheetDrag = null;
@@ -970,7 +973,8 @@ let customerGpsHasFix = false;
 let customerMapAutoCenter = true;
 let customerLocation = null;
 let customerLocationMarker = null;
-const CUSTOMER_FOLLOW_INTERVAL_MS = 2500;
+let pendingVerificationPin = null;
+const PICKUP_PIN_REVEAL_DISTANCE_KM = .1;
 const CUSTOMER_OFFER_MIN_MULTIPLIER = 0.5;
 const CUSTOMER_OFFER_MAX_MULTIPLIER = 2;
 const CUSTOMER_OFFER_INCREMENT = 10;
@@ -1439,13 +1443,7 @@ async function loadCustomerPerKmRates() {
 function initMap() {
   if (map) return;
   map = L.map('map', { zoomControl: false, preferCanvas: true }).setView([31.5204, 74.3587], 15);
-  L.tileLayer(TILE_URL, {
-    ...TILE_OPTS,
-    detectRetina: false,
-    maxZoom: 19,
-    updateWhenIdle: true,
-    keepBuffer: 1
-  }).addTo(map);
+  L.tileLayer(TILE_URL, { ...TILE_OPTS, detectRetina: false }).addTo(map);
   L.control.zoom({ position: 'topright' }).addTo(map);
 
   // Repaint once after Leaflet has a real container size. Avoid a cascade of
@@ -1485,7 +1483,6 @@ function applyCustomerGpsPosition(pos, { forceCenter = false } = {}) {
   // fix. Ignore it silently; only explicit pickup/dropoff selection should
   // show the Pakistan-only validation message.
   if (!isPakistanLocation(lat, lng) || !map) return false;
-  const previousLocation = customerLocation;
   const isFirstFix = !customerGpsHasFix;
   customerGpsHasFix = true;
   customerLocation = { lat, lng };
@@ -1497,10 +1494,9 @@ function applyCustomerGpsPosition(pos, { forceCenter = false } = {}) {
     }).addTo(map);
   }
 
-  const movedEnough = !previousLocation || haversineKm(previousLocation, customerLocation) >= .02;
-  if (forceCenter || (customerMapAutoCenter && !pickup && (isFirstFix || movedEnough))) {
+  if (forceCenter || (customerMapAutoCenter && !pickup && isFirstFix)) {
     const zoom = Math.max(15, map.getZoom());
-    map.setView([lat, lng], zoom, { animate: !isFirstFix, duration: .35 });
+    map.setView([lat, lng], zoom, { animate: false });
   }
   return true;
 }
@@ -2224,6 +2220,7 @@ function showWaitingPanel(ride) {
   document.getElementById('bottom-panel').style.display = 'none';
   document.getElementById('ar-waiting').style.display = 'block';
   document.getElementById('ar-matched').style.display = 'none';
+  document.getElementById('ar-contact-btns').style.display = 'none';
   document.getElementById('ar-live-fare').textContent = `Rs ${(activeLiveFare || ride.fare || 0).toLocaleString()}`;
   document.getElementById('ride-status-text').textContent = 'Broadcasting your offer…';
   document.getElementById('offers-list').innerHTML = '<div class="no-offers-msg">🔍 Waiting for nearby drivers to respond…</div>';
@@ -2263,7 +2260,28 @@ function showMatchedPanel(driver, agreedFare) {
        <a class="btn-whatsapp"  href="https://wa.me/${waPhone}" target="_blank" rel="noopener">💬 WhatsApp</a>`
     : `<div style="font-size:.78rem;color:#555;text-align:center;flex:1">Contact details not available</div>`;
   document.getElementById('ar-contact-btns').innerHTML = contactHtml;
+  document.getElementById('ar-contact-btns').style.display = 'flex';
   updateActiveSheetSummary('Driver on the way', 'Live tracking · swipe up for ride details');
+}
+
+function hideRidePin() {
+  const pinCard = document.getElementById('ar-pin-card');
+  if (!pinCard) return;
+  pinCard.style.display = 'none';
+  document.getElementById('ar-pin-value').textContent = '—';
+}
+
+function revealRidePinIfAtPickup(driverLocation = lastDriverLocation) {
+  if (!pendingVerificationPin || !activeRide?.pickupLocation || !driverLocation) return false;
+  const pickup = activeRide.pickupLocation;
+  const distanceKm = haversineKm(
+    Number(driverLocation.lat), Number(driverLocation.lng),
+    Number(pickup.lat), Number(pickup.lng)
+  );
+  if (!Number.isFinite(distanceKm) || distanceKm > PICKUP_PIN_REVEAL_DISTANCE_KM) return false;
+  document.getElementById('ar-pin-value').textContent = pendingVerificationPin;
+  document.getElementById('ar-pin-card').style.display = 'block';
+  return true;
 }
 
 function updateActiveSheetSummary(title, meta) {
@@ -2406,11 +2424,10 @@ async function cancelRide() {
 
 function endRide() {
   activeRide = null; routeDistanceKm = null; offeredFare = 0; customerFareOffset = 0;
-  activeLiveFare = 0; driverOffers = []; activeDriverInfo = null;
+  activeLiveFare = 0; driverOffers = []; activeDriverInfo = null; pendingVerificationPin = null;
   clearLiveTripTracking();
   // Hide PIN card and reset it for the next ride
-  const pinCard = document.getElementById('ar-pin-card');
-  if (pinCard) { pinCard.style.display = 'none'; document.getElementById('ar-pin-value').textContent = '—'; }
+  hideRidePin();
   document.getElementById('active-ride').style.display = 'none';
   document.getElementById('ar-waiting').style.display = 'block';
   document.getElementById('ar-matched').style.display = 'none';
@@ -2463,8 +2480,13 @@ function connectSocket() {
     apiCall(`/api/rides/${activeRide._id}`).then(ride => {
       if (!ride || !activeRide || String(ride._id) !== String(activeRide._id)) return;
       activeRide = ride;
+      pendingVerificationPin = ride.verificationPin || pendingVerificationPin;
+      if (ride.driver && typeof ride.driver === 'object') {
+        activeDriverInfo = ride.driver;
+        showMatchedPanel(ride.driver, ride.fare);
+      }
       const loc = ride?.driverLocation;
-      if (loc?.lat && loc?.lng) updateLiveTripTracking(loc, { recenter: true });
+      if (loc?.lat && loc?.lng) updateLiveTripTracking(loc, { recenter: false });
     }).catch(() => {});
   });
 
@@ -2530,12 +2552,10 @@ function connectToRideRoom(rideId) {
   socket.on('ride:accepted', ({ driver, rideId: acceptedRideId, verificationPin }) => {
     if (activeRide && String(activeRide._id) === String(acceptedRideId)) {
       activeDriverInfo = driver;
+      activeRide.status = 'accepted';
+      pendingVerificationPin = verificationPin || null;
+      hideRidePin();
       showMatchedPanel(driver, activeRide.fare);
-      // Display verification PIN so customer can share it with driver
-      if (verificationPin) {
-        document.getElementById('ar-pin-card').style.display = 'block';
-        document.getElementById('ar-pin-value').textContent  = verificationPin;
-      }
       showToast(`${driver.name} is on the way!`, 'success');
     }
   });
@@ -2547,6 +2567,7 @@ function connectToRideRoom(rideId) {
     else if (status === 'cancelled') { endRide(); showToast('Ride was cancelled', 'error'); }
     else if (status === 'arrived') {
       document.getElementById('ar-status-text').textContent = 'Driver has arrived! 📍';
+      revealRidePinIfAtPickup();
       showToast('Your driver has arrived!', 'info');
     } else if (status === 'in-progress') {
       document.getElementById('ar-status-text').textContent = 'Ride in progress 🚗';
@@ -2596,10 +2617,6 @@ function formatLiveTripEta(distanceKm) {
 
 function clearLiveTripTracking() {
   if (liveTripLine) { liveTripLine.remove(); liveTripLine = null; }
-  if (customerFollowTimer) {
-    clearInterval(customerFollowTimer);
-    customerFollowTimer = null;
-  }
   lastDriverLocation = null;
   lastDriverLocationAt = 0;
   customerTrackingFollow = true;
@@ -2621,11 +2638,6 @@ function centerCustomerMapPreservingZoom(point, { animate = true, duration = .45
 function followCustomerTrip() {
   if (!activeRide || !customerTrackingFollow || !lastDriverLocation) return;
   centerCustomerMapPreservingZoom(lastDriverLocation);
-}
-
-function startCustomerTripFollow() {
-  if (customerFollowTimer) return;
-  customerFollowTimer = setInterval(followCustomerTrip, CUSTOMER_FOLLOW_INTERVAL_MS);
 }
 
 function renderLiveTripFreshness() {
@@ -2654,7 +2666,7 @@ async function updateLiveTripTracking(location, { recenter = false } = {}) {
   const hadPreviousLocation = Boolean(lastDriverLocation);
   lastDriverLocation = { lat, lng };
   lastDriverLocationAt = Date.now();
-  startCustomerTripFollow();
+  revealRidePinIfAtPickup(lastDriverLocation);
   if (!liveTripFreshnessTimer) liveTripFreshnessTimer = setInterval(renderLiveTripFreshness, 5000);
 
   if (driverMarker) {
@@ -2667,7 +2679,7 @@ async function updateLiveTripTracking(location, { recenter = false } = {}) {
 
   const destinationKey = `${destination.point.lat},${destination.point.lng}`;
   const routeNeedsRefresh = !liveTripLine || !liveTripRouteOrigin
-    || haversineKm(liveTripRouteOrigin, { lat, lng }) > .15
+    || haversineKm(liveTripRouteOrigin.lat, liveTripRouteOrigin.lng, lat, lng) > .15
     || Date.now() - liveTripRouteAt > 15000
     || liveTripRouteDestinationKey !== destinationKey;
   if (routeNeedsRefresh) {

@@ -800,8 +800,6 @@ let lastNavigationRouteAt = 0;
 let lastNavigationRouteOrigin = null;
 let navigationFollowing = true;
 let navigationRouteRequest = 0;
-let navigationFollowTimer = null;
-const DRIVER_FOLLOW_INTERVAL_MS = 2500;
 let driverGpsHasFix = false;
 let driverMapAutoCenter = true;
 const PAKISTAN_ONLY_MESSAGE = window.MyRidePakistanGeofence?.PAKISTAN_ONLY_MESSAGE
@@ -815,7 +813,10 @@ function showToast(msg, type = 'info') {
 }
 
 function isPakistanLocation(lat, lng) {
-  return window.MyRidePakistanGeofence?.isWithinPakistan(lat, lng) === true;
+  const latitude = Number(lat), longitude = Number(lng);
+  if (!Number.isFinite(latitude) || !Number.isFinite(longitude)) return false;
+  const validator = window.MyRidePakistanGeofence?.isWithinPakistan;
+  return typeof validator !== 'function' || validator(latitude, longitude) === true;
 }
 
 function sendDriverHeartbeat() {
@@ -1464,14 +1465,14 @@ function urlBase64ToUint8Array(base64String) {
 function initMap() {
   if (map) return;
   map = L.map('map', { zoomControl: false, preferCanvas: true, attributionControl: true }).setView([31.5204, 74.3587], 16);
-  L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Dark_Gray_Base/MapServer/tile/{z}/{y}/{x}', {
-    attribution : 'Tiles © Esri — Esri, DeLorme, NAVTEQ',
-    maxNativeZoom: 16,
-    maxZoom      : 18,
+  L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
+    attribution : '© OpenStreetMap contributors © CARTO',
+    maxNativeZoom: 19,
+    maxZoom      : 20,
+    subdomains   : 'abc',
     detectRetina : false,
     updateWhenIdle: true,
     keepBuffer   : 1,
-    errorTileUrl: 'data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 width=%22256%22 height=%22256%22%3E%3Crect width=%22256%22 height=%22256%22 fill=%22%23202a2c%22/%3E%3C/svg%3E',
     crossOrigin  : true
   }).addTo(map);
 
@@ -1499,7 +1500,6 @@ function initMap() {
       // the service area during startup. Ignore those fixes silently; the
       // Pakistan warning is reserved for explicit user-selected locations.
       if (!isPakistanLocation(lat, lng)) return;
-      const previousLocation = driverLocation;
       const isFirstFix = !driverGpsHasFix;
       driverGpsHasFix = true;
       driverLocation = { lat, lng };
@@ -1511,18 +1511,14 @@ function initMap() {
       if (socket && (isOnline || activeRide)) {
         socket.emit('driver:location', { lat, lng, rideId: activeRide?._id });
       }
-      const shouldCenter = driverMapAutoCenter
-        && (isFirstFix || !previousLocation || haversineKm(previousLocation, driverLocation) >= .02);
       if (activeRide) {
         refreshActiveNavigation({ recenter: false });
-        startNavigationFollow();
-        if (shouldCenter) {
-          const zoom = Math.max(15, map.getZoom());
-          map.setView([lat, lng], zoom, { animate: !isFirstFix, duration: .35 });
+        if (navigationFollowing && driverMapAutoCenter) {
+          map.panTo([lat, lng], { animate: true, duration: .35 });
         }
-      } else if (shouldCenter) {
+      } else if (driverMapAutoCenter && isFirstFix) {
         const zoom = Math.max(15, map.getZoom());
-        map.setView([lat, lng], zoom, { animate: !isFirstFix, duration: .35 });
+        map.setView([lat, lng], zoom, { animate: false });
       }
     };
 
@@ -1546,22 +1542,6 @@ function centerDriverMapPreservingZoom(point, { animate = true, duration = .45 }
   const zoom = map.getZoom();
   if (!isPakistanLocation(lat, lng) || !Number.isFinite(zoom)) return;
   map.setView([lat, lng], zoom, { animate, duration });
-}
-
-function followActiveNavigation() {
-  if (!activeRide || !navigationFollowing || !driverLocation) return;
-  centerDriverMapPreservingZoom(driverLocation);
-}
-
-function startNavigationFollow() {
-  if (navigationFollowTimer) return;
-  navigationFollowTimer = setInterval(followActiveNavigation, DRIVER_FOLLOW_INTERVAL_MS);
-}
-
-function stopNavigationFollow() {
-  if (!navigationFollowTimer) return;
-  clearInterval(navigationFollowTimer);
-  navigationFollowTimer = null;
 }
 
 function haversineKm(a, b) {
@@ -1634,7 +1614,7 @@ function focusActiveNavigation() {
   const destination = activeNavigationDestination();
   if (!map || !destination) return;
   navigationFollowing = true;
-  startNavigationFollow();
+  driverMapAutoCenter = true;
   centerDriverMapPreservingZoom(driverLocation || destination.point);
 }
 
@@ -1716,7 +1696,6 @@ function showRideOnMap(ride) {
 }
 
 function clearRideMap() {
-  stopNavigationFollow();
   if (pickupMarker)  { pickupMarker.remove();  pickupMarker  = null; }
   if (dropoffMarker) { dropoffMarker.remove(); dropoffMarker = null; }
   dropoffMarkers.forEach(marker => marker.remove());
@@ -2491,10 +2470,8 @@ function showActivePanel(ride) {
   setupActiveRideSheet();
   setActiveRideSheetState('compact');
   navigationFollowing = true;
-  startNavigationFollow();
-  // Repaint map tiles — the panel swap can leave a black frame on slow devices
-  setTimeout(() => map?.invalidateSize(), 150);
-  setTimeout(() => map?.invalidateSize(), 600);
+  driverMapAutoCenter = true;
+  requestAnimationFrame(() => map?.invalidateSize({ pan: false }));
   const statusLabels = {
     accepted: 'On the way to pickup',
     arrived: 'At pickup',
