@@ -944,6 +944,7 @@ let customerLongRangeSettings = null;
 let liveTripLine = null;
 let lastDriverLocation = null;
 let customerTrackingFollow = true;
+let customerFollowTimer = null;
 let lastDriverLocationAt = 0;
 let liveTripFreshnessTimer = null;
 let customerSheetDrag = null;
@@ -951,6 +952,7 @@ let liveTripRouteRequest = 0;
 let liveTripRouteAt = 0;
 let liveTripRouteOrigin = null;
 let liveTripRouteDestinationKey = '';
+const CUSTOMER_FOLLOW_INTERVAL_MS = 2500;
 const CUSTOMER_OFFER_MIN_MULTIPLIER = 0.5;
 const CUSTOMER_OFFER_MAX_MULTIPLIER = 2;
 const CUSTOMER_OFFER_INCREMENT = 10;
@@ -2516,6 +2518,10 @@ function formatLiveTripEta(distanceKm) {
 
 function clearLiveTripTracking() {
   if (liveTripLine) { liveTripLine.remove(); liveTripLine = null; }
+  if (customerFollowTimer) {
+    clearInterval(customerFollowTimer);
+    customerFollowTimer = null;
+  }
   lastDriverLocation = null;
   lastDriverLocationAt = 0;
   customerTrackingFollow = true;
@@ -2524,6 +2530,24 @@ function clearLiveTripTracking() {
   liveTripRouteDestinationKey = '';
   liveTripRouteRequest++;
   if (liveTripFreshnessTimer) { clearInterval(liveTripFreshnessTimer); liveTripFreshnessTimer = null; }
+}
+
+function centerCustomerMapPreservingZoom(point, { animate = true, duration = .45 } = {}) {
+  if (!map || !point) return;
+  const lat = Number(point.lat), lng = Number(point.lng);
+  const zoom = map.getZoom();
+  if (!Number.isFinite(lat) || !Number.isFinite(lng) || !Number.isFinite(zoom)) return;
+  map.setView([lat, lng], zoom, { animate, duration });
+}
+
+function followCustomerTrip() {
+  if (!activeRide || !customerTrackingFollow || !lastDriverLocation) return;
+  centerCustomerMapPreservingZoom(lastDriverLocation);
+}
+
+function startCustomerTripFollow() {
+  if (customerFollowTimer) return;
+  customerFollowTimer = setInterval(followCustomerTrip, CUSTOMER_FOLLOW_INTERVAL_MS);
 }
 
 function renderLiveTripFreshness() {
@@ -2540,25 +2564,19 @@ function renderLiveTripFreshness() {
 }
 
 function focusCustomerTrip() {
-  const destination = activeTripDestination();
-  if (!map || !lastDriverLocation || !destination) return;
+  if (!map || !lastDriverLocation || !activeTripDestination()) return;
   customerTrackingFollow = true;
-  try {
-    map.fitBounds(
-      L.latLngBounds([[lastDriverLocation.lat, lastDriverLocation.lng], [destination.point.lat, destination.point.lng]]),
-      { paddingTopLeft: [38, 105], paddingBottomRight: [38, 205], maxZoom: 16, animate: true }
-    );
-  } catch (error) {
-    map.setView([lastDriverLocation.lat, lastDriverLocation.lng], 15);
-  }
+  centerCustomerMapPreservingZoom(lastDriverLocation);
 }
 
 async function updateLiveTripTracking(location, { recenter = false } = {}) {
   const lat = Number(location?.lat), lng = Number(location?.lng);
   const destination = activeTripDestination();
   if (!Number.isFinite(lat) || !Number.isFinite(lng) || !destination || !map) return;
+  const hadPreviousLocation = Boolean(lastDriverLocation);
   lastDriverLocation = { lat, lng };
   lastDriverLocationAt = Date.now();
+  startCustomerTripFollow();
   if (!liveTripFreshnessTimer) liveTripFreshnessTimer = setInterval(renderLiveTripFreshness, 5000);
 
   if (driverMarker) {
@@ -2613,7 +2631,7 @@ async function updateLiveTripTracking(location, { recenter = false } = {}) {
   }
 
   if (recenter) focusCustomerTrip();
-  else if (customerTrackingFollow) map.panTo([lat, lng], { animate: true, duration: .5 });
+  else if (!hadPreviousLocation && customerTrackingFollow) followCustomerTrip();
 }
 
 // ── Share Location ─────────────────────────────────────────────────────────
