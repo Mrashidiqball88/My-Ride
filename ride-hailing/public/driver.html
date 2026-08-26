@@ -299,8 +299,9 @@ textarea.support-input{resize:vertical;min-height:85px}
    IDs and handlers stay intact for realtime offers, payments and ride status. */
 :root{--dc-ink:#f7f7f3;--dc-muted:#9aa3a5;--dc-dim:#667174;--dc-line:rgba(255,255,255,.11);--dc-night:#111718;--dc-panel:#182022;--dc-panel2:#202a2c;--dc-cyan:#74e0d1;--dc-yellow:#f5cc68;--dc-coral:#ff8e78}
 #app{position:relative;display:none;background:var(--dc-night);color:var(--dc-ink);overflow:hidden;font-family:'DM Sans','Segoe UI',sans-serif}
-#map{position:absolute;inset:0;width:100%;height:100%;z-index:1;filter:none}
-.leaflet-container{background:#0c1218}
+#map{position:absolute;inset:0;width:100%;height:100%;z-index:1;filter:none;background:#3b4650}
+.leaflet-container{background:#3b4650}
+#map .leaflet-tile-pane{filter:brightness(1.48) contrast(1.12) grayscale(.2)}
 .header{position:absolute;top:0;left:0;right:0;height:62px;padding:14px 16px 12px;background:linear-gradient(180deg,rgba(17,23,24,.96),rgba(17,23,24,.55),transparent);border:0;z-index:20}
 .header-logo{font-size:20px;letter-spacing:-.04em;color:var(--dc-ink)}
 .header-logo span{color:var(--dc-cyan)}
@@ -799,6 +800,8 @@ let lastNavigationRouteAt = 0;
 let lastNavigationRouteOrigin = null;
 let navigationFollowing = true;
 let navigationRouteRequest = 0;
+let navigationFollowTimer = null;
+const DRIVER_FOLLOW_INTERVAL_MS = 2500;
 
 // ── Toast ──────────────────────────────────────────────────────────────────
 function showToast(msg, type = 'info') {
@@ -1490,7 +1493,7 @@ function initMap() {
       }
       if (activeRide) {
         refreshActiveNavigation({ recenter: false });
-        if (navigationFollowing) map.panTo([lat, lng], { animate: true, duration: .45 });
+        startNavigationFollow();
       } else {
         map.setView([lat, lng], map.getZoom());
       }
@@ -1509,6 +1512,30 @@ function removeRouteLine() {
     (Array.isArray(routeLine) ? routeLine : [routeLine]).forEach(line => line?.remove());
     routeLine = null;
   }
+}
+
+function centerDriverMapPreservingZoom(point, { animate = true, duration = .45 } = {}) {
+  if (!map || !point) return;
+  const lat = Number(point.lat), lng = Number(point.lng);
+  const zoom = map.getZoom();
+  if (!Number.isFinite(lat) || !Number.isFinite(lng) || !Number.isFinite(zoom)) return;
+  map.setView([lat, lng], zoom, { animate, duration });
+}
+
+function followActiveNavigation() {
+  if (!activeRide || !navigationFollowing || !driverLocation) return;
+  centerDriverMapPreservingZoom(driverLocation);
+}
+
+function startNavigationFollow() {
+  if (navigationFollowTimer) return;
+  navigationFollowTimer = setInterval(followActiveNavigation, DRIVER_FOLLOW_INTERVAL_MS);
+}
+
+function stopNavigationFollow() {
+  if (!navigationFollowTimer) return;
+  clearInterval(navigationFollowTimer);
+  navigationFollowTimer = null;
 }
 
 function haversineKm(a, b) {
@@ -1564,9 +1591,9 @@ function updateNavigationDetails(distanceMeters, durationSeconds) {
 
 function drawNavigationLine(coords, { dashed = false } = {}) {
   removeRouteLine();
-  const shadow = L.polyline(coords, { color: '#061014', weight: 10, opacity: .7, lineCap: 'round', lineJoin: 'round' }).addTo(map);
+  const shadow = L.polyline(coords, { color: '#092c62', weight: 10, opacity: .66, lineCap: 'round', lineJoin: 'round' }).addTo(map);
   const line = L.polyline(coords, {
-    color: '#65dfd0', weight: 5, opacity: 1,
+    color: '#2688ff', weight: 5, opacity: 1,
     dashArray: dashed ? '9 10' : null,
     lineCap: 'round', lineJoin: 'round'
   }).addTo(map);
@@ -1578,17 +1605,8 @@ function focusActiveNavigation() {
   const destination = activeNavigationDestination();
   if (!map || !destination) return;
   navigationFollowing = true;
-  const points = navigationRoute?.coords?.length
-    ? navigationRoute.coords
-    : [driverLocation && [driverLocation.lat, driverLocation.lng], [destination.point.lat, destination.point.lng]].filter(Boolean);
-  if (points.length >= 2) {
-    map.fitBounds(L.latLngBounds(points), {
-      paddingTopLeft: [26, 105],
-      paddingBottomRight: [26, Math.min(310, Math.round(window.innerHeight * .4))]
-    });
-  } else {
-    map.setView([destination.point.lat, destination.point.lng], 15);
-  }
+  startNavigationFollow();
+  centerDriverMapPreservingZoom(driverLocation || destination.point);
 }
 
 async function refreshActiveNavigation({ force = false, recenter = false } = {}) {
@@ -1669,6 +1687,7 @@ function showRideOnMap(ride) {
 }
 
 function clearRideMap() {
+  stopNavigationFollow();
   if (pickupMarker)  { pickupMarker.remove();  pickupMarker  = null; }
   if (dropoffMarker) { dropoffMarker.remove(); dropoffMarker = null; }
   dropoffMarkers.forEach(marker => marker.remove());
@@ -2443,6 +2462,7 @@ function showActivePanel(ride) {
   setupActiveRideSheet();
   setActiveRideSheetState('compact');
   navigationFollowing = true;
+  startNavigationFollow();
   // Repaint map tiles — the panel swap can leave a black frame on slow devices
   setTimeout(() => map?.invalidateSize(), 150);
   setTimeout(() => map?.invalidateSize(), 600);
@@ -2583,7 +2603,7 @@ async function refreshDashboard() {
     if (isOnline) await reconcileRideRequestsAfterReconnect();
     map?.invalidateSize();
     if (activeRide) await refreshActiveNavigation({ force: true, recenter: true });
-    else if (driverLocation) map?.setView([driverLocation.lat, driverLocation.lng], Math.max(map.getZoom(), 15));
+    else if (driverLocation) centerDriverMapPreservingZoom(driverLocation);
   } catch (e) {
     showToast('Refresh failed — check connection', 'error');
   } finally {

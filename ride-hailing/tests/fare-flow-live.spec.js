@@ -193,6 +193,98 @@ test.describe('live Mongo fare refresh', () => {
     );
   });
 
+  test('keeps active-trip camera zoom stable and follows only on the managed live cadence', async ({ browser }) => {
+    const baseURL = `http://127.0.0.1:${httpServer.address().port}`;
+    const customerPage = await browser.newPage();
+    const driverPage = await browser.newPage();
+    const pickup = { lat: 31.5204, lng: 74.3587, address: 'Pickup' };
+    const dropoff = { lat: 31.5304, lng: 74.3687, address: 'Drop-off' };
+
+    try {
+      await Promise.all([
+        openAuthenticatedClient(customerPage, baseURL, '/customer', customer, token(customer)),
+        openAuthenticatedClient(driverPage, baseURL, '/driver', matchingDriver, token(matchingDriver))
+      ]);
+
+      const customerCamera = await customerPage.evaluate(({ pickup, dropoff }) => {
+        const calls = [];
+        map = {
+          getZoom: () => 17,
+          setView: (center, zoom) => calls.push({ center, zoom })
+        };
+        activeRide = { status: 'accepted', pickupLocation: pickup, dropoffLocation: dropoff };
+        lastDriverLocation = { lat: 31.521, lng: 74.359 };
+        customerTrackingFollow = false;
+        followCustomerTrip();
+        const callsAfterManualPan = calls.length;
+        focusCustomerTrip();
+        customerFollowTimer = null;
+        startCustomerTripFollow();
+        const firstTimer = customerFollowTimer;
+        startCustomerTripFollow();
+        const singleTimer = firstTimer === customerFollowTimer;
+        clearLiveTripTracking();
+        return {
+          callsAfterManualPan,
+          focusCall: calls.at(-1),
+          cadence: CUSTOMER_FOLLOW_INTERVAL_MS,
+          singleTimer,
+          cleared: customerFollowTimer === null
+        };
+      }, { pickup, dropoff });
+
+      expect(customerCamera.callsAfterManualPan).toBe(0);
+      expect(customerCamera.focusCall.zoom).toBe(17);
+      expect(customerCamera.cadence).toBe(2500);
+      expect(customerCamera.singleTimer).toBe(true);
+      expect(customerCamera.cleared).toBe(true);
+
+      const driverCamera = await driverPage.evaluate(({ pickup, dropoff }) => {
+        const calls = [];
+        map = {
+          getZoom: () => 18,
+          setView: (center, zoom) => calls.push({ center, zoom })
+        };
+        activeRide = { status: 'accepted', pickupLocation: pickup, dropoffLocation: dropoff };
+        driverLocation = { lat: 31.521, lng: 74.359 };
+        navigationFollowing = false;
+        followActiveNavigation();
+        const callsAfterManualPan = calls.length;
+        focusActiveNavigation();
+        const originalPolyline = L.polyline;
+        const routeColors = [];
+        L.polyline = (_coords, options) => {
+          routeColors.push(options.color);
+          return { addTo() { return this; }, remove() {} };
+        };
+        routeLine = null;
+        drawNavigationLine([[31.521, 74.359], [31.5204, 74.3587]]);
+        L.polyline = originalPolyline;
+        const firstTimer = navigationFollowTimer;
+        startNavigationFollow();
+        const singleTimer = firstTimer === navigationFollowTimer;
+        clearRideMap();
+        return {
+          callsAfterManualPan,
+          focusCall: calls[0],
+          cadence: DRIVER_FOLLOW_INTERVAL_MS,
+          singleTimer,
+          cleared: navigationFollowTimer === null,
+          routeColors
+        };
+      }, { pickup, dropoff });
+
+      expect(driverCamera.callsAfterManualPan).toBe(0);
+      expect(driverCamera.focusCall.zoom).toBe(18);
+      expect(driverCamera.cadence).toBe(2500);
+      expect(driverCamera.singleTimer).toBe(true);
+      expect(driverCamera.cleared).toBe(true);
+      expect(driverCamera.routeColors).toEqual(['#092c62', '#2688ff']);
+    } finally {
+      await Promise.all([customerPage.close(), driverPage.close()]);
+    }
+  });
+
   test('persists settings, creates a ride, and refreshes only matching browser clients', async ({ browser, playwright }) => {
     const customerToken = token(customer);
     const adminToken = token({ _id: new mongoose.Types.ObjectId(), role: 'admin', isAdmin: true, name: 'Admin' });
