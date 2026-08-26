@@ -1,4 +1,4 @@
-modules = ["nodejs-24", "python-base-3.13"]
+modules = ["nodejs-24", "python-base-3.13", "java-graalvm22.3"]
 
 [deployment]
 router = "application"
@@ -41,7 +41,7 @@ timeoutMs = 20000
 
 [nix]
 channel = "stable-25_05"
-packages = ["glib", "gtk3", "nss", "nspr", "dbus", "atk", "at-spi2-atk", "cups", "libdrm", "pango", "cairo", "xorg.libX11", "xorg.libXcomposite", "xorg.libXdamage", "xorg.libXext", "xorg.libXfixes", "xorg.libXrandr", "xorg.libxcb", "mesa", "libgbm", "libxkbcommon", "alsa-lib", "chromium"]
+packages = ["glib", "gtk3", "nss", "nspr", "dbus", "atk", "at-spi2-atk", "cups", "libdrm", "pango", "cairo", "xorg.libX11", "xorg.libXcomposite", "xorg.libXdamage", "xorg.libXext", "xorg.libXfixes", "xorg.libXrandr", "xorg.libxcb", "mesa", "libgbm", "libxkbcommon", "alsa-lib", "chromium", "gradle"]
 
 [[ports]]
 localPort = 3000

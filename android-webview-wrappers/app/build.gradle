@@ -1,0 +1,50 @@
+plugins {
+    id "com.android.application"
+}
+
+android {
+    namespace "com.myride.wrapper"
+    compileSdk 35
+
+    defaultConfig {
+        minSdk 23
+        targetSdk 35
+        versionCode 1
+        versionName "1.0.0"
+    }
+
+    flavorDimensions += "app"
+
+    productFlavors {
+        customer {
+            dimension "app"
+            applicationId "com.myride.customer"
+            resValue "string", "app_name", "My Ride - Customer"
+            resValue "string", "production_url", "https://myride.duckdns.org/customer"
+        }
+        driver {
+            dimension "app"
+            applicationId "com.myride.driver"
+            resValue "string", "app_name", "My Ride - Driver"
+            resValue "string", "production_url", "https://myride.duckdns.org/driver"
+        }
+    }
+
+    buildTypes {
+        debug {
+            applicationIdSuffix ".debug"
+            versionNameSuffix "-debug"
+        }
+        release {
+            minifyEnabled false
+            shrinkResources false
+            // Release APKs are intentionally unsigned in this workspace.
+            // Use the organization's upload/signing key in CI or Android Studio.
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+}
