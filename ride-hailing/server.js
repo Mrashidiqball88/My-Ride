@@ -3130,7 +3130,8 @@ app.post('/api/payments/submit', authMiddleware, async (req, res) => {
     if (/^(.)\1+$/.test(cleanTrx)) {
       return res.status(400).json({ error: 'Invalid TRX ID — please enter the real transaction reference' });
     }
-    if (!amount || Number(amount) <= 0) {
+    const submittedAmount = Number(amount);
+    if (!Number.isFinite(submittedAmount) || submittedAmount <= 0) {
       return res.status(400).json({ error: 'A valid amount is required' });
     }
     try {
@@ -3144,9 +3145,6 @@ app.post('/api/payments/submit', authMiddleware, async (req, res) => {
     const configuredFee = await getDailyFeeForVehicle(driver.vehicleType);
     if (!Number.isFinite(configuredFee) || configuredFee <= 0) {
       return res.status(422).json({ error: 'Daily Fee is not configured for your vehicle category. Please contact Admin.' });
-    }
-    if (Math.abs(Number(amount) - configuredFee) > 0.001) {
-      return res.status(422).json({ error: `Payment amount must equal the current Daily Fee of Rs ${configuredFee.toLocaleString()}.` });
     }
 
     // ── Global TRX ID uniqueness (prevents reuse across drivers) ───────────
@@ -3166,7 +3164,7 @@ app.post('/api/payments/submit', authMiddleware, async (req, res) => {
     const payment = await Payment.create({
       driver:          req.user.id,
       trxId:           cleanTrx,
-      amount:          configuredFee,
+      amount:          submittedAmount,
       paymentType:     validTypes.includes(paymentType) ? paymentType : 'jazzcash',
       vehicleCategory: normalizeFareVehicle(driver.vehicleType || 'Car Mini Non-AC'),
       submittedDate:   dateStr,

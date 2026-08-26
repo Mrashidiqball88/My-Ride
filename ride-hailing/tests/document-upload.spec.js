@@ -203,6 +203,12 @@ test.describe('Document upload flow — large photos (~1.7 MB each)', () => {
     await page.goto('/driver');
   });
 
+  test('keeps the wallet recharge amount editable and shows Daily Fee separately', async ({ page }) => {
+    await expect(page.locator('#trx-amount-input')).not.toHaveAttribute('readonly', '');
+    await expect(page.locator('#trx-amount-input')).toHaveAttribute('placeholder', 'Enter amount to add to wallet');
+    await expect(page.locator('#fee-rate-text')).toContainText('Daily Fee');
+  });
+
   // ---------------------------------------------------------------------------
   test(
     'upload progress overlay appears, reaches 100 %, hides, and driver app loads',

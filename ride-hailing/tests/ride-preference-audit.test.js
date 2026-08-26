@@ -194,3 +194,22 @@ test('audits registration, scheduled fees, wallet gates, completion commission, 
   assert.equal(afterOverride.transactions.filter(tx => /Automatic daily fee/.test(tx.description)).length, 1);
   assert.equal((await models.User.findById(driverB._id).lean()).ridePreference, 'Both');
 });
+
+test('accepts a custom wallet recharge amount above the Admin daily fee', async () => {
+  const driver = await registerDriver({
+    name: 'Custom Recharge Driver', phone: '+923000001004', vehicleType: 'Car Mini', ridePreference: 'Both'
+  });
+  const submitted = await json('/api/payments/submit', {
+    token: driverToken(driver),
+    method: 'POST',
+    body: {
+      trxId: 'CUSTOM-RECHARGE-350',
+      amount: 350,
+      paymentType: 'jazzcash',
+      proofScreenshot: IMAGE
+    }
+  });
+  assert.equal(submitted.response.status, 201);
+  assert.equal(submitted.body.amount, 350);
+  assert.equal((await models.Payment.findOne({ trxId: 'CUSTOM-RECHARGE-350' }).lean()).amount, 350);
+});

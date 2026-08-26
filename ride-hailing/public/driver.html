@@ -184,6 +184,7 @@ body{font-family:'Segoe UI',sans-serif;background:#0a0a0f;color:#fff;height:100d
 
 .trx-form{background:#0a0a0f;border:1px solid #222;border-radius:12px;padding:.85rem;margin-bottom:1rem}
 .trx-form-title{font-size:.8rem;color:#888;margin-bottom:.75rem;font-weight:600}
+.trx-field-label{display:block;font-size:.72rem;color:#666;margin-bottom:-.25rem;font-weight:600}
 .trx-inputs{display:flex;flex-direction:column;gap:.6rem}
 .trx-input{width:100%;background:#13131a;border:1px solid #333;border-radius:8px;padding:.65rem .85rem;color:#fff;font-size:.9rem;outline:none;transition:border-color .2s}
 .trx-input:focus{border-color:#f5c518}
@@ -320,7 +321,7 @@ textarea.support-input{resize:vertical;min-height:85px}
 .driver-ops-control{position:absolute;top:72px;right:14px;z-index:24;width:min(294px,calc(100vw - 28px));color:var(--dc-ink);filter:drop-shadow(0 12px 24px rgba(0,0,0,.3))}
 .driver-ops-head{display:grid;grid-template-columns:28px minmax(0,1fr) 38px;align-items:center;gap:4px;padding:5px;background:rgba(17,26,32,.94);border:1px solid rgba(157,185,201,.2);border-radius:17px;backdrop-filter:blur(16px)}
 .driver-ops-grab{width:28px;height:34px;border:0;border-radius:10px;background:transparent;color:var(--dc-dim);cursor:grab;font-size:16px;touch-action:none}.driver-ops-grab:active{cursor:grabbing}
-.driver-ops-summary{min-width:0;border:0;background:transparent;color:var(--dc-ink);text-align:left;cursor:pointer;padding:4px 3px;display:flex;align-items:center;gap:8px}.driver-ops-summary-copy{min-width:0}.driver-ops-status-line{display:block;font-size:12px;font-weight:800;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.driver-ops-subline{display:block;color:var(--dc-muted);font-size:10px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-top:1px}
+.driver-ops-summary{min-width:0;border:0;background:transparent;color:var(--dc-ink);text-align:left;cursor:pointer;padding:4px 3px;display:flex;align-items:center;gap:8px}.driver-ops-summary-copy{min-width:0}.driver-ops-status-line{display:block;font-size:12px;font-weight:800;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.driver-ops-subline{display:block;color:var(--dc-muted);font-size:10px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-top:1px}.driver-ops-fee-line{display:block;color:var(--dc-yellow);font-size:10px;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-top:2px}
 .driver-ops-dot{width:9px;height:9px;border-radius:50%;background:#6d757b;box-shadow:0 0 0 4px rgba(109,117,123,.15);flex:none}.driver-ops-control.is-online .driver-ops-dot{background:var(--dc-cyan);box-shadow:0 0 0 4px rgba(116,224,209,.16),0 0 14px rgba(116,224,209,.62)}
 .map-refresh-btn{height:34px;width:38px;border:0;border-radius:11px;background:rgba(116,224,209,.14);color:var(--dc-cyan);font-size:16px;cursor:pointer;transition:transform .18s,background .18s}.map-refresh-btn:hover{background:var(--dc-cyan);color:#10201f}.map-refresh-btn:disabled{opacity:.55;cursor:wait}.map-refresh-btn:disabled span{display:inline-block;animation:spin .75s linear infinite}@keyframes spin{to{transform:rotate(360deg)}}
 .driver-ops-details{display:none;margin-top:7px;padding:11px;background:rgba(17,26,32,.96);border:1px solid rgba(157,185,201,.18);border-radius:16px;backdrop-filter:blur(16px)}.driver-ops-control.is-open .driver-ops-details{display:block}
@@ -560,6 +561,7 @@ textarea.support-input{resize:vertical;min-height:85px}
         <span class="driver-ops-summary-copy">
           <span class="driver-ops-status-line" id="status-text">You are Offline</span>
           <span class="driver-ops-subline" id="status-sub">Tap to manage availability</span>
+            <span class="driver-ops-fee-line" id="fee-rate-text">Daily Fee: —</span>
         </span>
       </button>
       <button type="button" id="map-refresh-btn" class="map-refresh-btn" onclick="refreshDashboard()" aria-label="Refresh map and ride status" title="Refresh map and ride status"><span>↻</span></button>
@@ -579,8 +581,8 @@ textarea.support-input{resize:vertical;min-height:85px}
         <div style="min-width:0"><div style="font-size:.8rem;font-weight:700;color:#dbeafe">🛣️ Long Range Rides</div><div id="long-range-sub" style="font-size:.7rem;color:#94a3b8">Loading eligibility…</div><div id="long-range-reminder" style="display:none;margin-top:.3rem;color:#fbbf24;font-size:.68rem;font-weight:700">⚠ Tolls, taxes, and challans are driver responsibility.</div></div>
         <div class="toggle-wrap"><input type="checkbox" id="long-range-toggle" class="toggle-input" onchange="toggleLongRange(this.checked)"><label for="long-range-toggle" class="toggle-label"></label></div>
       </div>
-      <div id="fee-info-bar" style="display:none;flex-wrap:wrap;align-items:center;gap:.4rem">
-        <span>🚗</span><span id="fee-vehicle-text" style="color:#cbd5e1;font-weight:600">—</span><span style="color:#526068">·</span><span id="fee-rate-text" style="color:#94a3b8">—</span><span style="color:#526068">·</span><span id="fee-status-text">—</span>
+       <div id="fee-info-bar" style="display:none;flex-wrap:wrap;align-items:center;gap:.4rem">
+        <span>🚗</span><span id="fee-vehicle-text" style="color:#cbd5e1;font-weight:600">—</span><span style="color:#526068">·</span><span id="fee-status-text">—</span>
       </div>
       <div id="trial-history-banner" style="display:none;align-items:center;gap:.4rem"><span>🎁</span><span></span></div>
     </div>
@@ -701,7 +703,8 @@ textarea.support-input{resize:vertical;min-height:85px}
           </div>
         </div>
         <input class="trx-input" id="trx-id-input" type="text" placeholder="TRX / Reference ID (e.g. T20240801ABCD…)">
-        <input class="trx-input" id="trx-amount-input" type="number" min="0.01" step="0.01" placeholder="Loading Daily Fee…" readonly>
+        <label class="trx-field-label" for="trx-amount-input">WALLET RECHARGE AMOUNT (PKR)</label>
+        <input class="trx-input" id="trx-amount-input" type="number" min="0.01" step="0.01" inputmode="decimal" placeholder="Enter amount to add to wallet">
         <div>
           <span class="trx-screenshot-label">📸 Payment proof screenshot (required)</span>
           <input class="trx-screenshot-input" id="trx-screenshot" type="file" accept="image/jpeg,image/png,image/webp" required>
@@ -3005,10 +3008,9 @@ async function loadPaymentHistory() {
 
 async function submitTrxPayment() {
   const trxId  = document.getElementById('trx-id-input').value.trim();
-  const configuredFee = getCurrentDailyFeeRate();
-  const amount = configuredFee;
+  const amount = Number(document.getElementById('trx-amount-input').value);
   if (!trxId)  return showToast('Enter a TRX / Reference ID', 'error');
-  if (!amount || Number(amount) <= 0) return showToast('Daily Fee is not configured for your vehicle. Contact Admin.', 'error');
+  if (!Number.isFinite(amount) || amount <= 0) return showToast('Enter a valid wallet recharge amount', 'error');
   const proofFile = document.getElementById('trx-screenshot')?.files?.[0];
   if (!proofFile) return showToast('Upload the payment proof screenshot', 'error');
   if (!['image/jpeg', 'image/png', 'image/webp'].includes(proofFile.type) || proofFile.size > 6 * 1024 * 1024) {
@@ -3027,7 +3029,7 @@ async function submitTrxPayment() {
     });
     await apiCall('/api/payments/submit', 'POST', {
       trxId,
-      amount:      Number(amount),
+      amount,
       paymentType: selectedPayType || 'jazzcash',
       proofScreenshot
     });
@@ -3397,12 +3399,6 @@ function checkDailyFee() {
   if (barEl)     barEl.style.display   = 'flex';
   if (vehicleEl) vehicleEl.textContent = user.vehicleType || 'Vehicle';
   if (rateEl)    rateEl.textContent    = feeRate ? `Daily Fee: Rs ${feeRate.toLocaleString()}` : 'Daily Fee: Not configured';
-  const amountInput = document.getElementById('trx-amount-input');
-  if (amountInput) {
-    amountInput.value = feeRate || '';
-    amountInput.readOnly = true;
-    amountInput.placeholder = feeRate ? 'Daily Fee (PKR)' : 'Daily Fee not configured';
-  }
   if (statusEl) {
     if (dailyFeeDue) {
       statusEl.textContent = feeRate ? '⚠ Fee unpaid — Accept disabled' : '⚠ Daily Fee not configured — contact Admin';
