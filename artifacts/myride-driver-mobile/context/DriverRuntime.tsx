@@ -197,7 +197,6 @@ export function DriverRuntimeProvider({ children }: { children: ReactNode }) {
       setConnection('connected');
       if (isOnlineRef.current) {
         nextSocket.emit('driver:status', { isOnline: true });
-        nextSocket.emit('driver:heartbeat');
       }
       if (activeRideIdRef.current) nextSocket.emit('ride:join', activeRideIdRef.current);
       void hydrateAvailableRides();
@@ -394,8 +393,7 @@ export function DriverRuntimeProvider({ children }: { children: ReactNode }) {
       await SecureStore.setItemAsync(ONLINE_KEY, String(next));
       setIsOnline(next);
       socket.current?.emit('driver:status', { isOnline: next });
-      if (next) socket.current?.emit('driver:heartbeat');
-      else {
+      if (!next) {
         isOnlineRef.current = false;
         setPendingRide(null);
         clearAllRideAlerts();
@@ -504,7 +502,6 @@ export function DriverRuntimeProvider({ children }: { children: ReactNode }) {
       if (state === 'active') {
         socket.current?.connect();
         socket.current?.emit('driver:status', { isOnline: true });
-        socket.current?.emit('driver:heartbeat', { clientSentAt: new Date().toISOString() });
         void registerExpoToken();
         void hydrateAvailableRides();
       }

@@ -4848,6 +4848,15 @@ io.on('connection', async (socket) => {
 
   // Join personal notification room
   socket.join(`user:${id}`);
+  // Status and heartbeat events can arrive together when a Driver comes
+  // online or resumes after a reconnect. Serialize them so a heartbeat never
+  // observes the previous offline state and incorrectly suspends the client.
+  let driverAvailabilityQueue = Promise.resolve();
+  const enqueueDriverAvailability = operation => {
+    const next = driverAvailabilityQueue.catch(() => undefined).then(operation);
+    driverAvailabilityQueue = next.catch(() => undefined);
+    return next;
+  };
 
   // ── Driver: restore room memberships from DB on every (re)connect ──────────
   // Socket.io rooms are process-memory only — they vanish on server restart.
@@ -4901,21 +4910,25 @@ io.on('connection', async (socket) => {
   });
 
   // Driver toggles online/offline
-  socket.on('driver:status', async ({ isOnline }) => {
+  socket.on('driver:status', ({ isOnline: requestedOnline } = {}) => enqueueDriverAvailability(async () => {
     if (role !== 'driver') return;
+    const isOnline = requestedOnline === true;
     if (isOnline) {
       const driver = await User.findById(id)
         .select('accountStatus vehicleType paidUntilDate lastDailyFeePaidAt isFreeTrial').catch(() => null);
       if (driver?.accountStatus === 'pending') {
+        await User.updateOne({ _id: id }, { isOnline: false }).catch(() => {});
         socket.emit('account:suspended', { reason: 'Your account is pending Admin approval. You will be notified once approved.' });
         return;
       }
       if (driver?.accountStatus === 'suspended' || driver?.accountStatus === 'blocked' || driver?.accountStatus === 'pending_deletion') {
+        await User.updateOne({ _id: id }, { isOnline: false }).catch(() => {});
         socket.emit('account:suspended', { reason: 'Your account has been suspended. Please contact Admin.' });
         return;
       }
       const feeResult = await chargeDailyFeeForOnlineDriver(id, driver);
       if (!feeResult.allowed) {
+        await User.updateOne({ _id: id }, { isOnline: false }).catch(() => {});
         socket.emit('account:suspended', {
           reason: `Wallet balance must cover today's Daily Fee of Rs ${feeResult.rate.toLocaleString()} before going online. Current balance: Rs ${Number(feeResult.balance).toLocaleString()}.`
         });
@@ -4932,12 +4945,13 @@ io.on('connection', async (socket) => {
     if (isOnline) { socket.join('drivers-online'); socket.join(vRoom); }
     else          { socket.leave('drivers-online'); socket.leave(vRoom); }
     if (isOnline) await rehydrateDriverSocket(socket, id, { replayOffers: true }).catch(() => {});
-  });
+    socket.emit('driver:status:ack', { isOnline, vehicleType: socket.vehicleType || null });
+  }));
 
   // Native clients explicitly heartbeat while their foreground service is
   // active. This lets the server detect policy/account changes without treating
   // short radio reconnects as an offline transition.
-  socket.on('driver:heartbeat', async (client = {}) => {
+  socket.on('driver:heartbeat', (client = {}) => enqueueDriverAvailability(async () => {
     if (role !== 'driver') return;
     const driver = await User.findById(id).select('accountStatus isOnline').lean().catch(() => null);
     if (!driver || driver.accountStatus !== 'active' || !driver.isOnline) {
@@ -4949,7 +4963,7 @@ io.on('connection', async (socket) => {
       serverTime: new Date().toISOString(),
       clientSentAt: typeof client.clientSentAt === 'string' ? client.clientSentAt : null
     });
-  });
+  }));
 
   // Share passenger location only with an active ride's authorized room.
   socket.on('location:share', async ({ lat, lng, rideId }) => {

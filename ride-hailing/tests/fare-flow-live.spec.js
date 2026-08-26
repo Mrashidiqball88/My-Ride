@@ -640,11 +640,11 @@ test.describe('live Mongo fare refresh', () => {
       await expect.poll(() => highroofPage.evaluate(() => isOnline)).toBe(true);
       await expect.poll(() => coasterPage.evaluate(() => isOnline)).toBe(true);
       await expect.poll(async () => {
-        const broadcast = await findRideBroadcastDrivers({ lat: 1, lng: 2 }, 'Toyota Highroof');
+        const broadcast = await findRideBroadcastDrivers({ lat: 31.5204, lng: 74.3587 }, 'Toyota Highroof');
         return broadcast.drivers.some(driver => String(driver._id) === String(highroofDriver._id));
       }).toBe(true);
       await expect.poll(async () => {
-        const broadcast = await findRideBroadcastDrivers({ lat: 1, lng: 2 }, 'Toyota Saloon Coaster');
+        const broadcast = await findRideBroadcastDrivers({ lat: 31.5204, lng: 74.3587 }, 'Toyota Saloon Coaster');
         return broadcast.drivers.some(driver => String(driver._id) === String(coasterDriver._id));
       }).toBe(true);
 

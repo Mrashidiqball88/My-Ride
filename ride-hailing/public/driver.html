@@ -215,6 +215,7 @@ body{font-family:'Segoe UI',sans-serif;background:#0a0a0f;color:#fff;height:100d
 .toast.info{border-left:3px solid #f5c518}
 
 .leaflet-container{background:#1a1a2a}
+.leaflet-control-attribution{font-size:9px;line-height:1.1;padding:2px 4px!important;background:rgba(10,10,15,.62)!important;box-shadow:none!important}
 .pickup-icon{background:#2266cc;border:3px solid #fff;width:16px;height:16px;border-radius:50%}
 .dropoff-icon{background:#cc6622;border:3px solid #fff;width:16px;height:16px;border-radius:50%}
 
@@ -878,7 +879,6 @@ function recoverDriverConnection() {
   if (isOnline) {
     socket?.connect();
     socket?.emit('driver:status', { isOnline: true });
-    sendDriverHeartbeat();
     reconcileActiveRideAfterReconnect();
     reconcileRideRequestsAfterReconnect();
   }
@@ -1951,7 +1951,6 @@ function toggleOnline(online) {
   socket?.emit('driver:status', { isOnline: online });
   if (online) {
     startDriverHeartbeat();
-    sendDriverHeartbeat();
     if (activeRide) startActiveRideLocationSync();
   } else {
     clearInterval(driverHeartbeatTimer);
@@ -1966,6 +1965,14 @@ function connectSocket() {
   if (socket) return;
   socket = io({ auth: { token, sessionToken } });
   socket.on('connect_error', e => console.warn('Socket error:', e.message));
+  socket.on('driver:status:ack', ({ isOnline: confirmedOnline } = {}) => {
+    if (!confirmedOnline) return;
+    isOnline = true;
+    startDriverHeartbeat();
+    sendDriverHeartbeat();
+    renderAvailabilityState();
+    reconcileRideRequestsAfterReconnect();
+  });
 
   // Fired on both initial connection AND every successful reconnect.
   // Re-declare online status so the server restores the drivers-online room,
@@ -1973,7 +1980,6 @@ function connectSocket() {
   socket.on('connect', () => {
     if (isOnline) {
       socket.emit('driver:status', { isOnline: true });
-      sendDriverHeartbeat();
     }
     if (activeRide) {
       socket.emit('ride:join', activeRide._id);
@@ -2122,6 +2128,8 @@ function connectSocket() {
   socket.on('account:suspended', ({ reason }) => {
     showToast(reason, 'error');
     stopActiveRideLocationSync();
+    clearInterval(driverHeartbeatTimer);
+    driverHeartbeatTimer = null;
     isOnline = false;
     pendingRide = null;
     sentOffer = null;

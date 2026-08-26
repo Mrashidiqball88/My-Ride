@@ -315,6 +315,7 @@ body{font-family:'Segoe UI',sans-serif;background:#0a0a0f;color:#fff;height:100d
 #app{position:relative;display:none;background:var(--lr-paper);color:var(--lr-ink);overflow:hidden}
 #map{position:absolute;inset:0;width:100%;height:100%;z-index:1;filter:none;background:#d8ddd9}
 .leaflet-container{background:#d8ddd9}
+.leaflet-control-attribution{font-size:9px;line-height:1.1;padding:2px 4px!important;background:rgba(246,241,233,.78)!important;box-shadow:none!important}
 .leaflet-control-zoom{margin-top:5.6rem!important;margin-right:1rem!important;border:0!important;box-shadow:0 8px 20px rgba(16,35,55,.12)!important}
 .leaflet-control-zoom a{background:rgba(246,241,233,.94)!important;color:var(--lr-ink)!important;border:0!important}
 .header{position:absolute;top:0;left:0;right:0;height:72px;padding:1rem clamp(1rem,4vw,3rem);background:linear-gradient(180deg,rgba(246,241,233,.98),rgba(246,241,233,.84),transparent);border:0;z-index:60;color:var(--lr-ink)}
@@ -903,7 +904,9 @@ const TILE_OPTS  = {
   maxNativeZoom: 19,
   maxZoom      : 20,
   subdomains   : 'abc',
-  detectRetina : true,
+  detectRetina : false,
+  updateWhenIdle: true,
+  keepBuffer   : 1,
   crossOrigin  : true
 };
 const PAKISTAN_ONLY_MESSAGE = window.MyRidePakistanGeofence?.PAKISTAN_ONLY_MESSAGE
@@ -1444,7 +1447,7 @@ async function loadCustomerPerKmRates() {
 function initMap() {
   if (map) return;
   map = L.map('map', { zoomControl: false, preferCanvas: true }).setView([31.5204, 74.3587], 15);
-  L.tileLayer(TILE_URL, { ...TILE_OPTS, detectRetina: false }).addTo(map);
+  L.tileLayer(TILE_URL, TILE_OPTS).addTo(map);
   L.control.zoom({ position: 'topright' }).addTo(map);
 
   // Repaint once after Leaflet has a real container size. Avoid a cascade of
