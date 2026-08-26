@@ -2519,12 +2519,14 @@ async function updateStatus(status) {
     const labels = { arrived: 'Arrived at pickup!', 'in-progress': 'Ride in progress', completed: 'Ride completed!' };
     document.getElementById('ap-status-text').textContent = labels[status] || status;
     if (status === 'completed') {
+      const completedRide = activeRide;
       todayRides++; todayEarnings += +(activeRide.fare * 0.85).toFixed(2);
       document.getElementById('stat-rides').textContent   = todayRides;
       document.getElementById('stat-earning').textContent = `Rs ${todayEarnings.toLocaleString()}`;
       document.getElementById('earnings-val').textContent = todayEarnings.toLocaleString();
+      endActiveRide();
       showToast('Ride completed! 🎉 Rate your passenger', 'success');
-      setTimeout(showDriverRatingModal, 1500);
+      setTimeout(() => showDriverRatingModal(completedRide), 300);
     } else {
       renderActiveButtons(status);
       updateNavigationDetails();
@@ -3042,9 +3044,9 @@ let _drRatingRideId    = null;
 let _drRatingSelected  = 0;
 let _drPassengerName   = 'your passenger';
 
-function showDriverRatingModal() {
-  _drRatingRideId   = activeRide?._id || null;
-  _drPassengerName  = activeRide?.passenger?.name || 'your passenger';
+function showDriverRatingModal(ride = activeRide) {
+  _drRatingRideId   = ride?._id || null;
+  _drPassengerName  = ride?.passenger?.name || 'your passenger';
   _drRatingSelected = 0;
   document.querySelectorAll('#driver-rating-modal .dr-star-btn').forEach(b => b.classList.remove('selected'));
   document.getElementById('dr-review-text').value = '';

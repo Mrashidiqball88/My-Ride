@@ -279,6 +279,74 @@ test.describe('live Mongo fare refresh', () => {
     }
   });
 
+  test('clears completed ride panels and locks customer cancellation after pickup arrival', async ({ browser }) => {
+    const baseURL = `http://127.0.0.1:${httpServer.address().port}`;
+    const customerPage = await browser.newPage();
+    const driverPage = await browser.newPage();
+    const pickup = { lat: 31.5204, lng: 74.3587, address: 'Pickup' };
+
+    try {
+      await Promise.all([
+        openAuthenticatedClient(customerPage, baseURL, '/customer', customer, token(customer)),
+        openAuthenticatedClient(driverPage, baseURL, '/driver', matchingDriver, token(matchingDriver))
+      ]);
+
+      const customerLifecycle = await customerPage.evaluate(({ pickup }) => {
+        activeRide = { _id: 'finished-customer-ride', status: 'arrived', pickupLocation: pickup, fare: 300 };
+        activeDriverInfo = { name: 'Driver Test', phone: '03000000000' };
+        document.getElementById('active-ride').style.display = 'block';
+        document.getElementById('ar-matched').style.display = 'block';
+        updateCustomerCancellationControl('arrived');
+        const lockedAtArrival = document.getElementById('ar-cancel-btn').disabled;
+        const originalLoadHistory = loadRideHistory;
+        loadRideHistory = () => Promise.resolve();
+        endRide();
+        loadRideHistory = originalLoadHistory;
+        showRatingModal({ rideId: 'finished-customer-ride', driverName: 'Driver Test' });
+        return {
+          cancelLocked: lockedAtArrival,
+          activeRideCleared: activeRide === null,
+          panelHidden: document.getElementById('active-ride').style.display === 'none',
+          ratingRideId: _ratingRideId,
+          ratingDriver: document.getElementById('rating-driver-name').textContent
+        };
+      }, { pickup });
+
+      expect(customerLifecycle).toEqual({
+        cancelLocked: true,
+        activeRideCleared: true,
+        panelHidden: true,
+        ratingRideId: 'finished-customer-ride',
+        ratingDriver: 'Driver Test'
+      });
+
+      const driverLifecycle = await driverPage.evaluate(() => {
+        activeRide = { _id: 'finished-driver-ride', passenger: { name: 'Passenger Test' } };
+        document.getElementById('active-panel').style.display = 'block';
+        const originalCheckTickets = checkUnreadDriverTickets;
+        checkUnreadDriverTickets = () => Promise.resolve();
+        endActiveRide();
+        checkUnreadDriverTickets = originalCheckTickets;
+        showDriverRatingModal({ _id: 'finished-driver-ride', passenger: { name: 'Passenger Test' } });
+        return {
+          activeRideCleared: activeRide === null,
+          panelHidden: document.getElementById('active-panel').style.display === 'none',
+          ratingRideId: _drRatingRideId,
+          ratingPassenger: document.getElementById('dr-passenger-name').textContent
+        };
+      });
+
+      expect(driverLifecycle).toEqual({
+        activeRideCleared: true,
+        panelHidden: true,
+        ratingRideId: 'finished-driver-ride',
+        ratingPassenger: 'Passenger Test'
+      });
+    } finally {
+      await Promise.all([customerPage.close(), driverPage.close()]);
+    }
+  });
+
   test('persists settings, creates a ride, and refreshes only matching browser clients', async ({ browser, playwright }) => {
     const customerToken = token(customer);
     const adminToken = token({ _id: new mongoose.Types.ObjectId(), role: 'admin', isAdmin: true, name: 'Admin' });

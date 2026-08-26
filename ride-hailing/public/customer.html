@@ -764,7 +764,7 @@ body{font-family:'Segoe UI',sans-serif;background:#0a0a0f;color:#fff;height:100d
     </div>
 
     <div class="ride-actions">
-      <button class="btn-danger" onclick="cancelRide()">✗ Cancel</button>
+      <button class="btn-danger" id="ar-waiting-cancel-btn" onclick="cancelRide()">✗ Cancel</button>
       <button class="btn-secondary" onclick="shareLocation()">📍 Share</button>
     </div>
   </div>
@@ -811,7 +811,7 @@ body{font-family:'Segoe UI',sans-serif;background:#0a0a0f;color:#fff;height:100d
     </div>
 
     <div class="ride-actions">
-      <button class="btn-danger" onclick="cancelRide()">✗ Cancel Ride</button>
+      <button class="btn-danger" id="ar-cancel-btn" onclick="cancelRide()">✗ Cancel Ride</button>
       <button class="btn-secondary" onclick="shareLocation()">📍 Share Location</button>
     </div>
   </div>
@@ -2221,6 +2221,7 @@ function showWaitingPanel(ride) {
   document.getElementById('ar-waiting').style.display = 'block';
   document.getElementById('ar-matched').style.display = 'none';
   document.getElementById('ar-contact-btns').style.display = 'none';
+  updateCustomerCancellationControl(ride.status || 'requested');
   document.getElementById('ar-live-fare').textContent = `Rs ${(activeLiveFare || ride.fare || 0).toLocaleString()}`;
   document.getElementById('ride-status-text').textContent = 'Broadcasting your offer…';
   document.getElementById('offers-list').innerHTML = '<div class="no-offers-msg">🔍 Waiting for nearby drivers to respond…</div>';
@@ -2261,7 +2262,20 @@ function showMatchedPanel(driver, agreedFare) {
     : `<div style="font-size:.78rem;color:#555;text-align:center;flex:1">Contact details not available</div>`;
   document.getElementById('ar-contact-btns').innerHTML = contactHtml;
   document.getElementById('ar-contact-btns').style.display = 'flex';
+  updateCustomerCancellationControl(activeRide?.status || 'accepted');
   updateActiveSheetSummary('Driver on the way', 'Live tracking · swipe up for ride details');
+}
+
+function updateCustomerCancellationControl(status = activeRide?.status) {
+  const locked = ['arrived', 'in-progress', 'completed', 'cancelled'].includes(status);
+  [
+    document.getElementById('ar-waiting-cancel-btn'),
+    document.getElementById('ar-cancel-btn')
+  ].filter(Boolean).forEach(button => {
+    button.disabled = locked;
+    button.setAttribute('aria-disabled', String(locked));
+    button.textContent = locked ? '🔒 Cancellation unavailable after arrival' : (button.id === 'ar-cancel-btn' ? '✗ Cancel Ride' : '✗ Cancel');
+  });
 }
 
 function hideRidePin() {
@@ -2397,10 +2411,11 @@ async function acceptDriver(driverId, agreedFare) {
   try {
     const ride = await apiCall(`/api/rides/${activeRide._id}/accept-driver`, 'PATCH', { driverId });
     activeRide = ride;
-    // The full driver info arrives via ride:accepted socket event
-    // But we can pre-populate from offers list while socket event comes in
     const offer = driverOffers.find(o => o.driverId === driverId);
-    if (offer) {
+    if (ride.driver && typeof ride.driver === 'object') {
+      activeDriverInfo = ride.driver;
+      showMatchedPanel(ride.driver, ride.fare);
+    } else if (offer) {
       showMatchedPanel({
         name: offer.driverName, vehicleModel: offer.vehicleModel,
         vehiclePlate: offer.vehiclePlate, rating: offer.rating
@@ -2416,6 +2431,10 @@ function statusLabel(s) {
 
 async function cancelRide() {
   if (!activeRide) return;
+  if (['arrived', 'in-progress', 'completed', 'cancelled'].includes(activeRide.status)) {
+    updateCustomerCancellationControl(activeRide.status);
+    return showToast('Cancellation is unavailable after the driver arrives at pickup.', 'error');
+  }
   try {
     await apiCall(`/api/rides/${activeRide._id}/cancel`, 'PATCH');
     endRide(); showToast('Ride cancelled', 'info');
@@ -2431,6 +2450,8 @@ function endRide() {
   document.getElementById('active-ride').style.display = 'none';
   document.getElementById('ar-waiting').style.display = 'block';
   document.getElementById('ar-matched').style.display = 'none';
+  document.getElementById('ar-contact-btns').style.display = 'none';
+  updateCustomerCancellationControl('requested');
   document.getElementById('bottom-panel').style.display = 'block';
   if (pickupMarker)  { pickupMarker.remove();  pickupMarker  = null; }
   stopMarkers.forEach((m, i) => { if (m) { m.remove(); stopMarkers[i] = null; } });
@@ -2563,14 +2584,22 @@ function connectToRideRoom(rideId) {
   socket.on('ride:status', ({ rideId, status }) => {
     if (!activeRide || String(activeRide._id) !== String(rideId)) return;
     activeRide.status = status;
-    if (status === 'completed') { showToast('Ride completed! 🎉', 'success'); setTimeout(showRatingModal, 1500); }
+    if (status === 'completed') {
+      const completedRideId = activeRide._id;
+      const completedDriverName = activeDriverInfo?.name || 'your driver';
+      endRide();
+      showToast('Ride completed! 🎉', 'success');
+      setTimeout(() => showRatingModal({ rideId: completedRideId, driverName: completedDriverName }), 300);
+    }
     else if (status === 'cancelled') { endRide(); showToast('Ride was cancelled', 'error'); }
     else if (status === 'arrived') {
       document.getElementById('ar-status-text').textContent = 'Driver has arrived! 📍';
+      updateCustomerCancellationControl('arrived');
       revealRidePinIfAtPickup();
       showToast('Your driver has arrived!', 'info');
     } else if (status === 'in-progress') {
       document.getElementById('ar-status-text').textContent = 'Ride in progress 🚗';
+      updateCustomerCancellationControl('in-progress');
       updateLiveTripTracking(lastDriverLocation, { recenter: true });
     }
   });
@@ -2810,12 +2839,12 @@ async function loadRideHistory() {
 let _ratingRideId = null;
 let _ratingSelected = 0;
 
-function showRatingModal() {
-  _ratingRideId = activeRide?._id || null;
+function showRatingModal({ rideId = activeRide?._id || null, driverName = activeDriverInfo?.name || 'your driver' } = {}) {
+  _ratingRideId = rideId;
   _ratingSelected = 0;
   document.querySelectorAll('.star-btn').forEach(b => b.classList.remove('selected'));
   document.getElementById('rating-review-text').value = '';
-  document.getElementById('rating-driver-name').textContent = activeDriverInfo?.name || 'your driver';
+  document.getElementById('rating-driver-name').textContent = driverName;
   document.getElementById('rating-modal').classList.add('open');
 }
 

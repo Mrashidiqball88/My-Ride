@@ -2593,7 +2593,9 @@ app.patch('/api/rides/:id/accept', authMiddleware, async (req, res) => {
       },
       { $set: { driver: req.user.id, status: 'accepted' } },
       { new: true }
-    ).populate('passenger', 'name phone');
+    )
+      .populate('passenger', 'name phone')
+      .populate('driver', 'name phone vehicleType vehicleModel vehiclePlate rating profilePhoto');
 
     if (!ride) return res.status(409).json({ error: 'Ride no longer available' });
     if (ride.isLongRange) {
