@@ -130,6 +130,7 @@ body{font-family:'Segoe UI',sans-serif;background:#0a0a0f;color:#fff;height:100d
 .sheet-list{min-height:0;flex:1;overflow-y:auto;overscroll-behavior:contain;-webkit-overflow-scrolling:touch;padding:.35rem .7rem 1.2rem;touch-action:pan-y}
 .sheet-item{display:flex;align-items:center;gap:.7rem;width:100%;border:0;border-bottom:1px solid #242436;background:transparent;color:#fff;text-align:left;padding:.78rem .45rem;cursor:pointer;min-height:58px}
 .sheet-item:last-child{border-bottom:0}.sheet-item:active,.sheet-item:focus-visible{background:#22223a;outline:none}.sheet-item-icon{width:30px;text-align:center;font-size:1.15rem}.sheet-item-copy{min-width:0}.sheet-item-primary{font-size:.86rem;color:#eee;font-weight:650;line-height:1.3}.sheet-item-secondary{font-size:.7rem;color:#777;margin-top:.15rem;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.sheet-item.my-location{background:#142333;border:1px solid #22547b;border-radius:11px;margin:.3rem 0 .45rem;padding:.72rem .45rem}.sheet-section-label{padding:.55rem .45rem .25rem;color:#f5c518;font-size:.62rem;font-weight:800;letter-spacing:.08em;text-transform:uppercase}.sheet-empty{padding:1rem .5rem;text-align:center;color:#777;font-size:.8rem}
+.sheet-expand{width:100%;margin:.65rem 0 .35rem;padding:.7rem .8rem;border:1px solid #3b4260;border-radius:10px;background:#1a1d31;color:#f5c518;font-size:.78rem;font-weight:750;cursor:pointer}.sheet-expand:disabled{opacity:.65;cursor:wait}
 
 .divider-line{display:flex;align-items:center;gap:.5rem;margin:.25rem 0;color:#444;font-size:.7rem}
 .divider-line::before,.divider-line::after{content:'';flex:1;height:1px;background:#222}
@@ -1102,7 +1103,7 @@ const LOCAL_LOCATION_INDEX = [
   ['Islamabad', 'Islamabad Capital Territory', 33.6844, 73.0479, 'City'],
   ['Blue Area', 'Islamabad', 33.7077, 73.0500, 'Area'],
   ['F-7 Markaz', 'Islamabad', 33.7215, 73.0565, 'Area'],
-  ['Karachi', 'Sindh', 24.8607, 67.0011, 'City'],
+  ['Karachi', 'Karachi', 24.8607, 67.0011, 'City'],
   ['Clifton', 'Karachi', 24.8138, 67.0300, 'Area']
 ];
 
@@ -1697,6 +1698,54 @@ function cityMatches(left, right) {
   return Boolean(a && b && (a === b || a.includes(b) || b.includes(a)));
 }
 
+const LOCATION_CITY_ALIASES = [
+  ['lahore', 'Lahore'],
+  ['gujranwala', 'Gujranwala'],
+  ['gujrat', 'Gujrat'],
+  ['islamabad', 'Islamabad'],
+  ['karachi', 'Karachi'],
+  ['multan', 'Multan'],
+  ['rawalpindi', 'Rawalpindi'],
+  ['faisalabad', 'Faisalabad'],
+  ['peshawar', 'Peshawar'],
+  ['quetta', 'Quetta'],
+  ['sialkot', 'Sialkot'],
+  ['bahawalpur', 'Bahawalpur'],
+  ['hyderabad', 'Hyderabad'],
+  ['abbottabad', 'Abbottabad'],
+  ['sargodha', 'Sargodha'],
+  ['sukkur', 'Sukkur'],
+  ['mardan', 'Mardan'],
+  ['kasur', 'Kasur'],
+  ['sheikhupura', 'Sheikhupura'],
+  ['jhelum', 'Jhelum'],
+  ['dera ghazi khan', 'Dera Ghazi Khan'],
+  ['rahim yar khan', 'Rahim Yar Khan']
+];
+
+function canonicalCityName(value) {
+  const normalized = normalizeCityName(value);
+  const alias = LOCATION_CITY_ALIASES.find(([needle]) => normalized === needle || normalized.includes(needle));
+  return alias ? alias[1] : String(value || '').trim();
+}
+
+function explicitSearchCity(query) {
+  const normalized = normalizeCityName(query);
+  if (!normalized) return '';
+  return LOCATION_CITY_ALIASES
+    .filter(([needle]) => normalized.includes(needle))
+    .sort((a, b) => b[0].length - a[0].length)[0]?.[1] || '';
+}
+
+function locationSearchScope(query, broad = false) {
+  const explicitCity = explicitSearchCity(query);
+  return {
+    city: canonicalCityName(explicitCity || customerActiveCity),
+    broad: Boolean(broad),
+    explicitCity
+  };
+}
+
 async function detectCustomerActiveCity(lat, lng) {
   const point = { lat: Number(lat), lng: Number(lng) };
   if (!Number.isFinite(point.lat) || !Number.isFinite(point.lng)) return;
@@ -1705,7 +1754,13 @@ async function detectCustomerActiveCity(lat, lng) {
   const requestId = ++customerCityRequest;
   customerCityDetectionInFlight = true;
   try {
-    const response = await fetch(`/api/geocode/reverse?lat=${encodeURIComponent(point.lat)}&lng=${encodeURIComponent(point.lng)}`);
+    const response = await fetch(
+      `/api/geocode/reverse?lat=${encodeURIComponent(point.lat)}&lng=${encodeURIComponent(point.lng)}`,
+      { headers: {
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        ...(sessionToken ? { 'X-Session-Token': sessionToken } : {})
+      } }
+    );
     if (!response.ok) return;
     const data = await response.json();
     if (requestId !== customerCityRequest) return;
@@ -1768,11 +1823,11 @@ function escapeLocationText(value) {
   }[char]));
 }
 
-function localLocationResults(query) {
+function localLocationResults(query, { city = '', broad = false } = {}) {
   const needle = query.trim().toLocaleLowerCase();
   if (!needle) return [];
   const center = pickup || (map ? map.getCenter() : null);
-  return LOCAL_LOCATION_AREAS
+  return LOCAL_LOCATION_INDEX
     .map(([name, city, lat, lon, kind]) => {
       const searchable = `${name} ${city}`.toLocaleLowerCase();
       const relevance = searchable.startsWith(needle)
@@ -1794,6 +1849,7 @@ function localLocationResults(query) {
       };
     })
     .filter(item => item.relevance < 3)
+    .filter(item => broad || !city || cityMatches(item.city, city))
     .sort((a, b) => a.relevance - b.relevance || a.distance - b.distance)
     .map(({ relevance, distance, ...item }) => item);
 }
@@ -1839,11 +1895,7 @@ function locationRelevance(item, needle) {
   return 4;
 }
 
-function isLahoreLocation(item) {
-  return /\blahore\b/i.test(`${item.city || ''} ${item.secondary || ''} ${item.display_name || ''}`);
-}
-
-function rankLocationResults(results, query) {
+function rankLocationResults(results, query, preferredCity = '', { broad = false } = {}) {
   const needle = query.trim().toLocaleLowerCase();
   const center = pickup || (map ? map.getCenter() : null);
   return results
@@ -1852,9 +1904,10 @@ function rankLocationResults(results, query) {
     .map(item => ({
       ...item,
       relevance: locationRelevance(item, needle),
-      cityPriority: isLahoreLocation(item) ? 0 : 1,
+      cityPriority: preferredCity && cityMatches(item.city, preferredCity) ? 0 : 1,
       distance: center ? haversine(center.lat, center.lng, item.lat, item.lon) : Number.POSITIVE_INFINITY
     }))
+    .filter(item => broad || !preferredCity || cityMatches(item.city, preferredCity))
     .filter(item => item.relevance < 4)
     .sort((a, b) =>
       a.cityPriority - b.cityPriority
@@ -1865,7 +1918,7 @@ function rankLocationResults(results, query) {
     .map(({ relevance, cityPriority, distance, ...item }) => item);
 }
 
-function mergeLocationResults(local, remote, query) {
+function mergeLocationResults(local, remote, query, preferredCity = '', { broad = false } = {}) {
   const candidates = [...local, ...(remote || []).map(item => normalizeLocationResult(item)).filter(Boolean)];
   const seen = new Set();
   const unique = candidates.filter(item => {
@@ -1874,7 +1927,7 @@ function mergeLocationResults(local, remote, query) {
     seen.add(key);
     return true;
   });
-  return rankLocationResults(unique, query);
+  return rankLocationResults(unique, query, preferredCity, { broad });
 }
 
 function openLocationSheet(type) {
@@ -1937,14 +1990,18 @@ function renderLocationSheet(type, results, query = '') {
       <span class="sheet-item-primary">Pin-Point / My Location</span>
       <span class="sheet-item-secondary">Use your phone GPS for the pickup point</span></span></button>`;
   }
-  locationSheetResults = rankLocationResults(results || [], query).slice(0, 24);
+  const scope = locationSearchScope(query, locationSearchBroadLoaded);
+  locationSheetResults = rankLocationResults(
+    results || [],
+    query,
+    scope.city,
+    { broad: scope.broad }
+  ).slice(0, 24);
   let previousGroup = '';
   markup += locationSheetResults.map((item, index) => {
     const primary = item.primary;
     const secondary = [item.kind, item.secondary].filter(Boolean).join(' · ');
-    const group = isLahoreLocation(item)
-      ? 'Lahore'
-      : item.city || (item.secondary || '').split(',')[0] || 'Other locations';
+    const group = canonicalCityName(item.city || (item.secondary || '').split(',')[0]) || 'Other locations';
     const groupHeading = group !== previousGroup
       ? `<div class="sheet-section-label">${escapeLocationText(group)}</div>`
       : '';
@@ -1954,6 +2011,11 @@ function renderLocationSheet(type, results, query = '') {
       <span class="sheet-item-primary">${escapeLocationText(primary)}</span>
       ${secondary ? `<span class="sheet-item-secondary">${escapeLocationText(secondary)}</span>` : ''}</span></button>`;
   }).join('');
+  if (query && scope.city && !locationSearchBroadLoaded) {
+    markup += `<button type="button" class="sheet-expand" data-location-action="expand-cities"${
+      locationSearchBroadLoading ? ' disabled' : ''
+    }>${locationSearchBroadLoading ? 'Loading other cities…' : 'Show more cities'}</button>`;
+  }
   list.innerHTML = markup || `<div class="sheet-empty">${
     query
       ? 'No matching areas yet. Try another letter or search phrase.'
@@ -1982,9 +2044,19 @@ function selectLocationFromSheet(index) {
 document.getElementById('location-sheet-list')?.addEventListener('click', event => {
   const option = event.target.closest('[data-location-index]');
   if (option) return selectLocationFromSheet(Number(option.dataset.locationIndex));
+  if (event.target.closest('[data-location-action="expand-cities"]')) {
+    return expandLocationSearch(activeLocationSearch);
+  }
   if (event.target.closest('[data-location-action="locate"]')) {
     closeLocationSheet();
     locateMe();
+  }
+});
+
+document.getElementById('location-sheet-list')?.addEventListener('scroll', event => {
+  const list = event.currentTarget;
+  if (activeLocationSearch && list.scrollTop + list.clientHeight >= list.scrollHeight - 48) {
+    expandLocationSearch(activeLocationSearch);
   }
 });
 
@@ -2042,17 +2114,44 @@ function onLocInput(type) {
   const input = document.getElementById(`${type}-input`);
   const query = input.value.trim();
   clearTimeout(locTimer[type]);
-  const local = localLocationResults(query);
-  renderLocationSheet(type, rankLocationResults(local, query), query);
   const requestId = (locSearchSeq[type] || 0) + 1;
   locSearchSeq[type] = requestId;
+  const scope = locationSearchScope(query);
+  locationSearchQuery = query;
+  locationSearchCity = scope.city;
+  locationSearchRemoteResults = [];
+  locationSearchBroadLoaded = false;
+  locationSearchBroadLoading = false;
+  const local = localLocationResults(query, { city: scope.city, broad: scope.broad });
+  renderLocationSheet(type, local, query);
   if (!query) return;
   locTimer[type] = setTimeout(async () => {
-    const remote = await searchPlaces(query);
+    const remote = await searchPlaces(query, { city: scope.city, broad: scope.broad });
     if (locSearchSeq[type] !== requestId) return;
-    const merged = mergeLocationResults(local, remote, query);
+    locationSearchRemoteResults = remote;
+    const merged = mergeLocationResults(local, remote, query, scope.city, { broad: scope.broad });
     renderLocationSheet(type, merged, query);
   }, 140);
+}
+
+async function expandLocationSearch(type) {
+  if (!type || !locationSearchQuery || locationSearchBroadLoaded || locationSearchBroadLoading) return;
+  const query = locationSearchQuery;
+  const requestId = (locSearchSeq[type] || 0) + 1;
+  locSearchSeq[type] = requestId;
+  locationSearchBroadLoading = true;
+  renderLocationSheet(type, locationSearchRemoteResults, query);
+  const broadRemote = await searchPlaces(query, { broad: true });
+  if (locSearchSeq[type] !== requestId) return;
+  locationSearchRemoteResults = [...locationSearchRemoteResults, ...broadRemote];
+  locationSearchBroadLoaded = true;
+  locationSearchBroadLoading = false;
+  const local = localLocationResults(query, { broad: true });
+  renderLocationSheet(
+    type,
+    mergeLocationResults(local, locationSearchRemoteResults, query, locationSearchCity, { broad: true }),
+    query
+  );
 }
 
 function onLocFocus(type) {

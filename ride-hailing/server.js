@@ -3462,9 +3462,26 @@ app.post('/api/sos', authMiddleware, async (req, res) => {
 // Keeps API keys server-side and adds a proper User-Agent for Nominatim ToS.
 // ─────────────────────────────────────────────────────────────────────────────
 
+function normalizeGeocodeCity(value) {
+  return String(value || '').trim().toLocaleLowerCase().replace(/\s+/g, ' ');
+}
+
+function geocodeResultCity(result) {
+  const address = result?.address || {};
+  return address.city || address.town || address.municipality || address.village || '';
+}
+
+function geocodeCityMatches(left, right) {
+  const a = normalizeGeocodeCity(left);
+  const b = normalizeGeocodeCity(right);
+  return Boolean(a && b && (a === b || a.includes(b) || b.includes(a)));
+}
+
 app.get('/api/geocode', async (req, res) => {
   const q = (req.query.q || '').trim();
   if (!q || q.length < 1) return res.json([]);
+  const city = String(req.query.city || '').trim().slice(0, 80);
+  const broad = ['1', 'true', 'yes'].includes(String(req.query.broad || '').toLowerCase());
 
   try {
     const key = process.env.LOCATIONIQ_KEY;
@@ -3476,13 +3493,15 @@ app.get('/api/geocode', async (req, res) => {
             `?key=${encodeURIComponent(key)}` +
             `&q=${encodeURIComponent(q)}` +
             `&format=json&limit=20` +
-            `&addressdetails=1&normalizeaddress=1&dedupe=1&namedetails=1`;
+             `&addressdetails=1&normalizeaddress=1&dedupe=1&namedetails=1` +
+             (city && !broad ? `&city=${encodeURIComponent(city)}` : '');
     } else {
       // Enhanced Nominatim fallback (OSM data)
       url = `https://nominatim.openstreetmap.org/search` +
              `?q=${encodeURIComponent(q)}` +
              `&format=json&limit=20` +
-            `&addressdetails=1&dedupe=1&namedetails=1`;
+             `&addressdetails=1&dedupe=1&namedetails=1` +
+             (city && !broad ? `&city=${encodeURIComponent(city)}` : '');
       headers = {
         'User-Agent': 'MyRide-App/1.0 (ride-hailing)',
         'Accept-Language': 'en,ur'
@@ -3494,11 +3513,59 @@ app.get('/api/geocode', async (req, res) => {
     const data = await r.json();
     const results = Array.isArray(data)
       ? data.filter(result => hasValidCoordinates({ lat: result?.lat, lng: result?.lon }))
+        .filter(result => broad || !city || !geocodeResultCity(result)
+          || geocodeCityMatches(geocodeResultCity(result), city))
       : [];
     res.json(results);
   } catch (err) {
     console.error('Geocode error:', err.message);
     res.json([]);
+  }
+});
+
+app.get('/api/geocode/reverse', authMiddleware, async (req, res) => {
+  const lat = Number(req.query.lat);
+  const lng = Number(req.query.lng);
+  if (!Number.isFinite(lat) || !Number.isFinite(lng)
+    || lat < -90 || lat > 90 || lng < -180 || lng > 180
+    || (lat === 0 && lng === 0)) {
+    return res.status(400).json({ error: 'Valid latitude and longitude are required' });
+  }
+
+  try {
+    const key = process.env.LOCATIONIQ_KEY;
+    let url, headers = {};
+    if (key) {
+      url = `https://us1.locationiq.com/v1/reverse` +
+        `?key=${encodeURIComponent(key)}` +
+        `&lat=${encodeURIComponent(lat)}&lon=${encodeURIComponent(lng)}` +
+        `&format=json&addressdetails=1&normalizeaddress=1`;
+    } else {
+      url = `https://nominatim.openstreetmap.org/reverse` +
+        `?lat=${encodeURIComponent(lat)}&lon=${encodeURIComponent(lng)}` +
+        `&format=json&addressdetails=1`;
+      headers = {
+        'User-Agent': 'MyRide-App/1.0 (ride-hailing)',
+        'Accept-Language': 'en,ur'
+      };
+    }
+
+    const upstream = await fetch(url, { headers, signal: AbortSignal.timeout(5000) });
+    if (!upstream.ok) throw new Error(`Reverse geocode upstream ${upstream.status}`);
+    const data = await upstream.json();
+    const address = data?.address && typeof data.address === 'object' ? data.address : {};
+    const city = address.city || address.town || address.municipality
+      || address.village || address.county || '';
+    res.json({
+      city: String(city).trim(),
+      display_name: data?.display_name || '',
+      address,
+      lat,
+      lng
+    });
+  } catch (err) {
+    console.error('Reverse geocode error:', err.message);
+    res.status(502).json({ error: 'Reverse geocoding is temporarily unavailable' });
   }
 });
 
