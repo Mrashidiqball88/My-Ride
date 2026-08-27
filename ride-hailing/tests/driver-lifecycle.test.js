@@ -11,6 +11,7 @@ const original = {
   userFindById: models.User.findById,
   userFind: models.User.find,
   userUpdateOne: models.User.updateOne,
+  userUpdateMany: models.User.updateMany,
   userFindOne: models.User.findOne,
   userFindByIdAndUpdate: models.User.findByIdAndUpdate,
   walletFindOne: models.Wallet.findOne,
@@ -23,6 +24,7 @@ afterEach(() => {
   models.User.findById = original.userFindById;
   models.User.find = original.userFind;
   models.User.updateOne = original.userUpdateOne;
+  models.User.updateMany = original.userUpdateMany;
   models.User.findOne = original.userFindOne;
   models.User.findByIdAndUpdate = original.userFindByIdAndUpdate;
   models.Wallet.findOne = original.walletFindOne;
@@ -147,6 +149,133 @@ test('daily fee is charged from the wallet only when a driver goes online, and i
     const insufficient = await request(server, '/api/driver/availability', { isOnline: true });
     assert.equal(insufficient.response.status, 403);
     assert.match(insufficient.body.error, /must cover today's Daily Fee/);
+  } finally {
+    await new Promise(resolve => server.close(resolve));
+  }
+});
+
+test('a future custom paid-until date lets a driver go online without touching the real-cash wallet', async () => {
+  const updates = [];
+  const paidUntilDate = new Date(Date.now() + (3 * 24 * 60 * 60 * 1000));
+  const driver = driverDocument({
+    paidUntilDate,
+    isFreeTrial: false,
+    lastDailyFeePaidAt: null
+  });
+  let walletTouched = false;
+
+  models.Settings.findOne = () => ({
+    lean: async () => ({ value: { 'Car Mini': 100 } })
+  });
+  models.User.findById = () => ({
+    select: () => ({ lean: async () => driver })
+  });
+  models.User.updateOne = async (_query, update) => {
+    updates.push(update);
+    return { acknowledged: true };
+  };
+  models.Wallet.findOne = () => {
+    walletTouched = true;
+    throw new Error('an active paid-until pass must not read the real-cash wallet');
+  };
+  models.Wallet.findOneAndUpdate = () => {
+    walletTouched = true;
+    throw new Error('an active paid-until pass must not debit the real-cash wallet');
+  };
+
+  const server = app.listen(0);
+  try {
+    const online = await request(server, '/api/driver/availability', { isOnline: true });
+    assert.equal(online.response.status, 200);
+    assert.equal(online.body.isOnline, true);
+    assert.equal(walletTouched, false);
+    assert.equal(updates.at(-1).isOnline, true);
+  } finally {
+    await new Promise(resolve => server.close(resolve));
+  }
+});
+
+test('an expired custom paid-until date returns to normal wallet fee charging', async () => {
+  const charges = [];
+  const paidUntilDate = new Date(Date.now() - (60 * 60 * 1000));
+  models.User.updateOne = async () => ({ acknowledged: true });
+  models.Wallet.findOne = () => ({
+    select: () => ({
+      lean: async () => ({ balance: 500, fee_paid_at: null })
+    })
+  });
+  models.Wallet.findOneAndUpdate = async (_query, update) => {
+    charges.push(update);
+    return { balance: 400 };
+  };
+
+  const result = await chargeDailyFeeForOnlineDriver(
+    'expired-paid-until-driver',
+    driverDocument({
+      vehicleType: 'Car Sedan',
+      paidUntilDate,
+      isFreeTrial: false,
+      lastDailyFeePaidAt: null
+    }),
+    { 'Car Sedan': 100 }
+  );
+
+  assert.equal(result.allowed, true);
+  assert.equal(result.charged, true);
+  assert.equal(charges.length, 1);
+  assert.equal(charges[0].$inc.balance, -100);
+});
+
+test('an Admin paid-until grant is immediately usable by the online availability endpoint', async () => {
+  const updates = [];
+  const driver = driverDocument({
+    paidUntilDate: null,
+    isFreeTrial: false,
+    lastDailyFeePaidAt: null
+  });
+  let walletTouched = false;
+
+  models.User.updateMany = async (_query, update) => {
+    updates.push(update);
+    driver.paidUntilDate = update.paidUntilDate;
+    return { acknowledged: true, matchedCount: 1, modifiedCount: 1 };
+  };
+  models.User.findById = () => ({
+    select: () => ({ lean: async () => driver })
+  });
+  models.User.updateOne = async (_query, update) => {
+    updates.push(update);
+    return { acknowledged: true };
+  };
+  models.Settings.findOne = () => ({
+    lean: async () => ({ value: { 'Car Mini': 100 } })
+  });
+  models.Wallet.findOne = () => {
+    walletTouched = true;
+    throw new Error('the granted paid period must not require a wallet read');
+  };
+  models.Wallet.findOneAndUpdate = () => {
+    walletTouched = true;
+    throw new Error('the granted paid period must not debit the wallet');
+  };
+
+  const server = app.listen(0);
+  try {
+    const grant = await adminJsonRequest(
+      server,
+      '/api/admin/drivers/grant-fee-waiver',
+      superAdminToken(),
+      'POST',
+      { driverIds: ['507f1f77bcf86cd799439011'], paidUntilDate: '2099-01-02' }
+    );
+    assert.equal(grant.response.status, 200);
+    assert.equal(grant.body.success, true);
+    assert.equal(updates[0].paidUntilDate.toISOString(), '2099-01-02T23:59:59.999Z');
+
+    const online = await request(server, '/api/driver/availability', { isOnline: true });
+    assert.equal(online.response.status, 200);
+    assert.equal(online.body.isOnline, true);
+    assert.equal(walletTouched, false);
   } finally {
     await new Promise(resolve => server.close(resolve));
   }

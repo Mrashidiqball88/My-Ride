@@ -1,4 +1,5 @@
 - [Socket.io browser tests](socketio-browser-tests.md) — live Socket.io assertions must listen on the HTTP server instance that owns the Socket.io attachment.
+- [Paid-until access authority](paid-until-access-authority.md) — any future paid-until date is an online fee pass independent of free-trial flags or real-cash wallet state.
 - [Live fare UI tests](live-fare-ui-tests.md) — exercise the authenticated customer and driver pages so fare assertions cover rendered UI, not only socket payloads.
 - [Admin permission refresh](admin-permission-refresh.md) — refresh the server-side Sub-Admin session before applying client visibility rules.
 - [Admin deep-link guards](admin-deep-link-guards.md) — protect both initial hash loads and later hash changes, with fallback before restricted loaders run.

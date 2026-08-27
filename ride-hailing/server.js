@@ -469,7 +469,8 @@ async function chargeDailyFeeForOnlineDriver(driverId, driver, dailyFeeSettings 
 
   const now = new Date();
   const activePassCutoff = new Date(now.getTime() - ACTIVE_FEE_PASS_MS);
-  if (driver.isFreeTrial && driver.paidUntilDate && new Date(driver.paidUntilDate) >= now) {
+  const paidUntilDate = driver.paidUntilDate ? new Date(driver.paidUntilDate) : null;
+  if (paidUntilDate && !Number.isNaN(paidUntilDate.getTime()) && paidUntilDate >= now) {
     return { allowed: true, charged: false, rate, alreadyPaid: true };
   }
 
