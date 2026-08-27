@@ -1,7 +1,7 @@
-// MyRide Service Worker — v21
+// MyRide Service Worker — v22
 // Strategy: network-first for API/socket, cache-first for static assets.
 
-const CACHE_NAME = 'myride-v21';
+const CACHE_NAME = 'myride-v22';
 
 // Static assets worth caching for fast repeat loads
 const PRECACHE = [
@@ -46,6 +46,7 @@ self.addEventListener('push', event => {
     badge:              '/icon-192.png',
     tag:                'ride-request',
     requireInteraction: true,
+    silent: false,
     vibrate:            [400, 150, 400, 150, 400],
     data:               {
       url: data.url || '/driver',
@@ -60,7 +61,24 @@ self.addEventListener('push', event => {
       { action: 'open',   title: '📱 Go to App'  }
     ]
   };
-  event.waitUntil(self.registration.showNotification(title, options));
+  event.waitUntil(
+    self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then(list => {
+      const hasVisibleDriver = list.some(client =>
+        client.url.includes('/driver') && client.visibilityState === 'visible'
+      );
+      const relay = Promise.all(list.map(client => client.postMessage({
+        type: 'PUSH_RIDE_ALERT',
+        rideId: options.data.rideId,
+        ride: options.data.ride
+      })));
+      // A visible Driver page already has the Socket.io/audio path. Let that
+      // page own the foreground presentation so a simultaneous Web Push event
+      // cannot create a second notification for the same ride.
+      return relay.then(() => hasVisibleDriver
+        ? undefined
+        : self.registration.showNotification(title, options));
+    })
+  );
 });
 
 // ── Notification click: handle action buttons and focus/open Driver App ──────
@@ -78,9 +96,11 @@ self.addEventListener('notificationclick', event => {
     clients.matchAll({ type: 'window', includeUncontrolled: true }).then(list => {
       const driverTab = list.find(c => c.url.includes('/driver'));
       if (driverTab) {
-        // Post a message so the app can auto-accept without user tapping again
+        // The page rehydrates the authoritative offer before applying the action.
         if (action === 'accept' && rideId) {
           driverTab.postMessage({ type: 'ACCEPT_RIDE', rideId });
+        } else if (rideId) {
+          driverTab.postMessage({ type: 'RECONCILE_RIDE_REQUESTS', rideId });
         }
         return driverTab.focus();
       }
@@ -90,6 +110,26 @@ self.addEventListener('notificationclick', event => {
         : targetUrl;
       if (clients.openWindow) return clients.openWindow(openUrl);
     })
+  );
+});
+
+// Background Sync is a recovery hint, not a replacement for Web Push. It lets
+// the page refresh authoritative ride state after a notification action or a
+// transient network interruption when the browser grants a sync opportunity.
+self.addEventListener('sync', event => {
+  if (event.tag !== 'myride-driver-reconcile') return;
+  event.waitUntil(
+    self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then(list =>
+      Promise.all(list.map(client => client.postMessage({ type: 'RECONCILE_RIDE_REQUESTS' })))
+    )
+  );
+});
+
+self.addEventListener('pushsubscriptionchange', event => {
+  event.waitUntil(
+    self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then(list =>
+      Promise.all(list.map(client => client.postMessage({ type: 'RE_REGISTER_PUSH' })))
+    )
   );
 });
 

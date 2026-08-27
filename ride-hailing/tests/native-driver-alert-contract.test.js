@@ -23,7 +23,8 @@ test('native Driver cannot go online without alert and background readiness', ()
   assert.match(runtimeSource, /requestPermissionsAsync\(\)/);
   assert.match(runtimeSource, /getForegroundPermissionsAsync\(\)/);
   assert.match(runtimeSource, /getBackgroundPermissionsAsync\(\)/);
-  assert.match(runtimeSource, /getNotificationChannelAsync\('ride-alerts'\)/);
+  assert.match(runtimeSource, /RIDE_ALERT_CHANNEL_ID/);
+  assert.match(runtimeSource, /getNotificationChannelAsync\(RIDE_ALERT_CHANNEL_ID\)/);
   assert.match(runtimeSource, /getExpoPushTokenAsync/);
   assert.match(runtimeSource, /hasStartedLocationUpdatesAsync/);
   assert.match(runtimeSource, /foregroundServiceReady/);

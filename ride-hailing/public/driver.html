@@ -820,6 +820,7 @@ let activeRideLocationRequestInFlight = false;
 let readCurrentDriverLocation = null;
 let activeRideLocationGeneration = 0;
 let activeRideLocationRideId = null;
+let pendingNotificationActionRideId = null;
 
 // ── Toast ──────────────────────────────────────────────────────────────────
 function showToast(msg, type = 'info') {
@@ -886,6 +887,64 @@ function recoverDriverConnection() {
   if ('Notification' in window && Notification.permission === 'granted') {
     registerPushSubscription();
   }
+}
+
+async function processPendingNotificationAction() {
+  const rideId = pendingNotificationActionRideId;
+  if (!rideId || !isOnline) return;
+  pendingNotificationActionRideId = null;
+  try {
+    await reconcileRideRequestsAfterReconnect();
+    if (pendingRide && String(pendingRide.id || pendingRide._id) === rideId) {
+      await acceptRide();
+    }
+  } catch (error) {
+    console.warn('Notification action recovery failed:', error.message);
+  }
+}
+
+function handleDriverNotificationHash() {
+  const match = String(location.hash || '').match(/^#accept:([^#]+)$/);
+  if (!match) return;
+  pendingNotificationActionRideId = decodeURIComponent(match[1]);
+  history.replaceState(null, '', location.pathname + location.search);
+  void processPendingNotificationAction();
+}
+
+function registerDriverBackgroundSync() {
+  navigator.serviceWorker?.ready.then(registration => {
+    if (registration.sync?.register) {
+      registration.sync.register('myride-driver-reconcile').catch(() => {});
+    }
+  }).catch(() => {});
+}
+
+if ('serviceWorker' in navigator && !window.__myRideDriverWorkerMessagesBound) {
+  window.__myRideDriverWorkerMessagesBound = true;
+  navigator.serviceWorker.addEventListener('message', event => {
+    const data = event.data || {};
+    if (data.type === 'RE_REGISTER_PUSH') {
+      void registerPushSubscription();
+      return;
+    }
+    if (data.type === 'PUSH_RIDE_ALERT' && data.ride && rideOfferIsLive(data.ride)) {
+      if (document.visibilityState === 'visible' && isOnline && !activeRide && !pendingRide) {
+        pendingRide = data.ride;
+        showRideRequest(data.ride);
+      }
+      registerDriverBackgroundSync();
+      return;
+    }
+    if (data.type === 'RECONCILE_RIDE_REQUESTS' || data.type === 'ACCEPT_RIDE') {
+      reconcileRideRequestsAfterReconnect().then(() => {
+        if (data.type === 'ACCEPT_RIDE' && data.rideId
+          && pendingRide && String(pendingRide.id || pendingRide._id) === String(data.rideId)) {
+          return acceptRide();
+        }
+        return undefined;
+      }).catch(error => console.warn('Notification action recovery failed:', error.message));
+    }
+  });
 }
 
 // ── Draggable Today’s Fare Widget ───────────────────────────────────────────
@@ -1404,6 +1463,7 @@ function bootApp() {
   }
   connectSocket();
   if (isOnline) startDriverHeartbeat();
+  handleDriverNotificationHash();
   if (!window.__myRideDriverRecoveryBound) {
     window.__myRideDriverRecoveryBound = true;
     window.addEventListener('online', recoverDriverConnection);
@@ -2048,6 +2108,7 @@ function connectSocket() {
     sendDriverHeartbeat();
     renderAvailabilityState();
     reconcileRideRequestsAfterReconnect();
+    void processPendingNotificationAction();
   });
 
   // Fired on both initial connection AND every successful reconnect.
@@ -2078,6 +2139,7 @@ function connectSocket() {
     if (restoredOnline) {
       startDriverHeartbeat();
       reconcileRideRequestsAfterReconnect();
+      void processPendingNotificationAction();
     } else if (!isOnline) {
       clearInterval(driverHeartbeatTimer);
       driverHeartbeatTimer = null;
@@ -2405,7 +2467,7 @@ function remainingRideOfferSeconds(ride) {
   return Number.isFinite(expiresAt) ? Math.max(0, Math.ceil((expiresAt - Date.now()) / 1000)) : 0;
 }
 
-function showRideRequest(ride) {
+function showRideRequest(ride, { suppressAlert = false } = {}) {
   if (!rideOfferIsLive(ride)) {
     hideRideRequest();
     return;
@@ -2468,7 +2530,7 @@ function showRideRequest(ride) {
   }, 1000);
 
   showRideOnMap(ride);
-  startRideAlert(ride);
+  if (!suppressAlert) startRideAlert(ride);
 
   // Grey out Accept button if today's platform fee is not yet paid
   const acceptBtn = document.querySelector('.btn-accept');
@@ -2531,16 +2593,28 @@ function startRideAlert(ride) {
     alertInterval = setInterval(playBeep, 1400);
   } catch(e) { console.warn('Audio alert error:', e); }
 
-  // Browser push notification (works even if tab is backgrounded)
-  if (Notification.permission === 'granted' && ride) {
-    try {
-      rideNotification = new Notification('🚗 New Ride Request!', {
-        body: `📍 ${ride.pickupLocation?.address || 'Nearby'}\n💰 Rs ${(ride.fare || 0).toLocaleString()} · ${ride.distance ? ride.distance.toFixed(1) + ' km' : ''}`,
-        requireInteraction: true,
-        tag: 'ride-request'
-      });
-      rideNotification.onclose = () => { rideNotification = null; };
-    } catch(e) {}
+  // Use the service worker even while the page is visible so foreground and
+  // background notifications share the same click/action implementation.
+  if (Notification.permission === 'granted' && ride && navigator.serviceWorker) {
+    navigator.serviceWorker.ready.then(registration => registration.showNotification('🚗 New Ride Request!', {
+      body: `📍 ${ride.pickupLocation?.address || 'Nearby'}\n💰 Rs ${(ride.fare || 0).toLocaleString()} · ${ride.distance ? ride.distance.toFixed(1) + ' km' : ''}`,
+      icon: '/icon-192.png',
+      badge: '/icon-192.png',
+      tag: `ride-request-${String(ride.id || ride._id || '')}`,
+      requireInteraction: true,
+      silent: false,
+      data: {
+        type: 'ride:new',
+        url: '/driver',
+        rideId: String(ride.id || ride._id || ''),
+        ride
+      },
+      actions: [
+        { action: 'accept', title: 'Accept Ride' },
+        { action: 'reject', title: 'Reject Ride' },
+        { action: 'open', title: 'Open Driver' }
+      ]
+    })).catch(error => console.warn('Service-worker ride notification failed:', error.message));
   }
 
   // Web Speech Synthesis — announce new ride vocally (Urdu/English)
@@ -3752,7 +3826,10 @@ async function doDeleteAccount() {
 if ('serviceWorker' in navigator) {
   window.addEventListener('load', () => {
     navigator.serviceWorker.register('/sw.js', { scope: '/' })
-      .then(reg => console.log('[SW] Driver registered, scope:', reg.scope))
+      .then(reg => {
+        console.log('[SW] Driver registered, scope:', reg.scope);
+        registerDriverBackgroundSync();
+      })
       .catch(err => console.warn('[SW] Registration failed:', err));
   });
 }

@@ -1,12 +1,20 @@
 import * as Location from 'expo-location';
+import * as Notifications from 'expo-notifications';
 import * as SecureStore from 'expo-secure-store';
 import * as TaskManager from 'expo-task-manager';
+import { AppState } from 'react-native';
+import {
+  ensureRideAlertChannel,
+  rideAlertId,
+  scheduleNativeRideAlert,
+} from '@/lib/ride-alerts';
 
 export const BACKGROUND_LOCATION_TASK = 'myride-driver-background-location';
 const TOKEN_KEY = 'myride.driver.token';
 const SESSION_KEY = 'myride.driver.session';
 const ONLINE_KEY = 'myride.driver.online';
 const ACTIVE_RIDE_KEY = 'myride.driver.activeRide';
+const BACKGROUND_ALERTS_KEY = 'myride.driver.backgroundRideAlerts';
 export const ACTIVE_RIDE_LOCATION_INTERVAL_MS = 3_000;
 const DOMAIN = process.env.EXPO_PUBLIC_RIDE_API_URL ||
   (process.env.EXPO_PUBLIC_DOMAIN ? `https://${process.env.EXPO_PUBLIC_DOMAIN}` : '');
@@ -62,12 +70,71 @@ async function postHeartbeat() {
   }
 }
 
+function isLiveRide(ride: { id?: string; _id?: string; broadcastExpiresAt?: string | Date }) {
+  const expiresAt = new Date(ride.broadcastExpiresAt || 0).getTime();
+  return Boolean(rideAlertId(ride) && Number.isFinite(expiresAt) && expiresAt > Date.now());
+}
+
+async function syncBackgroundRideAlerts() {
+  const [token, session, online, activeRide, storedAlerts, pushToken] = await Promise.all([
+    SecureStore.getItemAsync(TOKEN_KEY),
+    SecureStore.getItemAsync(SESSION_KEY),
+    SecureStore.getItemAsync(ONLINE_KEY),
+    SecureStore.getItemAsync(ACTIVE_RIDE_KEY),
+    SecureStore.getItemAsync(BACKGROUND_ALERTS_KEY),
+    SecureStore.getItemAsync('myride.driver.pushToken'),
+  ]);
+  if (!token || online !== 'true' || activeRide || !DOMAIN) return;
+  // A registered Expo token gets the platform-managed locked-screen alert.
+  // Polling is a last-resort wake path for builds that have not registered one.
+  if (pushToken) return;
+  // The foreground Socket.io listener and notification listener own visible
+  // alerts while the app is open. This fallback is only for suspended JS.
+  if (AppState.currentState === 'active') return;
+
+  let knownAlerts: Record<string, string> = {};
+  try {
+    const parsed = storedAlerts ? JSON.parse(storedAlerts) : {};
+    if (parsed && typeof parsed === 'object') knownAlerts = parsed;
+  } catch {
+    knownAlerts = {};
+  }
+
+  const response = await fetch(`${DOMAIN}/api/rides/available`, {
+    headers: {
+      Authorization: `Bearer ${token}`,
+      ...(session ? { 'X-Session-Token': session } : {}),
+    },
+  });
+  if (!response.ok) return;
+  const rides = await response.json().catch(() => []);
+  const liveRides = Array.isArray(rides) ? rides.filter(isLiveRide) : [];
+  const liveIds = new Set(liveRides.map(rideAlertId));
+
+  await ensureRideAlertChannel();
+  for (const ride of liveRides) {
+    const id = rideAlertId(ride);
+    if (!id || knownAlerts[id]) continue;
+    const notificationId = await scheduleNativeRideAlert(ride);
+    knownAlerts[id] = notificationId;
+  }
+
+  for (const [id, notificationId] of Object.entries(knownAlerts)) {
+    if (liveIds.has(id)) continue;
+    await Notifications.dismissNotificationAsync(notificationId).catch(() => undefined);
+    await Notifications.cancelScheduledNotificationAsync(notificationId).catch(() => undefined);
+    delete knownAlerts[id];
+  }
+  await SecureStore.setItemAsync(BACKGROUND_ALERTS_KEY, JSON.stringify(knownAlerts));
+}
+
 TaskManager.defineTask(BACKGROUND_LOCATION_TASK, async ({ data, error }) => {
   if (error) return;
   const locations = (data as { locations?: Location.LocationObject[] } | undefined)?.locations ?? [];
   const latest = locations[locations.length - 1];
-  if (latest) await postLocation(latest);
-  else await postHeartbeat();
+  if (latest) await postLocation(latest).catch(() => undefined);
+  else await postHeartbeat().catch(() => undefined);
+  await syncBackgroundRideAlerts().catch(() => undefined);
 });
 
 const sharedLocationOptions = {

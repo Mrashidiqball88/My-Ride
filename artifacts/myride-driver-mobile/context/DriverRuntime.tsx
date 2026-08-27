@@ -11,6 +11,12 @@ import {
   activeRideLocationOptions,
   availabilityLocationOptions,
 } from '@/lib/background-location';
+import {
+  ensureRideAlertChannel,
+  scheduleNativeRideAlert,
+  RIDE_ALERT_CATEGORY_ID,
+  RIDE_ALERT_CHANNEL_ID,
+} from '@/lib/ride-alerts';
 
 const TOKEN_KEY = 'myride.driver.token';
 const SESSION_KEY = 'myride.driver.session';
@@ -18,6 +24,7 @@ const USER_KEY = 'myride.driver.user';
 const ONLINE_KEY = 'myride.driver.online';
 const ACTIVE_RIDE_KEY = 'myride.driver.activeRide';
 const LOCK_SCREEN_ACK_KEY = 'myride.driver.lockScreenAlertsConfirmed';
+const PUSH_TOKEN_KEY = 'myride.driver.pushToken';
 const API_URL = process.env.EXPO_PUBLIC_RIDE_API_URL ||
   (process.env.EXPO_PUBLIC_DOMAIN ? `https://${process.env.EXPO_PUBLIC_DOMAIN}` : '');
 let sessionRevokedHandler: (() => void) | null = null;
@@ -110,12 +117,9 @@ function api(path: string, token?: string, session?: string, init: RequestInit =
 
 async function configureNotifications(requestPermission = false) {
   if (Platform.OS === 'android') {
-    await Notifications.setNotificationChannelAsync('ride-alerts', {
-      name: 'Ride requests', importance: Notifications.AndroidImportance.MAX,
-      vibrationPattern: [0, 350, 160, 350], sound: 'default', lockscreenVisibility: Notifications.AndroidNotificationVisibility.PUBLIC,
-    });
+    await ensureRideAlertChannel();
   }
-  await Notifications.setNotificationCategoryAsync('ride-request', [
+  await Notifications.setNotificationCategoryAsync(RIDE_ALERT_CATEGORY_ID, [
     { identifier: 'accept', buttonTitle: 'Accept', options: { opensAppToForeground: true } },
     { identifier: 'dismiss', buttonTitle: 'Dismiss', options: { opensAppToForeground: true } },
   ]);
@@ -124,7 +128,7 @@ async function configureNotifications(requestPermission = false) {
     permissions = await Notifications.requestPermissionsAsync();
   }
   const channel = Platform.OS === 'android'
-    ? await Notifications.getNotificationChannelAsync('ride-alerts')
+    ? await Notifications.getNotificationChannelAsync(RIDE_ALERT_CHANNEL_ID)
     : null;
   return {
     notificationsGranted: permissions.granted,
@@ -132,6 +136,8 @@ async function configureNotifications(requestPermission = false) {
       channel
       && channel.importance === Notifications.AndroidImportance.MAX
       && channel.lockscreenVisibility === Notifications.AndroidNotificationVisibility.PUBLIC
+      && channel.sound === 'default'
+      && channel.enableVibrate
     ),
   };
 }
@@ -174,6 +180,7 @@ export function DriverRuntimeProvider({ children }: { children: ReactNode }) {
   const alertedRideIds = useRef(new Set<string>());
   const localRideNotificationIds = useRef(new Map<string, string>());
   const receivedRideEvents = useRef(new Map<string, number>());
+  const pendingNotificationRideId = useRef<string | null>(null);
   const lastHeartbeatAckAt = useRef(0);
   const locationServiceMode = useRef<'stopped' | 'availability' | 'active-ride'>('stopped');
   const locationServiceTransition = useRef<Promise<void>>(Promise.resolve());
@@ -219,7 +226,7 @@ export function DriverRuntimeProvider({ children }: { children: ReactNode }) {
     }
   }, []);
 
-  const handleRideOffer = useCallback((ride: RideRequest) => {
+  const handleRideOffer = useCallback((ride: RideRequest, { fromPush = false } = {}) => {
     const nextRide = normalizeRideRequest(ride);
     if (!isOnlineRef.current || activeRideIdRef.current || !isRideOfferLive(nextRide)) return;
     const previousEventAt = receivedRideEvents.current.get(nextRide.id) || 0;
@@ -234,6 +241,19 @@ export function DriverRuntimeProvider({ children }: { children: ReactNode }) {
     setPendingRide(current => current?.id === nextRide.id ? current : nextRide);
     if (AppState.currentState === 'active') {
       void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning);
+    } else if (Platform.OS !== 'web' && !fromPush && !alertedRideIds.current.has(nextRide.id)) {
+      alertedRideIds.current.add(nextRide.id);
+      void SecureStore.getItemAsync(PUSH_TOKEN_KEY).then(pushToken => {
+        if (pushToken) {
+          alertedRideIds.current.delete(nextRide.id);
+          return;
+        }
+        return scheduleNativeRideAlert(nextRide).then(notificationId => {
+          localRideNotificationIds.current.set(nextRide.id, notificationId);
+        });
+      }).catch(() => {
+        alertedRideIds.current.delete(nextRide.id);
+      });
     }
   }, []);
 
@@ -383,7 +403,7 @@ export function DriverRuntimeProvider({ children }: { children: ReactNode }) {
     sessionRef.current = null;
     clearAllRideAlerts();
     void stopLocationService();
-    void Promise.all([TOKEN_KEY, SESSION_KEY, USER_KEY, ONLINE_KEY, ACTIVE_RIDE_KEY, LOCK_SCREEN_ACK_KEY]
+    void Promise.all([TOKEN_KEY, SESSION_KEY, USER_KEY, ONLINE_KEY, ACTIVE_RIDE_KEY, LOCK_SCREEN_ACK_KEY, PUSH_TOKEN_KEY]
       .map(key => SecureStore.deleteItemAsync(key)));
     setUser(null);
     setIsOnline(false);
@@ -402,16 +422,21 @@ export function DriverRuntimeProvider({ children }: { children: ReactNode }) {
     };
   }, [clearRevokedSession]);
 
-  const registerExpoToken = useCallback(async () => {
+  const registerExpoToken = useCallback(async (tokenOverride?: string) => {
     if (Platform.OS === 'web' || !tokenRef.current) return false;
     try {
       const notificationState = await configureNotifications(false);
       if (!notificationState.notificationsGranted) return false;
-      const projectId = Constants.easConfig?.projectId ?? Constants.expoConfig?.extra?.eas?.projectId;
-      const pushToken = await Notifications.getExpoPushTokenAsync(projectId ? { projectId } : undefined);
+      const projectId = process.env.EXPO_PUBLIC_EAS_PROJECT_ID
+        || Constants.easConfig?.projectId
+        || Constants.expoConfig?.extra?.eas?.projectId;
+      const pushToken = tokenOverride
+        ? { data: tokenOverride }
+        : await Notifications.getExpoPushTokenAsync(projectId ? { projectId } : undefined);
       await api('/api/driver/push-token', tokenRef.current, sessionRef.current || undefined, {
         method: 'POST', body: JSON.stringify({ token: pushToken.data }),
       });
+      await SecureStore.setItemAsync(PUSH_TOKEN_KEY, pushToken.data);
       return true;
     } catch {
       return false;
@@ -507,6 +532,25 @@ export function DriverRuntimeProvider({ children }: { children: ReactNode }) {
     await refreshAlertReadiness({ requestPermissions: true });
   }, [refreshAlertReadiness]);
 
+  const recoverNotificationRide = useCallback((response: Notifications.NotificationResponse | null) => {
+    const data = response?.notification.request.content.data as {
+      type?: string; ride?: RideRequest & { _id?: string }; rideId?: string;
+    } | undefined;
+    if (data?.type !== 'ride:new') return;
+    const rideId = String(data.rideId || data.ride?.id || data.ride?._id || '');
+    if (!rideId) return;
+    pendingNotificationRideId.current = rideId;
+    if (response?.actionIdentifier === 'dismiss') {
+      clearRideAlert(rideId);
+      pendingNotificationRideId.current = null;
+      return;
+    }
+    if (tokenRef.current && isOnlineRef.current) {
+      pendingNotificationRideId.current = null;
+      void hydrateAvailableRides(rideId);
+    }
+  }, [clearRideAlert, hydrateAvailableRides]);
+
   const setOnlineState = useCallback(async (next: boolean) => {
     const token = tokenRef.current;
     if (!token) throw new Error('Sign in is required.');
@@ -565,41 +609,41 @@ export function DriverRuntimeProvider({ children }: { children: ReactNode }) {
   }, [ready, refreshAlertReadiness, user]);
 
   useEffect(() => {
-    const subscription = Notifications.addNotificationResponseReceivedListener(response => {
-      const data = response.notification.request.content.data as {
+    if (!ready || !user || !isOnline || Platform.OS === 'web') return;
+    const rideId = pendingNotificationRideId.current;
+    if (rideId) {
+      pendingNotificationRideId.current = null;
+      void hydrateAvailableRides(rideId);
+    }
+  }, [hydrateAvailableRides, isOnline, ready, user]);
+
+  useEffect(() => {
+    const subscription = Notifications.addNotificationResponseReceivedListener(recoverNotificationRide);
+    const receivedSubscription = Notifications.addNotificationReceivedListener(notification => {
+      const data = notification.request.content.data as {
         type?: string; ride?: RideRequest & { _id?: string }; rideId?: string;
       };
-      if (data.type === 'ride:new') {
-        const rideId = String(data.rideId || data.ride?.id || data.ride?._id || '');
-        if (response.actionIdentifier === 'dismiss') {
-          if (rideId) clearRideAlert(rideId);
-        } else if (rideId) {
-          // Notification payloads can be stale after background suspension.
-          // Recheck the authoritative available-rides list before showing it.
-          void hydrateAvailableRides(rideId);
+      if (data.type === 'ride:new' && data.ride) handleRideOffer(data.ride, { fromPush: true });
+      else if (data.type === 'ride:new' && data.rideId) {
+        pendingNotificationRideId.current = String(data.rideId);
+        if (tokenRef.current && isOnlineRef.current) {
+          pendingNotificationRideId.current = null;
+          void hydrateAvailableRides(String(data.rideId));
         }
       }
     });
-    const receivedSubscription = Notifications.addNotificationReceivedListener(notification => {
-      const data = notification.request.content.data as {
-        type?: string; ride?: RideRequest & { _id?: string };
-      };
-      if (data.type === 'ride:new' && data.ride) handleRideOffer(data.ride);
-    });
     void Notifications.getLastNotificationResponseAsync().then(response => {
-      const data = response?.notification.request.content.data as {
-        type?: string; ride?: RideRequest & { _id?: string }; rideId?: string;
-      } | undefined;
-      const rideId = String(data?.rideId || data?.ride?.id || data?.ride?._id || '');
-      if (data?.type === 'ride:new' && rideId) {
-        void hydrateAvailableRides(rideId);
-      }
+      recoverNotificationRide(response);
     }).catch(() => undefined);
+    const tokenSubscription = Notifications.addPushTokenListener(({ data }) => {
+      void registerExpoToken(data);
+    });
     return () => {
       subscription.remove();
       receivedSubscription.remove();
+      tokenSubscription.remove();
     };
-  }, [clearRideAlert, handleRideOffer, hydrateAvailableRides]);
+  }, [handleRideOffer, recoverNotificationRide, registerExpoToken]);
 
   useEffect(() => {
     if (!ready || !tokenRef.current) return;
@@ -696,7 +740,7 @@ export function DriverRuntimeProvider({ children }: { children: ReactNode }) {
     await setOnlineState(false).catch(() => undefined);
     socket.current?.disconnect(); socket.current = null;
     tokenRef.current = null; sessionRef.current = null;
-    await Promise.all([TOKEN_KEY, SESSION_KEY, USER_KEY, ONLINE_KEY, ACTIVE_RIDE_KEY, LOCK_SCREEN_ACK_KEY].map(key => SecureStore.deleteItemAsync(key)));
+    await Promise.all([TOKEN_KEY, SESSION_KEY, USER_KEY, ONLINE_KEY, ACTIVE_RIDE_KEY, LOCK_SCREEN_ACK_KEY, PUSH_TOKEN_KEY].map(key => SecureStore.deleteItemAsync(key)));
     setUser(null); setPendingRide(null); setActiveRideId(null); setConnection('offline');
     setAlertReadiness(current => ({ ...current, ready: false, lockScreenConfirmed: false, foregroundServiceReady: false }));
   }, [setOnlineState]);

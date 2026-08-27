@@ -928,6 +928,7 @@ const userSchema = new mongoose.Schema({
   // disconnect must not silently make an otherwise approved driver unavailable.
   lastOnlineHeartbeat: { type: Date, default: null },
   expoPushToken:       { type: String, default: '' },
+  expoPushTokenUpdatedAt: { type: Date, default: null },
   rating:       { type: Number, default: 5.0 },
   totalRides:   { type: Number, default: 0 },
   emergencyContacts: [{
@@ -1241,6 +1242,7 @@ const DEFAULT_RIDE_BROADCAST_REQUEST_DURATION_SECONDS = 60;
 const MIN_RIDE_BROADCAST_REQUEST_DURATION_SECONDS = 30;
 const MAX_RIDE_BROADCAST_REQUEST_DURATION_SECONDS = 120;
 const PICKUP_PIN_REVEAL_DISTANCE_KM = 0.1;
+const NATIVE_RIDE_ALERT_CHANNEL_ID = 'ride-alerts-critical';
 
 async function sendExpoPush(tokens, message) {
   const recipients = [...new Set(tokens.filter(token => /^ExponentPushToken\[.+\]$|^ExpoPushToken\[.+\]$/.test(String(token || ''))))];
@@ -1257,7 +1259,14 @@ async function sendExpoPush(tokens, message) {
         response = await fetch('https://exp.host/--/api/v2/push/send', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
-          body: JSON.stringify(batch.map(to => ({ to, sound: 'default', priority: 'high', ...message })))
+           body: JSON.stringify(batch.map(to => ({
+             to,
+             sound: 'default',
+             priority: 'high',
+             ttl: 60,
+             channelId: NATIVE_RIDE_ALERT_CHANNEL_ID,
+             ...message
+           })))
         });
         responseBody = await response.json().catch(() => ({}));
         if (response.ok || response.status < 500 || attempt === 1) break;
@@ -1286,6 +1295,36 @@ async function sendExpoPush(tokens, message) {
       }
     });
     if (tickets.length < batch.length) failed += batch.length - tickets.length;
+    const receiptTokenById = new Map(
+      tickets.flatMap((ticket, index) =>
+        ticket?.status === 'ok' && ticket.id ? [[ticket.id, batch[index]]] : [])
+    );
+    const receiptIds = [...receiptTokenById.keys()];
+    if (receiptIds.length) {
+      const checkReceipts = async () => {
+        try {
+          const receiptResponse = await fetch('https://exp.host/--/api/v2/push/getReceipts', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+            body: JSON.stringify({ ids: receiptIds })
+          });
+          const receiptBody = await receiptResponse.json().catch(() => ({}));
+          for (const [receiptId, receipt] of Object.entries(receiptBody?.data || {})) {
+            if (receipt?.status === 'ok') continue;
+            const providerError = receipt?.details?.error || receipt?.message || 'unknown receipt error';
+            console.warn(`[expo-push] receipt ${receiptId} failed: ${providerError}`);
+            if (providerError === 'DeviceNotRegistered') {
+              const token = receiptTokenById.get(receiptId);
+              if (token) User.updateOne({ expoPushToken: token }, { $set: { expoPushToken: '' } }).catch(() => {});
+            }
+          }
+        } catch (err) {
+          console.warn(`[expo-push] receipt check failed: ${err.message}`);
+        }
+      };
+      const receiptTimer = setTimeout(() => void checkReceipts(), 15_000);
+      receiptTimer.unref?.();
+    }
   }
   if (failed) console.warn(`[expo-push] ride alert result: ${sent} accepted, ${failed} failed`);
   return { sent, failed };
@@ -2709,7 +2748,7 @@ app.post('/api/driver/push-token', authMiddleware, driverOnly, async (req, res) 
   if (!/^ExponentPushToken\[.+\]$|^ExpoPushToken\[.+\]$/.test(token)) {
     return res.status(422).json({ error: 'A valid Expo push token is required' });
   }
-  await User.updateOne({ _id: req.user.id }, { expoPushToken: token });
+  await User.updateOne({ _id: req.user.id }, { expoPushToken: token, expoPushTokenUpdatedAt: new Date() });
   res.json({ ok: true });
 });
 
