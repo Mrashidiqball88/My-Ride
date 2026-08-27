@@ -232,7 +232,7 @@ test.describe('live Mongo fare refresh', () => {
       const customerCamera = await customerPage.evaluate(({ pickup, dropoff }) => {
         const calls = [];
         map.getZoom = () => 17;
-        map.setView = (center, zoom) => calls.push({ center, zoom });
+        map.easeTo = camera => calls.push(camera);
         activeRide = { status: 'accepted', pickupLocation: pickup, dropoffLocation: dropoff };
         lastDriverLocation = { lat: 31.521, lng: 74.359 };
         customerTrackingFollow = true;
@@ -284,10 +284,10 @@ test.describe('live Mongo fare refresh', () => {
       expect(customerCamera.contactText).toContain('Phone Call');
       expect(customerCamera.contactText).toContain('WhatsApp');
 
-      const driverCamera = await driverPage.evaluate(({ pickup, dropoff }) => {
+      const driverCamera = await driverPage.evaluate(async ({ pickup, dropoff }) => {
         const calls = [];
         map.getZoom = () => 18;
-        map.setView = (center, zoom) => calls.push({ center, zoom });
+        map.easeTo = camera => calls.push(camera);
         activeRide = { status: 'accepted', pickupLocation: pickup, dropoffLocation: dropoff };
         driverLocation = { lat: 31.521, lng: 74.359 };
         navigationFollowing = true;
@@ -296,15 +296,13 @@ test.describe('live Mongo fare refresh', () => {
         const followingAfterZoom = navigationFollowing;
         const autoCenterAfterZoom = driverMapAutoCenter;
         focusActiveNavigation();
-        const originalPolyline = L.polyline;
-        const routeColors = [];
-        L.polyline = (_coords, options) => {
-          routeColors.push(options.color);
-          return { addTo() { return this; }, remove() {} };
-        };
+        if (!map.isStyleLoaded()) await new Promise(resolve => map.once('load', resolve));
         routeLine = null;
         drawNavigationLine([[31.521, 74.359], [31.5204, 74.3587]]);
-        L.polyline = originalPolyline;
+        const routeColors = [
+          map.getPaintProperty(DRIVER_ROUTE_IDS.shadow, 'line-color'),
+          map.getPaintProperty(DRIVER_ROUTE_IDS.line, 'line-color')
+        ];
         clearRideMap();
         return {
           focusCall: calls[0],
@@ -1075,32 +1073,45 @@ test.describe('live Mongo fare refresh', () => {
     }
   });
 
-  test('loads native no-key OpenStreetMap Driver map tiles without CSS inversion', async ({ browser }) => {
+  test('loads MapLibre vector maps without Leaflet or raster tile layers', async ({ browser }) => {
     const baseURL = `http://127.0.0.1:${httpServer.address().port}`;
     const context = await browser.newContext({
       viewport: { width: 430, height: 900 },
       deviceScaleFactor: 2
     });
+    const customerPage = await context.newPage();
     const driverPage = await context.newPage();
 
     try {
-      await openAuthenticatedClient(driverPage, baseURL, '/driver', matchingDriver, token(matchingDriver));
-      await driverPage.evaluate(() => {
-        if (!map) initMap();
-      });
-      await driverPage.waitForFunction(() =>
-        [...document.querySelectorAll('#map .leaflet-tile')].some(tile => tile.complete && tile.naturalWidth > 0)
-      );
-      const tiles = await driverPage.evaluate(() => [...document.querySelectorAll('#map .leaflet-tile')].map(tile => ({
-        src: tile.src,
-        loaded: tile.complete && tile.naturalWidth > 0
-      })));
-      const loadedOpenStreetMapTiles = tiles.filter(tile =>
-        tile.loaded && /\.tile\.openstreetmap\.org\/\d+\//.test(tile.src)
-      );
-      expect(loadedOpenStreetMapTiles.length).toBeGreaterThan(0);
-      expect(Math.max(...loadedOpenStreetMapTiles.map(tile => Number(tile.src.match(/openstreetmap\.org\/(\d+)\//)?.[1] || 0)))).toBeGreaterThanOrEqual(15);
-      await expect(driverPage.locator('#map .leaflet-tile-pane')).toHaveCSS('filter', 'none');
+      await Promise.all([
+        openAuthenticatedClient(customerPage, baseURL, '/customer', customer, token(customer)),
+        openAuthenticatedClient(driverPage, baseURL, '/driver', matchingDriver, token(matchingDriver))
+      ]);
+      await Promise.all([
+        customerPage.evaluate(() => { if (!map) initMap(); }),
+        driverPage.evaluate(() => { if (!map) initMap(); })
+      ]);
+      await Promise.all([
+        customerPage.waitForFunction(() => map?.isStyleLoaded() === true),
+        driverPage.waitForFunction(() => map?.isStyleLoaded() === true)
+      ]);
+
+      const mapDetails = await Promise.all([customerPage, driverPage].map(page =>
+        page.evaluate(() => ({
+          styleUrl: MAP_STYLE_URL,
+          vectorSources: Object.values(map.getStyle()?.sources || {})
+            .filter(source => source.type === 'vector')
+            .map(source => source.url || source.tiles?.[0] || ''),
+          canvas: Boolean(document.querySelector('#map .maplibregl-canvas')),
+          leafletNodes: document.querySelectorAll('#map [class*="leaflet"]').length
+        }))
+      ));
+      for (const details of mapDetails) {
+        expect(details.styleUrl).toBe('https://demotiles.maplibre.org/style.json');
+        expect(details.vectorSources.length).toBeGreaterThan(0);
+        expect(details.canvas).toBe(true);
+        expect(details.leafletNodes).toBe(0);
+      }
     } finally {
       await context.close();
     }

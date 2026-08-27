@@ -3464,7 +3464,7 @@ app.post('/api/sos', authMiddleware, async (req, res) => {
 
 app.get('/api/geocode', async (req, res) => {
   const q = (req.query.q || '').trim();
-  if (!q || q.length < 2) return res.json([]);
+  if (!q || q.length < 1) return res.json([]);
 
   try {
     const key = process.env.LOCATIONIQ_KEY;
@@ -3475,13 +3475,13 @@ app.get('/api/geocode', async (req, res) => {
       url = `https://us1.locationiq.com/v1/search` +
             `?key=${encodeURIComponent(key)}` +
             `&q=${encodeURIComponent(q)}` +
-            `&format=json&limit=8` +
+            `&format=json&limit=20` +
             `&addressdetails=1&normalizeaddress=1&dedupe=1&namedetails=1`;
     } else {
       // Enhanced Nominatim fallback (OSM data)
       url = `https://nominatim.openstreetmap.org/search` +
-            `?q=${encodeURIComponent(q)}` +
-            `&format=json&limit=8` +
+             `?q=${encodeURIComponent(q)}` +
+             `&format=json&limit=20` +
             `&addressdetails=1&dedupe=1&namedetails=1`;
       headers = {
         'User-Agent': 'MyRide-App/1.0 (ride-hailing)',

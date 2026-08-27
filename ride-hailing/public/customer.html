@@ -13,8 +13,8 @@
 <link rel="apple-touch-icon" href="/logo-customer.svg">
 <link rel="icon" type="image/svg+xml" href="/logo-customer.svg">
 <title>My Ride</title>
-<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
-<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<link rel="stylesheet" href="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.css"/>
+<script src="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.js"></script>
 <script src="/socket.io/socket.io.js"></script>
 <style>
 *{margin:0;padding:0;box-sizing:border-box;-webkit-tap-highlight-color:transparent}
@@ -129,7 +129,7 @@ body{font-family:'Segoe UI',sans-serif;background:#0a0a0f;color:#fff;height:100d
 .sheet-close{width:32px;height:32px;border:1px solid #343448;background:#1e1e2e;color:#bbb;border-radius:50%;font-size:.9rem;cursor:pointer}
 .sheet-list{min-height:0;flex:1;overflow-y:auto;overscroll-behavior:contain;-webkit-overflow-scrolling:touch;padding:.35rem .7rem 1.2rem;touch-action:pan-y}
 .sheet-item{display:flex;align-items:center;gap:.7rem;width:100%;border:0;border-bottom:1px solid #242436;background:transparent;color:#fff;text-align:left;padding:.78rem .45rem;cursor:pointer;min-height:58px}
-.sheet-item:last-child{border-bottom:0}.sheet-item:active,.sheet-item:focus-visible{background:#22223a;outline:none}.sheet-item-icon{width:30px;text-align:center;font-size:1.15rem}.sheet-item-copy{min-width:0}.sheet-item-primary{font-size:.86rem;color:#eee;font-weight:650;line-height:1.3}.sheet-item-secondary{font-size:.7rem;color:#777;margin-top:.15rem;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.sheet-item.my-location{background:#142333;border:1px solid #22547b;border-radius:11px;margin:.3rem 0 .45rem;padding:.72rem .45rem}.sheet-empty{padding:1rem .5rem;text-align:center;color:#777;font-size:.8rem}
+.sheet-item:last-child{border-bottom:0}.sheet-item:active,.sheet-item:focus-visible{background:#22223a;outline:none}.sheet-item-icon{width:30px;text-align:center;font-size:1.15rem}.sheet-item-copy{min-width:0}.sheet-item-primary{font-size:.86rem;color:#eee;font-weight:650;line-height:1.3}.sheet-item-secondary{font-size:.7rem;color:#777;margin-top:.15rem;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.sheet-item.my-location{background:#142333;border:1px solid #22547b;border-radius:11px;margin:.3rem 0 .45rem;padding:.72rem .45rem}.sheet-section-label{padding:.55rem .45rem .25rem;color:#f5c518;font-size:.62rem;font-weight:800;letter-spacing:.08em;text-transform:uppercase}.sheet-empty{padding:1rem .5rem;text-align:center;color:#777;font-size:.8rem}
 
 .divider-line{display:flex;align-items:center;gap:.5rem;margin:.25rem 0;color:#444;font-size:.7rem}
 .divider-line::before,.divider-line::after{content:'';flex:1;height:1px;background:#222}
@@ -292,11 +292,14 @@ body{font-family:'Segoe UI',sans-serif;background:#0a0a0f;color:#fff;height:100d
 .btn-modal-confirm{flex:2;border:none;border-radius:10px;padding:.7rem;font-size:.9rem;font-weight:700;cursor:pointer;transition:opacity .2s}
 .btn-modal-confirm:hover{opacity:.9}
 
-/* ── Leaflet ── */
-.leaflet-container{background:#1a1a2a}
+/* ── MapLibre markers and controls ── */
+.maplibregl-map{background:#1a1a2a}
 .pickup-marker{background:#2266cc;border:3px solid #fff;width:18px;height:18px;border-radius:50%;box-shadow:0 0 8px rgba(34,102,204,.8)}
 .dropoff-marker{background:#cc6622;border:3px solid #fff;width:18px;height:18px;border-radius:50%;box-shadow:0 0 8px rgba(204,102,34,.8)}
 .driver-marker{font-size:24px;line-height:1}
+.customer-location-marker{background:#2d8cff;border:2px solid #fff;width:16px;height:16px;border-radius:50%;box-shadow:0 0 8px rgba(45,140,255,.8)}
+.map-marker-shell{display:flex;align-items:center;justify-content:center;pointer-events:auto}
+.map-marker-shell[aria-hidden="true"]{pointer-events:none}
 /* ── ETA Bar ── */
 .eta-bar{display:flex;align-items:center;gap:.5rem;background:#0a1a0a;border:1px solid #2d5a2d;border-radius:10px;padding:.5rem .75rem;margin:.45rem 0;font-size:.82rem;color:#a5d6a7}
 .eta-icon{font-size:1rem;flex-shrink:0}
@@ -313,10 +316,11 @@ body{font-family:'Segoe UI',sans-serif;background:#0a0a0f;color:#fff;height:100d
 }
 #app{position:relative;display:none;background:var(--lr-paper);color:var(--lr-ink);overflow:hidden}
 #map{position:absolute;inset:0;width:100%;height:100%;z-index:1;filter:none;background:#d8ddd9}
-.leaflet-container{background:#d8ddd9}
-.leaflet-control-attribution{font-size:9px;line-height:1.1;padding:2px 4px!important;background:rgba(246,241,233,.78)!important;box-shadow:none!important}
-.leaflet-control-zoom{margin-top:5.6rem!important;margin-right:1rem!important;border:0!important;box-shadow:0 8px 20px rgba(16,35,55,.12)!important}
-.leaflet-control-zoom a{background:rgba(246,241,233,.94)!important;color:var(--lr-ink)!important;border:0!important}
+.maplibregl-map{background:#d8ddd9}
+.maplibregl-ctrl-top-right{margin-top:5.6rem;margin-right:1rem}
+.maplibregl-ctrl-group{border:0!important;box-shadow:0 8px 20px rgba(16,35,55,.12)!important;background:rgba(246,241,233,.94)!important}
+.maplibregl-ctrl-group button{background:transparent!important;color:var(--lr-ink)!important}
+.maplibregl-ctrl-attrib{font-size:9px;line-height:1.1;padding:2px 4px!important;background:rgba(246,241,233,.78)!important;box-shadow:none!important}
 .header{position:absolute;top:0;left:0;right:0;height:72px;padding:1rem clamp(1rem,4vw,3rem);background:linear-gradient(180deg,rgba(246,241,233,.98),rgba(246,241,233,.84),transparent);border:0;z-index:60;color:var(--lr-ink)}
 .header-logo{font-family:Georgia,serif;font-size:1.25rem;letter-spacing:-.03em;color:var(--lr-ink)}
 .header-logo span{color:var(--lr-ink)}
@@ -897,16 +901,16 @@ body{font-family:'Segoe UI',sans-serif;background:#0a0a0f;color:#fff;height:100d
 <script>
 // ── Constants ─────────────────────────────────────────────────────────────
 const API = '';
-const TILE_URL   = 'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png';
-const TILE_OPTS  = {
-  attribution : '© <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
-  maxNativeZoom: 19,
-  maxZoom      : 20,
-  subdomains   : 'abc',
-  detectRetina : false,
-  updateWhenIdle: true,
-  keepBuffer   : 1,
-  crossOrigin  : true
+const MAP_STYLE_URL = 'https://demotiles.maplibre.org/style.json';
+const CUSTOMER_ROUTE_IDS = {
+  source: 'customer-route-source',
+  shadow: 'customer-route-shadow',
+  line: 'customer-route-line'
+};
+const CUSTOMER_LIVE_ROUTE_IDS = {
+  source: 'customer-live-route-source',
+  shadow: 'customer-live-route-shadow',
+  line: 'customer-live-route-line'
 };
 
 // ── State ─────────────────────────────────────────────────────────────────
@@ -973,7 +977,7 @@ function setBookingSheetExpanded(expanded) {
   document.getElementById('booking-sheet-handle')?.setAttribute(
     'aria-label', expanded ? 'Collapse ride options' : 'Expand ride options'
   );
-  if (expanded) setTimeout(() => map?.invalidateSize(), 240);
+  if (expanded) setTimeout(() => map?.resize(), 240);
 }
 
 function toggleBookingSheet() {
@@ -1032,24 +1036,65 @@ document.getElementById('booking-sheet-handle')?.addEventListener('pointercancel
 });
 
 const LOCAL_LOCATION_AREAS = [
-  ['Salamatpura', 'Lahore', 31.5967, 74.3701],
-  ['Sabzazar', 'Lahore', 31.4941, 74.2775],
-  ['Samanabad', 'Lahore', 31.5337, 74.2865],
-  ['Shadbagh', 'Lahore', 31.5885, 74.3432],
-  ['Shahdara', 'Lahore', 31.6200, 74.2875],
-  ['Tajpura', 'Lahore', 31.5701, 74.3868],
-  ['Township', 'Lahore', 31.4580, 74.3040],
-  ['Tufailabad', 'Lahore', 31.5535, 74.3195],
-  ['Thokar Niaz Baig', 'Lahore', 31.4300, 74.2510],
-  ['Model Town', 'Lahore', 31.4800, 74.3250],
-  ['Gulberg', 'Lahore', 31.5100, 74.3500],
-  ['DHA Phase 5', 'Lahore', 31.4697, 74.4087],
-  ['Johar Town', 'Lahore', 31.4697, 74.2728],
-  ['Wapda Town', 'Lahore', 31.4437, 74.2764],
-  ['Valencia Town', 'Lahore', 31.4147, 74.2518],
-  ['Iqbal Town', 'Lahore', 31.5095, 74.2840],
-  ['Garden Town', 'Lahore', 31.4920, 74.3210],
-  ['Faisal Town', 'Lahore', 31.4865, 74.3005]
+  // Lahore instant index — common neighbourhoods, roads, markets, and landmarks.
+  ['Gulberg', 'Lahore', 31.5100, 74.3500, 'Area'],
+  ['Gulberg Main Boulevard', 'Lahore', 31.5152, 74.3547, 'Street'],
+  ['Gulberg III', 'Lahore', 31.5140, 74.3520, 'Area'],
+  ['Garden Town', 'Lahore', 31.4920, 74.3210, 'Area'],
+  ['Garden Town Main Boulevard', 'Lahore', 31.4910, 74.3190, 'Street'],
+  ['Green Town', 'Lahore', 31.4495, 74.2975, 'Area'],
+  ['Gulshan-e-Ravi', 'Lahore', 31.5067, 74.2828, 'Area'],
+  ['Garhi Shahu', 'Lahore', 31.5684, 74.3430, 'Area'],
+  ['Guru Mangat Road', 'Lahore', 31.5293, 74.3547, 'Street'],
+  ['Grand Trunk Road', 'Lahore', 31.5900, 74.3450, 'Street'],
+  ['Salamatpura', 'Lahore', 31.5967, 74.3701, 'Area'],
+  ['Sabzazar', 'Lahore', 31.4941, 74.2775, 'Area'],
+  ['Samanabad', 'Lahore', 31.5337, 74.2865, 'Area'],
+  ['Shadbagh', 'Lahore', 31.5885, 74.3432, 'Area'],
+  ['Shahdara', 'Lahore', 31.6200, 74.2875, 'Area'],
+  ['Tajpura', 'Lahore', 31.5701, 74.3868, 'Area'],
+  ['Township', 'Lahore', 31.4580, 74.3040, 'Area'],
+  ['Tufailabad', 'Lahore', 31.5535, 74.3195, 'Area'],
+  ['Thokar Niaz Baig', 'Lahore', 31.4300, 74.2510, 'Area'],
+  ['Model Town', 'Lahore', 31.4800, 74.3250, 'Area'],
+  ['Model Town Link Road', 'Lahore', 31.4826, 74.3268, 'Street'],
+  ['DHA Phase 5', 'Lahore', 31.4697, 74.4087, 'Area'],
+  ['DHA Phase 6', 'Lahore', 31.4628, 74.4120, 'Area'],
+  ['DHA Phase 8', 'Lahore', 31.4424, 74.4014, 'Area'],
+  ['Johar Town', 'Lahore', 31.4697, 74.2728, 'Area'],
+  ['Expo Center Lahore', 'Lahore', 31.4670, 74.2650, 'Landmark'],
+  ['Wapda Town', 'Lahore', 31.4437, 74.2764, 'Area'],
+  ['Valencia Town', 'Lahore', 31.4147, 74.2518, 'Area'],
+  ['Iqbal Town', 'Lahore', 31.5095, 74.2840, 'Area'],
+  ['Allama Iqbal Town', 'Lahore', 31.5095, 74.2840, 'Area'],
+  ['Faisal Town', 'Lahore', 31.4865, 74.3005, 'Area'],
+  ['Ferozepur Road', 'Lahore', 31.4930, 74.3280, 'Street'],
+  ['Canal Road Lahore', 'Lahore', 31.4970, 74.3650, 'Street'],
+  ['Jail Road Lahore', 'Lahore', 31.5410, 74.3470, 'Street'],
+  ['Mall Road Lahore', 'Lahore', 31.5620, 74.3260, 'Street'],
+  ['Raiwind Road', 'Lahore', 31.4010, 74.2480, 'Street'],
+  ['Lahore Ring Road', 'Lahore', 31.4900, 74.2200, 'Street'],
+  ['Liberty Market', 'Lahore', 31.5116, 74.3448, 'Landmark'],
+  ['Anarkali Bazaar', 'Lahore', 31.5655, 74.3135, 'Landmark'],
+  ['Ichhra', 'Lahore', 31.5290, 74.3220, 'Area'],
+  ['Shadman', 'Lahore', 31.5470, 74.3340, 'Area'],
+  ['Muslim Town', 'Lahore', 31.5100, 74.3310, 'Area'],
+  ['Harbanspura', 'Lahore', 31.5830, 74.3950, 'Area'],
+  ['LDA Avenue', 'Lahore', 31.4350, 74.2810, 'Area'],
+  ['Bahria Town Lahore', 'Lahore', 31.3680, 74.1880, 'Area'],
+  // Broader instant index — intentionally rendered below Lahore matches.
+  ['Gujranwala', 'Gujranwala', 32.1877, 74.1945, 'City'],
+  ['Satellite Town', 'Gujranwala', 32.1710, 74.1900, 'Area'],
+  ['Model Town', 'Gujranwala', 32.1770, 74.1900, 'Area'],
+  ['GT Road', 'Gujranwala', 32.1900, 74.1800, 'Street'],
+  ['Gujrat', 'Gujrat', 32.5731, 74.0780, 'City'],
+  ['Model Town', 'Gujrat', 32.5750, 74.0800, 'Area'],
+  ['Jalalpur Jattan Road', 'Gujrat', 32.5900, 74.0850, 'Street'],
+  ['Islamabad', 'Islamabad Capital Territory', 33.6844, 73.0479, 'City'],
+  ['Blue Area', 'Islamabad', 33.7077, 73.0500, 'Area'],
+  ['F-7 Markaz', 'Islamabad', 33.7215, 73.0565, 'Area'],
+  ['Karachi', 'Sindh', 24.8607, 67.0011, 'City'],
+  ['Clifton', 'Karachi', 24.8138, 67.0300, 'Area']
 ];
 
 // ── Toast ─────────────────────────────────────────────────────────────────
@@ -1393,7 +1438,7 @@ function bootApp() {
   checkUnreadCustTickets();  // badge for unread admin replies
   loadCustomerTerms();
   // Double rAF ensures the browser has fully painted the flex layout before
-  // Leaflet measures #map — fixes the 0×0 container race condition.
+  // MapLibre measures #map — fixes the 0×0 container race condition.
   requestAnimationFrame(() => requestAnimationFrame(() => {
     initMap();
   }));
@@ -1425,21 +1470,110 @@ async function loadCustomerPerKmRates() {
 }
 
 // ── Map ───────────────────────────────────────────────────────────────────
+function createCustomerDomMarker(lat, lng, { className = '', html = '', interactive = true } = {}) {
+  const element = document.createElement('div');
+  element.className = `map-marker-shell ${className}`.trim();
+  element.innerHTML = html;
+  element.style.pointerEvents = interactive ? 'auto' : 'none';
+  return new maplibregl.Marker({ element, anchor: 'center' })
+    .setLngLat([Number(lng), Number(lat)])
+    .addTo(map);
+}
+
+function setCustomerMapCenter(point, zoom, { animate = false, duration = .45 } = {}) {
+  const camera = { center: [Number(point.lng), Number(point.lat)], zoom: Number(zoom) };
+  if (animate) map.easeTo({ ...camera, duration: duration * 1000 });
+  else map.jumpTo(camera);
+}
+
+function routeFeature(coords) {
+  return {
+    type: 'Feature',
+    properties: {},
+    geometry: {
+      type: 'LineString',
+      coordinates: coords.map(([lat, lng]) => [Number(lng), Number(lat)])
+    }
+  };
+}
+
+function removeCustomerMapLine(ids) {
+  if (!map) return;
+  if (map.getLayer(ids.line)) map.removeLayer(ids.line);
+  if (map.getLayer(ids.shadow)) map.removeLayer(ids.shadow);
+  if (map.getSource(ids.source)) map.removeSource(ids.source);
+}
+
+function removeCustomerRouteLine() {
+  removeCustomerMapLine(CUSTOMER_ROUTE_IDS);
+  routeLine = null;
+}
+
+function removeCustomerLiveTripLine() {
+  removeCustomerMapLine(CUSTOMER_LIVE_ROUTE_IDS);
+  liveTripLine = null;
+}
+
+function setCustomerMapLine(ids, coords, { color, shadowColor, width, shadowWidth, opacity, dashed = false } = {}) {
+  if (!map || !coords?.length) return;
+  const apply = () => {
+    if (!map.getSource(ids.source)) {
+      map.addSource(ids.source, { type: 'geojson', data: routeFeature(coords) });
+      map.addLayer({
+        id: ids.shadow,
+        type: 'line',
+        source: ids.source,
+        layout: { 'line-cap': 'round', 'line-join': 'round' },
+        paint: { 'line-color': shadowColor, 'line-width': shadowWidth, 'line-opacity': opacity * .28 }
+      });
+      map.addLayer({
+        id: ids.line,
+        type: 'line',
+        source: ids.source,
+        layout: {
+          'line-cap': 'round',
+          'line-join': 'round',
+          ...(dashed ? { 'line-dasharray': [2, 2.5] } : {})
+        },
+        paint: { 'line-color': color, 'line-width': width, 'line-opacity': opacity }
+      });
+    } else {
+      map.getSource(ids.source).setData(routeFeature(coords));
+    }
+  };
+  if (map.isStyleLoaded()) apply();
+  else map.once('load', apply);
+}
+
+function fitCustomerMapToCoords(coords, padding = 50) {
+  if (!map || !coords?.length) return;
+  const bounds = new maplibregl.LngLatBounds();
+  coords.forEach(([lat, lng]) => bounds.extend([Number(lng), Number(lat)]));
+  if (!bounds.isEmpty()) map.fitBounds(bounds, { padding, maxZoom: 16, duration: 450 });
+}
+
 function initMap() {
   if (map) return;
-  map = L.map('map', { zoomControl: false, preferCanvas: true }).setView([31.5204, 74.3587], 15);
-  L.tileLayer(TILE_URL, TILE_OPTS).addTo(map);
-  L.control.zoom({ position: 'topright' }).addTo(map);
+  map = new maplibregl.Map({
+    container: 'map',
+    style: MAP_STYLE_URL,
+    center: [74.3587, 31.5204],
+    zoom: 15,
+    maxZoom: 20,
+    attributionControl: true,
+    dragRotate: false,
+    touchPitch: false
+  });
+  map.addControl(new maplibregl.NavigationControl({ showCompass: false }), 'top-right');
 
-  // Repaint once after Leaflet has a real container size. Avoid a cascade of
-  // invalidations that reloads tiles on slower phones.
-  requestAnimationFrame(() => map.invalidateSize());
+  // MapLibre observes its container, so one resize after flex layout is enough.
+  requestAnimationFrame(() => map?.resize());
   let resizeFrame = null;
   window.addEventListener('resize', () => {
     if (resizeFrame) return;
     resizeFrame = requestAnimationFrame(() => {
       resizeFrame = null;
-      map?.invalidateSize({ pan: false });
+      map?.resize();
     });
   });
   map.on('dragstart', () => {
@@ -1452,7 +1586,7 @@ function initMap() {
   });
 
   map.on('click', (e) => {
-    const { lat, lng } = e.latlng;
+    const { lat, lng } = e.lngLat;
     if (mapMode === 'pickup') {
       setPickup(lat, lng);
     } else if (mapMode.startsWith('stop-')) {
@@ -1476,16 +1610,17 @@ function applyCustomerGpsPosition(pos, { forceCenter = false } = {}) {
   customerGpsHasFix = true;
   customerLocation = { lat, lng };
 
-  if (customerLocationMarker) customerLocationMarker.setLatLng([lat, lng]);
+  if (customerLocationMarker) customerLocationMarker.setLngLat([lng, lat]);
   else {
-    customerLocationMarker = L.circleMarker([lat, lng], {
-      radius: 7, color: '#fff', weight: 2, fillColor: '#2d8cff', fillOpacity: .95
-    }).addTo(map);
+    customerLocationMarker = createCustomerDomMarker(lat, lng, {
+      className: 'customer-location-marker',
+      interactive: false
+    });
   }
 
   if (forceCenter || (customerMapAutoCenter && !pickup && isFirstFix)) {
     const zoom = Math.max(15, map.getZoom());
-    map.setView([lat, lng], zoom, { animate: false });
+    setCustomerMapCenter({ lat, lng }, zoom);
   }
   return true;
 }
@@ -1517,15 +1652,10 @@ async function pollNearbyDrivers() {
     if (activeRide) return; // double-check: ride may have started while request was in flight
     nearby.forEach(d => {
       const icon = _vehicleIcons[d.vehicleType] || '🚗';
-      const marker = L.marker([d.lat, d.lng], {
-        icon: L.divIcon({
-          className: '',
-          html: `<div style="font-size:18px;line-height:1;filter:drop-shadow(0 1px 3px rgba(0,0,0,.7))">${icon}</div>`,
-          iconSize: [24, 24], iconAnchor: [12, 12]
-        }),
-        interactive: false,
-        zIndexOffset: -100
-      }).addTo(map);
+      const marker = createCustomerDomMarker(d.lat, d.lng, {
+        html: `<div style="font-size:18px;line-height:1;filter:drop-shadow(0 1px 3px rgba(0,0,0,.7))">${icon}</div>`,
+        interactive: false
+      });
       nearbyDriversLayer.push(marker);
     });
   } catch (e) { /* silent — nearby drivers are cosmetic only */ }
@@ -1542,23 +1672,17 @@ function stopNearbyDrivers() {
   nearbyDriversLayer = [];
 }
 
-function createCircleIcon(cls) {
-  return L.divIcon({ className: cls, iconSize: [18, 18], iconAnchor: [9, 9] });
-}
-
-async function reverseGeocode(lat, lng) {
-  try {
-    const r = await fetch(`https://nominatim.openstreetmap.org/reverse?lat=${lat}&lon=${lng}&format=json`);
-    const d = await r.json();
-    return d.display_name ? d.display_name.split(',').slice(0, 2).join(',').trim() : `${lat.toFixed(4)}, ${lng.toFixed(4)}`;
-  } catch { return `${lat.toFixed(4)}, ${lng.toFixed(4)}`; }
+function formatCoordinateLabel(lat, lng) {
+  return `${Number(lat).toFixed(4)}, ${Number(lng).toFixed(4)}`;
 }
 
 // ── Location Autocomplete ─────────────────────────────────────────────────
 async function searchPlaces(query) {
   try {
     const r = await fetch(`/api/geocode?q=${encodeURIComponent(query)}`);
-    return await r.json();
+    if (!r.ok) return [];
+    const data = await r.json();
+    return Array.isArray(data) ? data : [];
   } catch { return []; }
 }
 
@@ -1579,7 +1703,15 @@ function buildLabel(item) {
   const parts = (item.display_name || '').split(',').map(p => p.trim());
   const skip  = new Set([primary, 'Pakistan']);
   const ctx   = parts.filter(p => p && !skip.has(p)).slice(0, 3).join(', ');
-  return { primary, secondary: ctx };
+  const city = a.city || a.town || a.municipality || a.county || '';
+  const kind = item.type === 'road' || item.class === 'highway'
+    ? 'Street'
+    : item.type === 'city' || item.type === 'town'
+      ? 'City'
+      : item.type === 'suburb' || item.type === 'neighbourhood'
+        ? 'Area'
+        : '';
+  return { primary, secondary: ctx, city, kind };
 }
 
 function escapeLocationText(value) {
@@ -1593,13 +1725,19 @@ function localLocationResults(query) {
   if (!needle) return [];
   const center = pickup || (map ? map.getCenter() : null);
   return LOCAL_LOCATION_AREAS
-    .map(([name, secondary, lat, lon]) => {
-      const normalizedName = name.toLocaleLowerCase();
-      const relevance = normalizedName.startsWith(needle) ? 0 : normalizedName.includes(needle) ? 1 : 2;
+    .map(([name, city, lat, lon, kind]) => {
+      const searchable = `${name} ${city}`.toLocaleLowerCase();
+      const relevance = searchable.startsWith(needle)
+        ? 0
+        : name.toLocaleLowerCase().startsWith(needle)
+          ? 1
+          : searchable.includes(needle) ? 2 : 3;
       const distance = center ? haversine(center.lat, center.lng, lat, lon) : Number.POSITIVE_INFINITY;
       return {
         primary: name,
-        secondary,
+        secondary: city,
+        city,
+        kind,
         lat,
         lon,
         local: true,
@@ -1607,9 +1745,88 @@ function localLocationResults(query) {
         distance
       };
     })
-    .filter(item => item.relevance < 2)
+    .filter(item => item.relevance < 3)
     .sort((a, b) => a.relevance - b.relevance || a.distance - b.distance)
     .map(({ relevance, distance, ...item }) => item);
+}
+
+function normalizeLocationResult(item, local = false) {
+  const label = item.primary ? item : buildLabel(item);
+  const lat = Number(item.lat);
+  const lon = Number(item.lon ?? item.lng);
+  if (!Number.isFinite(lat) || !Number.isFinite(lon)) return null;
+  const city = label.city || item.address?.city || item.address?.town
+    || item.address?.municipality || item.address?.county || '';
+  return {
+    ...item,
+    ...label,
+    lat,
+    lon,
+    city,
+    local: local || Boolean(item.local)
+  };
+}
+
+function locationSearchText(item) {
+  return [
+    item.primary,
+    item.secondary,
+    item.city,
+    item.display_name,
+    item.address?.road,
+    item.address?.suburb,
+    item.address?.neighbourhood,
+    item.address?.city,
+    item.address?.town
+  ].filter(Boolean).join(' ').toLocaleLowerCase();
+}
+
+function locationRelevance(item, needle) {
+  const primary = String(item.primary || '').toLocaleLowerCase();
+  const secondary = String(item.secondary || '').toLocaleLowerCase();
+  if (primary === needle) return 0;
+  if (primary.startsWith(needle)) return 1;
+  if (primary.includes(needle)) return 2;
+  if (secondary.includes(needle) || locationSearchText(item).includes(needle)) return 3;
+  return 4;
+}
+
+function isLahoreLocation(item) {
+  return /\blahore\b/i.test(`${item.city || ''} ${item.secondary || ''} ${item.display_name || ''}`);
+}
+
+function rankLocationResults(results, query) {
+  const needle = query.trim().toLocaleLowerCase();
+  const center = pickup || (map ? map.getCenter() : null);
+  return results
+    .map(item => normalizeLocationResult(item, item.local))
+    .filter(Boolean)
+    .map(item => ({
+      ...item,
+      relevance: locationRelevance(item, needle),
+      cityPriority: isLahoreLocation(item) ? 0 : 1,
+      distance: center ? haversine(center.lat, center.lng, item.lat, item.lon) : Number.POSITIVE_INFINITY
+    }))
+    .filter(item => item.relevance < 4)
+    .sort((a, b) =>
+      a.cityPriority - b.cityPriority
+      || a.relevance - b.relevance
+      || a.distance - b.distance
+      || String(a.primary).localeCompare(String(b.primary))
+    )
+    .map(({ relevance, cityPriority, distance, ...item }) => item);
+}
+
+function mergeLocationResults(local, remote, query) {
+  const candidates = [...local, ...(remote || []).map(item => normalizeLocationResult(item)).filter(Boolean)];
+  const seen = new Set();
+  const unique = candidates.filter(item => {
+    const key = `${String(item.primary).toLocaleLowerCase()}|${item.lat.toFixed(5)}|${item.lon.toFixed(5)}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+  return rankLocationResults(unique, query);
 }
 
 function openLocationSheet(type) {
@@ -1672,10 +1889,19 @@ function renderLocationSheet(type, results, query = '') {
       <span class="sheet-item-primary">Pin-Point / My Location</span>
       <span class="sheet-item-secondary">Use your phone GPS for the pickup point</span></span></button>`;
   }
-  locationSheetResults = (results || []).slice(0, 12);
+  locationSheetResults = rankLocationResults(results || [], query).slice(0, 24);
+  let previousGroup = '';
   markup += locationSheetResults.map((item, index) => {
-    const { primary, secondary } = item.primary ? item : buildLabel(item);
-    return `<button type="button" class="sheet-item" data-location-index="${index}">
+    const primary = item.primary;
+    const secondary = [item.kind, item.secondary].filter(Boolean).join(' · ');
+    const group = isLahoreLocation(item)
+      ? 'Lahore'
+      : item.city || (item.secondary || '').split(',')[0] || 'Other locations';
+    const groupHeading = group !== previousGroup
+      ? `<div class="sheet-section-label">${escapeLocationText(group)}</div>`
+      : '';
+    previousGroup = group;
+    return `${groupHeading}<button type="button" class="sheet-item" data-location-index="${index}">
       <span class="sheet-item-icon">${isPickup ? '📍' : '🎯'}</span><span class="sheet-item-copy">
       <span class="sheet-item-primary">${escapeLocationText(primary)}</span>
       ${secondary ? `<span class="sheet-item-secondary">${escapeLocationText(secondary)}</span>` : ''}</span></button>`;
@@ -1769,24 +1995,16 @@ function onLocInput(type) {
   const query = input.value.trim();
   clearTimeout(locTimer[type]);
   const local = localLocationResults(query);
-  renderLocationSheet(type, local, query);
+  renderLocationSheet(type, rankLocationResults(local, query), query);
   const requestId = (locSearchSeq[type] || 0) + 1;
   locSearchSeq[type] = requestId;
-  if (query.length < 2) return;
+  if (!query) return;
   locTimer[type] = setTimeout(async () => {
     const remote = await searchPlaces(query);
     if (locSearchSeq[type] !== requestId) return;
-    const seen = new Set(local.map(item => `${item.primary}|${item.lat}`));
-    const merged = [...local, ...remote.map(item => {
-      const label = buildLabel(item);
-      return { ...item, ...label };
-    }).filter(item => {
-      const key = `${item.primary}|${item.lat}`;
-      if (seen.has(key)) return false;
-      seen.add(key); return true;
-    })];
+    const merged = mergeLocationResults(local, remote, query);
     renderLocationSheet(type, merged, query);
-  }, 260);
+  }, 140);
 }
 
 function onLocFocus(type) {
@@ -1802,11 +2020,11 @@ function onLocBlur() {
 async function setPickup(lat, lng, preDisplay = null) {
   pickup = { lat, lng };
   if (pickupMarker) pickupMarker.remove();
-  pickupMarker = L.marker([lat, lng], { icon: createCircleIcon('pickup-marker') }).addTo(map);
+  pickupMarker = createCustomerDomMarker(lat, lng, { className: 'pickup-marker' });
   closeDropdown('pickup');
   document.getElementById('pickup-input').value = preDisplay || 'Locating…';
   document.getElementById('pickup-input').classList.add('has-val');
-  const addr = preDisplay || await reverseGeocode(lat, lng);
+  const addr = preDisplay || formatCoordinateLabel(lat, lng);
   pickup.address = addr;
   document.getElementById('pickup-input').value = addr;
   updateClearBtn('pickup');
@@ -1823,7 +2041,7 @@ async function setPickup(lat, lng, preDisplay = null) {
     routeDistanceKm = distKm;
     updateFare();
   } else {
-    map.setView([lat, lng], 14);
+    setCustomerMapCenter({ lat, lng }, 14);
   }
   return true;
 }
@@ -1832,13 +2050,13 @@ async function setPickup(lat, lng, preDisplay = null) {
 async function setStop(idx, lat, lng, preDisplay = null) {
   dropoffs[idx] = { lat, lng };
   if (stopMarkers[idx]) stopMarkers[idx].remove();
-  stopMarkers[idx] = L.marker([lat, lng], {
-    icon: createCircleIcon(idx === 0 ? 'dropoff-marker' : 'dropoff-marker stop-extra-marker')
-  }).addTo(map);
+  stopMarkers[idx] = createCustomerDomMarker(lat, lng, {
+    className: idx === 0 ? 'dropoff-marker' : 'dropoff-marker stop-extra-marker'
+  });
   closeDropdown(`stop-${idx}`);
   document.getElementById(`stop-${idx}-input`).value = preDisplay || 'Locating…';
   document.getElementById(`stop-${idx}-input`).classList.add('has-val');
-  const addr = preDisplay || await reverseGeocode(lat, lng);
+  const addr = preDisplay || formatCoordinateLabel(lat, lng);
   dropoffs[idx].address = addr;
   document.getElementById(`stop-${idx}-input`).value = addr;
   updateClearBtn(`stop-${idx}`);
@@ -1852,7 +2070,7 @@ async function setStop(idx, lat, lng, preDisplay = null) {
     routeDistanceKm = distKm;
     updateFare();
   } else {
-    map.setView([lat, lng], 14);
+    setCustomerMapCenter({ lat, lng }, 14);
   }
   return true;
 }
@@ -1910,7 +2128,7 @@ function clearLocation(type) {
   updateBookingSheetSummary();
 
   // Clear route and reset fare whenever any location is removed
-  if (routeLine) { (Array.isArray(routeLine) ? routeLine : [routeLine]).forEach(l => l.remove()); routeLine = null; }
+  removeCustomerRouteLine();
   routeDistanceKm = null;
   document.getElementById('fare-row').style.display  = 'none';
   document.getElementById('book-btn').style.display  = 'none';
@@ -1922,7 +2140,7 @@ function clearLocation(type) {
 }
 
 async function drawRoute() {
-  if (routeLine) { if (Array.isArray(routeLine)) routeLine.forEach(l => l.remove()); else routeLine.remove(); routeLine = null; }
+  removeCustomerRouteLine();
 
   // Build ordered waypoints: pickup + all non-null stops (in order)
   const activeDropoffs = dropoffs.slice(0, activeStops).filter(d => d !== null);
@@ -1931,10 +2149,11 @@ async function drawRoute() {
 
   try {
     const route = await requestRoadRoute(waypoints);
-    const shadow = L.polyline(route.coords, { color: '#000', weight: 8, opacity: .25, lineCap: 'round', lineJoin: 'round' }).addTo(map);
-    const line = L.polyline(route.coords, { color: '#f26a4f', weight: 5, opacity: 1, lineCap: 'round', lineJoin: 'round' }).addTo(map);
-    routeLine = [shadow, line];
-    map.fitBounds(line.getBounds(), { padding: [50, 50] });
+    setCustomerMapLine(CUSTOMER_ROUTE_IDS, route.coords, {
+      color: '#f26a4f', shadowColor: '#000', width: 5, shadowWidth: 8, opacity: 1
+    });
+    routeLine = { coords: route.coords };
+    fitCustomerMapToCoords(route.coords, 50);
     return route.distanceMeters / 1000;
   } catch (error) {
     // Never draw an air route when road geometry is unavailable.
@@ -2147,7 +2366,7 @@ function removeStop(idx) {
     drawRoute().then(dist => { routeDistanceKm = dist; updateFare(); });
   } else {
     routeDistanceKm = null;
-    if (routeLine) { if (Array.isArray(routeLine)) routeLine.forEach(l => l.remove()); else routeLine.remove(); routeLine = null; }
+    removeCustomerRouteLine();
     document.getElementById('fare-row').style.display = 'none';
     document.getElementById('book-btn').style.display = 'none';
   }
@@ -2300,7 +2519,7 @@ function setCustomerActiveRideSheetState(state = 'compact') {
     toggle.setAttribute('aria-expanded', String(expanded));
     toggle.setAttribute('aria-label', expanded ? 'Minimize active ride details' : 'Expand active ride details');
   }
-  setTimeout(() => map?.invalidateSize(), 240);
+  setTimeout(() => map?.resize(), 240);
 }
 
 function setupCustomerActiveRideSheet() {
@@ -2433,7 +2652,7 @@ function endRide() {
   document.getElementById('bottom-panel').style.display = 'block';
   if (pickupMarker)  { pickupMarker.remove();  pickupMarker  = null; }
   stopMarkers.forEach((m, i) => { if (m) { m.remove(); stopMarkers[i] = null; } });
-  if (routeLine)     { (Array.isArray(routeLine) ? routeLine : [routeLine]).forEach(l => l.remove()); routeLine = null; }
+  removeCustomerRouteLine();
   if (driverMarker)  { driverMarker.remove();  driverMarker  = null; }
   pickup = null;
   dropoffs = [null, null, null, null];
@@ -2639,7 +2858,7 @@ function formatLiveTripEta(distanceKm) {
 }
 
 function clearLiveTripTracking() {
-  if (liveTripLine) { liveTripLine.remove(); liveTripLine = null; }
+  removeCustomerLiveTripLine();
   lastDriverLocation = null;
   lastDriverLocationAt = 0;
   customerTrackingFollow = true;
@@ -2655,7 +2874,7 @@ function centerCustomerMapPreservingZoom(point, { animate = true, duration = .45
   const lat = Number(point.lat), lng = Number(point.lng);
   const zoom = map.getZoom();
   if (!Number.isFinite(lat) || !Number.isFinite(lng) || !Number.isFinite(zoom)) return;
-  map.setView([lat, lng], zoom, { animate, duration });
+  setCustomerMapCenter({ lat, lng }, zoom, { animate, duration });
 }
 
 function followCustomerTrip() {
@@ -2694,11 +2913,12 @@ async function updateLiveTripTracking(location, { recenter = false } = {}) {
   if (!liveTripFreshnessTimer) liveTripFreshnessTimer = setInterval(renderLiveTripFreshness, 5000);
 
   if (driverMarker) {
-    driverMarker.setLatLng([lat, lng]);
+    driverMarker.setLngLat([lng, lat]);
   } else {
-    driverMarker = L.marker([lat, lng], {
-      icon: L.divIcon({ className: 'driver-marker live-driver-marker', html: '🚗', iconSize: [28, 28], iconAnchor: [14, 14] })
-    }).addTo(map);
+    driverMarker = createCustomerDomMarker(lat, lng, {
+      className: 'driver-marker live-driver-marker',
+      html: '🚗'
+    });
   }
   const markerElement = driverMarker.getElement?.();
   if (markerElement) markerElement.style.transition = 'transform .8s linear';
@@ -2717,8 +2937,10 @@ async function updateLiveTripTracking(location, { recenter = false } = {}) {
         destination.point
       ]);
       if (requestId === liveTripRouteRequest && roadRoute.coords?.length > 1) {
-        if (liveTripLine) liveTripLine.setLatLngs(roadRoute.coords);
-        else liveTripLine = L.polyline(roadRoute.coords, { color: '#f26a4f', weight: 4, opacity: .9, lineCap: 'round', lineJoin: 'round' }).addTo(map);
+        setCustomerMapLine(CUSTOMER_LIVE_ROUTE_IDS, roadRoute.coords, {
+          color: '#f26a4f', shadowColor: '#000', width: 4, shadowWidth: 7, opacity: .9
+        });
+        liveTripLine = { coords: roadRoute.coords };
         liveTripRouteAt = Date.now();
         liveTripRouteOrigin = { lat, lng };
         liveTripRouteDestinationKey = destinationKey;
@@ -2969,7 +3191,7 @@ function switchAppTab(name) {
   document.getElementById(`tab-${name}`).classList.add('active');
   if (name === 'rides') loadRideHistory();
   // Repaint map tiles after the bottom panel reflows (50 ms is too short)
-  setTimeout(() => map?.invalidateSize(), 150);
+  setTimeout(() => map?.resize(), 150);
 }
 
 

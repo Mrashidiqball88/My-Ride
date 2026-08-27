@@ -13,8 +13,8 @@
 <link rel="apple-touch-icon" href="/logo-driver.svg">
 <link rel="icon" type="image/svg+xml" href="/logo-driver.svg">
 <title>My Ride - Driver</title>
-<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
-<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<link rel="stylesheet" href="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.css"/>
+<script src="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.js"></script>
 <script src="/socket.io/socket.io.js"></script>
 <style>
 @import url('https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Space+Mono:wght@400;700&display=swap');
@@ -214,8 +214,8 @@ body{font-family:'Segoe UI',sans-serif;background:#0a0a0f;color:#fff;height:100d
 .toast.error{border-left:3px solid #ff5555}
 .toast.info{border-left:3px solid #f5c518}
 
-.leaflet-container{background:#1a1a2a}
-.leaflet-control-attribution{font-size:9px;line-height:1.1;padding:2px 4px!important;background:rgba(10,10,15,.62)!important;box-shadow:none!important}
+.maplibregl-map{background:#1a1a2a}
+.maplibregl-ctrl-attrib{font-size:9px;line-height:1.1;padding:2px 4px!important;background:rgba(10,10,15,.62)!important;box-shadow:none!important}
 .pickup-icon{background:#2266cc;border:3px solid #fff;width:16px;height:16px;border-radius:50%}
 .dropoff-icon{background:#cc6622;border:3px solid #fff;width:16px;height:16px;border-radius:50%}
 
@@ -302,7 +302,7 @@ textarea.support-input{resize:vertical;min-height:85px}
 :root{--dc-ink:#f7f7f3;--dc-muted:#9aa3a5;--dc-dim:#667174;--dc-line:rgba(255,255,255,.11);--dc-night:#111718;--dc-panel:#182022;--dc-panel2:#202a2c;--dc-map-charcoal:#202a2c;--dc-cyan:#74e0d1;--dc-yellow:#f5cc68;--dc-coral:#ff8e78}
 #app{position:relative;display:none;background:var(--dc-night);color:var(--dc-ink);overflow:hidden;font-family:'DM Sans','Segoe UI',sans-serif}
 #map{position:absolute;inset:0;width:100%;height:100%;z-index:1;filter:none;background:var(--dc-map-charcoal)}
-.leaflet-container{background:var(--dc-map-charcoal)}
+.maplibregl-map{background:var(--dc-map-charcoal)}
 .header{position:absolute;top:0;left:0;right:0;height:62px;padding:14px 16px 12px;background:linear-gradient(180deg,rgba(17,23,24,.96),rgba(17,23,24,.55),transparent);border:0;z-index:20}
 .header-logo{font-size:20px;letter-spacing:-.04em;color:var(--dc-ink)}
 .header-logo span{color:var(--dc-cyan)}
@@ -353,6 +353,7 @@ textarea.support-input{resize:vertical;min-height:85px}
 .navigation-route-details{display:none}
 #app.navigation-active .navigation-route-details{display:block}.navigation-route-details .ap-route{padding:8px 10px;margin:0 0 8px}.navigation-route-details .ap-route-row{font-size:.72rem;padding:2px 0}
 .map-marker-shell{background:transparent!important;border:0!important}.driver-location-marker{display:grid;place-items:center;width:30px;height:30px;border-radius:50%;background:#3e9cff;border:3px solid #eaf8ff;box-shadow:0 0 0 5px rgba(62,156,255,.2),0 4px 13px rgba(0,0,0,.42)}.driver-location-marker i{width:7px;height:7px;border-radius:50%;background:#fff}.route-marker{display:grid;place-items:center;width:30px;height:30px;border-radius:11px;border:2px solid #f4fbff;color:#10201f;font-family:'Space Mono',monospace;font-size:11px;font-weight:800;box-shadow:0 5px 14px rgba(0,0,0,.42)}.route-marker.pickup{background:var(--dc-yellow)}.route-marker.dropoff{background:var(--dc-coral);color:#fff}
+.maplibregl-ctrl-top-right{margin-top:74px;margin-right:14px}.maplibregl-ctrl-group{border:0!important;box-shadow:0 8px 20px rgba(0,0,0,.28)!important;background:rgba(17,26,32,.9)!important}.maplibregl-ctrl-group button{filter:invert(1);opacity:.85}
 .ap-status-text{color:var(--dc-cyan)}.ap-passenger,.ap-route{background:#111819;border:1px solid var(--dc-line)}
 .ap-passenger-name,.ap-route-row{color:var(--dc-ink)}.ap-passenger-sub{color:var(--dc-muted)}
 .ap-btn.arrived{background:#182c35;color:var(--dc-cyan);border-color:#376c72}.ap-btn.start{background:#18352f;color:var(--dc-cyan);border-color:#4b978b}.ap-btn.complete{background:#2a3020;color:var(--dc-yellow);border-color:#89733d}
@@ -771,6 +772,13 @@ textarea.support-input{resize:vertical;min-height:85px}
 </div>
 
 <script>
+const MAP_STYLE_URL = 'https://demotiles.maplibre.org/style.json';
+const DRIVER_ROUTE_IDS = {
+  source: 'driver-route-source',
+  shadow: 'driver-route-shadow',
+  line: 'driver-route-line'
+};
+
 // ── State ──────────────────────────────────────────────────────────────────
 let token        = localStorage.getItem('rh_token');
 let sessionToken = localStorage.getItem('rh_session') || null;
@@ -1420,7 +1428,7 @@ function bootApp() {
     registerPushSubscription();
   }
   // Double rAF ensures the browser has fully painted the flex layout before
-  // Leaflet measures #map — fixes the 0×0 container race condition.
+  // MapLibre measures #map — fixes the 0×0 container race condition.
   requestAnimationFrame(() => requestAnimationFrame(() => {
     initMap();
     renderAvailabilityState();
@@ -1494,29 +1502,104 @@ function urlBase64ToUint8Array(base64String) {
 }
 
 // ── Map ────────────────────────────────────────────────────────────────────
+function createDriverDomMarker(lat, lng, { html = '', className = '', interactive = true } = {}) {
+  const element = document.createElement('div');
+  element.className = `map-marker-shell ${className}`.trim();
+  element.innerHTML = html;
+  element.style.pointerEvents = interactive ? 'auto' : 'none';
+  return new maplibregl.Marker({ element, anchor: 'center' })
+    .setLngLat([Number(lng), Number(lat)])
+    .addTo(map);
+}
+
+function setDriverMapCenter(point, zoom, { animate = false, duration = .45 } = {}) {
+  const camera = { center: [Number(point.lng), Number(point.lat)], zoom: Number(zoom) };
+  if (animate) map.easeTo({ ...camera, duration: duration * 1000 });
+  else map.jumpTo(camera);
+}
+
+function driverRouteFeature(coords) {
+  return {
+    type: 'Feature',
+    properties: {},
+    geometry: {
+      type: 'LineString',
+      coordinates: coords.map(([lat, lng]) => [Number(lng), Number(lat)])
+    }
+  };
+}
+
+function removeDriverMapLine() {
+  if (!map) return;
+  if (map.getLayer(DRIVER_ROUTE_IDS.line)) map.removeLayer(DRIVER_ROUTE_IDS.line);
+  if (map.getLayer(DRIVER_ROUTE_IDS.shadow)) map.removeLayer(DRIVER_ROUTE_IDS.shadow);
+  if (map.getSource(DRIVER_ROUTE_IDS.source)) map.removeSource(DRIVER_ROUTE_IDS.source);
+}
+
+function setDriverMapLine(coords, { dashed = false } = {}) {
+  if (!map || !coords?.length) return;
+  const apply = () => {
+    if (!map.getSource(DRIVER_ROUTE_IDS.source)) {
+      map.addSource(DRIVER_ROUTE_IDS.source, {
+        type: 'geojson',
+        data: driverRouteFeature(coords)
+      });
+      map.addLayer({
+        id: DRIVER_ROUTE_IDS.shadow,
+        type: 'line',
+        source: DRIVER_ROUTE_IDS.source,
+        layout: { 'line-cap': 'round', 'line-join': 'round' },
+        paint: { 'line-color': '#092c62', 'line-width': 10, 'line-opacity': .66 }
+      });
+      map.addLayer({
+        id: DRIVER_ROUTE_IDS.line,
+        type: 'line',
+        source: DRIVER_ROUTE_IDS.source,
+        layout: {
+          'line-cap': 'round',
+          'line-join': 'round',
+          ...(dashed ? { 'line-dasharray': [2, 2.5] } : {})
+        },
+        paint: { 'line-color': '#2688ff', 'line-width': 5, 'line-opacity': 1 }
+      });
+    } else {
+      map.getSource(DRIVER_ROUTE_IDS.source).setData(driverRouteFeature(coords));
+      map.getSource(DRIVER_ROUTE_IDS.source).setData(driverRouteFeature(coords));
+    }
+  };
+  if (map.isStyleLoaded()) apply();
+  else map.once('load', apply);
+}
+
+function fitDriverMapToCoords(coords, padding = 60) {
+  if (!map || !coords?.length) return;
+  const bounds = new maplibregl.LngLatBounds();
+  coords.forEach(([lat, lng]) => bounds.extend([Number(lng), Number(lat)]));
+  if (!bounds.isEmpty()) map.fitBounds(bounds, { padding, maxZoom: 16, duration: 450 });
+}
+
 function initMap() {
   if (map) return;
-  map = L.map('map', { zoomControl: false, preferCanvas: true, attributionControl: true }).setView([31.5204, 74.3587], 16);
-  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-    attribution : '© <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
-    maxNativeZoom: 19,
-    maxZoom      : 20,
-    subdomains   : 'abc',
-    detectRetina : false,
-    updateWhenIdle: true,
-    keepBuffer   : 1,
-    crossOrigin  : true
-  }).addTo(map);
+  map = new maplibregl.Map({
+    container: 'map',
+    style: MAP_STYLE_URL,
+    center: [74.3587, 31.5204],
+    zoom: 16,
+    maxZoom: 20,
+    attributionControl: true,
+    dragRotate: false,
+    touchPitch: false
+  });
+  map.addControl(new maplibregl.NavigationControl({ showCompass: false }), 'top-right');
 
-  // One initial repaint is enough after boot; repeated invalidations cause
-  // unnecessary tile work on low-end phones.
-  requestAnimationFrame(() => map.invalidateSize());
+  // MapLibre observes its container, so one resize after flex layout is enough.
+  requestAnimationFrame(() => map?.resize());
   let resizeFrame = null;
   window.addEventListener('resize', () => {
     if (resizeFrame) return;
     resizeFrame = requestAnimationFrame(() => {
       resizeFrame = null;
-      map?.invalidateSize({ pan: false });
+      map?.resize();
     });
   });
   map.on('dragstart', () => {
@@ -1543,10 +1626,10 @@ function initMap() {
       const nextLocation = { lat, lng };
       const movedKm = previousLocation ? haversineKm(previousLocation, nextLocation) : Infinity;
       driverLocation = nextLocation;
-      if (myMarker) myMarker.setLatLng([lat, lng]);
-      else myMarker = L.marker([lat, lng], {
-        icon: L.divIcon({ html: '<span class="driver-location-marker"><i></i></span>', className: 'map-marker-shell', iconSize: [30, 30], iconAnchor: [15, 15] })
-      }).addTo(map);
+      if (myMarker) myMarker.setLngLat([lng, lat]);
+      else myMarker = createDriverDomMarker(lat, lng, {
+        html: '<span class="driver-location-marker"><i></i></span>'
+      });
       const markerElement = myMarker.getElement?.();
       if (markerElement) markerElement.style.transition = 'transform .8s linear';
 
@@ -1556,11 +1639,11 @@ function initMap() {
       if (activeRide && activeRideTick) {
         refreshActiveNavigation({ recenter: false });
         if (navigationFollowing && driverMapAutoCenter && movedKm >= .003) {
-          map.panTo([lat, lng], { animate: true, duration: .55, easeLinearity: .35 });
+          map.easeTo({ center: [lng, lat], duration: 550 });
         }
       } else if (driverMapAutoCenter && isFirstFix) {
         const zoom = Math.max(15, map.getZoom());
-        map.setView([lat, lng], zoom, { animate: false });
+        setDriverMapCenter({ lat, lng }, zoom);
       }
     };
 
@@ -1593,10 +1676,8 @@ function initMap() {
 }
 
 function removeRouteLine() {
-  if (routeLine) {
-    (Array.isArray(routeLine) ? routeLine : [routeLine]).forEach(line => line?.remove());
-    routeLine = null;
-  }
+  removeDriverMapLine();
+  routeLine = null;
 }
 
 function centerDriverMapPreservingZoom(point, { animate = true, duration = .45 } = {}) {
@@ -1606,7 +1687,7 @@ function centerDriverMapPreservingZoom(point, { animate = true, duration = .45 }
   if (!Number.isFinite(lat) || !Number.isFinite(lng)
     || lat < -90 || lat > 90 || lng < -180 || lng > 180
     || !Number.isFinite(zoom)) return;
-  map.setView([lat, lng], zoom, { animate, duration });
+  setDriverMapCenter({ lat, lng }, zoom, { animate, duration });
 }
 
 function haversineKm(a, b) {
@@ -1662,14 +1743,9 @@ function updateNavigationDetails(distanceMeters, durationSeconds) {
 
 function drawNavigationLine(coords, { dashed = false } = {}) {
   removeRouteLine();
-  const shadow = L.polyline(coords, { color: '#092c62', weight: 10, opacity: .66, lineCap: 'round', lineJoin: 'round' }).addTo(map);
-  const line = L.polyline(coords, {
-    color: '#2688ff', weight: 5, opacity: 1,
-    dashArray: dashed ? '9 10' : null,
-    lineCap: 'round', lineJoin: 'round'
-  }).addTo(map);
-  routeLine = [shadow, line];
-  return line;
+  setDriverMapLine(coords, { dashed });
+  routeLine = { coords, dashed };
+  return routeLine;
 }
 
 function focusActiveNavigation() {
@@ -1736,7 +1812,9 @@ function showRideOnMap(ride) {
 
   const p = ride.pickupLocation;
   if (!p?.lat || !p?.lng) return;
-  pickupMarker = L.marker([p.lat, p.lng], { icon: L.divIcon({ html: '<span class="route-marker pickup">P</span>', className: 'map-marker-shell', iconSize: [30, 30], iconAnchor: [15, 15] }) }).addTo(map);
+  pickupMarker = createDriverDomMarker(p.lat, p.lng, {
+    html: '<span class="route-marker pickup">P</span>'
+  });
 
   // Build waypoint list: pickup + all stops
   const stops = (ride.dropoffLocations && ride.dropoffLocations.length)
@@ -1748,7 +1826,9 @@ function showRideOnMap(ride) {
 
   // Mark each stop
   stops.forEach((s, i) => {
-    const m = L.marker([s.lat, s.lng], { icon: L.divIcon({ html: `<span class="route-marker dropoff">${i + 1}</span>`, className: 'map-marker-shell', iconSize: [30, 30], iconAnchor: [15, 15] }) }).addTo(map);
+    const m = createDriverDomMarker(s.lat, s.lng, {
+      html: `<span class="route-marker dropoff">${i + 1}</span>`
+    });
     dropoffMarkers.push(m);
     if (i === 0) dropoffMarker = m;
   });
@@ -1761,7 +1841,7 @@ function showRideOnMap(ride) {
   requestRoadRoute(allPts).then(roadRoute => {
     if (!roadRoute.coords?.length) return;
     const line = drawNavigationLine(roadRoute.coords, { dashed: true });
-    map.fitBounds(line.getBounds(), { padding: [60, 60] });
+    fitDriverMapToCoords(line.coords, 60);
   }).catch(error => console.warn('Road overview unavailable:', error.message));
 }
 
@@ -1867,7 +1947,7 @@ function setActiveRideSheetState(state = 'compact') {
     toggle.setAttribute('aria-expanded', String(!minimized));
     toggle.setAttribute('aria-label', minimized ? 'Expand navigation panel' : 'Minimize navigation panel');
   }
-  setTimeout(() => map?.invalidateSize(), 230);
+  setTimeout(() => map?.resize(), 230);
 }
 
 function setupActiveRideSheet() {
@@ -2560,7 +2640,7 @@ function showActivePanel(ride) {
   setActiveRideSheetState('compact');
   navigationFollowing = true;
   driverMapAutoCenter = true;
-  requestAnimationFrame(() => map?.invalidateSize({ pan: false }));
+  requestAnimationFrame(() => map?.resize());
   const statusLabels = {
     accepted: 'On the way to pickup',
     arrived: 'At pickup',
@@ -2654,7 +2734,7 @@ function endActiveRide() {
   if (finishedRideId && socket) socket.emit('ride:leave', String(finishedRideId));
 
   // One layout-synchronized repaint avoids the old staggered redraw loop.
-  requestAnimationFrame(() => map?.invalidateSize({ pan: false }));
+  requestAnimationFrame(() => map?.resize());
 
   // Re-check support-ticket badge so the bell reflects the real unread count
   checkUnreadDriverTickets();
@@ -2697,7 +2777,7 @@ async function refreshDashboard() {
     // Ensure socket rooms are correct
     if (socket && isOnline) socket.emit('driver:status', { isOnline: true });
     if (isOnline) await reconcileRideRequestsAfterReconnect();
-    map?.invalidateSize();
+    map?.resize();
     if (activeRide) await refreshActiveNavigation({ force: true, recenter: true });
     else if (driverLocation) centerDriverMapPreservingZoom(driverLocation);
   } catch (e) {
@@ -2732,7 +2812,7 @@ function switchBottomTab(tab) {
     updateDailyFeeBanner();
   }
   // Repaint map tiles after panel reflow (50 ms is too short for iOS)
-  setTimeout(() => map?.invalidateSize(), 150);
+  setTimeout(() => map?.resize(), 150);
 }
 
 // ── Payments ───────────────────────────────────────────────────────────────
