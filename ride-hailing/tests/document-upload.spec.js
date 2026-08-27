@@ -176,7 +176,7 @@ async function fillStep1(page, { phone = '+923001234999' } = {}) {
   await page.locator('#r-phone').fill(phone);
   await page.locator('#r-email').fill(`driver-${phone.replace(/\D/g, '')}@example.test`);
   await page.locator('#r-pass').fill('password123');
-  await page.locator('#r-vehicle').selectOption('Car Mini');
+  await page.locator('#r-vehicle').selectOption('Car Mini Non-AC');
   await page.locator('#r-vehicle-model').fill('Suzuki Cultus 2020');
   await page.locator('#r-plate').fill('LHR-9999');
 

@@ -1413,7 +1413,7 @@ function bootApp() {
   }
   loadStats();
   checkUnreadDriverTickets();
-  checkDailyFee();
+  if (typeof checkDailyFee === 'function') checkDailyFee();
   loadDailyFeeSettings();
   initTodayFareWidget();
   loadDriverFareSettings();
@@ -1531,9 +1531,9 @@ function driverRouteFeature(coords) {
 
 function removeDriverMapLine() {
   if (!map) return;
-  if (map.getLayer(DRIVER_ROUTE_IDS.line)) map.removeLayer(DRIVER_ROUTE_IDS.line);
-  if (map.getLayer(DRIVER_ROUTE_IDS.shadow)) map.removeLayer(DRIVER_ROUTE_IDS.shadow);
-  if (map.getSource(DRIVER_ROUTE_IDS.source)) map.removeSource(DRIVER_ROUTE_IDS.source);
+  if (typeof map.getLayer === 'function' && map.getLayer(DRIVER_ROUTE_IDS.line)) map.removeLayer(DRIVER_ROUTE_IDS.line);
+  if (typeof map.getLayer === 'function' && map.getLayer(DRIVER_ROUTE_IDS.shadow)) map.removeLayer(DRIVER_ROUTE_IDS.shadow);
+  if (typeof map.getSource === 'function' && map.getSource(DRIVER_ROUTE_IDS.source)) map.removeSource(DRIVER_ROUTE_IDS.source);
 }
 
 function setDriverMapLine(coords, { dashed = false } = {}) {
@@ -1563,7 +1563,6 @@ function setDriverMapLine(coords, { dashed = false } = {}) {
         paint: { 'line-color': '#2688ff', 'line-width': 5, 'line-opacity': 1 }
       });
     } else {
-      map.getSource(DRIVER_ROUTE_IDS.source).setData(driverRouteFeature(coords));
       map.getSource(DRIVER_ROUTE_IDS.source).setData(driverRouteFeature(coords));
     }
   };
@@ -2380,8 +2379,20 @@ async function reconcileRideRequestsAfterReconnect() {
 const PAY_ICONS = { cash: '💵', easypaisa: '📱', jazzcash: '🎵', wallet: '💰' };
 const PAY_NAMES = { cash: 'Cash on delivery', easypaisa: 'EasyPaisa', jazzcash: 'JazzCash', wallet: 'Wallet' };
 
+function escapeDriverText(value) {
+  return String(value ?? '').replace(/[&<>"']/g, char => ({
+    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+  }[char]));
+}
+
 function formatStopAddr(loc) {
-  return loc?.address || (loc ? `${loc.lat?.toFixed(4)}, ${loc.lng?.toFixed(4)}` : '—');
+  if (loc?.address) return escapeDriverText(loc.address);
+  if (!loc) return '—';
+  const lat = Number(loc.lat);
+  const lng = Number(loc.lng);
+  return Number.isFinite(lat) && Number.isFinite(lng)
+    ? `${lat.toFixed(4)}, ${lng.toFixed(4)}`
+    : '—';
 }
 
 function rideOfferIsLive(ride) {
@@ -2824,6 +2835,13 @@ async function loadPayments() {
 async function loadAdminPaymentAccounts() {
   const el = document.getElementById('pay-accounts-list');
   if (!el) return;
+  if (!el.dataset.copyBound) {
+    el.dataset.copyBound = 'true';
+    el.addEventListener('click', event => {
+      const button = event.target.closest('.btn-copy[data-copy-value]');
+      if (button) copyNum(button, button.dataset.copyValue || '');
+    });
+  }
   try {
     const accts = await apiCall('/api/settings/payment');
     if (accts.dailyFeeSettings) {
@@ -2838,47 +2856,56 @@ async function loadAdminPaymentAccounts() {
     const cards = [];
 
     if (accts.jazzcash?.number) {
+      const number = escapeDriverText(accts.jazzcash.number);
+      const title = escapeDriverText(accts.jazzcash.title);
       cards.push(`<div class="pay-account-card">
         <div class="pay-account-icon">📱</div>
         <div class="pay-account-info">
           <div class="pay-account-name">JazzCash</div>
-          ${accts.jazzcash.title ? `<div class="pay-account-title">${accts.jazzcash.title}</div>` : ''}
-          <div class="pay-account-number">${accts.jazzcash.number}</div>
+          ${accts.jazzcash.title ? `<div class="pay-account-title">${title}</div>` : ''}
+          <div class="pay-account-number">${number}</div>
         </div>
-        <button class="btn-copy" onclick="copyNum(this,'${accts.jazzcash.number}')">📋 Copy</button>
+        <button class="btn-copy" data-copy-value="${number}">📋 Copy</button>
       </div>`);
     }
     if (accts.easypaisa?.number) {
+      const number = escapeDriverText(accts.easypaisa.number);
+      const title = escapeDriverText(accts.easypaisa.title);
       cards.push(`<div class="pay-account-card">
         <div class="pay-account-icon">💚</div>
         <div class="pay-account-info">
           <div class="pay-account-name">EasyPaisa</div>
-          ${accts.easypaisa.title ? `<div class="pay-account-title">${accts.easypaisa.title}</div>` : ''}
-          <div class="pay-account-number">${accts.easypaisa.number}</div>
+          ${accts.easypaisa.title ? `<div class="pay-account-title">${title}</div>` : ''}
+          <div class="pay-account-number">${number}</div>
         </div>
-        <button class="btn-copy" onclick="copyNum(this,'${accts.easypaisa.number}')">📋 Copy</button>
+        <button class="btn-copy" data-copy-value="${number}">📋 Copy</button>
       </div>`);
     }
     if (accts.bank?.iban) {
+      const iban = escapeDriverText(accts.bank.iban);
+      const bankName = escapeDriverText(accts.bank.name || 'Bank Transfer');
+      const title = escapeDriverText(accts.bank.title);
       cards.push(`<div class="pay-account-card">
         <div class="pay-account-icon">🏦</div>
         <div class="pay-account-info">
-          <div class="pay-account-name">${accts.bank.name || 'Bank Transfer'}</div>
-          ${accts.bank.title ? `<div class="pay-account-title">${accts.bank.title}</div>` : ''}
-          <div class="pay-account-iban">IBAN: ${accts.bank.iban}</div>
+          <div class="pay-account-name">${bankName}</div>
+          ${accts.bank.title ? `<div class="pay-account-title">${title}</div>` : ''}
+          <div class="pay-account-iban">IBAN: ${iban}</div>
         </div>
-        <button class="btn-copy" onclick="copyNum(this,'${accts.bank.iban}')">📋 Copy</button>
+        <button class="btn-copy" data-copy-value="${iban}">📋 Copy</button>
       </div>`);
     }
     if (accts.sadapay?.number) {
+      const number = escapeDriverText(accts.sadapay.number);
+      const title = escapeDriverText(accts.sadapay.title);
       cards.push(`<div class="pay-account-card">
         <div class="pay-account-icon">💳</div>
         <div class="pay-account-info">
           <div class="pay-account-name">SadaPay</div>
-          ${accts.sadapay.title ? `<div class="pay-account-title">${accts.sadapay.title}</div>` : ''}
-          <div class="pay-account-number">${accts.sadapay.number}</div>
+          ${accts.sadapay.title ? `<div class="pay-account-title">${title}</div>` : ''}
+          <div class="pay-account-number">${number}</div>
         </div>
-        <button class="btn-copy" onclick="copyNum(this,'${accts.sadapay.number}')">📋 Copy</button>
+        <button class="btn-copy" data-copy-value="${number}">📋 Copy</button>
       </div>`);
     }
 
@@ -2948,9 +2975,9 @@ async function loadWalletSummary() {
         else if (t.description?.toLowerCase().includes('subscription') || t.description?.toLowerCase().includes('daily')) icon = '📅';
         return `<div class="ledger-item">
           <span style="font-size:.85rem;flex-shrink:0">${icon}</span>
-          <span class="ledger-desc">${t.description || '—'}</span>
+          <span class="ledger-desc">${escapeDriverText(t.description || '—')}</span>
           <span class="ledger-date">${d}</span>
-          <span class="ledger-amt ${t.type}">${isCredit ? '+' : '−'}${formatRsAmount(t.amount || 0)}</span>
+          <span class="ledger-amt ${isCredit ? 'credit' : 'debit'}">${isCredit ? '+' : '−'}${formatRsAmount(t.amount || 0)}</span>
         </div>`;
       }).join('');
     }
@@ -2961,11 +2988,12 @@ async function loadWalletSummary() {
       const statusMap = { pending: '⏳ Pending', approved: '✅ Approved', rejected: '❌ Rejected' };
       const trxSection = document.getElementById('trx-form-section');
       if (trxSection) {
+        const safeStatus = ['pending', 'approved', 'rejected'].includes(s) ? s : 'pending';
         trxSection.innerHTML = `<div class="trx-form-title">Today's Submission</div>
-          <div style="font-size:.85rem;color:#ccc;margin:.4rem 0">TRX: <span style="font-family:monospace">${data.todayPayment.trxId}</span></div>
-          <div style="font-size:.85rem;color:#ccc;margin:.4rem 0">Amount: <strong style="color:#f5c518">Rs ${data.todayPayment.amount?.toLocaleString()}</strong></div>
-          <div style="margin:.4rem 0"><span class="pay-status-pill ${s}">${statusMap[s] || s}</span></div>
-          ${data.todayPayment.adminNote ? `<div class="pay-note">Note: ${data.todayPayment.adminNote}</div>` : ''}`;
+          <div style="font-size:.85rem;color:#ccc;margin:.4rem 0">TRX: <span style="font-family:monospace">${escapeDriverText(data.todayPayment.trxId)}</span></div>
+          <div style="font-size:.85rem;color:#ccc;margin:.4rem 0">Amount: <strong style="color:#f5c518">Rs ${Number(data.todayPayment.amount || 0).toLocaleString()}</strong></div>
+          <div style="margin:.4rem 0"><span class="pay-status-pill ${safeStatus}">${statusMap[s] || 'Pending'}</span></div>
+          ${data.todayPayment.adminNote ? `<div class="pay-note">Note: ${escapeDriverText(data.todayPayment.adminNote)}</div>` : ''}`;
       }
     }
   } catch (e) {
@@ -3036,16 +3064,16 @@ async function loadMyTickets() {
           <span style="font-size:.62rem;padding:.12rem .35rem;border-radius:4px;background:${isOpen?'#1a1a0a':'#0a1a0a'};color:${isOpen?'#f5c518':'#22c55e'};border:1px solid ${isOpen?'#2a2a10':'#0a3018'}">${isOpen?'Open':'Resolved'}</span>
           ${isUnread ? '<span style="font-size:.6rem;background:#f5c518;color:#06060e;border-radius:4px;padding:.1rem .3rem;font-weight:800">NEW REPLY</span>' : ''}
         </div>
-        <div style="font-size:.75rem;color:#475569">${t.message}</div>
+        <div style="font-size:.75rem;color:#475569">${escapeDriverText(t.message)}</div>
         ${hasReply ? `<div style="background:#0a1a0a;border:1px solid #1a3a1a;border-radius:8px;padding:.5rem .6rem;margin-top:.4rem">
           <div style="font-size:.63rem;color:#4caf50;font-weight:700;margin-bottom:.2rem">✉ Admin Reply</div>
-          <div style="font-size:.78rem;color:#a3a3a3">${t.adminReply}</div>
+          <div style="font-size:.78rem;color:#a3a3a3">${escapeDriverText(t.adminReply)}</div>
         </div>` : ''}
         <div style="font-size:.63rem;color:#334155;margin-top:.3rem">${d}</div>
       </div>`;
     }).join('');
   } catch (e) {
-    el.innerHTML = `<div style="color:#ef4444;text-align:center;padding:1rem;font-size:.83rem">${e.message}</div>`;
+    el.innerHTML = `<div style="color:#ef4444;text-align:center;padding:1rem;font-size:.83rem">${escapeDriverText(e.message)}</div>`;
   }
 }
 
@@ -3072,20 +3100,21 @@ async function loadPaymentHistory() {
     const statusMap = { pending: '⏳ Pending', approved: '✅ Approved', rejected: '❌ Rejected' };
     el.innerHTML = payments.map(p => {
       const date = new Date(p.createdAt).toLocaleDateString('en-PK', { day:'numeric', month:'short', year:'numeric' });
-      return `<div class="pay-item ${p.status}">
+      const status = ['pending', 'approved', 'rejected'].includes(p.status) ? p.status : 'pending';
+      return `<div class="pay-item ${status}">
         <div class="pay-item-row">
-          <span class="pay-trx">${p.trxId}</span>
-          <span class="pay-amount">Rs ${p.amount?.toLocaleString()}</span>
+          <span class="pay-trx">${escapeDriverText(p.trxId)}</span>
+          <span class="pay-amount">Rs ${Number(p.amount || 0).toLocaleString()}</span>
         </div>
         <div class="pay-item-row">
-          <span class="pay-meta">${date} · ${p.vehicleCategory}</span>
-          <span class="pay-status-pill ${p.status}">${statusMap[p.status] || p.status}</span>
+          <span class="pay-meta">${date} · ${escapeDriverText(p.vehicleCategory)}</span>
+          <span class="pay-status-pill ${status}">${statusMap[p.status] || 'Pending'}</span>
         </div>
-        ${p.adminNote ? `<div class="pay-note">Admin: ${p.adminNote}</div>` : ''}
+        ${p.adminNote ? `<div class="pay-note">Admin: ${escapeDriverText(p.adminNote)}</div>` : ''}
       </div>`;
     }).join('');
   } catch (e) {
-    el.innerHTML = `<div class="idle-msg" style="padding:1rem;color:#ff5555">${e.message}</div>`;
+    el.innerHTML = `<div class="idle-msg" style="padding:1rem;color:#ff5555">${escapeDriverText(e.message)}</div>`;
   }
 }
 

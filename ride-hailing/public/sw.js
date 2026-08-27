@@ -1,7 +1,7 @@
-// MyRide Service Worker — v20
+// MyRide Service Worker — v21
 // Strategy: network-first for API/socket, cache-first for static assets.
 
-const CACHE_NAME = 'myride-v20';
+const CACHE_NAME = 'myride-v21';
 
 // Static assets worth caching for fast repeat loads
 const PRECACHE = [
@@ -10,8 +10,8 @@ const PRECACHE = [
   '/icon-192.png',
   '/icon-512.png',
   '/apple-touch-icon.png',
-  'https://unpkg.com/leaflet@1.9.4/dist/leaflet.css',
-  'https://unpkg.com/leaflet@1.9.4/dist/leaflet.js',
+  'https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.css',
+  'https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.js',
 ];
 
 // ── Install: pre-cache static shell ─────────────────────────────────────────

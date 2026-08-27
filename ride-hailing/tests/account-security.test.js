@@ -239,7 +239,11 @@ test('driver identity documents are private and unsafe document URLs are rejecte
 });
 
 test('recovery-key setup works, rate limits attempts, and invalidates old Super Admin sessions', async () => {
-  const security = { passwordHash: '', recoveryKeyHash: '', sessionVersion: 0 };
+  const security = {
+    passwordHash: bcrypt.hashSync('admin1234', 4),
+    recoveryKeyHash: '',
+    sessionVersion: 0
+  };
   models.Settings.findOne = () => ({ lean: async () => ({ value: { ...security } }) });
   models.Settings.findOneAndUpdate = async (_filter, update) => {
     Object.assign(security, update.value);

@@ -1492,8 +1492,14 @@ function createCustomerDomMarker(lat, lng, { className = '', html = '', interact
 
 function setCustomerMapCenter(point, zoom, { animate = false, duration = .45 } = {}) {
   const camera = { center: [Number(point.lng), Number(point.lat)], zoom: Number(zoom) };
-  if (animate) map.easeTo({ ...camera, duration: duration * 1000 });
-  else map.jumpTo(camera);
+  if (animate && typeof map.easeTo === 'function') map.easeTo({ ...camera, duration: duration * 1000 });
+  else if (typeof map.jumpTo === 'function') map.jumpTo(camera);
+  else if (typeof map.setCenter === 'function') {
+    map.setCenter(camera.center);
+    if (typeof map.setZoom === 'function') map.setZoom(camera.zoom);
+  } else if (typeof map.setView === 'function') {
+    map.setView([camera.center[1], camera.center[0]], camera.zoom);
+  }
 }
 
 function routeFeature(coords) {
@@ -1509,9 +1515,9 @@ function routeFeature(coords) {
 
 function removeCustomerMapLine(ids) {
   if (!map) return;
-  if (map.getLayer(ids.line)) map.removeLayer(ids.line);
-  if (map.getLayer(ids.shadow)) map.removeLayer(ids.shadow);
-  if (map.getSource(ids.source)) map.removeSource(ids.source);
+  if (typeof map.getLayer === 'function' && map.getLayer(ids.line)) map.removeLayer(ids.line);
+  if (typeof map.getLayer === 'function' && map.getLayer(ids.shadow)) map.removeLayer(ids.shadow);
+  if (typeof map.getSource === 'function' && map.getSource(ids.source)) map.removeSource(ids.source);
 }
 
 function removeCustomerRouteLine() {
@@ -2585,8 +2591,13 @@ function showMatchedPanel(driver, agreedFare) {
   document.getElementById('ar-status-text').textContent = 'Driver on the way! 🚗';
   // Driver avatar — show profile photo if available, else initial letter
   const avatarEl = document.getElementById('ar-avatar');
-  if (driver.profilePhoto) {
-    avatarEl.innerHTML = `<img src="${driver.profilePhoto}" alt="Driver">`;
+  avatarEl.replaceChildren();
+  const profilePhoto = String(driver.profilePhoto || '');
+  if (/^\/uploads\/driver_profiles\/[A-Za-z0-9._-]+$/.test(profilePhoto)) {
+    const image = document.createElement('img');
+    image.src = profilePhoto;
+    image.alt = 'Driver';
+    avatarEl.appendChild(image);
   } else {
     avatarEl.textContent = (driver.name || '?')[0].toUpperCase();
   }
@@ -2721,6 +2732,14 @@ function renderOffers(offers) {
   driverOffers = offers || [];
   const el = document.getElementById('offers-list');
   const count = document.getElementById('offers-count');
+  if (!el.dataset.acceptBound) {
+    el.dataset.acceptBound = 'true';
+    el.addEventListener('click', event => {
+      const button = event.target.closest('.btn-accept-driver');
+      if (!button) return;
+      acceptDriver(button.dataset.driverId, Number(button.dataset.price));
+    });
+  }
   if (!driverOffers.length) {
     el.innerHTML = '<div class="no-offers-msg">🔍 Waiting for nearby drivers to respond…</div>';
     count.textContent = '';
@@ -2728,8 +2747,12 @@ function renderOffers(offers) {
   }
   count.textContent = `${driverOffers.length} response${driverOffers.length > 1 ? 's' : ''}`;
   el.innerHTML = driverOffers.map(o => {
-    const initial = (o.driverName || '?')[0].toUpperCase();
-    const vehicleStr = [o.vehicleModel, o.vehiclePlate].filter(Boolean).join(' · ');
+    const driverName = escapeLocationText(o.driverName || 'Driver');
+    const initial = escapeLocationText((o.driverName || '?')[0].toUpperCase());
+    const vehicleStr = escapeLocationText([o.vehicleModel, o.vehiclePlate].filter(Boolean).join(' · '));
+    const driverId = escapeLocationText(o.driverId || '');
+    const rating = Number.isFinite(Number(o.rating)) ? Number(o.rating).toFixed(1) : '5.0';
+    const price = Number.isFinite(Number(o.price)) ? Math.max(0, Number(o.price)) : 0;
     const typeBadge = o.type === 'counter'
       ? '<span class="offer-type-badge counter">Counter</span>'
       : '<span class="offer-type-badge accept">Accepts offer</span>';
@@ -2737,14 +2760,14 @@ function renderOffers(offers) {
       <div class="offer-card-top">
         <div class="offer-avatar">${initial}</div>
         <div class="offer-body">
-          <div class="offer-name">${o.driverName || 'Driver'}${typeBadge}</div>
-          <div class="offer-vehicle">⭐ ${(o.rating||5).toFixed(1)} ${vehicleStr ? '· ' + vehicleStr : ''}</div>
+           <div class="offer-name">${driverName}${typeBadge}</div>
+           <div class="offer-vehicle">⭐ ${rating} ${vehicleStr ? '· ' + vehicleStr : ''}</div>
         </div>
         <div class="offer-price-col">
-          <span class="offer-price-amt">Rs ${(o.price||0).toLocaleString()}</span>
+           <span class="offer-price-amt">Rs ${price.toLocaleString()}</span>
         </div>
       </div>
-      <button class="btn-accept-driver" onclick="acceptDriver('${o.driverId}',${o.price})">✓ Accept — Rs ${(o.price||0).toLocaleString()}</button>
+       <button class="btn-accept-driver" data-driver-id="${driverId}" data-price="${price}">✓ Accept — Rs ${price.toLocaleString()}</button>
     </div>`;
   }).join('');
 }
@@ -3060,7 +3083,8 @@ async function updateLiveTripTracking(location, { recenter = false } = {}) {
   if (!liveTripFreshnessTimer) liveTripFreshnessTimer = setInterval(renderLiveTripFreshness, 5000);
 
   if (driverMarker) {
-    driverMarker.setLngLat([lng, lat]);
+    if (typeof driverMarker.setLngLat === 'function') driverMarker.setLngLat([lng, lat]);
+    else if (typeof driverMarker.setLatLng === 'function') driverMarker.setLatLng([lat, lng]);
   } else {
     driverMarker = createCustomerDomMarker(lat, lng, {
       className: 'driver-marker live-driver-marker',
@@ -3196,11 +3220,13 @@ async function loadRideHistory() {
     const el = document.getElementById('ride-history-list');
     if (!rides.length) { el.innerHTML = '<div class="empty-msg">No rides yet. Book your first ride!</div>'; return; }
     el.innerHTML = rides.map(r => {
-      return `<div class="ride-history-item ${r.status}">
-        <div class="rh-route">${r.pickupLocation?.address || 'Pickup'} <span>→</span> ${r.dropoffLocation?.address || 'Dropoff'}</div>
+      const status = ['requested', 'accepted', 'arrived', 'in-progress', 'completed', 'cancelled'].includes(r.status) ? r.status : 'requested';
+      const fare = Number.isFinite(Number(r.fare)) ? Number(r.fare).toLocaleString() : '0';
+      return `<div class="ride-history-item ${status}">
+        <div class="rh-route">${escapeLocationText(r.pickupLocation?.address || 'Pickup')} <span>→</span> ${escapeLocationText(r.dropoffLocation?.address || 'Dropoff')}</div>
         <div class="rh-meta">
-          <span class="status-pill ${r.status}">${r.status}</span>
-          <span class="rh-fare">Rs ${r.fare} 💵</span>
+          <span class="status-pill ${status}">${escapeLocationText(status)}</span>
+          <span class="rh-fare">Rs ${fare} 💵</span>
           <span>${new Date(r.createdAt).toLocaleDateString()}</span>
         </div>
       </div>`;
@@ -3281,16 +3307,16 @@ async function loadMyTickets() {
           <span style="font-size:.62rem;padding:.12rem .35rem;border-radius:4px;background:${isOpen?'#1a1a0a':'#0a1a0a'};color:${isOpen?'#f5c518':'#22c55e'};border:1px solid ${isOpen?'#2a2a10':'#0a3018'}">${isOpen?'Open':'Resolved'}</span>
           ${isUnread ? '<span style="font-size:.6rem;background:#f5c518;color:#06060e;border-radius:4px;padding:.1rem .3rem;font-weight:800">NEW REPLY</span>' : ''}
         </div>
-        <div style="font-size:.75rem;color:#475569">${t.message}</div>
+        <div style="font-size:.75rem;color:#475569">${escapeLocationText(t.message)}</div>
         ${hasReply ? `<div style="background:#0a1a0a;border:1px solid #1a3a1a;border-radius:8px;padding:.5rem .6rem;margin-top:.4rem">
           <div style="font-size:.63rem;color:#22c55e;font-weight:700;margin-bottom:.2rem">✉ Admin Reply</div>
-          <div style="font-size:.78rem;color:#a3a3a3">${t.adminReply}</div>
+          <div style="font-size:.78rem;color:#a3a3a3">${escapeLocationText(t.adminReply)}</div>
         </div>` : '<div style="font-size:.72rem;color:#334155;margin-top:.3rem;font-style:italic">Awaiting admin response…</div>'}
         <div style="font-size:.63rem;color:#334155;margin-top:.3rem">${d}</div>
       </div>`;
     }).join('');
   } catch (e) {
-    el.innerHTML = `<div style="color:#ef4444;text-align:center;padding:1rem;font-size:.83rem">${e.message}</div>`;
+    el.innerHTML = `<div style="color:#ef4444;text-align:center;padding:1rem;font-size:.83rem">${escapeLocationText(e.message)}</div>`;
   }
 }
 

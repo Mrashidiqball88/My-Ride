@@ -1922,23 +1922,26 @@ async function loadPayments(status = 'pending') {
     el.innerHTML = pays.map(p => {
       const drv = p.driver || {};
       const isPending = p.status === 'pending';
+      const proofUrl = String(p.proofScreenshot || '');
+      const hasSafeProof = /^data:image\/(?:jpeg|jpg|png|webp);base64,[A-Za-z0-9+/=\s]+$/i.test(proofUrl)
+        || /^\/api\/admin\/payments\/[A-Za-z0-9_-]+\/proof$/.test(proofUrl);
       return `<div class="pay-card" id="pay-${p._id}">
         <div class="pay-info">
-          <div class="pay-name">🧑 ${drv.name||'Unknown Driver'}${isPending?'<span class="new-notif">NEW</span>':''}</div>
-          <div class="pay-meta">📱 ${drv.phone||'—'} · 🚗 ${drv.vehicleType||'—'} · TRX: <code style="color:#818cf8">${p.trxId}</code></div>
+          <div class="pay-name">🧑 ${escHtml(drv.name||'Unknown Driver')}${isPending?'<span class="new-notif">NEW</span>':''}</div>
+          <div class="pay-meta">📱 ${escHtml(drv.phone||'—')} · 🚗 ${escHtml(drv.vehicleType||'—')} · TRX: <code style="color:#818cf8">${escHtml(p.trxId)}</code></div>
           <div class="pay-meta">📅 ${fmtDate(p.createdAt)} · ${badgeHtml(p.status)}</div>
-          ${p.adminNote ? `<div class="pay-meta" style="color:#64748b;margin-top:.2rem">💬 ${p.adminNote}</div>` : ''}
-          ${p.approvedBy ? `<div class="pay-meta" style="color:#64748b;margin-top:.2rem">✓ Approved by ${p.approvedBy} · ${fmtDate(p.approvedAt)}</div>` : ''}
-          ${p.rejectedBy ? `<div class="pay-meta" style="color:#64748b;margin-top:.2rem">✕ Rejected by ${p.rejectedBy} · ${fmtDate(p.rejectedAt)}</div>` : ''}
+          ${p.adminNote ? `<div class="pay-meta" style="color:#64748b;margin-top:.2rem">💬 ${escHtml(p.adminNote)}</div>` : ''}
+          ${p.approvedBy ? `<div class="pay-meta" style="color:#64748b;margin-top:.2rem">✓ Approved by ${escHtml(p.approvedBy)} · ${fmtDate(p.approvedAt)}</div>` : ''}
+          ${p.rejectedBy ? `<div class="pay-meta" style="color:#64748b;margin-top:.2rem">✕ Rejected by ${escHtml(p.rejectedBy)} · ${fmtDate(p.rejectedAt)}</div>` : ''}
         </div>
         <div class="pay-amount">Rs ${(p.amount||0).toLocaleString()}</div>
         <div class="pay-actions" style="display:flex;align-items:center;gap:.5rem;flex-wrap:wrap">
-          ${hasPermission('viewPaymentProofs') && p.proofScreenshot ? `<a href="${p.proofScreenshot}" target="_blank" rel="noopener" class="btn btn-gray" style="text-decoration:none">🖼 View Proof</a>` : '<span class="badge badge-red">Proof hidden or unavailable</span>'}
+          ${hasPermission('viewPaymentProofs') && hasSafeProof ? `<a href="${escHtml(proofUrl)}" target="_blank" rel="noopener" class="btn btn-gray" style="text-decoration:none">🖼 View Proof</a>` : '<span class="badge badge-red">Proof hidden or unavailable</span>'}
           ${isPending && hasPermission('approveWalletTopups') ? `<button class="btn btn-green" onclick="approvePayment('${p._id}')">✓ Approve</button><button class="btn btn-red" onclick="rejectPayment('${p._id}')">✕ Reject</button>` : ''}
         </div>
       </div>`;
     }).join('');
-  } catch (e) { el.innerHTML = `<div class="empty-state">Error: ${e.message}</div>`; }
+  } catch (e) { el.innerHTML = `<div class="empty-state">Error: ${escHtml(e.message)}</div>`; }
 }
 
 async function approvePayment(paymentId) {
@@ -2904,7 +2907,7 @@ async function loadSOS(resolved = 'false') {
     const alerts = await api(url);
     if (!alerts.length) { el.innerHTML = '<div class="empty-state"><span class="empty-icon">✅</span>No alerts found</div>'; return; }
     el.innerHTML = alerts.map(a => renderSOSCard(a, !a.resolved)).join('');
-  } catch (e) { el.innerHTML = `<div class="empty-state" style="color:#ef4444">${e.message}</div>`; }
+  } catch (e) { el.innerHTML = `<div class="empty-state" style="color:#ef4444">${escHtml(e.message)}</div>`; }
 }
 
 function renderSOSCard(a, isLive = true) {
@@ -2912,28 +2915,36 @@ function renderSOSCard(a, isLive = true) {
   const loc  = a.location || {};
   const drv  = a.driverInfo || {};
   const ec   = a.emergencyContacts || [];
-  const mapsUrl = loc.lat ? `https://maps.google.com/?q=${loc.lat},${loc.lng}` : null;
-  const id   = a._id || a.sosId || '';
-  return `<div class="sos-card ${isLive?'unresolved':''}" id="sos-${id}">
+  const safeLat = Number.isFinite(Number(loc.lat)) ? Number(loc.lat) : null;
+  const safeLng = Number.isFinite(Number(loc.lng)) ? Number(loc.lng) : null;
+  const mapsUrl = safeLat !== null && safeLng !== null ? `https://maps.google.com/?q=${safeLat},${safeLng}` : null;
+  const id   = String(a._id || a.sosId || '');
+  const safeId = escHtml(id);
+  return `<div class="sos-card ${isLive?'unresolved':''}" id="sos-${safeId}">
     <div class="sos-card-header">
       ${isLive ? '<div class="sos-pulse"></div>' : ''}
       <div class="sos-title">🆘 ${isLive?'LIVE SOS ALERT':'Resolved Alert'}</div>
       <div class="sos-ts">${fmtDate(a.createdAt||a.ts)}</div>
     </div>
     <div class="sos-meta">
-      <div><div class="field-label">Triggered By</div><strong>${a.userName||user.name||'Unknown'}</strong></div>
-      <div><div class="field-label">Phone</div><strong>${a.userPhone||user.phone||'—'}</strong></div>
-      ${drv.name ? `<div><div class="field-label">Driver</div><strong>${drv.name}</strong></div>
-      <div><div class="field-label">Vehicle</div><strong>${drv.vehiclePlate||drv.vehicleModel||'—'}</strong></div>` : ''}
+      <div><div class="field-label">Triggered By</div><strong>${escHtml(a.userName||user.name||'Unknown')}</strong></div>
+      <div><div class="field-label">Phone</div><strong>${escHtml(a.userPhone||user.phone||'—')}</strong></div>
+      ${drv.name ? `<div><div class="field-label">Driver</div><strong>${escHtml(drv.name)}</strong></div>
+      <div><div class="field-label">Vehicle</div><strong>${escHtml(drv.vehiclePlate||drv.vehicleModel||'—')}</strong></div>` : ''}
       ${mapsUrl ? `<div class="sos-coords"><div class="field-label">Location</div><a href="${mapsUrl}" target="_blank">📍 Open in Maps</a></div>` : ''}
-      ${ec.length ? `<div><div class="field-label">Emergency Contacts</div><strong>${ec.map(c=>c.name||c.phone).join(', ')}</strong></div>` : ''}
+      ${ec.length ? `<div><div class="field-label">Emergency Contacts</div><strong>${escHtml(ec.map(c=>c.name||c.phone).join(', '))}</strong></div>` : ''}
     </div>
-    ${a.message ? `<div class="sos-msg">${a.message}</div>` : ''}
+    ${a.message ? `<div class="sos-msg">${escHtml(a.message)}</div>` : ''}
     ${isLive && id ? `<div class="sos-actions">
-      <button class="btn btn-green" onclick="resolveSOS('${id}')">✓ Mark Resolved</button>
+      <button class="btn btn-green" data-sos-id="${safeId}">✓ Mark Resolved</button>
     </div>` : ''}
   </div>`;
 }
+
+document.getElementById('sos-list')?.addEventListener('click', event => {
+  const button = event.target.closest('[data-sos-id]');
+  if (button) resolveSOS(button.dataset.sosId);
+});
 
 async function resolveSOS(id) {
   try {
@@ -3375,20 +3386,22 @@ async function loadRatings() {
     tbody.innerHTML = rides.map(r => {
       const pass = r.passenger || {};
       const drv  = r.driver    || {};
-      const stars = '★'.repeat(r.driverRating||0) + '☆'.repeat(5-(r.driverRating||0));
       const lowRating = (drv.rating||5) < 3;
+      const driverRating = Number.isFinite(Number(drv.rating)) ? Number(drv.rating).toFixed(1) : '5.0';
+      const rating = Number.isFinite(Number(r.driverRating)) ? Math.max(0, Math.min(5, Math.round(Number(r.driverRating)))) : 0;
+      const stars = '★'.repeat(rating) + '☆'.repeat(5 - rating);
       return `<tr>
-        <td>${pass.name||'—'}<br><span style="font-size:.68rem;color:#475569">${pass.phone||'—'}</span></td>
-        <td style="${lowRating?'color:#ef4444;font-weight:700':''}">${drv.name||'—'}<br>
-          <span style="font-size:.68rem;color:#475569">avg ⭐${(drv.rating||5).toFixed(1)}</span></td>
+        <td>${escHtml(pass.name||'—')}<br><span style="font-size:.68rem;color:#475569">${escHtml(pass.phone||'—')}</span></td>
+        <td style="${lowRating?'color:#ef4444;font-weight:700':''}">${escHtml(drv.name||'—')}<br>
+          <span style="font-size:.68rem;color:#475569">avg ⭐${driverRating}</span></td>
         <td><span style="color:#f5c518;font-size:.95rem;letter-spacing:.05em">${stars}</span><br>
-          <span style="font-size:.68rem;color:#475569">${r.driverRating}/5</span></td>
-        <td style="font-size:.78rem;color:#94a3b8;max-width:180px">${r.driverReview||'<span style="color:#334155">No comment</span>'}</td>
-        <td style="color:#f5c518;font-weight:700">Rs ${(r.fare||0).toLocaleString()}</td>
+          <span style="font-size:.68rem;color:#475569">${rating}/5</span></td>
+        <td style="font-size:.78rem;color:#94a3b8;max-width:180px">${r.driverReview ? escHtml(r.driverReview) : '<span style="color:#334155">No comment</span>'}</td>
+        <td style="color:#f5c518;font-weight:700">Rs ${Number(r.fare||0).toLocaleString()}</td>
         <td style="font-size:.72rem;color:#475569">${fmtDate(r.createdAt)}</td>
       </tr>`;
     }).join('');
-  } catch (e) { tbody.innerHTML = `<tr><td colspan="6" style="text-align:center;color:#ef4444;padding:1rem">${e.message}</td></tr>`; }
+  } catch (e) { tbody.innerHTML = `<tr><td colspan="6" style="text-align:center;color:#ef4444;padding:1rem">${escHtml(e.message)}</td></tr>`; }
 }
 
 // ── Support Tickets ───────────────────────────────────────────────────────────
@@ -3404,10 +3417,10 @@ async function loadSupportTickets(status = 'open') {
       const isOpen = t.status === 'open';
       return `<div class="pay-card" id="ticket-${t._id}" style="${isOpen?'border-left:3px solid #f5c518':'border-left:3px solid #22c55e'}">
         <div class="pay-info">
-          <div class="pay-name">${isOpen?'🟡':'✅'} ${t.subject}${isOpen?'<span class="new-notif">OPEN</span>':''}</div>
-          <div class="pay-meta">👤 ${u.name||'—'} · 📱 ${u.phone||u.email||'—'} · ${u.role||'customer'}</div>
-          <div class="pay-meta" style="color:#94a3b8;margin-top:.3rem">${t.message}</div>
-          ${t.adminReply ? `<div class="pay-meta" style="color:#22c55e;margin-top:.3rem">✉ Admin reply: ${t.adminReply}</div>` : ''}
+          <div class="pay-name">${isOpen?'🟡':'✅'} ${escHtml(t.subject)}${isOpen?'<span class="new-notif">OPEN</span>':''}</div>
+          <div class="pay-meta">👤 ${escHtml(u.name||'—')} · 📱 ${escHtml(u.phone||u.email||'—')} · ${escHtml(u.role||'customer')}</div>
+          <div class="pay-meta" style="color:#94a3b8;margin-top:.3rem">${escHtml(t.message)}</div>
+          ${t.adminReply ? `<div class="pay-meta" style="color:#22c55e;margin-top:.3rem">✉ Admin reply: ${escHtml(t.adminReply)}</div>` : ''}
           <div class="pay-meta" style="margin-top:.25rem">${fmtDate(t.createdAt)}</div>
         </div>
         ${isOpen ? `<div class="pay-actions">
@@ -3415,7 +3428,7 @@ async function loadSupportTickets(status = 'open') {
         </div>` : ''}
       </div>`;
     }).join('');
-  } catch (e) { el.innerHTML = `<div class="empty-state" style="color:#ef4444">${e.message}</div>`; }
+  } catch (e) { el.innerHTML = `<div class="empty-state" style="color:#ef4444">${escHtml(e.message)}</div>`; }
 }
 
 async function resolveTicket(id) {
@@ -3519,17 +3532,25 @@ async function loadDeletionRequests() {
       return;
     }
     tbody.innerHTML = users.map(u => `<tr>
-      <td><div style="font-weight:700;color:#e2e8f0">${u.name}</div></td>
-      <td>${u.phone || u.email || '—'}</td>
-      <td><span class="status-badge" style="background:#1e3a5f;color:#93c5fd">${u.role}</span></td>
+      <td><div style="font-weight:700;color:#e2e8f0">${escHtml(u.name)}</div></td>
+      <td>${escHtml(u.phone || u.email || '—')}</td>
+      <td><span class="status-badge" style="background:#1e3a5f;color:#93c5fd">${escHtml(u.role)}</span></td>
       <td style="font-size:.72rem;color:#475569">${fmtDate(u.updatedAt)}</td>
       <td><div style="display:flex;gap:.4rem">
-        <button class="btn btn-red"   onclick="approveDeletion('${u._id}','${u.name.replace(/'/g,"\\'")}')">🗑 Approve & Delete</button>
-        <button class="btn btn-green" onclick="rejectDeletion('${u._id}','${u.name.replace(/'/g,"\\'")}')">↩ Reject Request</button>
+        <button class="btn btn-red"   data-deletion-action="approve" data-user-id="${escHtml(u._id)}" data-user-name="${escHtml(u.name)}">🗑 Approve & Delete</button>
+        <button class="btn btn-green" data-deletion-action="reject" data-user-id="${escHtml(u._id)}" data-user-name="${escHtml(u.name)}">↩ Reject Request</button>
       </div></td>
     </tr>`).join('');
-  } catch (e) { tbody.innerHTML = `<tr><td colspan="5" style="text-align:center;color:#ef4444;padding:1rem">${e.message}</td></tr>`; }
+  } catch (e) { tbody.innerHTML = `<tr><td colspan="5" style="text-align:center;color:#ef4444;padding:1rem">${escHtml(e.message)}</td></tr>`; }
 }
+
+document.getElementById('del-tbody')?.addEventListener('click', event => {
+  const button = event.target.closest('[data-deletion-action]');
+  if (!button) return;
+  const { deletionAction, userId, userName } = button.dataset;
+  if (deletionAction === 'approve') approveDeletion(userId, userName);
+  if (deletionAction === 'reject') rejectDeletion(userId, userName);
+});
 
 async function approveDeletion(userId, name) {
   openDeleteModal(userId, name, null, true);
@@ -4135,19 +4156,29 @@ async function loadSubAdmins() {
       const granted = SUB_ADMIN_PERMISSION_CATALOG.filter(([, key]) => pr[key]).map(([, , label]) => label);
       return `<tr style="${isBlocked ? 'opacity:.6' : ''}">
         <td>
-          <strong style="color:#e2e8f0">${s.username}</strong>
+          <strong style="color:#e2e8f0">${escHtml(s.username)}</strong>
           ${isBlocked ? '<span class="badge badge-blocked" style="margin-left:.4rem;font-size:.6rem">BLOCKED</span>' : ''}
         </td>
-        <td><div class="permission-summary">${granted.length ? `${granted.length} permission${granted.length === 1 ? '' : 's'} assigned<br><span style="color:#64748b">${granted.slice(0, 3).join(' · ')}${granted.length > 3 ? ' …' : ''}</span>` : 'No dashboard access'}</div></td>
+        <td><div class="permission-summary">${granted.length ? `${granted.length} permission${granted.length === 1 ? '' : 's'} assigned<br><span style="color:#64748b">${escHtml(granted.slice(0, 3).join(' · '))}${granted.length > 3 ? ' …' : ''}</span>` : 'No dashboard access'}</div></td>
         <td style="font-size:.72rem;color:#475569">${fmtDate(s.createdAt)}</td>
         <td><div style="display:flex;gap:.3rem">
-          <button class="btn btn-blue" onclick="editSubAdmin('${s._id}','${s.username}','${permsJson}',${isBlocked})">✏️ Edit</button>
-          <button class="btn btn-red"  onclick="deleteSubAdmin('${s._id}','${s.username}')">🗑</button>
+          <button class="btn btn-blue" data-sub-action="edit" data-sub-id="${escHtml(s._id)}" data-sub-username="${escHtml(s.username)}" data-sub-permissions="${permsJson}" data-sub-blocked="${isBlocked}">✏️ Edit</button>
+          <button class="btn btn-red" data-sub-action="delete" data-sub-id="${escHtml(s._id)}" data-sub-username="${escHtml(s.username)}">🗑</button>
         </div></td>
       </tr>`;
     }).join('');
-  } catch (e) { tbody.innerHTML = `<tr><td colspan="4" style="text-align:center;color:#ef4444;padding:1rem">${e.message}</td></tr>`; }
+  } catch (e) { tbody.innerHTML = `<tr><td colspan="4" style="text-align:center;color:#ef4444;padding:1rem">${escHtml(e.message)}</td></tr>`; }
 }
+
+document.getElementById('sa-tbody')?.addEventListener('click', event => {
+  const button = event.target.closest('[data-sub-action]');
+  if (!button) return;
+  const { subAction, subId, subUsername, subPermissions, subBlocked } = button.dataset;
+  if (subAction === 'edit') {
+    try { editSubAdmin(subId, subUsername, JSON.parse(subPermissions || '{}'), subBlocked === 'true'); } catch {}
+  }
+  if (subAction === 'delete') deleteSubAdmin(subId, subUsername);
+});
 
 function openCreateSubAdmin() {
   renderPermissionMatrix('pn');

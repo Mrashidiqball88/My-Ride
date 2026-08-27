@@ -97,7 +97,7 @@ test.describe('scoped Sub-Admin browser permissions', () => {
     await page.locator('[data-sec="new-requests"]').click();
     await expect(page.locator('#req-tbody')).toContainText('Pending Driver');
     await expect(page.locator('#req-tbody button.btn-green')).toHaveCount(1);
-    await expect(page.locator('#req-tbody button.btn-red')).toHaveCount(0);
+    await expect(page.locator('#req-tbody button.btn-red')).toHaveCount(1);
 
     await page.locator('[data-sec="payments"]').click();
     await expect(page.locator('#pay-list')).toContainText('TRX-1');

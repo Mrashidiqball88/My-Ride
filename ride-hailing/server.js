@@ -33,6 +33,7 @@ const nodemailer = require('nodemailer');
 
 // ── 2. APP & SERVER INITIALIZATION ───────────────────────────────────────
 const app    = express();
+app.disable('x-powered-by');
 
 // ── 3. HEALTHCHECK ROUTES — FIRST lines after express(), zero dependencies
 // Replit deployment probes / immediately on startup; this must win before
@@ -42,8 +43,20 @@ app.get('/health', (_req, res) => res.status(200).send('OK'));
 app.get('/api',    (_req, res) => res.status(200).json({ status: 'ok' }));
 
 const server = http.createServer(app);
+const configuredCorsOrigins = String(process.env.CORS_ORIGIN || '')
+  .split(',')
+  .map(origin => origin.trim())
+  .filter(Boolean);
+function allowConfiguredOrigin(origin, callback) {
+  // Requests without an Origin include native clients and same-origin tools.
+  // They do not need an Access-Control-Allow-Origin response header.
+  if (!origin) return callback(null, true);
+  if (configuredCorsOrigins.includes(origin)) return callback(null, true);
+  // With no configured allowlist, do not opt into cross-origin browser access.
+  return callback(null, false);
+}
 const io     = new Server(server, {
-  cors: { origin: '*', methods: ['GET', 'POST'] },
+  cors: { origin: allowConfiguredOrigin, methods: ['GET', 'POST'] },
   // Keep the transport-level connection responsive while allowing the
   // application-level driver heartbeat to remain the source of truth for
   // online eligibility.
@@ -106,16 +119,32 @@ if (require.main === module) {
 }
 
 // ── 5. MIDDLEWARES & STATIC FILES ─────────────────────────────────────────
-app.use(cors());
+app.use(cors({ origin: allowConfiguredOrigin }));
+app.use((_req, res, next) => {
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
+  res.setHeader('X-Frame-Options', 'SAMEORIGIN');
+  res.setHeader('Permissions-Policy', 'camera=(), microphone=(), geolocation=(self)');
+  next();
+});
+// Route handlers log their internal exception details server-side but should
+// never disclose database, filesystem, or provider errors to API clients.
+app.use((_req, res, next) => {
+  const json = res.json.bind(res);
+  res.json = payload => res.statusCode >= 500
+    ? json({ error: 'Internal server error' })
+    : json(payload);
+  next();
+});
 // Keep the exact bytes for gateway signature verification while still exposing
 // the normal parsed JSON body to every other route.
 app.use(express.json({
-  limit: '50mb',
+  limit: process.env.REQUEST_BODY_LIMIT || '32mb',
   verify: (req, _res, buf) => {
     req.rawBody = Buffer.from(buf);
   }
 }));
-app.use(express.urlencoded({ limit: '50mb', extended: true }));
+app.use(express.urlencoded({ limit: process.env.REQUEST_BODY_LIMIT || '32mb', extended: true }));
 // Resolve the public directory absolutely — works in any CWD or spawn context.
 const PUBLIC_DIR = path.resolve(__dirname, 'public');
 app.use(express.static(PUBLIC_DIR));
@@ -142,6 +171,37 @@ fs.mkdirSync(CUSTOMER_ID_UPLOADS_DIR, { recursive: true });
 app.use('/uploads/customer_identity', (_req, res) => res.status(404).end());
 app.use('/uploads/driver_docs', (_req, res) => res.status(404).end());
 app.use('/uploads/driver_profiles', express.static(DRIVER_PROFILE_UPLOADS_DIR));
+
+// Lightweight in-process abuse protection for unauthenticated/high-cost
+// endpoints. Production deployments should still put a shared gateway/WAF in
+// front of autoscaled instances, but this prevents a single instance from
+// being trivially exhausted and fails closed for malformed bursts.
+const RATE_LIMIT_BUCKETS = new Map();
+function rateLimit({ windowMs, max, key = req => req.ip }) {
+  return (req, res, next) => {
+    const now = Date.now();
+    const bucketKey = `${req.path}:${key(req)}`;
+    const current = RATE_LIMIT_BUCKETS.get(bucketKey);
+    if (!current || current.resetAt <= now) {
+      RATE_LIMIT_BUCKETS.set(bucketKey, { count: 1, resetAt: now + windowMs });
+      return next();
+    }
+    current.count += 1;
+    if (current.count > max) {
+      res.setHeader('Retry-After', Math.ceil((current.resetAt - now) / 1000));
+      return res.status(429).json({ error: 'Too many requests. Please try again later.' });
+    }
+    return next();
+  };
+}
+const identityRateKey = req => `${req.ip}:${String(req.body?.email || req.body?.username || '').trim().toLowerCase()}`;
+app.use(['/api/auth/login', '/api/admin/login', '/api/admin/sub-user/login'],
+  rateLimit({ windowMs: 15 * 60 * 1000, max: 30, key: identityRateKey }));
+app.use(['/api/auth/register', '/api/auth/forgot-password', '/api/auth/reset-password', '/api/admin/forgot-password'],
+  rateLimit({ windowMs: 15 * 60 * 1000, max: 20, key: identityRateKey }));
+app.use('/api/geocode', rateLimit({ windowMs: 60 * 1000, max: 120 }));
+app.use('/api/fare/calculate', rateLimit({ windowMs: 60 * 1000, max: 120 }));
+app.use('/api/sos', rateLimit({ windowMs: 10 * 60 * 1000, max: 20 }));
 
 const MAX_ID_DOCUMENT_BYTES = 6 * 1024 * 1024;
 const ID_DOCUMENT_DATA_URL = /^data:image\/(jpeg|jpg|png|webp);base64,([A-Za-z0-9+/=\s]+)$/s;
@@ -230,6 +290,10 @@ const PAGES = {
   download: loadPage('download.html'),
 };
 
+const isProduction = process.env.NODE_ENV === 'production';
+if (isProduction && (!process.env.JWT_SECRET || process.env.JWT_SECRET.length < 32)) {
+  throw new Error('JWT_SECRET must be configured with at least 32 characters in production');
+}
 const JWT_SECRET = process.env.JWT_SECRET || 'ride-hailing-secret-fallback';
 let dbConnected  = false;
 
@@ -1744,7 +1808,10 @@ async function saveAdminSecurity(security) {
 async function verifySuperAdminPassword(candidate, security = null) {
   const current = security || await getAdminSecurity();
   if (current.passwordHash) return bcrypt.compare(String(candidate || ''), current.passwordHash);
-  return constantTimeEqual(candidate, process.env.ADMIN_PASSWORD || 'admin1234');
+  // There is deliberately no built-in password. A fresh local/demo instance
+  // may opt into ADMIN_PASSWORD explicitly; production must initialize the
+  // persisted admin password before login can succeed.
+  return Boolean(process.env.ADMIN_PASSWORD) && constantTimeEqual(candidate, process.env.ADMIN_PASSWORD);
 }
 
 async function verifyCustomerIdentityDocuments({ name, nationalId, front, back }) {
@@ -2861,11 +2928,13 @@ app.patch('/api/rides/:id/cancel', authMiddleware, async (req, res) => {
 });
 
 // PATCH /api/rides/:id/counter — driver submits an offer or counter-offer
-app.patch('/api/rides/:id/counter', authMiddleware, async (req, res) => {
+app.patch('/api/rides/:id/counter', authMiddleware, driverOnly, async (req, res) => {
   try {
-    if (req.user.role !== 'driver') return res.status(403).json({ error: 'Drivers only' });
     const { price, type } = req.body;           // type: 'accept' | 'counter'
-    if (!price || price < 1) return res.status(400).json({ error: 'Valid price required' });
+    const numericPrice = Number(price);
+    if (!Number.isFinite(numericPrice) || numericPrice < 1 || numericPrice > 1000000) {
+      return res.status(400).json({ error: 'Valid price required' });
+    }
 
     const ride = await Ride.findOne({ _id: req.params.id, status: 'requested', ...rideOfferIsStillOpenQuery() });
     if (!ride) return res.status(404).json({ error: 'Ride not available' });
@@ -2891,7 +2960,7 @@ app.patch('/api/rides/:id/counter', authMiddleware, async (req, res) => {
       vehicleModel: driver.vehicleModel || '',
       vehiclePlate: driver.vehiclePlate || '',
       rating:       driver.rating || 5.0,
-      price:        Number(price),
+      price:        numericPrice,
       type:         type === 'counter' ? 'counter' : 'accept',
       timestamp:    new Date()
     };
@@ -2932,13 +3001,23 @@ app.get('/api/driver/active-ride', authMiddleware, async (req, res) => {
 });
 
 // PATCH /api/rides/:id/accept-driver — customer selects a specific driver
-app.patch('/api/rides/:id/accept-driver', authMiddleware, async (req, res) => {
+app.patch('/api/rides/:id/accept-driver', authMiddleware, customerOnly, customerCanBook, async (req, res) => {
   try {
     const { driverId } = req.body;
     if (!driverId) return res.status(400).json({ error: 'driverId required' });
+    if (!mongoose.isValidObjectId(req.params.id) || !mongoose.isValidObjectId(driverId)) {
+      return res.status(400).json({ error: 'Invalid ride or driver ID' });
+    }
 
     const ride = await Ride.findOneAndUpdate(
-      { _id: req.params.id, passenger: req.user.id, status: 'requested', driver: null, ...rideOfferIsStillOpenQuery() },
+      {
+        _id: req.params.id,
+        passenger: req.user.id,
+        status: 'requested',
+        driver: null,
+        ...rideOfferIsStillOpenQuery(),
+        counterOffers: { $elemMatch: { driver: driverId } }
+      },
       { $set: { driver: driverId, status: 'accepted' } },
       { new: true }
     ).populate('passenger', 'name phone');
@@ -2946,7 +3025,8 @@ app.patch('/api/rides/:id/accept-driver', authMiddleware, async (req, res) => {
 
     // Find the agreed price from the offer
     const offer = ride.counterOffers.find(o => String(o.driver) === String(driverId));
-    if (offer && offer.price && offer.price !== ride.fare) {
+    if (!offer) return res.status(409).json({ error: 'That Driver has not offered this ride' });
+    if (offer.price && offer.price !== ride.fare) {
       ride.fare = offer.price;
     }
 
@@ -2967,7 +3047,20 @@ app.patch('/api/rides/:id/accept-driver', authMiddleware, async (req, res) => {
       }
     }
 
-    const driverUser = await User.findById(driverId).select('name phone vehicleType vehicleModel vehiclePlate rating profilePhoto');
+    const driverUser = await User.findOne({
+      _id: driverId,
+      role: 'driver',
+      accountStatus: 'active',
+      isOnline: true,
+      lastOnlineHeartbeat: { $gte: new Date(Date.now() - DRIVER_HEARTBEAT_MAX_AGE_MS) }
+    }).select('name phone vehicleType vehicleModel vehiclePlate rating profilePhoto');
+    if (!driverUser) {
+      await Ride.updateOne(
+        { _id: ride._id, driver: driverId, status: 'accepted' },
+        { $set: { driver: null, status: 'requested', verificationPin: null } }
+      );
+      return res.status(409).json({ error: 'Selected Driver is no longer available' });
+    }
     emitRideAccepted(ride, verificationPin, {
       id:           String(driverId),
       name:         driverUser.name,
@@ -3428,13 +3521,27 @@ app.get('/api/payments/history', adminJwt, requirePerm('viewPayments'), async (r
 app.post('/api/sos', authMiddleware, async (req, res) => {
   try {
     const { location, message, rideId, driverInfo } = req.body;
+    if (!location || !hasValidCoordinates(location)) {
+      return res.status(400).json({ error: 'Valid SOS coordinates are required' });
+    }
+    if (rideId && !mongoose.isValidObjectId(rideId)) {
+      return res.status(400).json({ error: 'Invalid ride ID' });
+    }
+    let ownedRide = null;
+    if (rideId) {
+      ownedRide = await Ride.findOne({
+        _id: rideId,
+        $or: [{ passenger: req.user.id }, { driver: req.user.id }]
+      }).select('_id');
+      if (!ownedRide) return res.status(403).json({ error: 'You are not a participant in this ride' });
+    }
     // Fetch user's emergency contacts for the alert
     const userDoc = await User.findById(req.user.id).select('emergencyContacts name phone');
     const sos = await SOS.create({
       user:     req.user.id,
-      location: location || { lat: 0, lng: 0 },
-      message:  message  || 'SOS Emergency Alert!',
-      ride:     rideId   || null
+      location,
+      message:  String(message || 'SOS Emergency Alert!').slice(0, 1000),
+      ride:     ownedRide?._id || null
     });
     const sosPayload = {
       sosId:             sos._id,
@@ -3446,8 +3553,9 @@ app.post('/api/sos', authMiddleware, async (req, res) => {
       emergencyContacts: userDoc?.emergencyContacts || [],
       ts: new Date().toISOString()
     };
-    io.emit('sos:alert', sosPayload);
-    io.to('admin-room').emit('sos:alert', sosPayload); // explicit to admin room
+    // SOS location and driver details are private operational data. Never
+    // broadcast them to every connected Customer/Driver.
+    io.to('admin-room').emit('sos:alert', sosPayload);
     res.status(201).json({
       success: true, sos,
       emergencyContacts: userDoc?.emergencyContacts || []
