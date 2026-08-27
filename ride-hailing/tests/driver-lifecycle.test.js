@@ -281,6 +281,102 @@ test('an Admin paid-until grant is immediately usable by the online availability
   }
 });
 
+test('the existing Grant Free Bonus handler credits the exact manual amount and notifies the Driver', async () => {
+  const walletUpdates = [];
+  const userUpdates = [];
+  const notifications = [];
+  const originalIoTo = service.io.to;
+  models.Settings.findOne = () => ({ lean: async () => null });
+  models.User.find = () => ({
+    select: async () => [{
+      _id: '507f1f77bcf86cd799439011',
+      name: 'Test Driver',
+      vehicleType: 'Car Sedan'
+    }]
+  });
+  models.Wallet.findOneAndUpdate = async (query, update) => {
+    walletUpdates.push({ query, update });
+    return { balance: 2234.5, bonusWallet: 1234.5 };
+  };
+  models.User.updateOne = async (_query, update) => {
+    userUpdates.push(update);
+    return { acknowledged: true };
+  };
+  service.io.to = room => ({
+    emit: (event, payload) => notifications.push({ room, event, payload })
+  });
+
+  const server = app.listen(0);
+  try {
+    const response = await adminJsonRequest(
+      server,
+      '/api/admin/drivers/grant-trial',
+      superAdminToken(),
+      'POST',
+      {
+        driverIds: ['507f1f77bcf86cd799439011'],
+        days: 3,
+        amount: 1234.5
+      }
+    );
+
+    assert.equal(response.response.status, 200);
+    assert.equal(response.body.bonusAmount, 1234.5);
+    assert.equal(response.body.results[0].amount, 1234.5);
+    assert.equal(walletUpdates.length, 1);
+    assert.equal(walletUpdates[0].update.$inc.balance, 1234.5);
+    assert.equal(walletUpdates[0].update.$inc.bonusWallet, 1234.5);
+    assert.equal(walletUpdates[0].update.$push.transactions.amount, 1234.5);
+    assert.match(walletUpdates[0].update.$push.transactions.description, /Admin Free Bonus Credit/);
+    assert.equal(userUpdates[0].isFreeTrial, true);
+    assert.ok(userUpdates[0].paidUntilDate instanceof Date);
+    assert.deepEqual(notifications, [{
+      room: 'user:507f1f77bcf86cd799439011',
+      event: 'fee:waived',
+      payload: {
+        paidUntilDate: userUpdates[0].paidUntilDate.toISOString(),
+        bonusAmount: 1234.5,
+        isFreeTrial: true,
+        trialStartDate: userUpdates[0].trialStartDate.toISOString()
+      }
+    }]);
+  } finally {
+    service.io.to = originalIoTo;
+    await new Promise(resolve => server.close(resolve));
+  }
+});
+
+test('the Grant Free Bonus handler rejects a missing or non-positive manual amount before changing balances', async () => {
+  let walletTouched = false;
+  models.Settings.findOne = () => ({ lean: async () => null });
+  models.Wallet.findOneAndUpdate = async () => {
+    walletTouched = true;
+    throw new Error('wallet must not be changed for an invalid bonus amount');
+  };
+
+  const server = app.listen(0);
+  try {
+    for (const amount of [undefined, 0, -25, 'not-a-number']) {
+      const response = await adminJsonRequest(
+        server,
+        '/api/admin/drivers/grant-trial',
+        superAdminToken(),
+        'POST',
+        {
+          driverIds: ['507f1f77bcf86cd799439011'],
+          days: 3,
+          ...(amount === undefined ? {} : { amount })
+        }
+      );
+      assert.equal(response.response.status, 400);
+      assert.match(response.body.error, /valid bonus amount/i);
+    }
+    assert.equal(walletTouched, false);
+  } finally {
+    await new Promise(resolve => server.close(resolve));
+  }
+});
+
 test('Long Range Only drivers are exempt from Daily Fees while Short Range Only and Both are charged', async () => {
   let walletTouched = false;
   models.Wallet.findOne = () => { walletTouched = true; throw new Error('Long Range Only must not read or debit a Daily Fee wallet'); };

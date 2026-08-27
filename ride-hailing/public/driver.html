@@ -2057,7 +2057,7 @@ function connectSocket() {
     const msg = hasBonus
       ? `✅ ${amountText} free bonus credited — ride acceptance is now active!`
       : isFreeTrial
-        ? '🎁 Free trial granted by admin — ride acceptance is now active!'
+        ? '🎁 Free bonus access granted by admin — ride acceptance is now active!'
         : '✅ Daily fee waived by admin — ride acceptance is now active!';
     if (hasBonus) await loadWalletSummary();
     showToast(msg, 'success');

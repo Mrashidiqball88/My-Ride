@@ -1962,7 +1962,7 @@ async function loadDrivers(status = 'all') {
       const ds         = feePaid ? paidUntil.toLocaleDateString('en-PK', { day:'2-digit', month:'short' }) : '';
       let feeCell;
       if (feePaid && d.isFreeTrial) {
-        feeCell = `<div style="font-size:.73rem"><span style="color:#f5c518;font-weight:700">🎁 Free Trial Active</span><br><span style="color:#64748b;font-size:.65rem">(Until ${ds})</span></div>`;
+        feeCell = `<div style="font-size:.73rem"><span style="color:#f5c518;font-weight:700">🎁 Free Bonus Active</span><br><span style="color:#64748b;font-size:.65rem">(Until ${ds})</span></div>`;
       } else if (feePaid) {
         feeCell = `<div style="font-size:.73rem">
           <span class="fee-pass-active fee-pass-timer" data-fee-expiry="${paidUntil.toISOString()}">Active Pass</span>
@@ -1985,7 +1985,7 @@ async function loadDrivers(status = 'all') {
         <td><div style="display:flex;gap:.3rem;flex-wrap:wrap">
           <button class="btn btn-blue"   onclick="viewUser('${d._id}','driver')">👁</button>
           <button class="btn btn-gray"   onclick="viewDocs('${d._id}')">📄</button>
-          ${hasPermission('manageDriverPasses') ? `<button class="btn btn-yellow" onclick="grantTrial('${d._id}')" title="Grant Free Trial">🎁</button>` : ''}
+          ${hasPermission('manageDriverPasses') ? `<button class="btn btn-yellow" onclick="grantTrial('${d._id}')" title="Grant Free Bonus">🎁</button>` : ''}
           ${d.accountStatus==='pending'   && hasPermission('manageDriverApprovals') ? `<button class="btn btn-green"  onclick="userAction('${d._id}','approve','driver')">✓</button>` : ''}
           ${d.accountStatus==='active'    && hasPermission('manageDriverStatus')   ? `<button class="btn btn-yellow" onclick="userAction('${d._id}','suspend','driver')">⏸</button>
             <button class="btn btn-red"   onclick="userAction('${d._id}','block','driver')">⛔</button>` : ''}
