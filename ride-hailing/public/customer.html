@@ -1468,10 +1468,10 @@ function initMap() {
 
 function applyCustomerGpsPosition(pos, { forceCenter = false } = {}) {
   const { latitude: lat, longitude: lng } = pos.coords;
-  // Startup/browser GPS can briefly return an unavailable or out-of-area
-  // fix. Ignore it silently; only explicit pickup/dropoff selection should
-  // show the Pakistan-only validation message.
-  if (!isPakistanLocation(lat, lng) || !map) return false;
+  // Startup/browser GPS can briefly return an unavailable or malformed fix.
+  if (!Number.isFinite(lat) || !Number.isFinite(lng)
+    || lat < -90 || lat > 90 || lng < -180 || lng > 180
+    || (lat === 0 && lng === 0) || !map) return false;
   const isFirstFix = !customerGpsHasFix;
   customerGpsHasFix = true;
   customerLocation = { lat, lng };

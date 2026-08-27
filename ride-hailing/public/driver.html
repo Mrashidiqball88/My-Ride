@@ -15,7 +15,6 @@
 <title>My Ride - Driver</title>
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-<script src="/pakistan-geofence.js"></script>
 <script src="/socket.io/socket.io.js"></script>
 <style>
 @import url('https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Space+Mono:wght@400;700&display=swap');
@@ -813,21 +812,12 @@ let activeRideLocationRequestInFlight = false;
 let readCurrentDriverLocation = null;
 let activeRideLocationGeneration = 0;
 let activeRideLocationRideId = null;
-const PAKISTAN_ONLY_MESSAGE = window.MyRidePakistanGeofence?.PAKISTAN_ONLY_MESSAGE
-  || 'Please select a location inside Pakistan.';
 
 // ── Toast ──────────────────────────────────────────────────────────────────
 function showToast(msg, type = 'info') {
   const el = document.getElementById('toast');
   el.textContent = msg; el.className = `toast ${type} show`;
   setTimeout(() => el.className = 'toast', 3000);
-}
-
-function isPakistanLocation(lat, lng) {
-  const latitude = Number(lat), longitude = Number(lng);
-  if (!Number.isFinite(latitude) || !Number.isFinite(longitude)) return false;
-  const validator = window.MyRidePakistanGeofence?.isWithinPakistan;
-  return typeof validator === 'function' && validator(latitude, longitude) === true;
 }
 
 function stopActiveRideLocationSync() {
@@ -1542,10 +1532,11 @@ function initMap() {
   if (navigator.geolocation) {
     const applyDriverLocation = (pos, { publish = true, activeRideTick = false } = {}) => {
       const { latitude: lat, longitude: lng } = pos.coords;
-      // GPS can briefly report 0,0, a stale location, or a location outside
-      // the service area during startup. Ignore those fixes silently; the
-      // Pakistan warning is reserved for explicit user-selected locations.
-      if (!isPakistanLocation(lat, lng)) return;
+      // GPS can briefly report 0,0, a stale location, or malformed data during
+      // startup. Ignore those fixes silently.
+      if (!Number.isFinite(lat) || !Number.isFinite(lng)
+        || lat < -90 || lat > 90 || lng < -180 || lng > 180
+        || (lat === 0 && lng === 0)) return;
       const isFirstFix = !driverGpsHasFix;
       driverGpsHasFix = true;
       const previousLocation = driverLocation;
@@ -1612,7 +1603,9 @@ function centerDriverMapPreservingZoom(point, { animate = true, duration = .45 }
   if (!map || !point) return;
   const lat = Number(point.lat), lng = Number(point.lng);
   const zoom = map.getZoom();
-  if (!isPakistanLocation(lat, lng) || !Number.isFinite(zoom)) return;
+  if (!Number.isFinite(lat) || !Number.isFinite(lng)
+    || lat < -90 || lat > 90 || lng < -180 || lng > 180
+    || !Number.isFinite(zoom)) return;
   map.setView([lat, lng], zoom, { animate, duration });
 }
 
@@ -1625,9 +1618,6 @@ function haversineKm(a, b) {
 }
 
 async function requestRoadRoute(points) {
-  if (points.some(point => !isPakistanLocation(point?.lat, point?.lng))) {
-    throw new Error(PAKISTAN_ONLY_MESSAGE);
-  }
   const encoded = points.map(point => `${Number(point.lng)},${Number(point.lat)}`).join(';');
   return apiCall(`/api/routing/road?points=${encodeURIComponent(encoded)}`);
 }
@@ -1639,7 +1629,7 @@ function activeNavigationDestination(ride = activeRide) {
     ? ride.dropoffLocations
     : (ride.dropoffLocation ? [ride.dropoffLocation] : []);
   const point = inProgress ? stops[0] : ride.pickupLocation;
-  if (!point?.lat || !point?.lng || !isPakistanLocation(point.lat, point.lng)) return null;
+  if (!point?.lat || !point?.lng) return null;
   return {
     point,
     label: inProgress ? 'To drop-off' : 'To pickup',

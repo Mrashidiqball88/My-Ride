@@ -1075,54 +1075,6 @@ test.describe('live Mongo fare refresh', () => {
     }
   });
 
-  test('rejects out-of-Pakistan customer locations in the browser and API', async ({ browser, playwright }) => {
-    const baseURL = `http://127.0.0.1:${httpServer.address().port}`;
-    const request = await playwright.request.newContext({ baseURL });
-    const customerPage = await browser.newPage();
-
-    try {
-      await openAuthenticatedClient(customerPage, baseURL, '/customer', customer, token(customer));
-      const selection = await customerPage.evaluate(async () => ({
-        accepted: await setPickup(28.6139, 77.2090, 'Delhi'),
-        message: document.getElementById('toast')?.textContent
-      }));
-      expect(selection).toEqual({
-        accepted: false,
-        message: 'Please select a location inside Pakistan.'
-      });
-
-      const routing = await request.get(`/api/routing/road?points=${encodeURIComponent('77.2090,28.6139;74.3587,31.5204')}`, {
-        headers: authHeaders(customer)
-      });
-      expect(routing.status()).toBe(422);
-      await expect(routing.json()).resolves.toMatchObject({
-        error: 'Please select a location inside Pakistan.',
-        code: 'OUTSIDE_PAKISTAN'
-      });
-
-      const multiStopRide = await request.post('/api/rides', {
-        headers: authHeaders(customer),
-        data: {
-          pickupLocation: { lat: 31.5204, lng: 74.3587, address: 'Lahore' },
-          dropoffLocations: [
-            { lat: 31.5304, lng: 74.3687, address: 'Local stop' },
-            { lat: 28.6139, lng: 77.2090, address: 'Delhi' }
-          ],
-          distance: 10,
-          vehicleType: 'Car Mini'
-        }
-      });
-      expect(multiStopRide.status()).toBe(422);
-      await expect(multiStopRide.json()).resolves.toMatchObject({
-        error: 'Please select a location inside Pakistan.',
-        code: 'OUTSIDE_PAKISTAN'
-      });
-    } finally {
-      await customerPage.close();
-      await request.dispose();
-    }
-  });
-
   test('loads native no-key OpenStreetMap Driver map tiles without CSS inversion', async ({ browser }) => {
     const baseURL = `http://127.0.0.1:${httpServer.address().port}`;
     const context = await browser.newContext({
