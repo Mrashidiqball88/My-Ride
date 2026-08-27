@@ -4,9 +4,9 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>My Ride Admin Panel</title>
-<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" crossorigin="">
+<link rel="stylesheet" href="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.css">
 <script src="/socket.io/socket.io.js"></script>
-<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" crossorigin=""></script>
+<script src="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.js"></script>
 <style>
 *{margin:0;padding:0;box-sizing:border-box}
 body{font-family:'Segoe UI',system-ui,sans-serif;background:#06060e;color:#e2e8f0;height:100vh;overflow:hidden;display:flex}
@@ -116,6 +116,23 @@ body{font-family:'Segoe UI',system-ui,sans-serif;background:#06060e;color:#e2e8f
 .admin-live-map-actions{display:flex;align-items:center;gap:.55rem;flex-wrap:wrap;justify-content:flex-end}
 .admin-live-map-sync{font-size:.68rem;color:#67e8f9;white-space:nowrap}
 .admin-live-map-toolbar{display:flex;align-items:center;gap:.55rem;flex-wrap:wrap;border-top:1px solid #1e1e2e;border-bottom:1px solid #1e1e2e;padding:.65rem 0;margin-bottom:.85rem}
+.admin-place-search{display:flex;align-items:flex-end;gap:.55rem;flex:1 1 360px;min-width:280px}
+.admin-place-search-field{flex:1;min-width:0}
+.admin-place-search-label{display:block;font-size:.62rem;color:#94a3b8;font-weight:800;letter-spacing:.05em;text-transform:uppercase;margin-bottom:.3rem}
+.admin-place-search-row{display:flex;gap:.45rem;align-items:center}
+.admin-place-search-input{width:100%;min-width:0;background:#06060e;border:1px solid #1e1e3a;border-radius:9px;padding:.55rem .7rem;color:#e2e8f0;font-size:.78rem;outline:none}
+.admin-place-search-input:focus{border-color:#38bdf8}
+.admin-place-search-results{flex-basis:100%;width:100%;margin-top:.1rem;max-height:210px;overflow-y:auto}
+.admin-place-search-results:empty{display:none}
+.admin-place-result{display:flex;align-items:center;gap:.6rem;width:100%;text-align:left;background:#06060e;border:1px solid #1e1e2e;border-radius:9px;color:#e2e8f0;padding:.55rem .7rem;cursor:pointer;font:inherit}
+.admin-place-result:hover,.admin-place-result:focus-visible{border-color:#38bdf8;background:#0a1020;outline:none}
+.admin-place-result-copy{min-width:0;flex:1}
+.admin-place-result-primary{font-size:.76rem;font-weight:800;display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.admin-place-result-secondary{font-size:.63rem;color:#64748b;display:block;margin-top:.15rem;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.admin-place-search-wrap{display:flex;flex-wrap:wrap;align-items:flex-end;gap:.55rem;width:100%;margin-bottom:.85rem}
+.admin-place-city{font-size:.65rem;color:#67e8f9;white-space:nowrap;padding-bottom:.58rem}
+.admin-place-expand{background:none;border:1px solid #155e75;border-radius:8px;color:#67e8f9;padding:.45rem .6rem;font-size:.68rem;cursor:pointer;white-space:nowrap}
+.admin-place-expand:disabled{opacity:.5;cursor:wait}
 .live-map-count{display:inline-flex;align-items:center;gap:.38rem;color:#cbd5e1;font-size:.7rem;font-weight:800}
 .live-map-count::before{content:"";width:8px;height:8px;border-radius:50%;background:#64748b}
 .live-map-count.driver::before{background:#38bdf8;box-shadow:0 0 0 3px rgba(56,189,248,.12)}
@@ -136,6 +153,13 @@ body{font-family:'Segoe UI',system-ui,sans-serif;background:#06060e;color:#e2e8f
 .admin-live-map-canvas{position:relative;min-width:0}
 .admin-map-pin{width:32px;height:32px;border-radius:50%;display:grid;place-items:center;border:3px solid #fff;box-shadow:0 4px 14px rgba(0,0,0,.5);font-size:.62rem;font-weight:900;color:#07111b}
 .admin-map-pin.driver{background:#38bdf8}.admin-map-pin.customer{background:#f5c518;color:#241b00}
+.admin-live-marker{display:grid;place-items:center;background:transparent;border:0}
+.maplibregl-popup-content{background:#0f0f1e;color:#e2e8f0;border:1px solid #1e1e2e;border-radius:10px;padding:.7rem .8rem;box-shadow:0 8px 24px rgba(0,0,0,.45);font-size:.75rem;line-height:1.45}
+.maplibregl-popup-tip{border-top-color:#0f0f1e;border-bottom-color:#0f0f1e}
+.maplibregl-popup-close-button{color:#94a3b8;font-size:1rem;padding:.25rem .45rem}
+.maplibregl-ctrl-group{background:#0f0f1e;border:1px solid #1e1e2e;box-shadow:0 4px 12px rgba(0,0,0,.35)}
+.maplibregl-ctrl-group button{filter:invert(1) hue-rotate(180deg);opacity:.8}
+.maplibregl-ctrl-attrib{font-size:9px;background:rgba(15,15,30,.8);color:#94a3b8}
 .income-section{margin-top:0;background:#0f0f1e;border:1px solid #1e1e2e;border-radius:14px;padding:1rem}
 .income-section .sec-hdr{margin-bottom:.75rem}
 @media (max-width:980px) and (min-width:701px){
@@ -524,6 +548,22 @@ input[type=date]:focus{border-color:#f5c518}
             <span class="live-map-count driver">Drivers <strong id="admin-live-driver-count">0</strong></span>
             <span class="live-map-count customer">Customers <strong id="admin-live-customer-count">0</strong></span>
             <span style="font-size:.68rem;color:#64748b;margin-left:auto">Fresh locations only</span>
+          </div>
+          <div class="admin-place-search-wrap">
+            <div class="admin-place-search">
+              <div class="admin-place-search-field">
+                <label class="admin-place-search-label" for="admin-place-search-input">Search a place</label>
+                <div class="admin-place-search-row">
+                  <input class="admin-place-search-input" id="admin-place-search-input" type="search"
+                    placeholder="Search an area, street or city…" autocomplete="off"
+                    oninput="onAdminPlaceInput()" onkeydown="if(event.key==='Enter')searchAdminPlacesNow()">
+                  <button class="btn btn-blue" id="admin-place-search-btn" type="button" onclick="searchAdminPlacesNow()">Search</button>
+                </div>
+              </div>
+              <span class="admin-place-city" id="admin-place-city" aria-live="polite"></span>
+            </div>
+            <button class="admin-place-expand" id="admin-place-expand" type="button" style="display:none" onclick="expandAdminPlaceSearch()">Show more cities</button>
+            <div class="admin-place-search-results" id="admin-place-search-results" aria-live="polite"></div>
           </div>
           <div class="admin-live-map-body">
             <div class="admin-live-map-canvas">
@@ -1309,6 +1349,7 @@ input[type=date]:focus{border-color:#f5c518}
 <script>
 // ── Constants / State ─────────────────────────────────────────────────────────
 const API = '';
+const MAP_STYLE_URL = 'https://demotiles.maplibre.org/style.json';
 let adminToken = localStorage.getItem('admin_token');
 let adminEmail = localStorage.getItem('admin_email') || '';
 let socket = null;
@@ -1332,6 +1373,18 @@ let adminLiveLocations = [];
 let adminLiveMarkers = new Map();
 let adminLiveMapHasFitted = false;
 let adminLiveLocationRefreshTimer = null;
+let adminPlaceSearchTimer = null;
+let adminPlaceSearchSeq = 0;
+let adminPlaceSearchQuery = '';
+let adminPlaceSearchResults = [];
+let adminPlaceSearchRemoteResults = [];
+let adminPlaceSearchBroadLoaded = false;
+let adminPlaceSearchBroadLoading = false;
+let adminActiveCity = '';
+let adminCityLocation = null;
+let adminCityRequest = 0;
+let adminCityDetectionInFlight = false;
+let adminCityWatchId = null;
 const SUB_ADMIN_PERMISSION_CATALOG = [
   ['Dashboard', 'viewOverview', 'View overview dashboard'],
   ['Drivers', 'viewDrivers', 'View drivers & vehicle categories'],
@@ -1438,6 +1491,10 @@ function adminLogout() {
   // Disconnect live socket
   if (socket) { socket.disconnect(); socket = null; }
   closeLiveLocationMap();
+  if (adminCityWatchId !== null && navigator.geolocation) {
+    navigator.geolocation.clearWatch(adminCityWatchId);
+    adminCityWatchId = null;
+  }
 
   // Wipe all auth state from memory and storage
   localStorage.clear();
@@ -1828,6 +1885,9 @@ async function loadStats() {
 
 // ── 1. OVERVIEW ──────────────────────────────────────────────────────────────
 async function loadOverview() {
+  initAdminLiveMap();
+  startAdminCityDetection();
+  updateAdminPlaceCityLabel();
   await loadStats();
   try {
     const income = await api('/api/admin/daily-income');
@@ -2282,25 +2342,308 @@ async function runMapSearch() {
   }
 }
 
+const ADMIN_LOCATION_CITY_ALIASES = [
+  ['lahore', 'Lahore'], ['gujranwala', 'Gujranwala'], ['gujrat', 'Gujrat'],
+  ['islamabad', 'Islamabad'], ['karachi', 'Karachi'], ['multan', 'Multan'],
+  ['rawalpindi', 'Rawalpindi'], ['faisalabad', 'Faisalabad'], ['peshawar', 'Peshawar'],
+  ['quetta', 'Quetta'], ['sialkot', 'Sialkot'], ['bahawalpur', 'Bahawalpur'],
+  ['hyderabad', 'Hyderabad'], ['abbottabad', 'Abbottabad'], ['sargodha', 'Sargodha'],
+  ['sukkur', 'Sukkur'], ['mardan', 'Mardan'], ['kasur', 'Kasur'],
+  ['sheikhupura', 'Sheikhupura'], ['jhelum', 'Jhelum'],
+  ['dera ghazi khan', 'Dera Ghazi Khan'], ['rahim yar khan', 'Rahim Yar Khan']
+];
+
+function normalizeAdminCity(value) {
+  return String(value || '').trim().toLocaleLowerCase().replace(/\s+/g, ' ');
+}
+
+function adminCitiesMatch(left, right) {
+  const a = normalizeAdminCity(left);
+  const b = normalizeAdminCity(right);
+  return Boolean(a && b && (a === b || a.includes(b) || b.includes(a)));
+}
+
+function canonicalAdminCity(value) {
+  const normalized = normalizeAdminCity(value);
+  const alias = ADMIN_LOCATION_CITY_ALIASES.find(([needle]) => normalized === needle || normalized.includes(needle));
+  return alias ? alias[1] : String(value || '').trim();
+}
+
+function explicitAdminCity(query) {
+  const normalized = normalizeAdminCity(query);
+  return ADMIN_LOCATION_CITY_ALIASES
+    .filter(([needle]) => normalized.includes(needle))
+    .sort((a, b) => b[0].length - a[0].length)[0]?.[1] || '';
+}
+
+function adminPlaceScope(query, broad = false) {
+  const explicitCity = explicitAdminCity(query);
+  return {
+    city: canonicalAdminCity(explicitCity || adminActiveCity),
+    broad: Boolean(broad),
+    explicitCity
+  };
+}
+
+async function detectAdminActiveCity(lat, lng) {
+  const point = { lat: Number(lat), lng: Number(lng) };
+  if (!Number.isFinite(point.lat) || !Number.isFinite(point.lng)
+    || point.lat < -90 || point.lat > 90 || point.lng < -180 || point.lng > 180
+    || (point.lat === 0 && point.lng === 0)) return;
+  if (adminCityLocation && Math.hypot(
+    (adminCityLocation.lat - point.lat) * 111,
+    (adminCityLocation.lng - point.lng) * 111
+  ) < 8) return;
+  if (adminCityDetectionInFlight) return;
+  const requestId = ++adminCityRequest;
+  adminCityDetectionInFlight = true;
+  try {
+    const response = await fetch(
+      `/api/geocode/reverse?lat=${encodeURIComponent(point.lat)}&lng=${encodeURIComponent(point.lng)}`,
+      { headers: { ...(adminToken ? { Authorization: `Bearer ${adminToken}` } : {}) } }
+    );
+    if (!response.ok) return;
+    const data = await response.json();
+    if (requestId !== adminCityRequest) return;
+    const nextCity = canonicalAdminCity(data.city || '');
+    adminCityLocation = point;
+    if (nextCity && nextCity !== adminActiveCity) {
+      adminActiveCity = nextCity;
+      updateAdminPlaceCityLabel();
+      if (adminPlaceSearchQuery) onAdminPlaceInput();
+    }
+  } catch (error) {
+    console.warn('Admin active city detection unavailable:', error.message);
+  } finally {
+    if (requestId === adminCityRequest) adminCityDetectionInFlight = false;
+  }
+}
+
+function startAdminCityDetection() {
+  if (!navigator.geolocation || adminCityWatchId !== null) return;
+  const onPosition = position => detectAdminActiveCity(position.coords.latitude, position.coords.longitude);
+  const options = { enableHighAccuracy: false, maximumAge: 60000, timeout: 10000 };
+  navigator.geolocation.getCurrentPosition(onPosition, () => {}, options);
+  adminCityWatchId = navigator.geolocation.watchPosition(onPosition, () => {}, options);
+}
+
+async function searchAdminPlaces(query, { city = '', broad = false } = {}) {
+  try {
+    const params = new URLSearchParams({ q: query });
+    if (city && !broad) params.set('city', city);
+    if (broad) params.set('broad', '1');
+    const response = await fetch(`/api/geocode?${params.toString()}`, {
+      headers: { ...(adminToken ? { Authorization: `Bearer ${adminToken}` } : {}) }
+    });
+    if (!response.ok) return [];
+    const data = await response.json();
+    return Array.isArray(data) ? data : [];
+  } catch {
+    return [];
+  }
+}
+
+function normalizeAdminPlace(item) {
+  const address = item?.address || {};
+  const parts = String(item?.display_name || '').split(',').map(part => part.trim()).filter(Boolean);
+  const named = item?.namedetails?.name || item?.namedetails?.['name:en'] || '';
+  const primary = item?.primary || named || address.neighbourhood || address.suburb
+    || address.quarter || address.road || address.footway || address.pedestrian
+    || address.village || address.town || address.city || parts[0] || '';
+  const city = item?.city || address.city || address.town || address.municipality
+    || address.county || '';
+  const secondary = item?.secondary || parts.filter(part => part !== primary && part !== 'Pakistan').slice(0, 3).join(', ');
+  const lat = Number(item?.lat);
+  const lon = Number(item?.lon ?? item?.lng);
+  if (!primary || !Number.isFinite(lat) || !Number.isFinite(lon)) return null;
+  const kind = item?.kind || (item?.type === 'road' || item?.class === 'highway'
+    ? 'Street' : item?.type === 'suburb' || item?.type === 'neighbourhood' ? 'Area' : '');
+  return { ...item, primary, secondary, city, kind, lat, lon };
+}
+
+function rankAdminPlaces(results, query, preferredCity = '', broad = false) {
+  const needle = query.trim().toLocaleLowerCase();
+  return (results || [])
+    .map(normalizeAdminPlace)
+    .filter(Boolean)
+    .filter(item => broad || !preferredCity || adminCitiesMatch(item.city, preferredCity))
+    .map(item => {
+      const primary = item.primary.toLocaleLowerCase();
+      const searchable = `${item.primary} ${item.secondary} ${item.city}`.toLocaleLowerCase();
+      const relevance = primary === needle ? 0 : primary.startsWith(needle) ? 1
+        : primary.includes(needle) ? 2 : searchable.includes(needle) ? 3 : 4;
+      return { item, relevance, cityPriority: preferredCity && adminCitiesMatch(item.city, preferredCity) ? 0 : 1 };
+    })
+    .filter(item => item.relevance < 4)
+    .sort((a, b) => a.cityPriority - b.cityPriority || a.relevance - b.relevance
+      || String(a.item.primary).localeCompare(String(b.item.primary)))
+    .map(({ item }) => item)
+    .filter((item, index, all) => all.findIndex(other =>
+      other.primary.toLocaleLowerCase() === item.primary.toLocaleLowerCase()
+      && Math.abs(other.lat - item.lat) < .00001
+      && Math.abs(other.lon - item.lon) < .00001
+    ) === index)
+    .slice(0, 24);
+}
+
+function updateAdminPlaceCityLabel() {
+  const label = document.getElementById('admin-place-city');
+  if (!label) return;
+  label.textContent = adminActiveCity ? `Prioritizing ${adminActiveCity}` : 'Detecting nearby city…';
+}
+
+function setAdminPlaceSearchMessage(message, color = '#64748b') {
+  const results = document.getElementById('admin-place-search-results');
+  if (results) results.innerHTML = `<div style="font-size:.68rem;color:${color};padding:.4rem .2rem">${escHtml(message)}</div>`;
+}
+
+function renderAdminPlaceResults(results, query = adminPlaceSearchQuery) {
+  const container = document.getElementById('admin-place-search-results');
+  const expand = document.getElementById('admin-place-expand');
+  if (!container) return;
+  const scope = adminPlaceScope(query, adminPlaceSearchBroadLoaded);
+  adminPlaceSearchResults = rankAdminPlaces(results, query, scope.city, scope.broad);
+  if (!query) {
+    container.innerHTML = '';
+    if (expand) expand.style.display = 'none';
+    return;
+  }
+  container.innerHTML = adminPlaceSearchResults.length
+    ? adminPlaceSearchResults.map((item, index) => `
+      <button class="admin-place-result" type="button" data-admin-place-index="${index}">
+        <span class="sheet-item-icon">📍</span>
+        <span class="admin-place-result-copy">
+          <span class="admin-place-result-primary">${escHtml(item.primary)}</span>
+          <span class="admin-place-result-secondary">${escHtml([item.kind, item.secondary || item.city].filter(Boolean).join(' · '))}</span>
+        </span>
+      </button>`).join('')
+    : '<div style="font-size:.68rem;color:#64748b;padding:.4rem .2rem">No matching places in the prioritized city yet.</div>';
+  if (expand) {
+    expand.style.display = scope.city && !adminPlaceSearchBroadLoaded ? 'inline-block' : 'none';
+    expand.disabled = adminPlaceSearchBroadLoading;
+    expand.textContent = adminPlaceSearchBroadLoading ? 'Loading other cities…' : 'Show more cities';
+  }
+}
+
+function onAdminPlaceInput() {
+  const input = document.getElementById('admin-place-search-input');
+  const query = input?.value.trim() || '';
+  clearTimeout(adminPlaceSearchTimer);
+  const requestId = ++adminPlaceSearchSeq;
+  adminPlaceSearchQuery = query;
+  adminPlaceSearchResults = [];
+  adminPlaceSearchRemoteResults = [];
+  adminPlaceSearchBroadLoaded = false;
+  adminPlaceSearchBroadLoading = false;
+  updateAdminPlaceCityLabel();
+  renderAdminPlaceResults([], query);
+  if (!query) return;
+  setAdminPlaceSearchMessage('Searching prioritized city…');
+  adminPlaceSearchTimer = setTimeout(async () => {
+    const scope = adminPlaceScope(query);
+    const remote = await searchAdminPlaces(query, { city: scope.city });
+    if (requestId !== adminPlaceSearchSeq) return;
+    adminPlaceSearchRemoteResults = remote;
+    renderAdminPlaceResults(remote, query);
+  }, 140);
+}
+
+async function searchAdminPlacesNow() {
+  const input = document.getElementById('admin-place-search-input');
+  const query = input?.value.trim() || '';
+  if (!query) return;
+  clearTimeout(adminPlaceSearchTimer);
+  const requestId = ++adminPlaceSearchSeq;
+  adminPlaceSearchQuery = query;
+  const button = document.getElementById('admin-place-search-btn');
+  if (button) { button.disabled = true; button.textContent = 'Searching…'; }
+  setAdminPlaceSearchMessage('Searching prioritized city…');
+  const scope = adminPlaceScope(query);
+  const remote = await searchAdminPlaces(query, { city: scope.city });
+  if (requestId === adminPlaceSearchSeq) {
+    adminPlaceSearchRemoteResults = remote;
+    renderAdminPlaceResults(remote, query);
+  }
+  if (button) { button.disabled = false; button.textContent = 'Search'; }
+}
+
+async function expandAdminPlaceSearch() {
+  if (!adminPlaceSearchQuery || adminPlaceSearchBroadLoaded || adminPlaceSearchBroadLoading) return;
+  const query = adminPlaceSearchQuery;
+  const requestId = ++adminPlaceSearchSeq;
+  adminPlaceSearchBroadLoading = true;
+  renderAdminPlaceResults(adminPlaceSearchRemoteResults, query);
+  const broadRemote = await searchAdminPlaces(query, { broad: true });
+  if (requestId !== adminPlaceSearchSeq) return;
+  adminPlaceSearchRemoteResults = [...adminPlaceSearchRemoteResults, ...broadRemote];
+  adminPlaceSearchBroadLoaded = true;
+  adminPlaceSearchBroadLoading = false;
+  renderAdminPlaceResults(adminPlaceSearchRemoteResults, query);
+}
+
+function focusAdminPlace(item) {
+  const input = document.getElementById('admin-place-search-input');
+  if (input) input.value = item.primary;
+  const expand = document.getElementById('admin-place-expand');
+  if (expand) expand.style.display = 'none';
+  const center = [Number(item.lon), Number(item.lat)];
+  if (!adminLiveMap) initAdminLiveMap();
+  const move = () => adminLiveMap?.easeTo({ center, zoom: 14, duration: 500 });
+  if (adminLiveMap?.isStyleLoaded()) move();
+  else adminLiveMap?.once('load', move);
+}
+
+document.getElementById('admin-place-search-results')?.addEventListener('click', event => {
+  const button = event.target.closest('[data-admin-place-index]');
+  if (!button) return;
+  const item = adminPlaceSearchResults[Number(button.dataset.adminPlaceIndex)];
+  if (item) focusAdminPlace(item);
+});
+
+document.getElementById('admin-place-search-results')?.addEventListener('scroll', event => {
+  const list = event.currentTarget;
+  if (adminPlaceSearchQuery && list.scrollTop + list.clientHeight >= list.scrollHeight - 32) {
+    expandAdminPlaceSearch();
+  }
+});
+
 function initAdminLiveMap() {
   const mapEl = document.getElementById('admin-live-map');
-  if (!mapEl || !window.L) return false;
+  if (!mapEl || !window.maplibregl) return false;
   if (adminLiveMap) {
-    setTimeout(() => adminLiveMap?.invalidateSize(), 80);
+    requestAnimationFrame(() => adminLiveMap?.resize());
     return true;
   }
-  adminLiveMap = L.map(mapEl, { zoomControl: true, attributionControl: true, minZoom: 2 }).setView([20, 0], 2);
-  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-    attribution: '© <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
-    maxNativeZoom: 19,
+  adminLiveMap = new maplibregl.Map({
+    container: mapEl,
+    style: MAP_STYLE_URL,
+    center: [0, 20],
+    zoom: 2,
     maxZoom: 20,
-    subdomains: 'abc',
-    detectRetina: false,
-    updateWhenIdle: true,
-    keepBuffer: 1,
-    crossOrigin: true
-  }).addTo(adminLiveMap);
+    attributionControl: true,
+    dragRotate: false,
+    touchPitch: false
+  });
+  adminLiveMap.addControl(new maplibregl.NavigationControl({ showCompass: false }), 'top-right');
+  adminLiveMap.on('load', () => {
+    adminLiveMap?.resize();
+    if (adminLiveLocations.length) renderAdminLiveLocations(adminLiveLocations);
+  });
+  requestAnimationFrame(() => adminLiveMap?.resize());
   return true;
+}
+
+function createAdminLiveMarker(location) {
+  const role = location.role === 'driver' ? 'driver' : 'customer';
+  const element = document.createElement('div');
+  element.className = 'admin-map-pin ' + role;
+  element.setAttribute('aria-label', location.name || role);
+  element.textContent = role === 'driver' ? 'D' : 'C';
+  element.addEventListener('click', () => { selectedMapUserId = String(location._id); });
+  return new maplibregl.Marker({ element, anchor: 'center' })
+    .setLngLat([Number(location.location.lng), Number(location.location.lat)])
+    .setPopup(new maplibregl.Popup({ closeButton: true, maxWidth: '240px', offset: 18 }).setHTML(liveLocationPopup(location)))
+    .addTo(adminLiveMap);
 }
 
 function liveLocationPopup(location) {
@@ -2335,6 +2678,10 @@ function renderAdminLiveLocations(locations) {
     }
     return;
   }
+  if (!adminLiveMap.isStyleLoaded()) {
+    adminLiveMap.once('load', () => renderAdminLiveLocations(locations));
+    return;
+  }
   if (!mapEl) return;
   state?.classList.toggle('visible', validLocations.length === 0);
   if (state && validLocations.length === 0) {
@@ -2344,28 +2691,21 @@ function renderAdminLiveLocations(locations) {
   adminLiveMarkers.forEach(marker => marker.remove());
   adminLiveMarkers = new Map();
   validLocations.forEach(location => {
-    const role = location.role === 'driver' ? 'driver' : 'customer';
-    const icon = L.divIcon({
-      className: 'admin-live-marker',
-      html: `<div class="admin-map-pin ${role}" aria-label="${escHtml(location.name || role)}">${role === 'driver' ? 'D' : 'C'}</div>`,
-      iconSize: [32, 32],
-      iconAnchor: [16, 16]
-    });
-    const marker = L.marker([Number(location.location.lat), Number(location.location.lng)], { icon })
-      .addTo(adminLiveMap)
-      .bindPopup(liveLocationPopup(location), { closeButton: true, maxWidth: 240 });
-    marker.on('click', () => { selectedMapUserId = String(location._id); });
-    adminLiveMarkers.set(String(location._id), marker);
+    adminLiveMarkers.set(String(location._id), createAdminLiveMarker(location));
   });
 
   if (!validLocations.length) {
     adminLiveMapHasFitted = false;
   } else if (!adminLiveMapHasFitted) {
-    const bounds = L.latLngBounds(validLocations.map(location => [Number(location.location.lat), Number(location.location.lng)]));
+    const bounds = new maplibregl.LngLatBounds();
+    validLocations.forEach(location => bounds.extend([
+      Number(location.location.lng), Number(location.location.lat)
+    ]));
     if (validLocations.length === 1) {
-      adminLiveMap.setView(bounds.getCenter(), 13, { animate: false });
+      const center = bounds.getCenter();
+      adminLiveMap.jumpTo({ center, zoom: 13 });
     } else {
-      adminLiveMap.fitBounds(bounds, { padding: [36, 36], maxZoom: 13, animate: false });
+      adminLiveMap.fitBounds(bounds, { padding: 36, maxZoom: 13, duration: 0 });
     }
     adminLiveMapHasFitted = true;
   }
@@ -2390,7 +2730,7 @@ function renderAdminLiveLocations(locations) {
         : '<div style="font-size:.7rem;color:#64748b;padding:.65rem .2rem;line-height:1.45">No fresh locations to show.</div>'
     );
   }
-  setTimeout(() => adminLiveMap?.invalidateSize(), 80);
+  setTimeout(() => adminLiveMap?.resize(), 80);
 }
 
 async function loadAdminLiveLocations(force = false) {
@@ -2422,16 +2762,24 @@ function focusAdminLiveLocation(userId) {
   const location = adminLiveLocations.find(item => String(item._id) === id);
   const marker = adminLiveMarkers.get(id);
   if (location && marker && adminLiveMap) {
-    adminLiveMap.setView([Number(location.location.lat), Number(location.location.lng)], Math.max(adminLiveMap.getZoom() || 0, 14), { animate: true });
-    marker.openPopup();
+    adminLiveMap.easeTo({
+      center: [Number(location.location.lng), Number(location.location.lat)],
+      zoom: Math.max(adminLiveMap.getZoom() || 0, 14),
+      duration: 450
+    });
+    marker.togglePopup();
     return;
   }
   loadAdminLiveLocations(true).then(() => {
     const refreshed = adminLiveMarkers.get(id);
     const current = adminLiveLocations.find(item => String(item._id) === id);
     if (refreshed && current && adminLiveMap) {
-      adminLiveMap.setView([Number(current.location.lat), Number(current.location.lng)], 14, { animate: true });
-      refreshed.openPopup();
+      adminLiveMap.easeTo({
+        center: [Number(current.location.lng), Number(current.location.lat)],
+        zoom: 14,
+        duration: 450
+      });
+      refreshed.togglePopup();
     }
   });
 }
@@ -2450,6 +2798,16 @@ function showLiveLocationState(message) {
   if (state) { state.textContent = message; state.classList.add('visible'); }
 }
 
+function createAdminSelectedMarker(location) {
+  const element = document.createElement('div');
+  element.className = 'admin-map-pin ' + (location.role === 'driver' ? 'driver' : 'customer');
+  element.setAttribute('aria-label', location.name || 'Live location');
+  element.textContent = location.role === 'driver' ? 'D' : 'C';
+  return new maplibregl.Marker({ element, anchor: 'center' })
+    .setLngLat([Number(location.location.lng), Number(location.location.lat)])
+    .addTo(liveLocationMap);
+}
+
 function renderLiveLocation(location) {
   const mapEl = document.getElementById('live-location-map');
   const state = document.getElementById('live-location-state');
@@ -2461,34 +2819,30 @@ function renderLiveLocation(location) {
   if (role) role.textContent = `${location.role === 'driver' ? 'Driver' : 'Customer'} · ${location.status || 'active'}`;
   if (updated) updated.textContent = formatLiveLocationTime(location.updatedAt);
   if (meta) meta.textContent = `Coordinates received ${formatLiveLocationTime(location.updatedAt).toLowerCase()}. Refreshes every 10 seconds while open.`;
-  if (!mapEl || !window.L || !location.location) return showLiveLocationState('Map is unavailable. Please refresh and try again.');
+  if (!mapEl || !window.maplibregl || !location.location) return showLiveLocationState('Map is unavailable. Please refresh and try again.');
   mapEl.style.display = 'block';
   state?.classList.remove('visible');
-  const latLng = [Number(location.location.lat), Number(location.location.lng)];
+  const center = [Number(location.location.lng), Number(location.location.lat)];
   if (!liveLocationMap) {
-    liveLocationMap = L.map(mapEl, { zoomControl: true, attributionControl: true });
-    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-      attribution: '© <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
-      maxNativeZoom: 19,
+    liveLocationMap = new maplibregl.Map({
+      container: mapEl,
+      style: MAP_STYLE_URL,
+      center,
+      zoom: 16,
       maxZoom: 20,
-      subdomains: 'abc',
-      detectRetina: false,
-      updateWhenIdle: true,
-      keepBuffer: 1,
-      crossOrigin: true
-    }).addTo(liveLocationMap);
+      attributionControl: true,
+      dragRotate: false,
+      touchPitch: false
+    });
+    liveLocationMap.addControl(new maplibregl.NavigationControl({ showCompass: false }), 'top-right');
+    liveLocationMap.on('load', () => liveLocationMap?.resize());
+  } else {
+    liveLocationMap.resize();
   }
   if (liveLocationMarker) liveLocationMarker.remove();
-  const icon = L.divIcon({
-    className: 'live-map-marker',
-    html: `<div style="width:34px;height:34px;border-radius:50%;display:grid;place-items:center;background:${location.role === 'driver' ? '#38bdf8' : '#f5c518'};border:3px solid #fff;box-shadow:0 3px 12px rgba(0,0,0,.45);font-size:16px">${location.role === 'driver' ? '🚗' : '👤'}</div>`,
-    iconSize: [34, 34],
-    iconAnchor: [17, 17]
-  });
-  liveLocationMarker = L.marker(latLng, { icon }).addTo(liveLocationMap);
-  liveLocationMarker.bindTooltip(`${location.name || 'User'} · ${location.role}`, { direction: 'top', offset: [0, -17] });
-  liveLocationMap.setView(latLng, Math.max(liveLocationMap.getZoom() || 0, 16), { animate: false });
-  setTimeout(() => liveLocationMap?.invalidateSize(), 80);
+  liveLocationMarker = createAdminSelectedMarker(location);
+  liveLocationMap.jumpTo({ center, zoom: Math.max(liveLocationMap.getZoom() || 0, 16) });
+  setTimeout(() => liveLocationMap?.resize(), 80);
 }
 
 async function refreshLiveLocation() {
@@ -2520,6 +2874,14 @@ function closeLiveLocationMap() {
   clearInterval(liveLocationRefreshTimer);
   liveLocationRefreshTimer = null;
   selectedMapUserId = null;
+  if (liveLocationMarker) {
+    liveLocationMarker.remove();
+    liveLocationMarker = null;
+  }
+  if (liveLocationMap) {
+    liveLocationMap.remove();
+    liveLocationMap = null;
+  }
   document.getElementById('live-location-modal')?.classList.remove('open');
 }
 

@@ -28,3 +28,4 @@
 - [Driver recharge amounts](driver-recharge-amounts.md) — keep Admin Daily Fee display-only; submit and credit the Driver-entered recharge amount.
 - [Native alert readiness](native-alert-readiness.md) — native Drivers must pass OS permissions, push registration, lock-screen acknowledgement, and service preflight before online.
 - [Nested API route stubs](nested-api-route-stubs.md) — Playwright globs for a base API path may miss nested routes; use an explicit nested-path pattern or regex.
+- [Legacy Admin shell refresh](legacy-admin-shell-refresh.md) — restart the Ride Hailing workflow before browser checks when static Admin HTML edits are not reflected by the serving process.
