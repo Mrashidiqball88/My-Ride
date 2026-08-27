@@ -3473,13 +3473,13 @@ app.get('/api/geocode', async (req, res) => {
       url = `https://us1.locationiq.com/v1/search` +
             `?key=${encodeURIComponent(key)}` +
             `&q=${encodeURIComponent(q)}` +
-            `&format=json&limit=8&countrycodes=pk` +
+            `&format=json&limit=8` +
             `&addressdetails=1&normalizeaddress=1&dedupe=1&namedetails=1`;
     } else {
       // Enhanced Nominatim fallback (OSM data, good for major Pakistani areas)
       url = `https://nominatim.openstreetmap.org/search` +
             `?q=${encodeURIComponent(q)}` +
-            `&format=json&limit=8&countrycodes=pk` +
+            `&format=json&limit=8` +
             `&addressdetails=1&dedupe=1&namedetails=1`;
       headers = {
         'User-Agent': 'MyRide-App/1.0 (ride-hailing)',

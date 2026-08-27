@@ -7,7 +7,6 @@ import {
   CreateRideResponse,
 } from "@workspace/api-zod";
 import { requireAuth } from "../middleware/auth";
-import { isWithinPakistanCoordinates, PAKISTAN_ONLY_MESSAGE } from "../lib/pakistan-geofence";
 import { getMongoDB } from "../lib/mongodb";
 import { emitRideStatus } from "../realtime";
 import {
@@ -34,11 +33,6 @@ router.post("/rides", requireAuth, async (req, res) => {
   const passengerId = req.authUserId;
   if (!passengerId) {
     res.status(401).json({ message: "Authentication required." });
-    return;
-  }
-  if (!isWithinPakistanCoordinates(rideDetails.pickupLocation.latitude, rideDetails.pickupLocation.longitude)
-    || !isWithinPakistanCoordinates(rideDetails.dropoffLocation.latitude, rideDetails.dropoffLocation.longitude)) {
-    res.status(422).json({ message: PAKISTAN_ONLY_MESSAGE, code: "OUTSIDE_PAKISTAN" });
     return;
   }
 

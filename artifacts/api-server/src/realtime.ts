@@ -5,7 +5,6 @@ import { z } from "zod";
 import { verifyAuthToken } from "./middleware/auth";
 import { getMongoDB } from "./lib/mongodb";
 import { logger } from "./lib/logger";
-import { isWithinPakistanCoordinates, PAKISTAN_ONLY_MESSAGE } from "./lib/pakistan-geofence";
 import {
   getRidesCollection,
   toPublicRide,
@@ -156,10 +155,6 @@ export function initializeRealtime(httpServer: HttpServer): Server {
       async (rawPayload: unknown, ack?: Ack) => {
         try {
           const payload = locationUpdateSchema.parse(rawPayload);
-          if (!isWithinPakistanCoordinates(payload.latitude, payload.longitude)) {
-            rejectAck(ack, PAKISTAN_ONLY_MESSAGE);
-            return;
-          }
           if (!ObjectId.isValid(payload.rideId)) {
             rejectAck(ack, "Invalid ride ID.");
             return;

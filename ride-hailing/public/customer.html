@@ -15,7 +15,6 @@
 <title>My Ride</title>
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-<script src="/pakistan-geofence.js"></script>
 <script src="/socket.io/socket.io.js"></script>
 <style>
 *{margin:0;padding:0;box-sizing:border-box;-webkit-tap-highlight-color:transparent}
@@ -909,23 +908,6 @@ const TILE_OPTS  = {
   keepBuffer   : 1,
   crossOrigin  : true
 };
-const PAKISTAN_ONLY_MESSAGE = window.MyRidePakistanGeofence?.PAKISTAN_ONLY_MESSAGE
-  || 'Please select a location inside Pakistan.';
-
-function isPakistanLocation(lat, lng) {
-  const latitude = Number(lat), longitude = Number(lng);
-  if (!Number.isFinite(latitude) || !Number.isFinite(longitude)) return false;
-  const validator = window.MyRidePakistanGeofence?.isWithinPakistan;
-  // Explicit pins must fail closed if the local boundary helper is missing.
-  // The same polygon is loaded locally and enforced again by the server.
-  return typeof validator === 'function' && validator(latitude, longitude) === true;
-}
-
-function ensurePakistanLocation(lat, lng) {
-  if (isPakistanLocation(lat, lng)) return true;
-  showToast(PAKISTAN_ONLY_MESSAGE, 'error');
-  return false;
-}
 
 // ── State ─────────────────────────────────────────────────────────────────
 let token = localStorage.getItem('rh_token');
@@ -1716,7 +1698,6 @@ function selectLocationFromSheet(index) {
   const item = locationSheetResults[index];
   const type = activeLocationSearch;
   if (!item || !type) return;
-  if (!ensurePakistanLocation(+item.lat, +item.lon)) return;
   // Close first so the customer immediately returns to the normal booking
   // view before the map marker/geocoding work begins.
   closeLocationSheet();
@@ -1796,7 +1777,7 @@ function onLocInput(type) {
     const remote = await searchPlaces(query);
     if (locSearchSeq[type] !== requestId) return;
     const seen = new Set(local.map(item => `${item.primary}|${item.lat}`));
-    const merged = [...local, ...remote.filter(item => isPakistanLocation(+item.lat, +item.lon)).map(item => {
+    const merged = [...local, ...remote.map(item => {
       const label = buildLabel(item);
       return { ...item, ...label };
     }).filter(item => {
@@ -1819,7 +1800,6 @@ function onLocBlur() {
 
 // ── Set Locations ─────────────────────────────────────────────────────────
 async function setPickup(lat, lng, preDisplay = null) {
-  if (!ensurePakistanLocation(lat, lng)) return false;
   pickup = { lat, lng };
   if (pickupMarker) pickupMarker.remove();
   pickupMarker = L.marker([lat, lng], { icon: createCircleIcon('pickup-marker') }).addTo(map);
@@ -1850,7 +1830,6 @@ async function setPickup(lat, lng, preDisplay = null) {
 
 // ── Set a specific stop by index (0=Drop1, 1=Drop2, …) ────────────────────
 async function setStop(idx, lat, lng, preDisplay = null) {
-  if (!ensurePakistanLocation(lat, lng)) return false;
   dropoffs[idx] = { lat, lng };
   if (stopMarkers[idx]) stopMarkers[idx].remove();
   stopMarkers[idx] = L.marker([lat, lng], {
@@ -1949,10 +1928,6 @@ async function drawRoute() {
   const activeDropoffs = dropoffs.slice(0, activeStops).filter(d => d !== null);
   if (!pickup || !activeDropoffs.length) return 0;
   const waypoints = [pickup, ...activeDropoffs];
-  if (waypoints.some(point => !isPakistanLocation(point.lat, point.lng))) {
-    showToast(PAKISTAN_ONLY_MESSAGE, 'error');
-    return 0;
-  }
 
   try {
     const route = await requestRoadRoute(waypoints);
@@ -2185,9 +2160,6 @@ async function bookRide() {
   if (!currentFareQuote || !offeredFare) return showToast('Wait for the Admin-configured fare calculation', 'error');
 
   const activeDropoffsList = dropoffs.slice(0, activeStops).filter(d => d !== null);
-  if (![pickup, ...activeDropoffsList].every(point => isPakistanLocation(point.lat, point.lng))) {
-    return showToast(PAKISTAN_ONLY_MESSAGE, 'error');
-  }
 
   const dist = routeDistanceKm !== null ? routeDistanceKm : (() => {
     const pts = [pickup, ...activeDropoffsList];
