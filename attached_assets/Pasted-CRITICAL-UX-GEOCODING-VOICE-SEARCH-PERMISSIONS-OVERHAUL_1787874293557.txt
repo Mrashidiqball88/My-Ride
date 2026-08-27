@@ -1,0 +1,19 @@
+CRITICAL UX, GEOCODING, VOICE SEARCH & PERMISSIONS OVERHAUL - FIX URGENTLY!
+
+1. Broken Urdu Text Shaping on Map Tiles:
+   - Place names rendered on map tiles (e.g., "سلامت پورہ") are rendered as disjointed, isolated letters (e.g., س ل ا م ت...). The text shaping/rendering engine must correctly handle RTL and Urdu typography to form proper connected words.
+
+2. Dynamic Live-Location Radius (Instead of Hardcoded Lahore):
+   - Do not restrict search statically to Lahore. The search radius/bounding box must automatically center on the customer's auto-detected live location and prioritize results within a 25-30 km radius. If the user explicitly types a major location from another city, it should resolve properly.
+
+3. Fuzzy Search, Typo Tolerance & Phonetic Matching:
+   - Customers often misspell words or type phonetic/approximate spellings (e.g., typing wrong spellings like "Pakeges" vs "Packages", or spelling local landmarks incorrectly). The search engine / geocoder must support fuzzy matching and typo tolerance to intelligently deduce the user's intent and display correct results.
+
+4. Voice Search Integration (Speech-to-Text):
+   - Add a microphone button inside/beside the search bar utilizing the browser's Web Speech API (SpeechRecognition). Users should be able to tap the mic and speak their destination location (Urdu/English/regional), having it automatically transcribed into the search input.
+
+5. Search Bar UI & Overlay Trap Fix:
+   - When search results appear, the search input bar currently gets pushed to the top edge / hidden behind headers. The search input bar MUST remain sticky and visible at the top, and the results container below it must be a smooth, draggable, and scrollable list. Selecting a location must instantly update the drop-off and map.
+
+6. App Initialization & Permissions Flow:
+   - On app startup, ensure a robust permissions flow is enforced (Location GPS, Microphone, Notifications/Audio). The app must properly prompt and handle all necessary runtime permissions before letting users proceed into the booking workflow.
