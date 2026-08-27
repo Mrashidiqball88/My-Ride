@@ -26,3 +26,4 @@
 - [Strict active-ride tracking](strict-active-ride-tracking.md) — serialize one three-second GPS cycle and restore native availability mode when rides end.
 - [Pickup PIN authority](pickup-pin-authority.md) — release the ride PIN only from persisted server-side pickup proximity, never from client GPS calculations.
 - [Driver recharge amounts](driver-recharge-amounts.md) — keep Admin Daily Fee display-only; submit and credit the Driver-entered recharge amount.
+- [Native alert readiness](native-alert-readiness.md) — native Drivers must pass OS permissions, push registration, lock-screen acknowledgement, and service preflight before online.

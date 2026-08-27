@@ -15,6 +15,14 @@ sound/vibration, radio recovery, or force-stop behavior.
   for every run.
 - Keep the driver online only during the test. Turn the driver offline and
   confirm the status before moving to the next scenario.
+- On first launch, do not bypass the native **Required alert setup** card. Tap
+  **Check & enable permissions**, complete every OS prompt, open device Settings,
+  confirm notification and lock-screen visibility, and tap **I enabled lock-screen
+  alerts**. The Online switch must remain disabled until the checklist passes.
+- After changing any permission in Settings, return to the app and confirm the
+  checklist is re-evaluated. If notification, location, push registration, or
+  the background service is no longer ready, the app must refuse or end Online
+  status rather than relying on a stale local toggle.
 
 ## Acceptance matrix
 
@@ -51,6 +59,17 @@ sound/vibration, radio recovery, or force-stop behavior.
    suppress an interruptive presentation.
 4. Create a second matching ride only after dismissing or accepting the first;
    confirm the offer does not show a different ride's details.
+
+### Dual-channel duplicate suppression
+
+1. Keep the native app foregrounded and online with a valid Expo token.
+2. Create one matching ride and capture the Socket.io event and the native
+   notification receipt for the same ride ID.
+3. Pass when the UI exposes one offer card, the ride ID and server expiry are
+   identical, and dismissing/accepting it clears the local offer state once.
+4. Repeat with the app backgrounded so the push notification is the visible
+   path; tapping it must recheck `/api/rides/available` before restoring the
+   offer.
 
 ### Wi-Fi/mobile-data interruption
 
@@ -122,4 +141,6 @@ OS, native build, timestamp, ride ID, and screenshot or log after completing
 the acceptance steps above. The automated server contract checks remain
 regression coverage only; they do not close this physical-device gate. Task
 completion is blocked until approved Android and iOS phones and a qualified
-native build are available.
+native build are available. The readiness gate and provider-response handling
+reduce known failure modes but do not convert a provider request into proof of
+physical lock-screen delivery.

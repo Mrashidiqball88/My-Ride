@@ -60,6 +60,21 @@ function DriverHome() {
     catch (error) { report(error instanceof Error ? error.message : 'Unable to change Long Range mode'); }
     finally { setBusy(false); }
   };
+  const prepareAlerts = async () => {
+    setBusy(true);
+    try { await runtime.prepareAlertReadiness(); }
+    catch (error) { report(error instanceof Error ? error.message : 'Unable to check alert permissions'); }
+    finally { setBusy(false); }
+  };
+  const confirmLockScreen = async () => {
+    setBusy(true);
+    try { await runtime.confirmLockScreenAlerts(); }
+    catch (error) { report(error instanceof Error ? error.message : 'Unable to save lock-screen confirmation'); }
+    finally { setBusy(false); }
+  };
+  const openSettings = () => {
+    void Linking.openSettings().catch(() => report('Open your device Settings and enable My Ride notifications and lock-screen alerts.'));
+  };
 
   if (!runtime.ready) return <View style={[styles.center, { backgroundColor: colors.background }]}><ActivityIndicator color={colors.primary} /></View>;
   if (!runtime.user) {
@@ -84,9 +99,27 @@ function DriverHome() {
       <View><Text style={[styles.eyebrow, { color: colors.mutedForeground }]}>MY RIDE DRIVER</Text><Text style={[styles.name, { color: colors.foreground }]}>{runtime.user.name}</Text></View>
       <Pressable testID="driver-sign-out" onPress={() => void runtime.signOut()}><Ionicons name="log-out-outline" size={25} color={colors.mutedForeground} /></Pressable>
     </View>
-    <View style={[styles.statusCard, { backgroundColor: colors.card, borderColor: runtime.isOnline ? colors.primary : colors.border, borderRadius: colors.radius + 12 }]}>
+     {!isWeb && !runtime.alertReadiness.ready && <View testID="driver-alert-readiness" style={[styles.setupCard, { backgroundColor: colors.card, borderColor: colors.primary, borderRadius: colors.radius + 12 }]}>
+       <View style={styles.statusRow}><Ionicons name="shield-checkmark-outline" size={22} color={colors.primary} /><View style={{ flex: 1 }}><Text style={[styles.cardTitle, { color: colors.foreground }]}>Required alert setup</Text><Text style={[styles.statusCopy, { color: colors.mutedForeground }]}>Complete these checks before going online. Ride requests must be able to reach you with the screen locked.</Text></View></View>
+       {[
+         ['Push notifications', runtime.alertReadiness.notificationsGranted],
+         ['Ride-alert channel and lock-screen visibility', runtime.alertReadiness.alertChannelReady],
+         ['Precise foreground location', runtime.alertReadiness.foregroundLocationGranted],
+         ['Background location / screen-off service', runtime.alertReadiness.backgroundLocationGranted],
+         ['Expo Push registration', runtime.alertReadiness.pushTokenRegistered],
+         ['Lock-screen alerts confirmed', runtime.alertReadiness.lockScreenConfirmed],
+         ['Foreground service verified', runtime.alertReadiness.foregroundServiceReady],
+       ].map(([label, passed]) => <View key={String(label)} style={styles.setupRow}><Ionicons name={passed ? 'checkmark-circle' : 'ellipse-outline'} size={17} color={passed ? colors.primary : colors.mutedForeground} /><Text style={[styles.setupRowText, { color: passed ? colors.foreground : colors.mutedForeground }]}>{label}</Text></View>)}
+       {runtime.alertReadiness.message && <Text style={[styles.setupMessage, { color: colors.destructive }]}>{runtime.alertReadiness.message}</Text>}
+       <View style={styles.setupActions}>
+         <Pressable testID="driver-alert-setup" onPress={() => void prepareAlerts()} disabled={busy || runtime.alertReadiness.checking} style={[styles.primaryButton, { backgroundColor: colors.primary, borderRadius: colors.radius, opacity: busy ? .7 : 1 }]}><Text style={[styles.buttonText, { color: colors.primaryForeground }]}>{runtime.alertReadiness.checking ? 'Checking…' : 'Check & enable permissions'}</Text></Pressable>
+         <Pressable onPress={openSettings} style={[styles.secondaryButton, { borderColor: colors.border, borderRadius: colors.radius }]}><Text style={{ color: colors.mutedForeground }}>Open device settings</Text></Pressable>
+         {runtime.alertReadiness.notificationsGranted && runtime.alertReadiness.alertChannelReady && runtime.alertReadiness.backgroundLocationGranted && runtime.alertReadiness.pushTokenRegistered && !runtime.alertReadiness.lockScreenConfirmed && <Pressable testID="driver-confirm-lock-screen" onPress={() => void confirmLockScreen()} style={[styles.secondaryButton, { borderColor: colors.primary, borderRadius: colors.radius }]}><Text style={{ color: colors.primary }}>I enabled lock-screen alerts</Text></Pressable>}
+       </View>
+     </View>}
+     <View style={[styles.statusCard, { backgroundColor: colors.card, borderColor: runtime.isOnline ? colors.primary : colors.border, borderRadius: colors.radius + 12 }]}>
       <View style={styles.statusRow}><View style={[styles.statusDot, { backgroundColor: onlineTone }]} /><View style={{ flex: 1 }}><Text style={[styles.statusTitle, { color: colors.foreground }]}>{runtime.isOnline ? 'You are online' : 'You are offline'}</Text><Text style={[styles.statusCopy, { color: colors.mutedForeground }]}>{runtime.isOnline ? 'Foreground service is keeping location and ride alerts active.' : 'Go online when you are ready for trips.'}</Text></View>
-      <Switch testID="driver-online-toggle" value={runtime.isOnline} onValueChange={toggle} disabled={busy} trackColor={{ false: colors.muted, true: colors.primary }} thumbColor={colors.primaryForeground} /></View>
+       <Switch testID="driver-online-toggle" value={runtime.isOnline} onValueChange={toggle} disabled={busy || (!isWeb && !runtime.alertReadiness.ready)} trackColor={{ false: colors.muted, true: colors.primary }} thumbColor={colors.primaryForeground} /></View>
       {runtime.isOnline && <View style={[styles.serviceLine, { borderTopColor: colors.border }]}><Ionicons name="shield-checkmark-outline" size={17} color={colors.primary} /><Text style={[styles.serviceText, { color: colors.mutedForeground }]}>Background service active · {runtime.connection === 'connected' ? 'Connected' : 'Reconnecting…'}</Text></View>}
     </View>
     <View testID="driver-vehicle-category" style={[styles.vehicleCard, { backgroundColor: colors.secondary, borderColor: colors.border, borderRadius: colors.radius }]}>
@@ -118,7 +151,8 @@ const styles = StyleSheet.create({
   brand: { fontSize: 30, fontFamily: 'Inter_700Bold' }, subtle: { fontSize: 15, marginTop: 6 }, authCard: { width: '100%', borderWidth: 1, padding: 20, marginTop: 34, gap: 12 },
   cardTitle: { fontFamily: 'Inter_700Bold', fontSize: 19, marginBottom: 5 }, input: { borderWidth: 1, borderRadius: 12, paddingHorizontal: 14, paddingVertical: 14, fontFamily: 'Inter_400Regular', fontSize: 16 },
   primaryButton: { height: 52, justifyContent: 'center', alignItems: 'center', marginTop: 4 }, buttonText: { fontFamily: 'Inter_700Bold', fontSize: 16 }, legal: { fontFamily: 'Inter_400Regular', fontSize: 13, lineHeight: 19, textAlign: 'center', marginTop: 20, paddingHorizontal: 12 },
-  app: { flex: 1, paddingHorizontal: 20 }, header: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingVertical: 20 }, eyebrow: { fontFamily: 'Inter_700Bold', fontSize: 11, letterSpacing: 1.2 }, name: { fontFamily: 'Inter_700Bold', fontSize: 24, marginTop: 3 },
+   app: { flex: 1, paddingHorizontal: 20 }, header: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingVertical: 20 }, eyebrow: { fontFamily: 'Inter_700Bold', fontSize: 11, letterSpacing: 1.2 }, name: { fontFamily: 'Inter_700Bold', fontSize: 24, marginTop: 3 },
+  setupCard: { borderWidth: 1, padding: 16, marginBottom: 12 }, setupRow: { flexDirection: 'row', alignItems: 'center', gap: 9, marginTop: 11 }, setupRowText: { flex: 1, fontFamily: 'Inter_500Medium', fontSize: 13 }, setupMessage: { fontFamily: 'Inter_500Medium', fontSize: 12, lineHeight: 18, marginTop: 14 }, setupActions: { gap: 10, marginTop: 16 },
   statusCard: { borderWidth: 1, padding: 18 }, statusRow: { flexDirection: 'row', alignItems: 'center', gap: 12 }, statusDot: { width: 12, height: 12, borderRadius: 6 }, statusTitle: { fontFamily: 'Inter_700Bold', fontSize: 18 }, statusCopy: { fontFamily: 'Inter_400Regular', fontSize: 13, marginTop: 3, lineHeight: 19 },
   longRangeCard: { borderWidth: 1, padding: 16, marginTop: 12 }, longRangeTitle: { fontFamily: 'Inter_700Bold', fontSize: 15 }, longRangeReminder: { flexDirection: 'row', alignItems: 'flex-start', gap: 7, borderWidth: 1, padding: 10, marginTop: 14, borderRadius: 10 }, longRangeReminderText: { flex: 1, fontFamily: 'Inter_600SemiBold', fontSize: 12, lineHeight: 17 },
   serviceLine: { borderTopWidth: 1, flexDirection: 'row', gap: 8, alignItems: 'center', marginTop: 15, paddingTop: 14 }, serviceText: { fontFamily: 'Inter_500Medium', fontSize: 12 },

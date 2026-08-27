@@ -6,7 +6,7 @@ const jwt = require('jsonwebtoken');
 const { io: connectClient } = require('socket.io-client');
 const service = require('../server');
 
-const { server, models } = service;
+const { server, models, sendExpoPush } = service;
 const originals = {
   userFindById: models.User.findById,
   userUpdateOne: models.User.updateOne,
@@ -116,5 +116,41 @@ test('driver reconnect replays open offers and heartbeat ack preserves client co
     client.close();
     await new Promise(resolve => server.close(resolve));
     restore();
+  }
+});
+
+test('Expo push retries transient failures and clears tokens rejected as unregistered', async () => {
+  const originalFetch = global.fetch;
+  const originalUpdateOne = models.User.updateOne;
+  const updates = [];
+  let attempts = 0;
+  global.fetch = async () => {
+    attempts += 1;
+    if (attempts === 1) return { ok: false, status: 503, json: async () => ({}) };
+    return {
+      ok: true,
+      status: 200,
+      json: async () => ({ data: [{ status: 'error', details: { error: 'DeviceNotRegistered' } }] }),
+    };
+  };
+  models.User.updateOne = async (query, update) => {
+    updates.push({ query, update });
+    return { acknowledged: true };
+  };
+
+  try {
+    const result = await sendExpoPush(['ExponentPushToken[expired]'], {
+      title: 'New ride request',
+      data: { type: 'ride:new', rideId: 'ride-push' },
+    });
+    assert.deepEqual(result, { sent: 0, failed: 1 });
+    assert.equal(attempts, 2);
+    assert.deepEqual(updates, [{
+      query: { expoPushToken: 'ExponentPushToken[expired]' },
+      update: { $set: { expoPushToken: '' } },
+    }]);
+  } finally {
+    global.fetch = originalFetch;
+    models.User.updateOne = originalUpdateOne;
   }
 });

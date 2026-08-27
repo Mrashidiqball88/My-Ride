@@ -1180,17 +1180,51 @@ const PICKUP_PIN_REVEAL_DISTANCE_KM = 0.1;
 
 async function sendExpoPush(tokens, message) {
   const recipients = [...new Set(tokens.filter(token => /^ExponentPushToken\[.+\]$|^ExpoPushToken\[.+\]$/.test(String(token || ''))))];
-  if (!recipients.length) return;
-  try {
-    const response = await fetch('https://exp.host/--/api/v2/push/send', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
-      body: JSON.stringify(recipients.map(to => ({ to, sound: 'default', priority: 'high', ...message })))
+  if (!recipients.length) return { sent: 0, failed: 0 };
+  const batchSize = 100;
+  let sent = 0;
+  let failed = 0;
+  for (let offset = 0; offset < recipients.length; offset += batchSize) {
+    const batch = recipients.slice(offset, offset + batchSize);
+    let response;
+    let responseBody;
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      try {
+        response = await fetch('https://exp.host/--/api/v2/push/send', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+          body: JSON.stringify(batch.map(to => ({ to, sound: 'default', priority: 'high', ...message })))
+        });
+        responseBody = await response.json().catch(() => ({}));
+        if (response.ok || response.status < 500 || attempt === 1) break;
+      } catch (err) {
+        if (attempt === 1) {
+          console.warn(`[expo-push] delivery request failed after retry: ${err.message}`);
+        }
+      }
+    }
+    if (!response?.ok) {
+      failed += batch.length;
+      console.warn(`[expo-push] delivery request failed: ${response?.status || 'network error'}`);
+      continue;
+    }
+    const tickets = Array.isArray(responseBody?.data) ? responseBody.data : [];
+    tickets.forEach((ticket, index) => {
+      if (ticket?.status === 'ok') {
+        sent += 1;
+        return;
+      }
+      failed += 1;
+      const providerError = ticket?.details?.error || ticket?.message || 'unknown provider error';
+      console.warn(`[expo-push] provider rejected token ${batch[index]}: ${providerError}`);
+      if (providerError === 'DeviceNotRegistered') {
+        User.updateOne({ expoPushToken: batch[index] }, { $set: { expoPushToken: '' } }).catch(() => {});
+      }
     });
-    if (!response.ok) console.warn(`[expo-push] delivery request failed: ${response.status}`);
-  } catch (err) {
-    console.warn(`[expo-push] delivery request failed: ${err.message}`);
+    if (tickets.length < batch.length) failed += batch.length - tickets.length;
   }
+  if (failed) console.warn(`[expo-push] ride alert result: ${sent} accepted, ${failed} failed`);
+  return { sent, failed };
 }
 
 function haversineKm(lat1, lng1, lat2, lng2) {
@@ -5542,6 +5576,7 @@ module.exports = {
   findRideBroadcastDrivers,
   findLongRangeBroadcastDrivers,
   emitRideRequestToDrivers,
+  sendExpoPush,
   getAvailableRidesForDriver,
   driverRidePayload,
   emitRideLifecycle,

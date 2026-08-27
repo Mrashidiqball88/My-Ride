@@ -17,6 +17,7 @@ const SESSION_KEY = 'myride.driver.session';
 const USER_KEY = 'myride.driver.user';
 const ONLINE_KEY = 'myride.driver.online';
 const ACTIVE_RIDE_KEY = 'myride.driver.activeRide';
+const LOCK_SCREEN_ACK_KEY = 'myride.driver.lockScreenAlertsConfirmed';
 const PAKISTAN_ONLY_MESSAGE = 'Please select a location inside Pakistan.';
 const API_URL = process.env.EXPO_PUBLIC_RIDE_API_URL ||
   (process.env.EXPO_PUBLIC_DOMAIN ? `https://${process.env.EXPO_PUBLIC_DOMAIN}` : '');
@@ -51,13 +52,29 @@ export type LongRangeState = {
   settings: { enabled?: boolean; distanceCutoffKm?: number; minimumWalletBalances?: Record<string, number> };
 };
 
+export type AlertReadiness = {
+  checking: boolean;
+  ready: boolean;
+  notificationsGranted: boolean;
+  alertChannelReady: boolean;
+  foregroundLocationGranted: boolean;
+  backgroundLocationGranted: boolean;
+  pushTokenRegistered: boolean;
+  lockScreenConfirmed: boolean;
+  foregroundServiceReady: boolean;
+  message: string | null;
+};
+
 type RuntimeContext = {
   ready: boolean; user: DriverUser | null; isOnline: boolean; connection: 'connected' | 'connecting' | 'offline';
   pendingRide: RideRequest | null; activeRideId: string | null; error: string | null;
   longRange: LongRangeState | null;
+  alertReadiness: AlertReadiness;
   signIn(identifier: string, password: string): Promise<void>;
   signOut(): Promise<void>;
   setOnline(next: boolean): Promise<void>;
+  prepareAlertReadiness(): Promise<void>;
+  confirmLockScreenAlerts(): Promise<void>;
   setLongRange(next: boolean): Promise<string>;
   acceptRide(): Promise<void>;
   dismissRide(): void;
@@ -92,7 +109,7 @@ function api(path: string, token?: string, session?: string, init: RequestInit =
   });
 }
 
-async function configureNotifications() {
+async function configureNotifications(requestPermission = false) {
   if (Platform.OS === 'android') {
     await Notifications.setNotificationChannelAsync('ride-alerts', {
       name: 'Ride requests', importance: Notifications.AndroidImportance.MAX,
@@ -103,8 +120,21 @@ async function configureNotifications() {
     { identifier: 'accept', buttonTitle: 'Accept', options: { opensAppToForeground: true } },
     { identifier: 'dismiss', buttonTitle: 'Dismiss', options: { opensAppToForeground: true } },
   ]);
-  const permissions = await Notifications.getPermissionsAsync();
-  if (!permissions.granted) await Notifications.requestPermissionsAsync();
+  let permissions = await Notifications.getPermissionsAsync();
+  if (!permissions.granted && requestPermission) {
+    permissions = await Notifications.requestPermissionsAsync();
+  }
+  const channel = Platform.OS === 'android'
+    ? await Notifications.getNotificationChannelAsync('ride-alerts')
+    : null;
+  return {
+    notificationsGranted: permissions.granted,
+    alertChannelReady: Platform.OS !== 'android' || Boolean(
+      channel
+      && channel.importance === Notifications.AndroidImportance.MAX
+      && channel.lockscreenVisibility === Notifications.AndroidNotificationVisibility.PUBLIC
+    ),
+  };
 }
 
 function normalizeRideRequest(ride: RideRequest & { _id?: string }): RideRequest {
@@ -125,6 +155,18 @@ export function DriverRuntimeProvider({ children }: { children: ReactNode }) {
   const [activeRideId, setActiveRideId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [longRange, setLongRangeState] = useState<LongRangeState | null>(null);
+  const [alertReadiness, setAlertReadiness] = useState<AlertReadiness>({
+    checking: Platform.OS !== 'web',
+    ready: Platform.OS === 'web',
+    notificationsGranted: Platform.OS === 'web',
+    alertChannelReady: Platform.OS === 'web',
+    foregroundLocationGranted: Platform.OS === 'web',
+    backgroundLocationGranted: Platform.OS === 'web',
+    pushTokenRegistered: Platform.OS === 'web',
+    lockScreenConfirmed: Platform.OS === 'web',
+    foregroundServiceReady: Platform.OS === 'web',
+    message: Platform.OS === 'web' ? null : 'Complete alert setup before going online.',
+  });
   const socket = useRef<Socket | null>(null);
   const tokenRef = useRef<string | null>(null);
   const sessionRef = useRef<string | null>(null);
@@ -178,6 +220,24 @@ export function DriverRuntimeProvider({ children }: { children: ReactNode }) {
     }
   }, []);
 
+  const handleRideOffer = useCallback((ride: RideRequest) => {
+    const nextRide = normalizeRideRequest(ride);
+    if (!isOnlineRef.current || activeRideIdRef.current || !isRideOfferLive(nextRide)) return;
+    const previousEventAt = receivedRideEvents.current.get(nextRide.id) || 0;
+    if (Date.now() - previousEventAt < 120_000) return;
+    const receivedAt = Date.now();
+    receivedRideEvents.current.set(nextRide.id, receivedAt);
+    setTimeout(() => {
+      if (receivedRideEvents.current.get(nextRide.id) === receivedAt) {
+        receivedRideEvents.current.delete(nextRide.id);
+      }
+    }, 120_000);
+    setPendingRide(current => current?.id === nextRide.id ? current : nextRide);
+    if (AppState.currentState === 'active') {
+      void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning);
+    }
+  }, []);
+
   const loadLongRange = useCallback(async () => {
     if (!tokenRef.current) return;
     const data = await api('/api/driver/long-range', tokenRef.current, sessionRef.current || undefined);
@@ -212,43 +272,7 @@ export function DriverRuntimeProvider({ children }: { children: ReactNode }) {
       lastHeartbeatAckAt.current = Date.now();
     });
     nextSocket.on('driver:rehydrate', () => void hydrateAvailableRides());
-    nextSocket.on('ride:new', (ride: RideRequest) => {
-      const nextRide = normalizeRideRequest(ride);
-      if (!isOnlineRef.current || activeRideIdRef.current || !isRideOfferLive(nextRide)) return;
-      const previousEventAt = receivedRideEvents.current.get(nextRide.id) || 0;
-      if (Date.now() - previousEventAt < 120_000) return;
-      const receivedAt = Date.now();
-      receivedRideEvents.current.set(nextRide.id, receivedAt);
-      setTimeout(() => {
-        if (receivedRideEvents.current.get(nextRide.id) === receivedAt) {
-          receivedRideEvents.current.delete(nextRide.id);
-        }
-      }, 120_000);
-      setPendingRide(current => current?.id === nextRide.id ? current : nextRide);
-      void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning);
-      // Expo's remote notification already displays in the foreground. Only
-      // create a local fallback while backgrounded, and only once per ride.
-      if (AppState.currentState !== 'active' && !alertedRideIds.current.has(nextRide.id)) {
-        alertedRideIds.current.add(nextRide.id);
-        void Notifications.scheduleNotificationAsync({
-          content: {
-            title: 'New ride request',
-            body: `${nextRide.pickupLocation?.address || 'Nearby pickup'} · Rs ${Number(nextRide.fare || 0).toLocaleString()}`,
-            sound: 'default', categoryIdentifier: 'ride-request', data: { type: 'ride:new', ride: nextRide },
-          },
-          trigger: null,
-        }).then(notificationId => {
-          // A cancellation can arrive before the notification promise settles.
-          // Do not leave a late local alert behind for a retired ride.
-          if (alertedRideIds.current.has(nextRide.id)) {
-            localRideNotificationIds.current.set(nextRide.id, notificationId);
-          } else {
-            void Notifications.cancelScheduledNotificationAsync(notificationId).catch(() => undefined);
-            void Notifications.dismissNotificationAsync(notificationId).catch(() => undefined);
-          }
-        }).catch(() => undefined);
-      }
-    });
+    nextSocket.on('ride:new', handleRideOffer);
     nextSocket.on('ride:taken', ({ rideId }: { rideId: string }) => {
       clearRideAlert(rideId);
       setPendingRide(current => current?.id === rideId ? null : current);
@@ -291,7 +315,7 @@ export function DriverRuntimeProvider({ children }: { children: ReactNode }) {
     });
   // setOnlineState is stable through declaration below at execution time.
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [clearRideAlert, hydrateAvailableRides]);
+  }, [clearRideAlert, handleRideOffer, hydrateAvailableRides]);
 
   const sendCurrentLocation = useCallback(async (location: Location.LocationObject) => {
     if (!tokenRef.current || !isOnlineRef.current) return;
@@ -314,11 +338,14 @@ export function DriverRuntimeProvider({ children }: { children: ReactNode }) {
     if (Platform.OS === 'web') {
       throw new Error('Persistent driver service requires the native My Ride Driver app.');
     }
-    const foreground = await Location.requestForegroundPermissionsAsync();
+    const foreground = await Location.getForegroundPermissionsAsync();
     if (!foreground.granted) throw new Error('Location permission is required to go online.');
-    const background = await Location.requestBackgroundPermissionsAsync();
+    const background = await Location.getBackgroundPermissionsAsync();
     if (!background.granted) throw new Error('Allow location access all the time to remain online while the screen is off.');
-    await configureNotifications();
+    const notificationState = await configureNotifications(false);
+    if (!notificationState.notificationsGranted || !notificationState.alertChannelReady) {
+      throw new Error('Ride notifications and lock-screen visibility must be enabled before going online.');
+    }
     const desiredMode = activeRideTracking ? 'active-ride' : 'availability';
     const transition = locationServiceTransition.current
       .catch(() => undefined)
@@ -334,11 +361,15 @@ export function DriverRuntimeProvider({ children }: { children: ReactNode }) {
           );
         }
         locationServiceMode.current = desiredMode;
+        if (!await Location.hasStartedLocationUpdatesAsync(BACKGROUND_LOCATION_TASK)) {
+          throw new Error('The background Driver service could not be started. Check system permissions and retry.');
+        }
         const latest = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Highest });
         await sendCurrentLocation(latest);
       });
     locationServiceTransition.current = transition;
     await transition;
+    setAlertReadiness(current => ({ ...current, foregroundServiceReady: true }));
   }, [sendCurrentLocation]);
 
   const stopLocationService = useCallback(async () => {
@@ -361,7 +392,7 @@ export function DriverRuntimeProvider({ children }: { children: ReactNode }) {
     sessionRef.current = null;
     clearAllRideAlerts();
     void stopLocationService();
-    void Promise.all([TOKEN_KEY, SESSION_KEY, USER_KEY, ONLINE_KEY, ACTIVE_RIDE_KEY]
+    void Promise.all([TOKEN_KEY, SESSION_KEY, USER_KEY, ONLINE_KEY, ACTIVE_RIDE_KEY, LOCK_SCREEN_ACK_KEY]
       .map(key => SecureStore.deleteItemAsync(key)));
     setUser(null);
     setIsOnline(false);
@@ -369,6 +400,7 @@ export function DriverRuntimeProvider({ children }: { children: ReactNode }) {
     setActiveRideId(null);
     setLongRangeState(null);
     setConnection('offline');
+    setAlertReadiness(current => ({ ...current, ready: false, lockScreenConfirmed: false, foregroundServiceReady: false }));
     setError('Your account was signed in on another device. Please sign in again.');
   }, [clearAllRideAlerts, stopLocationService]);
 
@@ -379,17 +411,128 @@ export function DriverRuntimeProvider({ children }: { children: ReactNode }) {
     };
   }, [clearRevokedSession]);
 
+  const registerExpoToken = useCallback(async () => {
+    if (Platform.OS === 'web' || !tokenRef.current) return false;
+    try {
+      const notificationState = await configureNotifications(false);
+      if (!notificationState.notificationsGranted) return false;
+      const projectId = Constants.easConfig?.projectId ?? Constants.expoConfig?.extra?.eas?.projectId;
+      const pushToken = await Notifications.getExpoPushTokenAsync(projectId ? { projectId } : undefined);
+      await api('/api/driver/push-token', tokenRef.current, sessionRef.current || undefined, {
+        method: 'POST', body: JSON.stringify({ token: pushToken.data }),
+      });
+      return true;
+    } catch {
+      return false;
+    }
+  }, []);
+
+  const refreshAlertReadiness = useCallback(async ({ requestPermissions = false } = {}) => {
+    if (Platform.OS === 'web') return true;
+    setAlertReadiness(current => ({ ...current, checking: true, message: null }));
+    try {
+      const notificationState = await configureNotifications(requestPermissions);
+      let foregroundLocation = await Location.getForegroundPermissionsAsync();
+      if (requestPermissions && !foregroundLocation.granted) {
+        foregroundLocation = await Location.requestForegroundPermissionsAsync();
+      }
+      let backgroundLocation = await Location.getBackgroundPermissionsAsync();
+      if (foregroundLocation.granted && requestPermissions && !backgroundLocation.granted) {
+        backgroundLocation = await Location.requestBackgroundPermissionsAsync();
+      }
+      const lockScreenConfirmed = (await SecureStore.getItemAsync(LOCK_SCREEN_ACK_KEY)) === 'true';
+      const pushTokenRegistered = notificationState.notificationsGranted
+        ? await registerExpoToken()
+        : false;
+      let foregroundServiceReady = false;
+      if (isOnlineRef.current) {
+        foregroundServiceReady = await Location.hasStartedLocationUpdatesAsync(BACKGROUND_LOCATION_TASK);
+      } else if (
+        requestPermissions
+        && notificationState.notificationsGranted
+        && notificationState.alertChannelReady
+        && foregroundLocation.granted
+        && backgroundLocation.granted
+        && pushTokenRegistered
+        && lockScreenConfirmed
+      ) {
+        try {
+          await startLocationService(false);
+          foregroundServiceReady = await Location.hasStartedLocationUpdatesAsync(BACKGROUND_LOCATION_TASK);
+          await stopLocationService();
+        } catch {
+          foregroundServiceReady = false;
+          await stopLocationService().catch(() => undefined);
+        }
+      }
+      const ready = Boolean(
+        notificationState.notificationsGranted
+        && notificationState.alertChannelReady
+        && foregroundLocation.granted
+        && backgroundLocation.granted
+        && pushTokenRegistered
+        && lockScreenConfirmed
+        && foregroundServiceReady
+      );
+      const message = ready
+        ? null
+        : !notificationState.notificationsGranted
+          ? 'Allow notifications so ride requests can reach the locked screen.'
+          : !notificationState.alertChannelReady
+            ? 'Enable the Ride requests notification channel and lock-screen visibility in system settings.'
+            : !foregroundLocation.granted || !backgroundLocation.granted
+              ? 'Allow precise location and background location to keep your Driver availability active.'
+              : !pushTokenRegistered
+                ? 'Push registration did not complete. Check your network and retry.'
+                : !lockScreenConfirmed
+                  ? 'Confirm that My Ride ride alerts are enabled on your lock screen.'
+                  : 'The native foreground service could not be verified. Check system settings and retry.';
+      setAlertReadiness(current => ({
+        checking: false,
+        ready,
+        notificationsGranted: notificationState.notificationsGranted,
+        alertChannelReady: notificationState.alertChannelReady,
+        foregroundLocationGranted: foregroundLocation.granted,
+        backgroundLocationGranted: backgroundLocation.granted,
+        pushTokenRegistered,
+        lockScreenConfirmed,
+        foregroundServiceReady,
+        message,
+      }));
+      return ready;
+    } catch (cause) {
+      const message = cause instanceof Error ? cause.message : 'Alert setup could not be checked.';
+      setAlertReadiness(current => ({ ...current, checking: false, ready: false, message }));
+      return false;
+    }
+  }, [registerExpoToken, startLocationService, stopLocationService]);
+
+  const prepareAlertReadiness = useCallback(async () => {
+    await refreshAlertReadiness({ requestPermissions: true });
+  }, [refreshAlertReadiness]);
+
+  const confirmLockScreenAlerts = useCallback(async () => {
+    await SecureStore.setItemAsync(LOCK_SCREEN_ACK_KEY, 'true');
+    await refreshAlertReadiness({ requestPermissions: true });
+  }, [refreshAlertReadiness]);
+
   const setOnlineState = useCallback(async (next: boolean) => {
     const token = tokenRef.current;
     if (!token) throw new Error('Sign in is required.');
     try {
-      await api('/api/driver/availability', token, sessionRef.current || undefined, {
-        method: 'POST', body: JSON.stringify({ isOnline: next }),
-      });
+      if (next && Platform.OS !== 'web') {
+        const alertSetupReady = await refreshAlertReadiness({ requestPermissions: true });
+        if (!alertSetupReady) {
+          throw new Error('Complete the required notification, lock-screen, and background-location setup before going online.');
+        }
+      }
       if (next) {
         isOnlineRef.current = true;
         await startLocationService(Boolean(activeRideIdRef.current));
       }
+      await api('/api/driver/availability', token, sessionRef.current || undefined, {
+        method: 'POST', body: JSON.stringify({ isOnline: next }),
+      });
       await SecureStore.setItemAsync(ONLINE_KEY, String(next));
       setIsOnline(next);
       socket.current?.emit('driver:status', { isOnline: next });
@@ -409,19 +552,7 @@ export function DriverRuntimeProvider({ children }: { children: ReactNode }) {
       }
       throw cause;
     }
-  }, [clearAllRideAlerts, startLocationService, stopLocationService]);
-
-  const registerExpoToken = useCallback(async () => {
-    if (Platform.OS === 'web' || !tokenRef.current) return;
-    try {
-      await configureNotifications();
-      const projectId = Constants.easConfig?.projectId ?? Constants.expoConfig?.extra?.eas?.projectId;
-      const pushToken = await Notifications.getExpoPushTokenAsync(projectId ? { projectId } : undefined);
-      await api('/api/driver/push-token', tokenRef.current, sessionRef.current || undefined, {
-        method: 'POST', body: JSON.stringify({ token: pushToken.data }),
-      });
-    } catch { /* Notifications still work locally even if a development build lacks a project id. */ }
-  }, []);
+  }, [clearAllRideAlerts, refreshAlertReadiness, startLocationService, stopLocationService]);
 
   useEffect(() => {
     Promise.all([
@@ -435,6 +566,12 @@ export function DriverRuntimeProvider({ children }: { children: ReactNode }) {
       setReady(true);
     }).catch(() => setReady(true));
   }, []);
+
+  useEffect(() => {
+    if (ready && user && tokenRef.current && Platform.OS !== 'web') {
+      void refreshAlertReadiness();
+    }
+  }, [ready, refreshAlertReadiness, user]);
 
   useEffect(() => {
     const subscription = Notifications.addNotificationResponseReceivedListener(response => {
@@ -452,6 +589,12 @@ export function DriverRuntimeProvider({ children }: { children: ReactNode }) {
         }
       }
     });
+    const receivedSubscription = Notifications.addNotificationReceivedListener(notification => {
+      const data = notification.request.content.data as {
+        type?: string; ride?: RideRequest & { _id?: string };
+      };
+      if (data.type === 'ride:new' && data.ride) handleRideOffer(data.ride);
+    });
     void Notifications.getLastNotificationResponseAsync().then(response => {
       const data = response?.notification.request.content.data as {
         type?: string; ride?: RideRequest & { _id?: string }; rideId?: string;
@@ -461,15 +604,17 @@ export function DriverRuntimeProvider({ children }: { children: ReactNode }) {
         void hydrateAvailableRides(rideId);
       }
     }).catch(() => undefined);
-    return () => subscription.remove();
-  }, [clearRideAlert, hydrateAvailableRides]);
+    return () => {
+      subscription.remove();
+      receivedSubscription.remove();
+    };
+  }, [clearRideAlert, handleRideOffer, hydrateAvailableRides]);
 
   useEffect(() => {
     if (!ready || !tokenRef.current) return;
     connectSocket();
-    void registerExpoToken();
     return () => { socket.current?.disconnect(); socket.current = null; };
-  }, [connectSocket, ready, registerExpoToken, user]);
+  }, [connectSocket, ready, user]);
 
   useEffect(() => {
     if (ready && user && tokenRef.current) void loadLongRange().catch(() => undefined);
@@ -504,10 +649,15 @@ export function DriverRuntimeProvider({ children }: { children: ReactNode }) {
         socket.current?.emit('driver:status', { isOnline: true });
         void registerExpoToken();
         void hydrateAvailableRides();
+        if (Platform.OS !== 'web') {
+          void refreshAlertReadiness().then(isReady => {
+            if (!isReady && isOnlineRef.current) void setOnlineState(false).catch(() => undefined);
+          });
+        }
       }
     });
     return () => { clearInterval(interval); subscription.remove(); };
-  }, [hydrateAvailableRides, isOnline, registerExpoToken]);
+  }, [hydrateAvailableRides, isOnline, refreshAlertReadiness, registerExpoToken, setOnlineState]);
 
   useEffect(() => {
     if (!pendingRide) return;
@@ -528,11 +678,15 @@ export function DriverRuntimeProvider({ children }: { children: ReactNode }) {
     if (!ready || !user || !isOnline || Platform.OS === 'web') return;
     // Restore the existing foreground/background location task after a normal
     // process restart. If Android permissions were revoked, fail closed.
-    void startLocationService(Boolean(activeRideId)).catch(async cause => {
+    void refreshAlertReadiness().then(isReady => {
+      if (!isReady) throw new Error('Required alert permissions are no longer available.');
+      return startLocationService(Boolean(activeRideId));
+    }).catch(async cause => {
+      setAlertReadiness(current => ({ ...current, ready: false, foregroundServiceReady: false }));
       setError(cause instanceof Error ? cause.message : 'Background location is no longer available.');
       await setOnlineState(false).catch(() => undefined);
     });
-  }, [activeRideId, isOnline, ready, startLocationService, user]);
+  }, [activeRideId, isOnline, ready, refreshAlertReadiness, setOnlineState, startLocationService, user]);
 
   const signIn = useCallback(async (identifier: string, password: string) => {
     const response = await api('/api/auth/login', undefined, undefined, { method: 'POST', body: JSON.stringify({ identifier, password }) });
@@ -551,8 +705,9 @@ export function DriverRuntimeProvider({ children }: { children: ReactNode }) {
     await setOnlineState(false).catch(() => undefined);
     socket.current?.disconnect(); socket.current = null;
     tokenRef.current = null; sessionRef.current = null;
-    await Promise.all([TOKEN_KEY, SESSION_KEY, USER_KEY, ONLINE_KEY, ACTIVE_RIDE_KEY].map(key => SecureStore.deleteItemAsync(key)));
+    await Promise.all([TOKEN_KEY, SESSION_KEY, USER_KEY, ONLINE_KEY, ACTIVE_RIDE_KEY, LOCK_SCREEN_ACK_KEY].map(key => SecureStore.deleteItemAsync(key)));
     setUser(null); setPendingRide(null); setActiveRideId(null); setConnection('offline');
+    setAlertReadiness(current => ({ ...current, ready: false, lockScreenConfirmed: false, foregroundServiceReady: false }));
   }, [setOnlineState]);
 
   const acceptRide = useCallback(async () => {
@@ -579,9 +734,10 @@ export function DriverRuntimeProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const value = useMemo<RuntimeContext>(() => ({
-    ready, user, isOnline, connection, pendingRide, activeRideId, error, longRange,
-    signIn, signOut, setOnline: setOnlineState, setLongRange, acceptRide, dismissRide: () => setPendingRide(null), clearError: () => setError(null),
-  }), [acceptRide, activeRideId, error, isOnline, pendingRide, ready, setOnlineState, setLongRange, signIn, signOut, user, connection, longRange]);
+    ready, user, isOnline, connection, pendingRide, activeRideId, error, longRange, alertReadiness,
+    signIn, signOut, setOnline: setOnlineState, prepareAlertReadiness, confirmLockScreenAlerts, setLongRange, acceptRide,
+    dismissRide: () => setPendingRide(null), clearError: () => setError(null),
+  }), [acceptRide, activeRideId, alertReadiness, confirmLockScreenAlerts, error, isOnline, pendingRide, prepareAlertReadiness, ready, setOnlineState, setLongRange, signIn, signOut, user, connection, longRange]);
   return <DriverContext.Provider value={value}>{children}</DriverContext.Provider>;
 }
 
