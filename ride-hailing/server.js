@@ -3614,6 +3614,7 @@ function normalizeGeocodeCity(value) {
 }
 
 function geocodeResultCity(result) {
+  if (result?.city) return result.city;
   const address = result?.address || {};
   return address.city || address.town || address.municipality || address.village || '';
 }
@@ -3632,23 +3633,25 @@ app.get('/api/geocode', async (req, res) => {
 
   try {
     const key = process.env.LOCATIONIQ_KEY;
+    const upstreamQuery = city && !broad
+      && !normalizeGeocodeCity(q).includes(normalizeGeocodeCity(city))
+      ? `${q}, ${city}`
+      : q;
     let url, headers = {};
 
     if (key) {
       // LocationIQ locality / neighbourhood data
       url = `https://us1.locationiq.com/v1/search` +
             `?key=${encodeURIComponent(key)}` +
-            `&q=${encodeURIComponent(q)}` +
+            `&q=${encodeURIComponent(upstreamQuery)}` +
             `&format=json&limit=20` +
-             `&addressdetails=1&normalizeaddress=1&dedupe=1&namedetails=1` +
-             (city && !broad ? `&city=${encodeURIComponent(city)}` : '');
+             `&addressdetails=1&normalizeaddress=1&dedupe=1&namedetails=1`;
     } else {
       // Enhanced Nominatim fallback (OSM data)
       url = `https://nominatim.openstreetmap.org/search` +
-             `?q=${encodeURIComponent(q)}` +
+             `?q=${encodeURIComponent(upstreamQuery)}` +
              `&format=json&limit=20` +
-             `&addressdetails=1&dedupe=1&namedetails=1` +
-             (city && !broad ? `&city=${encodeURIComponent(city)}` : '');
+             `&addressdetails=1&dedupe=1&namedetails=1`;
       headers = {
         'User-Agent': 'MyRide-App/1.0 (ride-hailing)',
         'Accept-Language': 'en,ur'
@@ -3660,13 +3663,18 @@ app.get('/api/geocode', async (req, res) => {
     const data = await r.json();
     const results = Array.isArray(data)
       ? data.filter(result => hasValidCoordinates({ lat: result?.lat, lng: result?.lon }))
+        .map(result => (
+          city && !broad && String(result?.address?.country_code || '').toLowerCase() === 'pk'
+            ? { ...result, city }
+            : result
+        ))
         .filter(result => broad || !city || !geocodeResultCity(result)
           || geocodeCityMatches(geocodeResultCity(result), city))
       : [];
     res.json(results);
   } catch (err) {
     console.error('Geocode error:', err.message);
-    res.json([]);
+    res.status(502).json({ error: 'Geocoding is temporarily unavailable' });
   }
 });
 

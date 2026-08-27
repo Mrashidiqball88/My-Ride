@@ -1107,7 +1107,7 @@ test.describe('live Mongo fare refresh', () => {
         }))
       ));
       for (const details of mapDetails) {
-        expect(details.styleUrl).toBe('https://demotiles.maplibre.org/style.json');
+        expect(details.styleUrl).toBe('https://tiles.openfreemap.org/styles/liberty');
         expect(details.vectorSources.length).toBeGreaterThan(0);
         expect(details.canvas).toBe(true);
         expect(details.leafletNodes).toBe(0);

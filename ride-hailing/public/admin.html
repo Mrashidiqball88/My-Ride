@@ -1349,7 +1349,19 @@ input[type=date]:focus{border-color:#f5c518}
 <script>
 // ── Constants / State ─────────────────────────────────────────────────────────
 const API = '';
-const MAP_STYLE_URL = 'https://demotiles.maplibre.org/style.json';
+const MAP_STYLE_URL = 'https://tiles.openfreemap.org/styles/liberty';
+const MAP_FALLBACK_STYLE = {
+  version: 8,
+  sources: {
+    openstreetmap: {
+      type: 'raster',
+      tiles: ['https://tile.openstreetmap.org/{z}/{x}/{y}.png'],
+      tileSize: 256,
+      attribution: '© OpenStreetMap contributors'
+    }
+  },
+  layers: [{ id: 'openstreetmap', type: 'raster', source: 'openstreetmap' }]
+};
 let adminToken = localStorage.getItem('admin_token');
 let adminEmail = localStorage.getItem('admin_email') || '';
 let socket = null;
@@ -2837,6 +2849,14 @@ function renderLiveLocation(location) {
       dragRotate: false,
       touchPitch: false
     });
+  let mapFallbackTried = false;
+  liveLocationMap.on('error', event => {
+    if (!mapFallbackTried && !liveLocationMap.isStyleLoaded() && event?.error) {
+      mapFallbackTried = true;
+      console.warn('MapLibre vector style unavailable; using OSM raster fallback.', event.error);
+      liveLocationMap.setStyle(MAP_FALLBACK_STYLE);
+    }
+  });
     liveLocationMap.addControl(new maplibregl.NavigationControl({ showCompass: false }), 'top-right');
     liveLocationMap.on('load', () => liveLocationMap?.resize());
   } else {

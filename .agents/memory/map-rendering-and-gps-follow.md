@@ -1,10 +1,10 @@
 ---
 name: Map rendering and GPS follow
-description: Performance and interaction rules for the Customer and Driver Leaflet maps.
+description: Coverage, fallback, performance, and interaction rules for the Customer and Driver MapLibre maps.
 ---
 
-Use lightweight native basemap tiles for the Driver map; never apply SVG inversion, high-contrast filters, retina tile overfetching, or expensive fallback-tile work to create the charcoal look. Center on the first valid GPS fix, then follow only from explicit navigation/locate actions; manual pan or zoom must stop forced recentering.
+Use a globally covered MapLibre style for Customer, Driver, and Admin maps; a demo style can return HTTP 200 and still contain no useful feature data for the deployed city. Keep a lightweight OSM raster style as a one-time pre-load fallback. Center on the first valid GPS fix, then follow only from explicit navigation/locate actions; manual pan or zoom must stop forced recentering.
 
-**Why:** Filtering dense raster tiles caused severe mobile rendering lag and distorted white outlines, while recentering on every GPS callback made the map fight user gestures.
+**Why:** Filtering dense raster tiles caused severe mobile rendering lag and distorted white outlines, while the demo vector style rendered a canvas but left Lahore visually blank. Re-centering on every GPS callback also made the map fight user gestures.
 
-**How to apply:** Restore the known-fast Leaflet tile configuration before trying visual experiments. Recenter on first fix or an explicit locate/follow action; do not add recurring camera timers, and never recenter on every geolocation event. Treat zoom gestures as user camera control and preserve the selected zoom.
+**How to apply:** Verify actual feature/tile coverage at the app's default cities, not just style HTTP status. Use the raster fallback only when the vector style fails before loading; do not add recurring camera timers, and never recenter on every geolocation event. Treat zoom gestures as user camera control and preserve the selected zoom.

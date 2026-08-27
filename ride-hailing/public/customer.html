@@ -902,7 +902,19 @@ body{font-family:'Segoe UI',sans-serif;background:#0a0a0f;color:#fff;height:100d
 <script>
 // ── Constants ─────────────────────────────────────────────────────────────
 const API = '';
-const MAP_STYLE_URL = 'https://demotiles.maplibre.org/style.json';
+const MAP_STYLE_URL = 'https://tiles.openfreemap.org/styles/liberty';
+const MAP_FALLBACK_STYLE = {
+  version: 8,
+  sources: {
+    openstreetmap: {
+      type: 'raster',
+      tiles: ['https://tile.openstreetmap.org/{z}/{x}/{y}.png'],
+      tileSize: 256,
+      attribution: '© OpenStreetMap contributors'
+    }
+  },
+  layers: [{ id: 'openstreetmap', type: 'raster', source: 'openstreetmap' }]
+};
 const CUSTOMER_ROUTE_IDS = {
   source: 'customer-route-source',
   shadow: 'customer-route-shadow',
@@ -1580,6 +1592,14 @@ function initMap() {
     dragRotate: false,
     touchPitch: false
   });
+  let mapFallbackTried = false;
+  map.on('error', event => {
+    if (!mapFallbackTried && !map.isStyleLoaded() && event?.error) {
+      mapFallbackTried = true;
+      console.warn('MapLibre vector style unavailable; using OSM raster fallback.', event.error);
+      map.setStyle(MAP_FALLBACK_STYLE);
+    }
+  });
   map.addControl(new maplibregl.NavigationControl({ showCompass: false }), 'top-right');
 
   // MapLibre observes its container, so one resize after flex layout is enough.
@@ -1823,6 +1843,25 @@ function buildLabel(item) {
   return { primary, secondary: ctx, city, kind };
 }
 
+async function reverseLocationLabel(lat, lng) {
+  try {
+    const response = await fetch(
+      `/api/geocode/reverse?lat=${encodeURIComponent(lat)}&lng=${encodeURIComponent(lng)}`,
+      { headers: {
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        ...(sessionToken ? { 'X-Session-Token': sessionToken } : {})
+      } }
+    );
+    if (!response.ok) return '';
+    const data = await response.json();
+    const label = buildLabel(data);
+    return [label.primary, label.secondary].filter(Boolean).join(', ')
+      || String(data.display_name || '').split(',').slice(0, 3).join(', ').trim();
+  } catch {
+    return '';
+  }
+}
+
 function escapeLocationText(value) {
   return String(value ?? '').replace(/[&<>"']/g, char => ({
     '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
@@ -1865,7 +1904,7 @@ function normalizeLocationResult(item, local = false) {
   const lat = Number(item.lat);
   const lon = Number(item.lon ?? item.lng);
   if (!Number.isFinite(lat) || !Number.isFinite(lon)) return null;
-  const city = label.city || item.address?.city || item.address?.town
+  const city = item.city || label.city || item.address?.city || item.address?.town
     || item.address?.municipality || item.address?.county || '';
   return {
     ...item,
@@ -2177,7 +2216,7 @@ async function setPickup(lat, lng, preDisplay = null) {
   closeDropdown('pickup');
   document.getElementById('pickup-input').value = preDisplay || 'Locating…';
   document.getElementById('pickup-input').classList.add('has-val');
-  const addr = preDisplay || formatCoordinateLabel(lat, lng);
+  const addr = preDisplay || 'Pinned location';
   pickup.address = addr;
   document.getElementById('pickup-input').value = addr;
   updateClearBtn('pickup');
@@ -2196,6 +2235,17 @@ async function setPickup(lat, lng, preDisplay = null) {
   } else {
     setCustomerMapCenter({ lat, lng }, 14);
   }
+  if (!preDisplay) {
+    void reverseLocationLabel(lat, lng).then(label => {
+      if (!label || !pickup
+        || Math.abs(pickup.lat - lat) > 0.000001
+        || Math.abs(pickup.lng - lng) > 0.000001) return;
+      pickup.address = label;
+      const input = document.getElementById('pickup-input');
+      if (input) input.value = label;
+      updateBookingSheetSummary();
+    });
+  }
   return true;
 }
 
@@ -2209,7 +2259,7 @@ async function setStop(idx, lat, lng, preDisplay = null) {
   closeDropdown(`stop-${idx}`);
   document.getElementById(`stop-${idx}-input`).value = preDisplay || 'Locating…';
   document.getElementById(`stop-${idx}-input`).classList.add('has-val');
-  const addr = preDisplay || formatCoordinateLabel(lat, lng);
+  const addr = preDisplay || 'Pinned location';
   dropoffs[idx].address = addr;
   document.getElementById(`stop-${idx}-input`).value = addr;
   updateClearBtn(`stop-${idx}`);
@@ -2224,6 +2274,18 @@ async function setStop(idx, lat, lng, preDisplay = null) {
     updateFare();
   } else {
     setCustomerMapCenter({ lat, lng }, 14);
+  }
+  if (!preDisplay) {
+    void reverseLocationLabel(lat, lng).then(label => {
+      const selected = dropoffs[idx];
+      if (!label || !selected
+        || Math.abs(selected.lat - lat) > 0.000001
+        || Math.abs(selected.lng - lng) > 0.000001) return;
+      selected.address = label;
+      const input = document.getElementById(`stop-${idx}-input`);
+      if (input) input.value = label;
+      updateBookingSheetSummary();
+    });
   }
   return true;
 }

@@ -772,7 +772,19 @@ textarea.support-input{resize:vertical;min-height:85px}
 </div>
 
 <script>
-const MAP_STYLE_URL = 'https://demotiles.maplibre.org/style.json';
+const MAP_STYLE_URL = 'https://tiles.openfreemap.org/styles/liberty';
+const MAP_FALLBACK_STYLE = {
+  version: 8,
+  sources: {
+    openstreetmap: {
+      type: 'raster',
+      tiles: ['https://tile.openstreetmap.org/{z}/{x}/{y}.png'],
+      tileSize: 256,
+      attribution: '© OpenStreetMap contributors'
+    }
+  },
+  layers: [{ id: 'openstreetmap', type: 'raster', source: 'openstreetmap' }]
+};
 const DRIVER_ROUTE_IDS = {
   source: 'driver-route-source',
   shadow: 'driver-route-shadow',
@@ -1474,7 +1486,8 @@ function bootApp() {
   loadStats();
   checkUnreadDriverTickets();
   if (typeof checkDailyFee === 'function') checkDailyFee();
-  loadDailyFeeSettings();
+  if (typeof loadDailyFeeSettings === 'function') loadDailyFeeSettings();
+  else window.addEventListener('load', () => loadDailyFeeSettings(), { once: true });
   initTodayFareWidget();
   loadDriverFareSettings();
   loadLongRangeState();
@@ -1648,6 +1661,14 @@ function initMap() {
     attributionControl: true,
     dragRotate: false,
     touchPitch: false
+  });
+  let mapFallbackTried = false;
+  map.on('error', event => {
+    if (!mapFallbackTried && !map.isStyleLoaded() && event?.error) {
+      mapFallbackTried = true;
+      console.warn('MapLibre vector style unavailable; using OSM raster fallback.', event.error);
+      map.setStyle(MAP_FALLBACK_STYLE);
+    }
   });
   map.addControl(new maplibregl.NavigationControl({ showCompass: false }), 'top-right');
 
