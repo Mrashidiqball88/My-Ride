@@ -942,6 +942,15 @@ let activeLocationSearch = null;
 let locationSheetResults = [];
 let locationSheetDrag = null;
 let locationSearchOrigin = null;
+let customerActiveCity = '';
+let customerCityLocation = null;
+let customerCityRequest = 0;
+let customerCityDetectionInFlight = false;
+let locationSearchQuery = '';
+let locationSearchCity = '';
+let locationSearchRemoteResults = [];
+let locationSearchBroadLoaded = false;
+let locationSearchBroadLoading = false;
 let bookingSheetDrag = null;
 let currentFareQuote = null;
 let fareQuoteRequest = 0;
@@ -1035,8 +1044,8 @@ document.getElementById('booking-sheet-handle')?.addEventListener('pointercancel
   if (panel) panel.style.transform = 'translateX(-50%)';
 });
 
-const LOCAL_LOCATION_AREAS = [
-  // Lahore instant index — common neighbourhoods, roads, markets, and landmarks.
+const LOCAL_LOCATION_INDEX = [
+  // Instant multi-city fallback index — remote search remains the source of truth.
   ['Gulberg', 'Lahore', 31.5100, 74.3500, 'Area'],
   ['Gulberg Main Boulevard', 'Lahore', 31.5152, 74.3547, 'Street'],
   ['Gulberg III', 'Lahore', 31.5140, 74.3520, 'Area'],
@@ -1082,7 +1091,7 @@ const LOCAL_LOCATION_AREAS = [
   ['Harbanspura', 'Lahore', 31.5830, 74.3950, 'Area'],
   ['LDA Avenue', 'Lahore', 31.4350, 74.2810, 'Area'],
   ['Bahria Town Lahore', 'Lahore', 31.3680, 74.1880, 'Area'],
-  // Broader instant index — intentionally rendered below Lahore matches.
+  // Broader locations stay behind the detected active city until expansion.
   ['Gujranwala', 'Gujranwala', 32.1877, 74.1945, 'City'],
   ['Satellite Town', 'Gujranwala', 32.1710, 74.1900, 'Area'],
   ['Model Town', 'Gujranwala', 32.1770, 74.1900, 'Area'],
@@ -1622,6 +1631,7 @@ function applyCustomerGpsPosition(pos, { forceCenter = false } = {}) {
     const zoom = Math.max(15, map.getZoom());
     setCustomerMapCenter({ lat, lng }, zoom);
   }
+  detectCustomerActiveCity(lat, lng);
   return true;
 }
 
@@ -1677,9 +1687,47 @@ function formatCoordinateLabel(lat, lng) {
 }
 
 // ── Location Autocomplete ─────────────────────────────────────────────────
-async function searchPlaces(query) {
+function normalizeCityName(value) {
+  return String(value || '').trim().toLocaleLowerCase().replace(/\s+/g, ' ');
+}
+
+function cityMatches(left, right) {
+  const a = normalizeCityName(left);
+  const b = normalizeCityName(right);
+  return Boolean(a && b && (a === b || a.includes(b) || b.includes(a)));
+}
+
+async function detectCustomerActiveCity(lat, lng) {
+  const point = { lat: Number(lat), lng: Number(lng) };
+  if (!Number.isFinite(point.lat) || !Number.isFinite(point.lng)) return;
+  if (customerCityLocation && haversine(customerCityLocation.lat, customerCityLocation.lng, point.lat, point.lng) < 8) return;
+  if (customerCityDetectionInFlight) return;
+  const requestId = ++customerCityRequest;
+  customerCityDetectionInFlight = true;
   try {
-    const r = await fetch(`/api/geocode?q=${encodeURIComponent(query)}`);
+    const response = await fetch(`/api/geocode/reverse?lat=${encodeURIComponent(point.lat)}&lng=${encodeURIComponent(point.lng)}`);
+    if (!response.ok) return;
+    const data = await response.json();
+    if (requestId !== customerCityRequest) return;
+    const nextCity = String(data.city || '').trim();
+    customerCityLocation = point;
+    if (nextCity && nextCity !== customerActiveCity) {
+      customerActiveCity = nextCity;
+      if (activeLocationSearch) onLocInput(activeLocationSearch);
+    }
+  } catch (error) {
+    console.warn('Active city detection unavailable:', error.message);
+  } finally {
+    if (requestId === customerCityRequest) customerCityDetectionInFlight = false;
+  }
+}
+
+async function searchPlaces(query, { city = '', broad = false } = {}) {
+  try {
+    const params = new URLSearchParams({ q: query });
+    if (city && !broad) params.set('city', city);
+    if (broad) params.set('broad', '1');
+    const r = await fetch(`/api/geocode?${params.toString()}`);
     if (!r.ok) return [];
     const data = await r.json();
     return Array.isArray(data) ? data : [];
