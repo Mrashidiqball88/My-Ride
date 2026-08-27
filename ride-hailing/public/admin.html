@@ -108,6 +108,40 @@ body{font-family:'Segoe UI',system-ui,sans-serif;background:#06060e;color:#e2e8f
 .map-search-result:hover{border-color:#38bdf8;background:#0a1020}
 .map-search-result:focus-visible{outline:2px solid #38bdf8;outline-offset:2px}
 .map-status{display:inline-flex;align-items:center;gap:.25rem;font-size:.62rem;font-weight:800;color:#67e8f9;background:#083344;border:1px solid #155e75;border-radius:999px;padding:.14rem .42rem;text-transform:capitalize}
+.admin-live-map-panel{max-width:none;background:#0f0f1e;border:1px solid #1e1e2e;border-radius:16px;padding:1rem;margin-top:1rem;overflow:hidden}
+.admin-live-map-header{display:flex;align-items:flex-start;justify-content:space-between;gap:1rem;margin-bottom:.85rem}
+.admin-live-map-kicker{font-size:.62rem;color:#38bdf8;text-transform:uppercase;letter-spacing:.12em;font-weight:900;margin-bottom:.22rem}
+.admin-live-map-header h2{font-size:1rem;color:#e2e8f0}
+.admin-live-map-header p{font-size:.72rem;color:#64748b;margin-top:.25rem;line-height:1.45}
+.admin-live-map-actions{display:flex;align-items:center;gap:.55rem;flex-wrap:wrap;justify-content:flex-end}
+.admin-live-map-sync{font-size:.68rem;color:#67e8f9;white-space:nowrap}
+.admin-live-map-toolbar{display:flex;align-items:center;gap:.55rem;flex-wrap:wrap;border-top:1px solid #1e1e2e;border-bottom:1px solid #1e1e2e;padding:.65rem 0;margin-bottom:.85rem}
+.live-map-count{display:inline-flex;align-items:center;gap:.38rem;color:#cbd5e1;font-size:.7rem;font-weight:800}
+.live-map-count::before{content:"";width:8px;height:8px;border-radius:50%;background:#64748b}
+.live-map-count.driver::before{background:#38bdf8;box-shadow:0 0 0 3px rgba(56,189,248,.12)}
+.live-map-count.customer::before{background:#f5c518;box-shadow:0 0 0 3px rgba(245,197,24,.12)}
+.admin-live-map-body{display:grid;grid-template-columns:minmax(0,1fr) 240px;gap:.85rem}
+#admin-live-map{height:520px;min-height:390px;width:100%;background:#090b14;border-radius:12px;overflow:hidden}
+.admin-live-map-roster{height:520px;min-height:390px;overflow-y:auto;background:#090b14;border:1px solid #1e1e2e;border-radius:12px;padding:.65rem}
+.live-roster-title{font-size:.65rem;color:#64748b;text-transform:uppercase;letter-spacing:.08em;font-weight:900;padding:.15rem .2rem .5rem}
+.live-roster-item{display:flex;align-items:center;gap:.55rem;width:100%;text-align:left;background:none;border:0;border-top:1px solid #1e1e2e;color:#cbd5e1;padding:.65rem .2rem;cursor:pointer}
+.live-roster-item:hover{color:#fff;background:#101525}
+.live-roster-dot{width:8px;height:8px;border-radius:50%;flex:0 0 auto;background:#f5c518}
+.live-roster-dot.driver{background:#38bdf8}
+.live-roster-copy{min-width:0}
+.live-roster-name{font-size:.72rem;font-weight:800;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.live-roster-meta{font-size:.62rem;color:#64748b;margin-top:.18rem;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;text-transform:capitalize}
+.admin-live-map-state{display:none;position:absolute;inset:0;z-index:1000;align-items:center;justify-content:center;text-align:center;padding:1.25rem;color:#94a3b8;font-size:.8rem;line-height:1.5;background:rgba(9,11,20,.86)}
+.admin-live-map-state.visible{display:flex}
+.admin-live-map-canvas{position:relative;min-width:0}
+.admin-map-pin{width:32px;height:32px;border-radius:50%;display:grid;place-items:center;border:3px solid #fff;box-shadow:0 4px 14px rgba(0,0,0,.5);font-size:.62rem;font-weight:900;color:#07111b}
+.admin-map-pin.driver{background:#38bdf8}.admin-map-pin.customer{background:#f5c518;color:#241b00}
+.income-section{margin-top:0;background:#0f0f1e;border:1px solid #1e1e2e;border-radius:14px;padding:1rem}
+.income-section .sec-hdr{margin-bottom:.75rem}
+@media (max-width:980px) and (min-width:701px){
+  .admin-live-map-body{grid-template-columns:1fr}
+  .admin-live-map-roster{height:auto;max-height:260px;min-height:0}
+}
 .live-map-modal{max-width:920px;width:min(96vw,920px);overflow:hidden}
 .live-map-modal .modal-body{padding:0}
 .live-map-summary{padding:1rem 1.25rem .8rem;display:flex;align-items:flex-start;justify-content:space-between;gap:1rem;border-bottom:1px solid #1e1e2e}
@@ -287,6 +321,15 @@ textarea.modal-input{resize:vertical;min-height:70px}
   .admin-search-row{align-items:stretch;flex-direction:column}
   .admin-search-row .btn{width:100%;justify-content:center}
   .admin-search-dual{grid-template-columns:1fr}
+  .income-section{padding:.85rem}
+  .income-day{gap:.55rem;flex-wrap:wrap}
+  .income-date{min-width:90px}
+  .income-bar{order:3;flex-basis:100%}
+  .admin-live-map-header{flex-direction:column}
+  .admin-live-map-actions{justify-content:flex-start}
+  .admin-live-map-body{grid-template-columns:1fr}
+  #admin-live-map{height:390px;min-height:320px}
+  .admin-live-map-roster{height:auto;max-height:240px;min-height:0}
   .live-map-modal{width:100%;max-height:calc(100dvh - 1.5rem)}
   #live-location-map{height:300px}
   .live-map-summary{padding:.85rem 1rem;flex-direction:column;gap:.3rem}
@@ -434,6 +477,11 @@ input[type=date]:focus{border-color:#f5c518}
           <div class="stat-card"><div class="stat-label">Passengers</div><div class="stat-val" id="s-pass">—</div><div class="stat-sub" id="s-pass-sub">— blocked</div></div>
           <div class="stat-card red"><div class="stat-label">Unresolved SOS</div><div class="stat-val" id="s-sos">—</div><div class="stat-sub">Emergency alerts</div></div>
         </div>
+        <!-- Daily income strip -->
+        <div class="income-section">
+          <div class="sec-hdr"><h2>💰 Last 7 Days Income</h2><button class="btn-refresh" onclick="loadOverview()">↻ Refresh</button></div>
+          <div id="income-strip"><div class="loading-row">Loading…</div></div>
+        </div>
         <div class="admin-search" id="admin-search">
           <div class="sec-hdr" style="margin-bottom:.55rem">
             <div>
@@ -460,9 +508,34 @@ input[type=date]:focus{border-color:#f5c518}
           <div class="search-results" id="global-search-results"><div style="font-size:.75rem;color:#475569">Enter at least two characters to search.</div></div>
           <div class="search-results" id="map-search-results" aria-live="polite"></div>
         </div>
-        <!-- Daily income strip -->
-        <div class="sec-hdr"><h2>💰 Last 7 Days Income</h2><button class="btn-refresh" onclick="loadOverview()">↻ Refresh</button></div>
-        <div id="income-strip"><div class="loading-row">Loading…</div></div>
+        <div class="admin-live-map-panel" id="admin-live-map-panel">
+          <div class="admin-live-map-header">
+            <div>
+              <div class="admin-live-map-kicker">Realtime fleet view</div>
+              <h2>📍 Live locations</h2>
+              <p>Online Drivers and Customers sharing their location during an active ride.</p>
+            </div>
+            <div class="admin-live-map-actions">
+              <span class="admin-live-map-sync" id="admin-live-map-sync">Waiting for first sync…</span>
+              <button class="btn-refresh" type="button" onclick="loadAdminLiveLocations(true)">↻ Refresh map</button>
+            </div>
+          </div>
+          <div class="admin-live-map-toolbar" aria-live="polite">
+            <span class="live-map-count driver">Drivers <strong id="admin-live-driver-count">0</strong></span>
+            <span class="live-map-count customer">Customers <strong id="admin-live-customer-count">0</strong></span>
+            <span style="font-size:.68rem;color:#64748b;margin-left:auto">Fresh locations only</span>
+          </div>
+          <div class="admin-live-map-body">
+            <div class="admin-live-map-canvas">
+              <div id="admin-live-map" aria-label="Live map showing online drivers and active customers"></div>
+              <div class="admin-live-map-state" id="admin-live-map-state"></div>
+            </div>
+            <div class="admin-live-map-roster" id="admin-live-map-roster">
+              <div class="live-roster-title">Visible now</div>
+              <div class="loading-row">Loading live locations…</div>
+            </div>
+          </div>
+        </div>
       </div>
 
       <!-- ════ 2. PAYMENTS ════ -->
@@ -1254,6 +1327,11 @@ let liveLocationMap = null;
 let liveLocationMarker = null;
 let selectedMapUserId = null;
 let liveLocationRefreshTimer = null;
+let adminLiveMap = null;
+let adminLiveLocations = [];
+let adminLiveMarkers = new Map();
+let adminLiveMapHasFitted = false;
+let adminLiveLocationRefreshTimer = null;
 const SUB_ADMIN_PERMISSION_CATALOG = [
   ['Dashboard', 'viewOverview', 'View overview dashboard'],
   ['Drivers', 'viewDrivers', 'View drivers & vehicle categories'],
@@ -1672,6 +1750,10 @@ function showSection(name) {
     if (fallback?.dataset.sec && fallback.dataset.sec !== name) showSection(fallback.dataset.sec);
     return;
   }
+  if (name !== 'overview' && adminLiveLocationRefreshTimer) {
+    clearInterval(adminLiveLocationRefreshTimer);
+    adminLiveLocationRefreshTimer = null;
+  }
   document.querySelectorAll('.sb-item').forEach(el => el.classList.toggle('active', el.dataset.sec === name));
   document.querySelectorAll('.section-panel').forEach(el => el.classList.remove('active'));
   document.getElementById(`sec-${name}`)?.classList.add('active');
@@ -1752,17 +1834,21 @@ async function loadOverview() {
     const last7  = income.slice(0, 7);
     maxIncome = Math.max(...last7.map(d => d.total), 1);
     const strip = document.getElementById('income-strip');
-    if (!last7.length) { strip.innerHTML = '<div class="empty-state"><span class="empty-icon">📭</span>No approved payments in last 30 days</div>'; return; }
-    strip.innerHTML = last7.map(d => {
-      const pct = Math.round((d.total / maxIncome) * 100);
-      return `<div class="income-day">
-        <div class="income-date">📅 ${d.date}</div>
-        <div class="income-bar"><div class="income-bar-fill" style="width:${pct}%"></div></div>
-        <div class="income-total">Rs ${d.total.toLocaleString()}</div>
-        <div style="font-size:.68rem;color:#334155;min-width:50px">${d.count} pay${d.count!==1?'s':''}</div>
-      </div>`;
-    }).join('');
+    if (!last7.length) {
+      strip.innerHTML = '<div class="empty-state"><span class="empty-icon">📭</span>No approved payments in last 30 days</div>';
+    } else {
+      strip.innerHTML = last7.map(d => {
+        const pct = Math.round((d.total / maxIncome) * 100);
+        return `<div class="income-day">
+          <div class="income-date">📅 ${d.date}</div>
+          <div class="income-bar"><div class="income-bar-fill" style="width:${pct}%"></div></div>
+          <div class="income-total">Rs ${d.total.toLocaleString()}</div>
+          <div style="font-size:.68rem;color:#334155;min-width:50px">${d.count} pay${d.count!==1?'s':''}</div>
+        </div>`;
+      }).join('');
+    }
   } catch {}
+  await loadAdminLiveLocations();
 }
 
 // ── 2. PAYMENTS ───────────────────────────────────────────────────────────────
@@ -2181,12 +2267,12 @@ async function runMapSearch() {
       const detail = user.role === 'driver'
         ? [user.vehicleType, user.vehicleModel, user.vehiclePlate].filter(Boolean).join(' · ')
         : `Active ride: ${String(user.status || '').replace('-', ' ')}`;
-      return `<button class="search-result map-search-result" type="button" onclick="openLiveLocationMap('${user._id}')">
+      return `<button class="search-result map-search-result" type="button" onclick="focusAdminLiveLocation('${user._id}')">
         <div class="search-result-main">
           <div class="search-result-name">${escHtml(user.name)} <span class="map-status">● ${escHtml(role)} · ${escHtml(user.status || 'live')}</span></div>
           <div class="search-result-meta">${escHtml(user.phone || 'No contact')} ${detail ? `· ${escHtml(detail)}` : ''}</div>
         </div>
-        <span class="btn btn-blue">View map</span>
+        <span class="btn btn-blue">Focus map</span>
       </button>`;
     }).join('');
   } catch (e) {
@@ -2194,6 +2280,160 @@ async function runMapSearch() {
   } finally {
     button.disabled = false; button.textContent = 'Search on Map';
   }
+}
+
+function initAdminLiveMap() {
+  const mapEl = document.getElementById('admin-live-map');
+  if (!mapEl || !window.L) return false;
+  if (adminLiveMap) {
+    setTimeout(() => adminLiveMap?.invalidateSize(), 80);
+    return true;
+  }
+  adminLiveMap = L.map(mapEl, { zoomControl: true, attributionControl: true, minZoom: 2 }).setView([20, 0], 2);
+  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+    attribution: '© <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
+    maxNativeZoom: 19,
+    maxZoom: 20,
+    subdomains: 'abc',
+    detectRetina: false,
+    updateWhenIdle: true,
+    keepBuffer: 1,
+    crossOrigin: true
+  }).addTo(adminLiveMap);
+  return true;
+}
+
+function liveLocationPopup(location) {
+  const role = location.role === 'driver' ? 'Driver' : 'Customer';
+  const detail = location.role === 'driver'
+    ? [location.vehicleType, location.vehicleModel, location.vehiclePlate].filter(Boolean).join(' · ')
+    : `Active ride · ${String(location.status || '').replaceAll('-', ' ')}`;
+  return `<strong>${escHtml(location.name || role)}</strong><br><span>${escHtml(role)} · ${escHtml(detail || 'Live')}</span><br><small>${escHtml(formatLiveLocationTime(location.updatedAt))}</small>`;
+}
+
+function renderAdminLiveLocations(locations) {
+  const mapEl = document.getElementById('admin-live-map');
+  const state = document.getElementById('admin-live-map-state');
+  const roster = document.getElementById('admin-live-map-roster');
+  const sync = document.getElementById('admin-live-map-sync');
+  const driverCount = locations.filter(location => location.role === 'driver').length;
+  const customerCount = locations.filter(location => location.role === 'customer').length;
+  const validLocations = locations.filter(location => (
+    location?.location &&
+    Number.isFinite(Number(location.location.lat)) &&
+    Number.isFinite(Number(location.location.lng))
+  ));
+
+  document.getElementById('admin-live-driver-count').textContent = driverCount;
+  document.getElementById('admin-live-customer-count').textContent = customerCount;
+  if (sync) sync.textContent = formatLiveLocationTime(new Date());
+
+  if (!initAdminLiveMap()) {
+    if (state) {
+      state.textContent = 'The live map is unavailable. Refresh the page to try again.';
+      state.classList.add('visible');
+    }
+    return;
+  }
+  if (!mapEl) return;
+  state?.classList.toggle('visible', validLocations.length === 0);
+  if (state && validLocations.length === 0) {
+    state.textContent = 'No fresh live locations are available right now. Drivers appear after a current heartbeat; Customers appear only while sharing during an active ride.';
+  }
+
+  adminLiveMarkers.forEach(marker => marker.remove());
+  adminLiveMarkers = new Map();
+  validLocations.forEach(location => {
+    const role = location.role === 'driver' ? 'driver' : 'customer';
+    const icon = L.divIcon({
+      className: 'admin-live-marker',
+      html: `<div class="admin-map-pin ${role}" aria-label="${escHtml(location.name || role)}">${role === 'driver' ? 'D' : 'C'}</div>`,
+      iconSize: [32, 32],
+      iconAnchor: [16, 16]
+    });
+    const marker = L.marker([Number(location.location.lat), Number(location.location.lng)], { icon })
+      .addTo(adminLiveMap)
+      .bindPopup(liveLocationPopup(location), { closeButton: true, maxWidth: 240 });
+    marker.on('click', () => { selectedMapUserId = String(location._id); });
+    adminLiveMarkers.set(String(location._id), marker);
+  });
+
+  if (!validLocations.length) {
+    adminLiveMapHasFitted = false;
+  } else if (!adminLiveMapHasFitted) {
+    const bounds = L.latLngBounds(validLocations.map(location => [Number(location.location.lat), Number(location.location.lng)]));
+    if (validLocations.length === 1) {
+      adminLiveMap.setView(bounds.getCenter(), 13, { animate: false });
+    } else {
+      adminLiveMap.fitBounds(bounds, { padding: [36, 36], maxZoom: 13, animate: false });
+    }
+    adminLiveMapHasFitted = true;
+  }
+
+  if (roster) {
+    const sorted = [...validLocations].sort((a, b) => (
+      (a.role === b.role ? 0 : a.role === 'driver' ? -1 : 1) ||
+      String(a.name || '').localeCompare(String(b.name || ''))
+    ));
+    roster.innerHTML = `<div class="live-roster-title">Visible now · ${sorted.length}</div>` + (
+      sorted.length
+        ? sorted.map(location => {
+          const role = location.role === 'driver' ? 'driver' : 'customer';
+          const detail = location.role === 'driver'
+            ? [location.vehicleType, location.vehicleModel].filter(Boolean).join(' · ') || 'Online'
+            : `Active ride · ${String(location.status || '').replaceAll('-', ' ')}`;
+          return `<button class="live-roster-item" type="button" onclick="focusAdminLiveLocation('${location._id}')">
+            <span class="live-roster-dot ${role}"></span>
+            <span class="live-roster-copy"><span class="live-roster-name">${escHtml(location.name || 'Unknown user')}</span><span class="live-roster-meta">${escHtml(detail)} · ${escHtml(formatLiveLocationTime(location.updatedAt))}</span></span>
+          </button>`;
+        }).join('')
+        : '<div style="font-size:.7rem;color:#64748b;padding:.65rem .2rem;line-height:1.45">No fresh locations to show.</div>'
+    );
+  }
+  setTimeout(() => adminLiveMap?.invalidateSize(), 80);
+}
+
+async function loadAdminLiveLocations(force = false) {
+  if (!force && !document.getElementById('sec-overview')?.classList.contains('active')) return;
+  const sync = document.getElementById('admin-live-map-sync');
+  const state = document.getElementById('admin-live-map-state');
+  if (sync && !adminLiveLocations.length) sync.textContent = 'Syncing live locations…';
+  try {
+    const locations = await api('/api/admin/live-locations');
+    adminLiveLocations = Array.isArray(locations) ? locations : [];
+    renderAdminLiveLocations(adminLiveLocations);
+    if (sync) sync.textContent = formatLiveLocationTime(new Date());
+    if (!adminLiveLocationRefreshTimer) {
+      adminLiveLocationRefreshTimer = setInterval(() => {
+        if (document.getElementById('sec-overview')?.classList.contains('active')) loadAdminLiveLocations();
+      }, 10000);
+    }
+  } catch (e) {
+    if (state) {
+      state.textContent = e.message || 'Live locations could not be loaded.';
+      state.classList.add('visible');
+    }
+    if (sync) sync.textContent = 'Live sync unavailable';
+  }
+}
+
+function focusAdminLiveLocation(userId) {
+  const id = String(userId);
+  const location = adminLiveLocations.find(item => String(item._id) === id);
+  const marker = adminLiveMarkers.get(id);
+  if (location && marker && adminLiveMap) {
+    adminLiveMap.setView([Number(location.location.lat), Number(location.location.lng)], Math.max(adminLiveMap.getZoom() || 0, 14), { animate: true });
+    marker.openPopup();
+    return;
+  }
+  loadAdminLiveLocations(true).then(() => {
+    const refreshed = adminLiveMarkers.get(id);
+    const current = adminLiveLocations.find(item => String(item._id) === id);
+    if (refreshed && current && adminLiveMap) {
+      adminLiveMap.setView([Number(current.location.lat), Number(current.location.lng)], 14, { animate: true });
+      refreshed.openPopup();
+    }
+  });
 }
 
 function formatLiveLocationTime(value) {

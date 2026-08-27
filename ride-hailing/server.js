@@ -3788,6 +3788,78 @@ app.get('/api/admin/map-search', adminJwt, requireProfileSearchAccess, async (re
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
+// GET /api/admin/live-locations — returns the complete fresh live-location
+// snapshot for the dashboard map. Drivers must be online with a fresh
+// heartbeat; Customers are included only when an active ride is sharing a
+// fresh passenger location with the platform.
+app.get('/api/admin/live-locations', adminJwt, requireProfileSearchAccess, async (req, res) => {
+  try {
+    const now = new Date();
+    const allowedRoles = adminSearchableRoles(req.admin);
+    const locations = [];
+
+    if (allowedRoles.includes('driver')) {
+      const heartbeatAfter = new Date(now.getTime() - DRIVER_HEARTBEAT_MAX_AGE_MS);
+      const drivers = await User.find({
+        role: 'driver',
+        accountStatus: 'active',
+        isOnline: true,
+        lastOnlineHeartbeat: { $gte: heartbeatAfter }
+      })
+        .select('name phone role accountStatus isOnline lastOnlineHeartbeat currentLocation vehicleType vehicleModel vehiclePlate')
+        .sort({ name: 1 })
+        .lean();
+      drivers.forEach(driver => {
+        if (!hasValidCoordinates(driver.currentLocation)) return;
+        locations.push({
+          _id: driver._id,
+          name: driver.name,
+          role: 'driver',
+          phone: driver.phone || '',
+          vehicleType: driver.vehicleType || '',
+          vehicleModel: driver.vehicleModel || '',
+          vehiclePlate: driver.vehiclePlate || '',
+          status: 'online',
+          location: { lat: Number(driver.currentLocation.lat), lng: Number(driver.currentLocation.lng) },
+          updatedAt: driver.lastOnlineHeartbeat
+        });
+      });
+    }
+
+    if (allowedRoles.includes('customer')) {
+      const sharedAfter = new Date(now.getTime() - CUSTOMER_SHARED_LOCATION_MAX_AGE_MS);
+      const rides = await Ride.find({
+        status: { $in: ['accepted', 'arrived', 'in-progress'] },
+        passengerLocationUpdatedAt: { $gte: sharedAfter }
+      })
+        .select('passenger passengerLocation passengerLocationUpdatedAt status')
+        .populate('passenger', 'name phone role accountStatus')
+        .sort('-passengerLocationUpdatedAt')
+        .lean();
+      const seenCustomers = new Set();
+      rides.forEach(ride => {
+        const customer = ride.passenger;
+        if (
+          !customer || customer.role !== 'customer' || customer.accountStatus !== 'active' ||
+          seenCustomers.has(String(customer._id)) || !hasValidCoordinates(ride.passengerLocation)
+        ) return;
+        seenCustomers.add(String(customer._id));
+        locations.push({
+          _id: customer._id,
+          name: customer.name,
+          role: 'customer',
+          phone: customer.phone || '',
+          status: ride.status,
+          location: { lat: Number(ride.passengerLocation.lat), lng: Number(ride.passengerLocation.lng) },
+          updatedAt: ride.passengerLocationUpdatedAt
+        });
+      });
+    }
+
+    res.json(locations);
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
 // GET /api/admin/map-location/:userId — refreshes the selected map pin from
 // authoritative persisted coordinates. Role permissions are checked again on
 // each poll so permission revocations take effect without a page reload.
