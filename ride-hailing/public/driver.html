@@ -2042,16 +2042,24 @@ function connectSocket() {
     showToast(reason || 'Vehicle documents are under Admin review. You are offline until approval.', 'info');
   });
 
-  // Admin granted a fee waiver or free trial — instantly unlock Accept button
-  socket.on('fee:waived', ({ paidUntilDate, isFreeTrial, trialStartDate }) => {
+  // Admin granted a fee waiver or free bonus — instantly unlock Accept button
+  socket.on('fee:waived', async ({ paidUntilDate, isFreeTrial, trialStartDate, bonusAmount }) => {
     if (paidUntilDate)             user.paidUntilDate  = paidUntilDate;
     if (isFreeTrial !== undefined)  user.isFreeTrial    = isFreeTrial;
     if (trialStartDate)            user.trialStartDate = trialStartDate;
     localStorage.setItem('rh_user', JSON.stringify(user));
     unlockAcceptButton();
-    const msg = isFreeTrial
-      ? '🎁 Free trial granted by admin — ride acceptance is now active!'
-      : '✅ Daily fee waived by admin — ride acceptance is now active!';
+    const numericBonus = Number(bonusAmount);
+    const hasBonus = Number.isFinite(numericBonus) && numericBonus > 0;
+    const amountText = hasBonus
+      ? `Rs ${numericBonus.toLocaleString('en-PK', { maximumFractionDigits: 2 })}`
+      : '';
+    const msg = hasBonus
+      ? `✅ ${amountText} free bonus credited — ride acceptance is now active!`
+      : isFreeTrial
+        ? '🎁 Free trial granted by admin — ride acceptance is now active!'
+        : '✅ Daily fee waived by admin — ride acceptance is now active!';
+    if (hasBonus) await loadWalletSummary();
     showToast(msg, 'success');
   });
 
@@ -2826,19 +2834,24 @@ function selectPayType(el) {
   selectedPayType = el.dataset.type;
 }
 
+function formatRsAmount(amount) {
+  const numeric = Number(amount);
+  return `Rs ${Number.isFinite(numeric) ? numeric.toLocaleString('en-PK', { maximumFractionDigits: 2 }) : '0'}`;
+}
+
 async function loadWalletSummary() {
   try {
     const data = await apiCall('/api/wallet/summary');
     // 3-card summary — total shown as sum of real cash + bonus
-    const realCash  = data.realCashWallet ?? 0;
-    const bonusCred = data.bonusWallet    ?? 0;
+    const realCash  = Number(data.realCashWallet ?? 0);
+    const bonusCred = Number(data.bonusWallet    ?? 0);
     const total     = realCash + bonusCred;
-    document.getElementById('wsum-balance').textContent = total.toLocaleString();
+    document.getElementById('wsum-balance').textContent = formatRsAmount(total);
     document.getElementById('wsum-balance').style.color = total < 0 ? '#ef4444' : '#4caf50';
-    document.getElementById('wsum-bonus').textContent = bonusCred.toLocaleString();
+    document.getElementById('wsum-bonus').textContent = formatRsAmount(bonusCred);
     // Breakdown rows
-    document.getElementById('wsum-real-cash').textContent    = 'Rs ' + realCash.toLocaleString();
-    document.getElementById('wsum-bonus-credit').textContent = 'Rs ' + bonusCred.toLocaleString();
+    document.getElementById('wsum-real-cash').textContent    = formatRsAmount(realCash);
+    document.getElementById('wsum-bonus-credit').textContent = formatRsAmount(bonusCred);
 
     // Transaction ledger
     const ledgerEl = document.getElementById('wsum-ledger');
@@ -2857,7 +2870,7 @@ async function loadWalletSummary() {
           <span style="font-size:.85rem;flex-shrink:0">${icon}</span>
           <span class="ledger-desc">${t.description || '—'}</span>
           <span class="ledger-date">${d}</span>
-          <span class="ledger-amt ${t.type}">${isCredit ? '+' : '−'}${(t.amount || 0).toLocaleString()}</span>
+          <span class="ledger-amt ${t.type}">${isCredit ? '+' : '−'}${formatRsAmount(t.amount || 0)}</span>
         </div>`;
       }).join('');
     }
@@ -3409,7 +3422,7 @@ function checkDailyFee() {
     if (user.isFreeTrial && user.trialStartDate && paidUntil && !dailyFeeDue) {
       const startDs = new Date(user.trialStartDate).toLocaleDateString('en-PK', { day: 'numeric', month: 'short', year: 'numeric' });
       const endDs   = paidUntil.toLocaleDateString('en-PK', { day: 'numeric', month: 'short', year: 'numeric' });
-      trialBannerEl.textContent = `Free Trial Granted: ${startDs} to ${endDs}`;
+      trialBannerEl.textContent = `Free Bonus Access Granted: ${startDs} to ${endDs}`;
       trialBannerEl.style.display = 'flex';
     } else {
       trialBannerEl.style.display = 'none';

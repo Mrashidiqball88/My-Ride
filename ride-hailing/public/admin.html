@@ -566,7 +566,7 @@ input[type=date]:focus{border-color:#f5c518}
               <div class="ftab" onclick="loadDrivers('suspended');setFTab(this)">Suspended</div>
               <div class="ftab" onclick="loadDrivers('blocked');setFTab(this)">Blocked</div>
             </div>
-            <button id="bulk-trial-btn" class="btn btn-yellow" onclick="grantBulkTrial()" disabled>🎁 Grant Free Trial</button>
+            <button id="bulk-trial-btn" class="btn btn-yellow" onclick="grantBulkTrial()" disabled>🎁 Grant Free Bonus</button>
             <input type="date" id="waiver-date-input" title="Grant Fee Paid Until this date" style="background:#06060e;border:1px solid #1e1e2e;border-radius:8px;padding:.35rem .65rem;color:#94a3b8;font-size:.78rem;outline:none;cursor:pointer">
             <button id="waiver-btn" class="btn btn-green" onclick="grantFeeWaiver()" disabled>📅 Grant Fee Paid Until</button>
             <button class="btn-refresh" onclick="loadDrivers(currentDriverStatus)">↻</button>
@@ -3066,7 +3066,7 @@ async function resolveTicket(id) {
   } catch (e) { showToast(e.message, 'error'); }
 }
 
-// ── Bulk Free Trial ───────────────────────────────────────────────────────────
+// ── Bulk Free Bonus ───────────────────────────────────────────────────────────
 function toggleSelectAll(checked) {
   document.querySelectorAll('.driver-chk').forEach(cb => {
     cb.checked = checked;
@@ -3088,7 +3088,7 @@ function updateBulkGrantBtn() {
   const n = selectedDriverIds.size;
   const btn = document.getElementById('bulk-trial-btn');
   if (btn) {
-    btn.textContent = n ? `🎁 Grant Free Trial (${n} selected)` : '🎁 Grant Free Trial';
+    btn.textContent = n ? `🎁 Grant Free Bonus (${n} selected)` : '🎁 Grant Free Bonus';
     btn.disabled = n === 0;
   }
   const wBtn = document.getElementById('waiver-btn');
@@ -3104,13 +3104,15 @@ function openTrialModal(driverIds) {
   _trialDriverIds = driverIds;
   const desc = document.getElementById('trial-modal-desc');
   if (desc) desc.textContent = driverIds.length === 1
-    ? 'Grant a free trial to 1 selected driver.'
-    : `Grant a free trial to ${driverIds.length} selected drivers.`;
+    ? 'Grant a free bonus and access period to 1 selected driver.'
+    : `Grant a free bonus and access period to ${driverIds.length} selected drivers.`;
   const inp = document.getElementById('trial-days-input');
   if (inp) inp.value = '30';
+  const amountInput = document.getElementById('trial-bonus-amount');
+  if (amountInput) amountInput.value = '';
   document.getElementById('trial-modal-err').textContent = '';
   const btn = document.getElementById('trial-confirm-btn');
-  if (btn) { btn.disabled = false; btn.textContent = 'Grant Trial'; }
+  if (btn) { btn.disabled = false; btn.textContent = 'Grant Bonus'; }
   document.getElementById('trial-modal').style.display = 'flex';
 }
 function closeTrialModal() {
@@ -3119,20 +3121,23 @@ function closeTrialModal() {
 }
 async function submitTrialGrant() {
   const days  = parseInt(document.getElementById('trial-days-input').value);
+  const amount = Number(document.getElementById('trial-bonus-amount').value);
   const errEl = document.getElementById('trial-modal-err');
+  if (!Number.isFinite(amount) || amount <= 0) { errEl.textContent = 'Enter a valid bonus amount greater than Rs 0'; return; }
   if (!days || days < 1 || days > 365) { errEl.textContent = 'Enter a valid number of days (1–365)'; return; }
   errEl.textContent = '';
   const btn = document.getElementById('trial-confirm-btn');
-  btn.disabled = true; btn.textContent = 'Granting…';
+  btn.disabled = true; btn.textContent = 'Granting Bonus…';
   try {
-    const res = await api('/api/admin/drivers/grant-trial', 'POST', { driverIds: _trialDriverIds, days });
-    showToast(`✓ ${res.credited} driver(s) granted ${days}-day free trial`, 'success');
+    const res = await api('/api/admin/drivers/grant-trial', 'POST', { driverIds: _trialDriverIds, days, amount });
+    const creditedAmount = Number(res.bonusAmount ?? amount);
+    showToast(`✓ ${res.credited} driver(s) received Rs ${creditedAmount.toLocaleString('en-PK', { maximumFractionDigits: 2 })} free bonus`, 'success');
     closeTrialModal();
     selectedDriverIds.clear();
     loadDrivers(currentDriverStatus);
   } catch (e) {
     errEl.textContent = e.message;
-    btn.disabled = false; btn.textContent = 'Grant Trial';
+    btn.disabled = false; btn.textContent = 'Grant Bonus';
   }
 }
 
@@ -3890,18 +3895,21 @@ if (adminToken) {
   </div>
 </div>
 
-<!-- ── Grant Free Trial Modal ─────────────────────────────────────────────── -->
+<!-- ── Grant Free Bonus Modal ─────────────────────────────────────────────── -->
 <div id="trial-modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.75);z-index:3100;align-items:center;justify-content:center">
   <div style="background:#0d0d1e;border:1px solid #2a2a4a;border-radius:14px;padding:1.5rem;max-width:340px;width:90%;margin:auto">
-    <h3 style="color:#f5c518;margin:0 0 .6rem;font-size:1rem">🎁 Grant Free Trial</h3>
+    <h3 style="color:#f5c518;margin:0 0 .6rem;font-size:1rem">🎁 Grant Free Bonus</h3>
     <p id="trial-modal-desc" style="color:#94a3b8;font-size:.82rem;margin:0 0 1rem"></p>
-    <label style="color:#64748b;font-size:.72rem;font-weight:600;display:block;margin-bottom:.35rem">NUMBER OF TRIAL DAYS</label>
+    <label style="color:#64748b;font-size:.72rem;font-weight:600;display:block;margin-bottom:.35rem">BONUS AMOUNT (RS)</label>
+    <input type="number" id="trial-bonus-amount" min="0.01" step="any" placeholder="Enter amount, e.g. 1000"
+      style="width:100%;padding:.7rem;border-radius:8px;border:1px solid #2a2a4a;background:#06060e;color:#fff;font-size:.95rem;box-sizing:border-box;margin-bottom:.7rem">
+    <label style="color:#64748b;font-size:.72rem;font-weight:600;display:block;margin-bottom:.35rem">ACCESS PERIOD (DAYS)</label>
     <input type="number" id="trial-days-input" min="1" max="365" value="30" placeholder="e.g. 30"
       style="width:100%;padding:.7rem;border-radius:8px;border:1px solid #2a2a4a;background:#06060e;color:#fff;font-size:.95rem;box-sizing:border-box;margin-bottom:.4rem">
     <p id="trial-modal-err" style="color:#ef4444;font-size:.77rem;min-height:1em;margin-bottom:.65rem"></p>
     <div style="display:flex;gap:.5rem">
       <button onclick="closeTrialModal()" style="flex:1;padding:.7rem;border-radius:8px;border:1px solid #2a2a4a;background:#0d0d1e;color:#94a3b8;cursor:pointer;font-size:.85rem">Cancel</button>
-      <button id="trial-confirm-btn" onclick="submitTrialGrant()" style="flex:1;padding:.7rem;border-radius:8px;border:none;background:#f5c518;color:#000;font-weight:700;cursor:pointer;font-size:.85rem">Grant Trial</button>
+      <button id="trial-confirm-btn" onclick="submitTrialGrant()" style="flex:1;padding:.7rem;border-radius:8px;border:none;background:#f5c518;color:#000;font-weight:700;cursor:pointer;font-size:.85rem">Grant Bonus</button>
     </div>
   </div>
 </div>

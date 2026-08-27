@@ -4390,22 +4390,17 @@ app.get('/api/admin/ratings', adminJwt, requirePerm('viewRatings'), async (req, 
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Admin: Grant Free Trial Credit
+// Admin: Grant Free Bonus Credit
 // ─────────────────────────────────────────────────────────────────────────────
-
-const TRIAL_AMOUNTS = {
-  Bike: 2000,
-  Rickshaw: 3000,
-  'Car Mini AC': 4500,
-  'Car Mini Non-AC': 4500,
-  'Car AC': 6500
-};
 
 app.post('/api/admin/drivers/grant-trial', adminJwt, requirePerm('manageDriverPasses'), async (req, res) => {
   try {
-    const { driverIds, days } = req.body;
+    const { driverIds, days, amount } = req.body;
     if (!Array.isArray(driverIds) || !driverIds.length)
       return res.status(400).json({ error: 'driverIds array required' });
+    const bonusAmount = Number(amount);
+    if (!Number.isFinite(bonusAmount) || bonusAmount <= 0)
+      return res.status(400).json({ error: 'A valid bonus amount greater than Rs 0 is required' });
     const trialDays = Math.max(1, Math.min(365, parseInt(days) || 30));
 
     const trialStartDate = new Date();
@@ -4416,23 +4411,23 @@ app.post('/api/admin/drivers/grant-trial', adminJwt, requirePerm('manageDriverPa
     const drivers = await User.find({ _id: { $in: driverIds }, role: 'driver' }).select('vehicleType name');
     const results = [];
     for (const driver of drivers) {
-      const amount = TRIAL_AMOUNTS[normalizeFareVehicle(driver.vehicleType)] || 4500;
       await Wallet.findOneAndUpdate(
         { user: driver._id },
-        { $inc: { balance: amount, bonusWallet: amount },
-          $push: { transactions: { amount, type: 'credit', description: `${trialDays}-Day Free Trial Bonus Credit` } } },
+        { $inc: { balance: bonusAmount, bonusWallet: bonusAmount },
+          $push: { transactions: { amount: bonusAmount, type: 'credit', description: `Admin Free Bonus Credit (Rs ${bonusAmount.toLocaleString('en-PK', { maximumFractionDigits: 2 })})` } } },
         { upsert: true, new: true }
       );
       await User.updateOne({ _id: driver._id }, { paidUntilDate, isFreeTrial: true, trialStartDate });
       // Notify driver via socket instantly
       io.to(`user:${driver._id}`).emit('fee:waived', {
         paidUntilDate:  paidUntilDate.toISOString(),
+        bonusAmount,
         isFreeTrial:    true,
         trialStartDate: trialStartDate.toISOString()
       });
-      results.push({ id: driver._id, name: driver.name, amount });
+      results.push({ id: driver._id, name: driver.name, amount: bonusAmount });
     }
-    res.json({ success: true, credited: results.length, results, trialDays, paidUntilDate });
+    res.json({ success: true, credited: results.length, results, trialDays, bonusAmount, paidUntilDate });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
