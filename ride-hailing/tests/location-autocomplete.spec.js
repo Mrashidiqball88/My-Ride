@@ -16,6 +16,20 @@ function geocodeResult(primary, city, lat, lon, kind = 'suburb') {
   };
 }
 
+function poiResult(primary, city, lat, lon, type, extra = {}) {
+  return {
+    display_name: `${primary}, ${city}, Pakistan`,
+    lat: String(lat),
+    lon: String(lon),
+    type,
+    ...extra,
+    address: {
+      city,
+      ...(extra.address || {})
+    }
+  };
+}
+
 async function setSearch(page, value, inputId = 'pickup-input') {
   await page.evaluate(({ value, inputId }) => {
     const input = document.getElementById(inputId);
@@ -130,6 +144,81 @@ test.describe('live nationwide location autocomplete', () => {
     await expect(page.locator('#location-sheet-list .sheet-item-tertiary').first()).toContainText('Lahore');
     await expect(page.locator('#location-sheet-list .sheet-item-coordinates').first())
       .toHaveText(/\d+\.\d{4},\s+\d+\.\d{4}/);
+  });
+
+  test('keeps vital POI categories from multiple cities and labels provider metadata', async ({ page }) => {
+    const requests = [];
+    await page.route(/\/api\/geocode(?:\?|$)/, async route => {
+      const url = new URL(route.request().url());
+      requests.push(url);
+      return route.fulfill({
+        contentType: 'application/json',
+        body: JSON.stringify([
+          poiResult('Allama Iqbal International Airport', 'Lahore', 31.5216, 74.4036, 'aerodrome'),
+          poiResult('Daewoo Bus Terminal', 'Karachi', 24.8947, 67.0632, 'bus_station'),
+          poiResult('Aga Khan University Hospital', 'Karachi', 24.8934, 67.0746, 'hospital'),
+          poiResult('Government College University', 'Faisalabad', 31.4180, 73.0790, 'college'),
+          poiResult('University of Peshawar', 'Peshawar', 34.0209, 71.4874, 'university'),
+          poiResult('Liberty Chowk', 'Lahore', 31.5107, 74.3441, 'place', { name: 'Liberty Chowk' }),
+          poiResult('Pakistan Monument', 'Islamabad', 33.6938, 73.0652, 'monument'),
+          poiResult('Unknown Community Place', 'Quetta', 30.1798, 66.9750, 'community_centre')
+        ])
+      });
+    });
+
+    await page.goto('/customer');
+    await page.evaluate(() => {
+      customerActiveCity = 'Karachi';
+      pickup = { lat: 24.8607, lng: 67.0011 };
+    });
+    await setSearch(page, 'important places');
+
+    await expect.poll(() => visibleLocationNames(page)).toHaveLength(8);
+    const sheet = page.locator('#location-sheet-list');
+    await expect(sheet).toContainText('Airport');
+    await expect(sheet).toContainText('Bus terminal / station');
+    await expect(sheet).toContainText('Healthcare');
+    await expect(sheet).toContainText('College');
+    await expect(sheet).toContainText('University');
+    await expect(sheet).toContainText('Intersection / chowk');
+    await expect(sheet).toContainText('Landmark');
+    await expect(sheet).toContainText('Community Centre');
+    expect(requests).toHaveLength(1);
+    expect(requests[0].searchParams.get('q')).toBe('important places');
+    expect(requests[0].searchParams.get('countrycodes')).toBeNull();
+    expect(requests[0].searchParams.get('city')).toBeNull();
+    expect(requests[0].searchParams.get('radius')).toBeNull();
+    expect(requests[0].searchParams.get('viewbox')).toBeNull();
+    expect(requests[0].searchParams.get('bounded')).toBeNull();
+    expect(requests[0].searchParams.get('type')).toBeNull();
+  });
+
+  test('searches nationwide without a pickup or GPS context', async ({ page }) => {
+    let requestedUrl;
+    await page.route(/\/api\/geocode(?:\?|$)/, async route => {
+      requestedUrl = new URL(route.request().url());
+      return route.fulfill({
+        contentType: 'application/json',
+        body: JSON.stringify([
+          poiResult('Jinnah International Airport', 'Karachi', 24.9065, 67.1608, 'airport'),
+          poiResult('Khyber Medical University', 'Peshawar', 34.0151, 71.5249, 'university')
+        ])
+      });
+    });
+
+    await page.goto('/customer');
+    await page.evaluate(() => {
+      pickup = null;
+      customerLocation = null;
+      customerCityLocation = null;
+      customerActiveCity = '';
+    });
+    await setSearch(page, 'airport');
+
+    await expect.poll(() => visibleLocationNames(page)).toHaveLength(2);
+    expect(requestedUrl.searchParams.get('q')).toBe('airport');
+    expect(requestedUrl.searchParams.get('lat')).toBeNull();
+    expect(requestedUrl.searchParams.get('lng')).toBeNull();
   });
 
   test('selects live pickup and drop-off results and pins their coordinates', async ({ page }) => {

@@ -2067,12 +2067,58 @@ async function searchPlaces(query, _context = {}, { signal } = {}) {
 }
 
 // Build the best human-readable label from a geocode result
+function providerLocationKind(item) {
+  const address = item.address && typeof item.address === 'object' ? item.address : {};
+  const signals = [
+    item.providerType, item.type, item.category, item.class,
+    address.amenity, address.public_transport, address.aeroway,
+    address.highway, address.tourism, address.landuse
+  ]
+    .filter(Boolean)
+    .map(value => String(value).trim().toLocaleLowerCase().replace(/[_-]+/g, ' '));
+  const nameSignal = String(
+    item.name || item.namedetails?.name || (item.display_name || '').split(',')[0] || ''
+  ).trim().toLocaleLowerCase();
+  const matches = (...values) => values.some(value => signals.includes(value));
+  const contains = (...values) => values.some(value =>
+    signals.some(signal => signal.includes(value)) || nameSignal.includes(value)
+  );
+
+  if (matches('airport', 'aerodrome', 'aeroway') || contains('airport')) return 'Airport';
+  if (matches('bus station', 'bus stop', 'terminal', 'transport station') || contains('bus station', 'bus terminal')) {
+    return 'Bus terminal / station';
+  }
+  if (matches('train station', 'railway station', 'halt', 'tram stop', 'subway station', 'station') || contains('railway')) {
+    return 'Train station';
+  }
+  if (matches('hospital', 'clinic', 'doctors', 'pharmacy', 'healthcare', 'health centre', 'health center') || contains('hospital', 'medical', 'healthcare')) {
+    return 'Healthcare';
+  }
+  if (matches('school', 'kindergarten', 'college', 'university', 'educational institution') || contains('school', 'college', 'university', 'education')) {
+    return matches('university') || contains('university') ? 'University' : matches('college') || contains('college') ? 'College' : 'School';
+  }
+  if (matches('junction', 'intersection', 'roundabout', 'traffic circle', 'crossing', 'square') || contains('junction', 'intersection', 'chowk')) {
+    return 'Intersection / chowk';
+  }
+  if (matches('landmark', 'monument', 'memorial', 'attraction', 'viewpoint') || contains('landmark', 'monument')) {
+    return 'Landmark';
+  }
+  if (matches('road', 'street', 'pedestrian', 'footway', 'path') || signals.includes('highway')) return 'Street';
+  if (matches('city', 'town', 'municipality')) return 'City';
+  if (matches('suburb', 'neighbourhood', 'quarter', 'village', 'hamlet')) return 'Area';
+
+  const raw = signals.find(Boolean);
+  return raw ? raw.replace(/\b\w/g, character => character.toLocaleUpperCase()) : 'Place';
+}
+
 function buildLabel(item) {
   const a = item.address || {};
   const nn = item.namedetails?.name || item.namedetails?.['name:en'] || '';
   // Most specific name first
   const primary =
     nn ||
+    item.name ||
+    a.name ||
     a.neighbourhood || a.suburb || a.quarter ||
     a.road          || a.footway || a.pedestrian ||
     a.village       || a.hamlet  ||
@@ -2084,13 +2130,7 @@ function buildLabel(item) {
   const skip  = new Set([primary, 'Pakistan']);
   const ctx   = parts.filter(p => p && !skip.has(p)).slice(0, 3).join(', ');
   const city = a.city || a.town || a.municipality || a.county || '';
-  const kind = item.type === 'road' || item.class === 'highway'
-    ? 'Street'
-    : item.type === 'city' || item.type === 'town'
-      ? 'City'
-      : item.type === 'suburb' || item.type === 'neighbourhood'
-        ? 'Area'
-        : '';
+  const kind = providerLocationKind(item);
   const addressLine = parts.filter(part => part && part !== 'Pakistan').slice(0, 4).join(', ');
   return { primary, secondary: ctx, city, kind, addressLine };
 }
@@ -2133,6 +2173,7 @@ function normalizeLocationResult(item, local = false) {
     lat,
     lon,
     city,
+    providerType: item.providerType || item.type || item.category || item.class || '',
     addressLine: item.addressLine
       || (typeof item.address === 'string' ? item.address : '')
       || label.addressLine
@@ -2235,7 +2276,10 @@ function renderLocationSheet(type, results, query = '', { loading = locationSear
       <span class="sheet-item-secondary">Use your phone GPS for the pickup point</span></span></button>`;
   }
   const scope = locationSearchScope(query);
-  locationSheetResults = prepareLiveLocationResults(results || [], scope.city).slice(0, 24);
+  // The server requests up to 50 provider records. Keep that full bounded
+  // provider response available rather than hiding valid categories after an
+  // arbitrary UI cutoff; the sheet is already scrollable.
+  locationSheetResults = prepareLiveLocationResults(results || [], scope.city).slice(0, 50);
   const hasResults = locationSheetResults.length > 0;
   let previousGroup = '';
   markup += locationSheetResults.map((item, index) => {

@@ -3610,21 +3610,23 @@ app.post('/api/sos', authMiddleware, async (req, res) => {
 // ─────────────────────────────────────────────────────────────────────────────
 // Geocode Proxy — forwards to LocationIQ (if LOCATIONIQ_KEY set) or Nominatim
 // Keeps API keys server-side and adds a proper User-Agent for Nominatim ToS.
+// This endpoint deliberately does not accept or forward a city, radius, map
+// viewport, bounded, feature-type, or category filter. The Customer search is
+// nationwide within Pakistan; the live provider owns the POI index.
 // ─────────────────────────────────────────────────────────────────────────────
 
-function normalizeGeocodeCity(value) {
-  return String(value || '').trim().toLocaleLowerCase().replace(/\s+/g, ' ');
-}
-
-function geocodeResultCity(result) {
-  const address = result?.address || {};
-  return address.city || address.town || address.municipality || address.village || result?.city || '';
-}
-
-function geocodeCityMatches(left, right) {
-  const a = normalizeGeocodeCity(left);
-  const b = normalizeGeocodeCity(right);
-  return Boolean(a && b && (a === b || a.includes(b) || b.includes(a)));
+function geocodeProviderType(result) {
+  const address = result?.address && typeof result.address === 'object' ? result.address : {};
+  return String(
+    result?.type ||
+    result?.category ||
+    result?.class ||
+    address.amenity ||
+    address.public_transport ||
+    address.aeroway ||
+    address.highway ||
+    ''
+  ).trim();
 }
 
 app.get('/api/geocode', async (req, res) => {
@@ -3644,7 +3646,7 @@ app.get('/api/geocode', async (req, res) => {
       url = `https://nominatim.openstreetmap.org/search` +
         `?q=${encodeURIComponent(q)}` +
         `&format=json&limit=50&countrycodes=pk` +
-        `&addressdetails=1&dedupe=1&namedetails=1`;
+        `&addressdetails=1&dedupe=1&namedetails=1&extratags=1`;
       headers = {
         'User-Agent': 'MyRide-App/1.0 (ride-hailing)',
         'Accept-Language': 'en,ur,pa,hi,sd'
@@ -3654,7 +3656,14 @@ app.get('/api/geocode', async (req, res) => {
     if (!upstream.ok) throw new Error(`Geocode upstream ${upstream.status}`);
     const data = await upstream.json();
     const results = Array.isArray(data)
-      ? data.filter(result => hasValidCoordinates({ lat: result?.lat, lng: result?.lon }))
+      ? data
+        .filter(result => hasValidCoordinates({ lat: result?.lat, lng: result?.lon }))
+        .map(result => ({
+          ...result,
+          // Keep provider metadata explicit for clients that need a stable
+          // category field, while returning all other provider fields intact.
+          providerType: geocodeProviderType(result)
+        }))
       : [];
     const seen = new Set();
     res.json(results.filter(result => {
