@@ -947,6 +947,8 @@ const API = '';
 const MAP_STYLE_URL = 'https://tiles.openfreemap.org/styles/liberty';
 const MAP_RTL_TEXT_PLUGIN_URL = 'https://unpkg.com/@mapbox/mapbox-gl-rtl-text@0.4.0/dist/mapbox-gl-rtl-text.js';
 const CUSTOMER_SEARCH_RADIUS_KM = 28;
+const CUSTOMER_MAP_DEFAULT_CENTER = [69.3451, 30.3753]; // Pakistan; GPS or pickup replaces this.
+const CUSTOMER_MAP_DEFAULT_ZOOM = 5.5;
 const MAP_FALLBACK_STYLE = {
   version: 8,
   sources: {
@@ -1882,8 +1884,8 @@ function initMap() {
   map = new maplibregl.Map({
     container: 'map',
     style: MAP_STYLE_URL,
-    center: [74.3587, 31.5204],
-    zoom: 15,
+    center: CUSTOMER_MAP_DEFAULT_CENTER,
+    zoom: CUSTOMER_MAP_DEFAULT_ZOOM,
     maxZoom: 20,
     attributionControl: true,
     dragRotate: false,
@@ -1965,7 +1967,7 @@ function applyCustomerGpsPosition(pos, { forceCenter = false } = {}) {
     const zoom = Math.max(15, map.getZoom());
     setCustomerMapCenter({ lat, lng }, zoom);
   }
-  detectCustomerActiveCity(lat, lng);
+  if (!pickup) detectCustomerActiveCity(lat, lng);
   return true;
 }
 
@@ -2082,11 +2084,11 @@ function locationSearchScope(query, broad = false) {
   };
 }
 
-async function detectCustomerActiveCity(lat, lng) {
+async function detectCustomerActiveCity(lat, lng, { force = false } = {}) {
   const point = { lat: Number(lat), lng: Number(lng) };
   if (!Number.isFinite(point.lat) || !Number.isFinite(point.lng)) return;
-  if (customerCityLocation && haversine(customerCityLocation.lat, customerCityLocation.lng, point.lat, point.lng) < 8) return;
-  if (customerCityDetectionInFlight) return;
+  if (!force && customerCityLocation && haversine(customerCityLocation.lat, customerCityLocation.lng, point.lat, point.lng) < 8) return;
+  if (customerCityDetectionInFlight && !force) return;
   const requestId = ++customerCityRequest;
   customerCityDetectionInFlight = true;
   try {
@@ -2100,7 +2102,7 @@ async function detectCustomerActiveCity(lat, lng) {
     if (!response.ok) return;
     const data = await response.json();
     if (requestId !== customerCityRequest) return;
-    const nextCity = String(data.city || '').trim();
+    const nextCity = canonicalCityName(String(data.city || '').trim());
     customerCityLocation = point;
     if (nextCity && nextCity !== customerActiveCity) {
       customerActiveCity = nextCity;
@@ -2114,7 +2116,9 @@ async function detectCustomerActiveCity(lat, lng) {
 }
 
 function locationSearchCenter() {
-  const point = customerLocation || pickup || customerCityLocation;
+  // The first pickup is the ride's authoritative local context. GPS is only
+  // the fallback before a pickup has been selected.
+  const point = pickup || customerLocation || customerCityLocation;
   if (point && Number.isFinite(Number(point.lat)) && Number.isFinite(Number(point.lng))) {
     return { lat: Number(point.lat), lng: Number(point.lng) };
   }
@@ -2136,7 +2140,6 @@ async function searchPlaces(query, { city = '', broad = false, explicitCity = ''
     if (center && !broad && !crossCity) {
       params.set('lat', String(center.lat));
       params.set('lng', String(center.lng));
-      params.set('radiusKm', String(Math.min(30, Math.max(25, Number(radiusKm) || CUSTOMER_SEARCH_RADIUS_KM))));
     }
     const r = await fetch(`/api/geocode?${params.toString()}`);
     if (!r.ok) return [];
