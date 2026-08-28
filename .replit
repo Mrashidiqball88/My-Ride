@@ -51,6 +51,7 @@ SMTP_PORT = "465"
 SMTP_SECURE = "true"
 SMTP_USER = "Mrashidiqbal88@gmail.com"
 EMAIL_FROM = "\"My Ride\" <Mrashidiqbal88@gmail.com>"
+ADMIN_EMAIL = "machinescarelab@gmail.com"
 
 [[ports]]
 localPort = 3000
