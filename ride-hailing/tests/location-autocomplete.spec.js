@@ -307,7 +307,12 @@ test.describe('dynamic city location autocomplete', () => {
     });
 
     await page.goto('/customer');
-    await page.evaluate(() => startVoiceSearch('pickup'));
+    await page.evaluate(() => {
+      document.getElementById('app').style.display = 'flex';
+      document.getElementById('auth-screen').style.display = 'none';
+      setBookingSheetExpanded(true);
+    });
+    await page.locator('.btn-voice[aria-label="Search pickup by voice"]').click();
     await expect.poll(() => page.evaluate(() => ({
       recognition: voiceRecognition,
       type: voiceSearchType,
@@ -323,7 +328,7 @@ test.describe('dynamic city location autocomplete', () => {
     });
     await expect(page.locator('#location-voice-status')).toContainText('timed out');
 
-    await page.evaluate(() => startVoiceSearch('pickup'));
+    await page.locator('.btn-voice[aria-label="Search pickup by voice"]').click();
     await expect.poll(() => page.evaluate(() => window.voiceStartCount)).toBe(2);
   });
 });

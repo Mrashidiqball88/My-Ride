@@ -2748,13 +2748,15 @@ function startVoiceSearch(type) {
   if (voiceRecognition) {
     voiceSearchSession++;
     clearVoiceSearchTimeout();
-    voiceRecognition.stop();
+    try {
+      if (typeof voiceRecognition.abort === 'function') voiceRecognition.abort();
+      else if (typeof voiceRecognition.stop === 'function') voiceRecognition.stop();
+    } catch {}
     voiceRecognition = null;
-    if (voiceSearchType === type) {
-      voiceSearchType = null;
-      setVoiceButtonState(type, false);
-      return;
-    }
+    const wasSameType = voiceSearchType === type;
+    voiceSearchType = null;
+    setVoiceButtonState(type, false);
+    if (wasSameType) return;
   }
   openLocationSheet(type);
   const language = document.getElementById('voice-language')?.value || 'ur-PK';
@@ -2780,8 +2782,11 @@ function startVoiceSearch(type) {
     if (!transcript) return;
     input.value = transcript;
     input.classList.add('has-val');
-    input.dispatchEvent(new Event('input', { bubbles: true }));
     updateClearBtn(type);
+    // Route voice results directly through the search handler. On mobile Web
+    // Speech builds the reparented sheet input may not reliably dispatch or
+    // route a synthetic input event.
+    onLocInput(type);
     // The local index renders synchronously. Promote an immediate fuzzy/phonetic
     // hit to the input so voice search shows the actual location name instead
     // of leaving a short or Urdu transcript that looks like a failed search.
@@ -2798,6 +2803,10 @@ function startVoiceSearch(type) {
   recognition.onerror = event => {
     if (voiceSearchSession !== session || voiceRecognition !== recognition) return;
     clearVoiceSearchTimeout();
+    voiceSearchSession++;
+    voiceRecognition = null;
+    voiceSearchType = null;
+    setVoiceButtonState(type, false);
     customerReadinessState.microphone = event.error === 'not-allowed' ? 'denied' : customerReadinessState.microphone;
     const message = event.error === 'not-allowed'
       ? 'Microphone access was blocked. Allow it in browser settings or type the location.'
