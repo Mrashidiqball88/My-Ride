@@ -86,6 +86,12 @@ test.describe('dynamic city location autocomplete', () => {
     await expect.poll(() => requests.some(url =>
       url.pathname.endsWith('/api/geocode') && url.searchParams.get('city') === 'Karachi'
     )).toBe(true);
+    const localSearchRequest = requests.find(url =>
+      url.pathname.endsWith('/api/geocode') && url.searchParams.get('city') === 'Karachi'
+    );
+    expect(localSearchRequest.searchParams.get('lat')).toBe('24.8607');
+    expect(localSearchRequest.searchParams.get('lng')).toBe('67.0011');
+    expect(localSearchRequest.searchParams.get('radiusKm')).toBe('28');
 
     const firstName = await page.locator('#location-sheet-list [data-location-index] .sheet-item-primary').first().textContent();
     expect(firstName).toBe('Gulshan-e-Iqbal');
@@ -121,5 +127,55 @@ test.describe('dynamic city location autocomplete', () => {
     await expect.poll(() => requests.some(url =>
       url.pathname.endsWith('/api/geocode') && url.searchParams.get('city') === 'Islamabad'
     )).toBe(true);
+  });
+
+  test('matches a phonetic misspelling and explains voice fallback', async ({ page }) => {
+    await page.goto('/customer');
+    await page.evaluate(() => {
+      customerActiveCity = 'Lahore';
+      customerCityLocation = { lat: 31.5204, lng: 74.3587 };
+    });
+
+    await setSearch(page, 'gulbur');
+    await expect(page.locator('#location-sheet-list')).toContainText('Gulberg');
+
+    await page.evaluate(() => {
+      window.SpeechRecognition = undefined;
+      window.webkitSpeechRecognition = undefined;
+      startVoiceSearch('pickup');
+    });
+    await expect(page.locator('#location-voice-status')).toContainText('not supported');
+  });
+
+  test('shows actionable capability states and keeps the search sheet usable', async ({ page }) => {
+    await page.goto('/customer');
+    await page.evaluate(() => {
+      customerReadinessState = {
+        location: 'denied',
+        microphone: 'denied',
+        notifications: 'unavailable',
+        audio: 'ready'
+      };
+      customerReadinessManualLocation = true;
+      renderCustomerReadiness();
+      document.getElementById('app').style.display = 'flex';
+      document.getElementById('customer-readiness').classList.add('open');
+    });
+
+    await expect(page.locator('.customer-permission-row')).toHaveCount(4);
+    await expect(page.locator('[data-permission="location"] .customer-permission-state')).toHaveText('Manual pin');
+    await expect(page.locator('[data-permission="microphone"] .customer-permission-state')).toHaveText('Blocked');
+    await expect(page.locator('#customer-readiness-continue')).toHaveText('Continue');
+
+    await setSearch(page, 'g');
+    await expect(page.locator('#location-sheet')).toHaveClass(/open/, { timeout: 5000 });
+    const sheetBox = await page.locator('#location-sheet').boundingBox();
+    const inputBox = await page.locator('#location-search-slot .location-input').boundingBox();
+    expect(sheetBox).not.toBeNull();
+    expect(inputBox).not.toBeNull();
+    expect(inputBox.height).toBeGreaterThan(0);
+    expect(await page.locator('#location-search-slot').evaluate(element =>
+      getComputedStyle(element).position
+    )).toBe('sticky');
   });
 });

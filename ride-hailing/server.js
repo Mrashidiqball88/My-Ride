@@ -124,7 +124,10 @@ app.use((_req, res, next) => {
   res.setHeader('X-Content-Type-Options', 'nosniff');
   res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
   res.setHeader('X-Frame-Options', 'SAMEORIGIN');
-  res.setHeader('Permissions-Policy', 'camera=(), microphone=(), geolocation=(self)');
+  // The Customer voice-search flow needs microphone access from this same
+  // origin. Keep camera disabled while allowing the explicitly requested
+  // browser capabilities.
+  res.setHeader('Permissions-Policy', 'camera=(), microphone=(self), geolocation=(self)');
   next();
 });
 // Route handlers log their internal exception details server-side but should
@@ -3630,6 +3633,29 @@ app.get('/api/geocode', async (req, res) => {
   if (!q || q.length < 1) return res.json([]);
   const city = String(req.query.city || '').trim().slice(0, 80);
   const broad = ['1', 'true', 'yes'].includes(String(req.query.broad || '').toLowerCase());
+  const globalSearch = ['1', 'true', 'yes'].includes(String(req.query.global || '').toLowerCase());
+  const centerLat = Number(req.query.lat);
+  const centerLng = Number(req.query.lng);
+  const requestedRadius = Number(req.query.radiusKm);
+  const hasSearchCenter = Number.isFinite(centerLat) && Number.isFinite(centerLng)
+    && centerLat >= -90 && centerLat <= 90
+    && centerLng >= -180 && centerLng <= 180
+    && !(centerLat === 0 && centerLng === 0);
+  const radiusKm = Number.isFinite(requestedRadius)
+    ? Math.min(30, Math.max(25, requestedRadius))
+    : 28;
+  const latitudeDelta = radiusKm / 111.32;
+  const longitudeDelta = hasSearchCenter
+    ? radiusKm / (111.32 * Math.max(0.2, Math.cos(centerLat * Math.PI / 180)))
+    : 0;
+  const viewbox = hasSearchCenter
+    ? [
+        Math.max(-180, centerLng - longitudeDelta),
+        Math.min(90, centerLat + latitudeDelta),
+        Math.min(180, centerLng + longitudeDelta),
+        Math.max(-90, centerLat - latitudeDelta)
+      ]
+    : null;
 
   try {
     const key = process.env.LOCATIONIQ_KEY;
@@ -3645,13 +3671,15 @@ app.get('/api/geocode', async (req, res) => {
             `?key=${encodeURIComponent(key)}` +
             `&q=${encodeURIComponent(upstreamQuery)}` +
             `&format=json&limit=20` +
-             `&addressdetails=1&normalizeaddress=1&dedupe=1&namedetails=1`;
+             `&addressdetails=1&normalizeaddress=1&dedupe=1&namedetails=1` +
+             (viewbox && !broad && !globalSearch ? `&viewbox=${encodeURIComponent(viewbox.join(','))}&bounded=1` : '');
     } else {
       // Enhanced Nominatim fallback (OSM data)
       url = `https://nominatim.openstreetmap.org/search` +
              `?q=${encodeURIComponent(upstreamQuery)}` +
              `&format=json&limit=20` +
-             `&addressdetails=1&dedupe=1&namedetails=1`;
+             `&addressdetails=1&dedupe=1&namedetails=1` +
+             (viewbox && !broad && !globalSearch ? `&viewbox=${encodeURIComponent(viewbox.join(','))}&bounded=1` : '');
       headers = {
         'User-Agent': 'MyRide-App/1.0 (ride-hailing)',
         'Accept-Language': 'en,ur'

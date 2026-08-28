@@ -107,6 +107,11 @@ body{font-family:'Segoe UI',sans-serif;background:#0a0a0f;color:#fff;height:100d
 .btn-clear-loc:hover{background:#3a3a50;color:#fff}
 .btn-locate-me{position:absolute;right:2.2rem;top:50%;transform:translateY(-50%);width:24px;height:24px;border-radius:50%;border:none;background:transparent;color:#f5c518;font-size:.95rem;line-height:1;cursor:pointer;z-index:2;display:flex;align-items:center;justify-content:center;padding:0;opacity:.85}
 .btn-locate-me:hover{opacity:1;background:#1a1a2a}
+.btn-voice{position:absolute;right:2.2rem;top:50%;transform:translateY(-50%);width:28px;height:28px;border-radius:8px;border:1px solid transparent;background:transparent;color:#f26a4f;font-size:.9rem;line-height:1;cursor:pointer;z-index:2;display:flex;align-items:center;justify-content:center;padding:0}
+.btn-voice:hover,.btn-voice.listening{border-color:#f26a4f;background:#fff0eb;color:#d9543c}
+#pickup-wrap .btn-voice{right:5rem}
+.voice-status{display:none;color:#d9543c;font-size:.65rem;margin-top:.25rem;padding:0 .25rem;line-height:1.35}
+.voice-status.visible{display:block}
 .location-input:focus{border-color:#f5c518}
 .location-input.has-val{border-color:#2d5a2d}
 .location-dropdown{display:none!important}
@@ -126,6 +131,7 @@ body{font-family:'Segoe UI',sans-serif;background:#0a0a0f;color:#fff;height:100d
 .location-search-slot .loc-wrap{width:min(100%, 640px);margin:0 auto}
 .sheet-header{display:flex;align-items:center;gap:.65rem;padding:.35rem 1rem .75rem;border-bottom:1px solid #252535;flex:0 0 auto}
 .sheet-header-copy{flex:1}.sheet-kicker{font-size:.63rem;color:#f5c518;font-weight:800;text-transform:uppercase;letter-spacing:.08em}.sheet-title{font-size:.92rem;color:#fff;font-weight:700;margin-top:.15rem}
+.sheet-controls{display:flex;align-items:center;gap:.4rem;flex-shrink:0}.voice-language{background:#0a0a0f;border:1px solid #3a3a4a;color:#ccc;border-radius:8px;padding:.35rem .4rem;font-size:.68rem;max-width:112px}.voice-language:focus{border-color:#f5c518;outline:none}
 .sheet-close{width:32px;height:32px;border:1px solid #343448;background:#1e1e2e;color:#bbb;border-radius:50%;font-size:.9rem;cursor:pointer}
 .sheet-list{min-height:0;flex:1;overflow-y:auto;overscroll-behavior:contain;-webkit-overflow-scrolling:touch;padding:.35rem .7rem 1.2rem;touch-action:pan-y}
 .sheet-item{display:flex;align-items:center;gap:.7rem;width:100%;border:0;border-bottom:1px solid #242436;background:transparent;color:#fff;text-align:left;padding:.78rem .45rem;cursor:pointer;min-height:58px}
@@ -315,6 +321,11 @@ body{font-family:'Segoe UI',sans-serif;background:#0a0a0f;color:#fff;height:100d
   --lr-muted:#6c7881;--lr-coral:#f26a4f;--lr-coral-dark:#d9543c;
   --lr-line:#ded5ca;--lr-blue:#376f9b;
 }
+#customer-readiness{position:absolute;inset:0;z-index:90;display:none;align-items:center;justify-content:center;padding:1.2rem;background:rgba(16,35,55,.38);backdrop-filter:blur(8px)}
+#customer-readiness.open{display:flex}
+.customer-readiness-card{width:min(430px,calc(100% - 1.5rem));max-height:min(86dvh,680px);overflow-y:auto;background:rgba(246,241,233,.98);border:1px solid var(--lr-line);border-radius:24px;padding:1.25rem;color:var(--lr-ink);box-shadow:0 20px 50px rgba(16,35,55,.24)}
+.customer-readiness-kicker{font-size:.62rem;color:var(--lr-coral);font-weight:900;letter-spacing:.12em;text-transform:uppercase}.customer-readiness-title{font-family:Georgia,serif;font-size:1.5rem;line-height:1.1;margin:.35rem 0 .45rem}.customer-readiness-copy{font-size:.78rem;color:var(--lr-muted);line-height:1.5;margin-bottom:1rem}
+.customer-permission-list{display:grid;gap:.5rem;margin-bottom:.85rem}.customer-permission-row{display:grid;grid-template-columns:34px minmax(0,1fr) auto;align-items:center;gap:.6rem;padding:.65rem .7rem;border:1px solid var(--lr-line);border-radius:13px;background:#fffaf4}.customer-permission-icon{width:30px;height:30px;border-radius:10px;background:var(--lr-paper-deep);display:grid;place-items:center;font-size:1rem}.customer-permission-name{font-size:.78rem;font-weight:850}.customer-permission-detail{font-size:.67rem;color:var(--lr-muted);line-height:1.3;margin-top:.1rem}.customer-permission-state{font-size:.64rem;font-weight:850;color:var(--lr-muted);white-space:nowrap}.customer-permission-row.ready .customer-permission-state{color:#2e8b57}.customer-permission-row.blocked .customer-permission-state{color:#c94d3a}.customer-readiness-status{min-height:1.2rem;color:var(--lr-muted);font-size:.7rem;line-height:1.4;margin:.6rem 0}.customer-readiness-actions{display:flex;gap:.5rem}.customer-readiness-actions button{flex:1;border-radius:11px;padding:.7rem .75rem;font-size:.78rem;font-weight:850;cursor:pointer}.customer-readiness-primary{background:var(--lr-coral);color:#fff;border:1px solid var(--lr-coral)}.customer-readiness-secondary{background:transparent;color:var(--lr-ink);border:1px solid var(--lr-line)}.customer-readiness-actions button:disabled{opacity:.55;cursor:wait}
 #app{position:relative;display:none;background:var(--lr-paper);color:var(--lr-ink);overflow:hidden}
 #map{position:absolute;inset:0;width:100%;height:100%;z-index:1;filter:none;background:#d8ddd9}
 .maplibregl-map{background:#d8ddd9}
@@ -352,12 +363,14 @@ body{font-family:'Segoe UI',sans-serif;background:#0a0a0f;color:#fff;height:100d
 .tab-content{padding:1rem clamp(1rem,3vw,1.5rem) 1.25rem}
 .map-hint{display:none}
 .loc-wrap{margin-bottom:.55rem}
-.location-input{background:rgba(255,255,255,.62);border:1px solid var(--lr-line);border-radius:14px;padding:.9rem 2.25rem .9rem 2.7rem;color:var(--lr-ink);font-size:.92rem;box-shadow:0 4px 12px rgba(16,35,55,.04)}
+.location-input{background:rgba(255,255,255,.62);border:1px solid var(--lr-line);border-radius:14px;padding:.9rem 5.2rem .9rem 2.7rem;color:var(--lr-ink);font-size:.92rem;box-shadow:0 4px 12px rgba(16,35,55,.04)}
 .location-input::placeholder{color:#9aa1a3}
 .location-input:focus{border-color:var(--lr-coral);box-shadow:0 0 0 3px rgba(242,106,79,.12)}
 .location-input.has-val{border-color:#8ba993}
 .pin-indicator{left:.9rem;filter:saturate(.7)}
 .btn-locate-me{right:2.25rem;color:var(--lr-coral)}
+.btn-voice{right:2.25rem;color:var(--lr-coral)}
+#pickup-wrap .btn-voice{right:5rem}
 .btn-clear-loc{background:var(--lr-paper-deep);color:var(--lr-muted)}
 .divider-line{color:#aab0ad;margin:.15rem 0}
 .divider-line::before,.divider-line::after{background:var(--lr-line)}
@@ -523,13 +536,36 @@ body{font-family:'Segoe UI',sans-serif;background:#0a0a0f;color:#fff;height:100d
     </div>
   </div>
 
+  <section id="customer-readiness" aria-label="Booking permissions" aria-modal="true">
+    <div class="customer-readiness-card">
+      <div class="customer-readiness-kicker">Ready when you are</div>
+      <h2 class="customer-readiness-title">Set up your booking tools</h2>
+      <p class="customer-readiness-copy">Allow the capabilities you want to use before booking. Your location is needed for nearby search; voice, alerts, and sound can be retried or skipped if this browser does not support them.</p>
+      <div class="customer-permission-list" id="customer-permission-list"></div>
+      <div class="customer-readiness-status" id="customer-readiness-status" role="status" aria-live="polite"></div>
+      <div class="customer-readiness-actions">
+        <button type="button" class="customer-readiness-secondary" onclick="retryCustomerPermissions()">Try again</button>
+        <button type="button" class="customer-readiness-primary" id="customer-readiness-continue" onclick="continueCustomerReadiness()">Continue</button>
+      </div>
+    </div>
+  </section>
+
   <div id="map"></div>
 
   <section id="location-sheet" class="location-sheet" aria-label="Location suggestions" aria-hidden="true">
     <div id="location-sheet-grabber" class="sheet-grabber" aria-label="Drag suggestions"></div>
     <div id="location-search-slot" class="location-search-slot"></div>
     <div class="sheet-header" id="location-sheet-header">
-      <div class="sheet-header-copy"><div class="sheet-kicker" id="location-sheet-kicker">Choose a location</div><div class="sheet-title" id="location-sheet-title">Search an area</div></div>
+      <div class="sheet-header-copy"><div class="sheet-kicker" id="location-sheet-kicker">Choose a location</div><div class="sheet-title" id="location-sheet-title">Search an area</div><div class="voice-status" id="location-voice-status" role="status" aria-live="polite"></div></div>
+      <div class="sheet-controls">
+        <select class="voice-language" id="voice-language" aria-label="Voice search language">
+          <option value="ur-PK">Urdu</option>
+          <option value="en-PK">English</option>
+          <option value="pa-IN">Punjabi</option>
+          <option value="hi-IN">Hindi</option>
+          <option value="sd-PK">Sindhi</option>
+        </select>
+      </div>
       <button class="sheet-close" type="button" onclick="closeLocationSheet()" aria-label="Close location suggestions">✕</button>
     </div>
     <div id="location-sheet-list" class="sheet-list"></div>
@@ -567,6 +603,7 @@ body{font-family:'Segoe UI',sans-serif;background:#0a0a0f;color:#fff;height:100d
                onfocus="onLocFocus('pickup')"
                onblur="onLocBlur('pickup')">
         <button class="btn-locate-me" onclick="locateMe()" title="Use my current location">🎯</button>
+        <button class="btn-voice" type="button" onclick="startVoiceSearch('pickup')" aria-label="Search pickup by voice" title="Search pickup by voice">🎙</button>
         <button class="btn-clear-loc" id="clear-pickup" onclick="clearLocation('pickup')" title="Clear pickup">✕</button>
         <div class="location-dropdown" id="pickup-dropdown"></div>
       </div>
@@ -590,6 +627,7 @@ body{font-family:'Segoe UI',sans-serif;background:#0a0a0f;color:#fff;height:100d
                    oninput="onLocInput('stop-0');updateClearBtn('stop-0')"
                    onfocus="onLocFocus('stop-0')"
                    onblur="onLocBlur('stop-0')">
+            <button class="btn-voice" type="button" onclick="startVoiceSearch('stop-0')" aria-label="Search Drop 1 by voice" title="Search Drop 1 by voice">🎙</button>
             <button class="btn-clear-loc" id="clear-stop-0" onclick="clearLocation('stop-0')" title="Clear drop 1">✕</button>
             <div class="location-dropdown" id="stop-0-dropdown"></div>
           </div>
@@ -610,6 +648,7 @@ body{font-family:'Segoe UI',sans-serif;background:#0a0a0f;color:#fff;height:100d
                    oninput="onLocInput('stop-1');updateClearBtn('stop-1')"
                    onfocus="onLocFocus('stop-1')"
                    onblur="onLocBlur('stop-1')">
+            <button class="btn-voice" type="button" onclick="startVoiceSearch('stop-1')" aria-label="Search Drop 2 by voice" title="Search Drop 2 by voice">🎙</button>
             <button class="btn-clear-loc" id="clear-stop-1" onclick="clearLocation('stop-1')" title="Clear drop 2">✕</button>
             <div class="location-dropdown" id="stop-1-dropdown"></div>
           </div>
@@ -630,6 +669,7 @@ body{font-family:'Segoe UI',sans-serif;background:#0a0a0f;color:#fff;height:100d
                    oninput="onLocInput('stop-2');updateClearBtn('stop-2')"
                    onfocus="onLocFocus('stop-2')"
                    onblur="onLocBlur('stop-2')">
+            <button class="btn-voice" type="button" onclick="startVoiceSearch('stop-2')" aria-label="Search Drop 3 by voice" title="Search Drop 3 by voice">🎙</button>
             <button class="btn-clear-loc" id="clear-stop-2" onclick="clearLocation('stop-2')" title="Clear drop 3">✕</button>
             <div class="location-dropdown" id="stop-2-dropdown"></div>
           </div>
@@ -650,6 +690,7 @@ body{font-family:'Segoe UI',sans-serif;background:#0a0a0f;color:#fff;height:100d
                    oninput="onLocInput('stop-3');updateClearBtn('stop-3')"
                    onfocus="onLocFocus('stop-3')"
                    onblur="onLocBlur('stop-3')">
+            <button class="btn-voice" type="button" onclick="startVoiceSearch('stop-3')" aria-label="Search Drop 4 by voice" title="Search Drop 4 by voice">🎙</button>
             <button class="btn-clear-loc" id="clear-stop-3" onclick="clearLocation('stop-3')" title="Clear drop 4">✕</button>
             <div class="location-dropdown" id="stop-3-dropdown"></div>
           </div>
@@ -903,6 +944,8 @@ body{font-family:'Segoe UI',sans-serif;background:#0a0a0f;color:#fff;height:100d
 // ── Constants ─────────────────────────────────────────────────────────────
 const API = '';
 const MAP_STYLE_URL = 'https://tiles.openfreemap.org/styles/liberty';
+const MAP_RTL_TEXT_PLUGIN_URL = 'https://unpkg.com/@mapbox/mapbox-gl-rtl-text@0.3.0/mapbox-gl-rtl-text.js';
+const CUSTOMER_SEARCH_RADIUS_KM = 28;
 const MAP_FALLBACK_STYLE = {
   version: 8,
   sources: {
@@ -964,6 +1007,17 @@ let locationSearchCity = '';
 let locationSearchRemoteResults = [];
 let locationSearchBroadLoaded = false;
 let locationSearchBroadLoading = false;
+let customerReadinessState = {
+  location: 'checking',
+  microphone: 'checking',
+  notifications: 'checking',
+  audio: 'checking'
+};
+let customerReadinessManualLocation = false;
+let customerReadinessBusy = false;
+let customerReadinessInitialized = false;
+let voiceRecognition = null;
+let voiceSearchType = null;
 let bookingSheetDrag = null;
 let currentFareQuote = null;
 let fareQuoteRequest = 0;
@@ -1448,6 +1502,224 @@ async function saveEmergencyContacts() {
   } catch (e) { showToast(e.message, 'error'); }
 }
 
+// ── Customer capability readiness ────────────────────────────────────────
+function customerReadinessAcknowledged() {
+  return sessionStorage.getItem('myride:customer-readiness') === '1';
+}
+
+function customerPermissionState(name) {
+  if (!navigator.permissions?.query) return 'prompt';
+  return navigator.permissions.query({ name }).then(result => result.state).catch(() => 'prompt');
+}
+
+function renderCustomerReadiness() {
+  const list = document.getElementById('customer-permission-list');
+  const status = document.getElementById('customer-readiness-status');
+  const continueButton = document.getElementById('customer-readiness-continue');
+  if (!list || !status || !continueButton) return;
+  const rows = [
+    {
+      key: 'location',
+      icon: '⌖',
+      name: 'Nearby location search',
+      detail: customerReadinessManualLocation
+        ? 'Manual map pin is enabled'
+        : 'Used to prioritize places around you',
+      required: true
+    },
+    {
+      key: 'microphone',
+      icon: '◉',
+      name: 'Voice search',
+      detail: 'Speak pickup and drop-off names',
+      required: false
+    },
+    {
+      key: 'notifications',
+      icon: '◇',
+      name: 'Ride alerts',
+      detail: 'Receive browser updates when a driver responds',
+      required: false
+    },
+    {
+      key: 'audio',
+      icon: '♪',
+      name: 'Audio feedback',
+      detail: 'Play sound for important ride updates',
+      required: false
+    }
+  ];
+  list.innerHTML = rows.map(row => {
+    const state = customerReadinessManualLocation && row.key === 'location'
+      ? 'manual'
+      : customerReadinessState[row.key];
+    const stateLabel = {
+      ready: 'Ready',
+      granted: 'Ready',
+      prompt: 'Needs access',
+      denied: 'Blocked',
+      blocked: 'Blocked',
+      unavailable: 'Unavailable',
+      manual: 'Manual pin',
+      checking: 'Checking…'
+    }[state] || 'Needs access';
+    const className = ['ready', 'granted', 'manual'].includes(state)
+      ? 'ready'
+      : ['denied', 'blocked', 'unavailable'].includes(state) ? 'blocked' : '';
+    return `<div class="customer-permission-row ${className}" data-permission="${row.key}">
+      <span class="customer-permission-icon" aria-hidden="true">${row.icon}</span>
+      <span><span class="customer-permission-name">${row.name}${row.required ? ' · required for nearby results' : ''}</span>
+      <span class="customer-permission-detail">${row.detail}</span></span>
+      <span class="customer-permission-state">${stateLabel}</span>
+    </div>`;
+  }).join('');
+  const locationReady = customerReadinessState.location === 'granted'
+    || customerReadinessState.location === 'ready'
+    || customerReadinessManualLocation;
+  continueButton.disabled = customerReadinessBusy;
+  continueButton.textContent = locationReady ? 'Continue' : 'Use map pin instead';
+  if (!status.textContent || customerReadinessBusy) {
+    status.textContent = customerReadinessBusy
+      ? 'Requesting the selected browser permissions…'
+      : locationReady
+        ? 'You can continue to booking.'
+        : 'Location access is unavailable. You can continue and place pickup manually on the map.';
+  }
+}
+
+async function refreshCustomerPermissionStates() {
+  const [location, microphone, notifications] = await Promise.all([
+    navigator.geolocation ? customerPermissionState('geolocation') : Promise.resolve('unavailable'),
+    navigator.mediaDevices?.getUserMedia ? customerPermissionState('microphone') : Promise.resolve('unavailable'),
+    'Notification' in window ? customerPermissionState('notifications') : Promise.resolve('unavailable')
+  ]);
+  customerReadinessState.location = location === 'granted' ? 'granted'
+    : location === 'denied' ? 'denied' : location;
+  customerReadinessState.microphone = microphone === 'granted' ? 'granted'
+    : microphone === 'denied' ? 'denied' : microphone;
+  customerReadinessState.notifications = notifications === 'granted' ? 'granted'
+    : notifications === 'denied' ? 'denied' : notifications;
+  customerReadinessState.audio = window.AudioContext || window.webkitAudioContext ? 'ready' : 'unavailable';
+  renderCustomerReadiness();
+}
+
+function getCustomerCurrentPosition() {
+  return new Promise((resolve, reject) => {
+    if (!navigator.geolocation) return reject(new Error('Location is not supported by this browser'));
+    navigator.geolocation.getCurrentPosition(resolve, reject, {
+      enableHighAccuracy: true,
+      maximumAge: 10000,
+      timeout: 10000
+    });
+  });
+}
+
+async function requestCustomerMicrophone() {
+  if (!navigator.mediaDevices?.getUserMedia) {
+    customerReadinessState.microphone = 'unavailable';
+    return;
+  }
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    stream.getTracks().forEach(track => track.stop());
+    customerReadinessState.microphone = 'granted';
+  } catch (error) {
+    customerReadinessState.microphone = error?.name === 'NotAllowedError' ? 'denied' : 'unavailable';
+  }
+}
+
+async function requestCustomerNotifications() {
+  if (!('Notification' in window)) {
+    customerReadinessState.notifications = 'unavailable';
+    return;
+  }
+  try {
+    const result = Notification.permission === 'default'
+      ? await Notification.requestPermission()
+      : Notification.permission;
+    customerReadinessState.notifications = result === 'granted' ? 'granted'
+      : result === 'denied' ? 'denied' : 'prompt';
+  } catch {
+    customerReadinessState.notifications = 'unavailable';
+  }
+}
+
+async function requestCustomerAudio() {
+  const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+  if (!AudioContextClass) {
+    customerReadinessState.audio = 'unavailable';
+    return;
+  }
+  try {
+    const context = window.__myRideAudioContext || new AudioContextClass();
+    window.__myRideAudioContext = context;
+    if (context.state === 'suspended') await context.resume();
+    customerReadinessState.audio = 'ready';
+  } catch {
+    customerReadinessState.audio = 'unavailable';
+  }
+}
+
+async function continueCustomerReadiness() {
+  if (customerReadinessBusy) return;
+  customerReadinessBusy = true;
+  const status = document.getElementById('customer-readiness-status');
+  if (status) status.textContent = 'Requesting the selected browser permissions…';
+  renderCustomerReadiness();
+  try {
+    if (customerReadinessState.location !== 'granted' && customerReadinessState.location !== 'ready') {
+      try {
+        await getCustomerCurrentPosition();
+        customerReadinessState.location = 'granted';
+      } catch (error) {
+        customerReadinessState.location = error?.code === 1 ? 'denied' : 'unavailable';
+      }
+    }
+    await Promise.all([
+      requestCustomerMicrophone(),
+      requestCustomerNotifications(),
+      requestCustomerAudio()
+    ]);
+    await refreshCustomerPermissionStates();
+    if (customerReadinessState.location === 'granted' || customerReadinessState.location === 'ready') {
+      customerReadinessManualLocation = false;
+      customerReadinessBusy = false;
+      sessionStorage.setItem('myride:customer-readiness', '1');
+      document.getElementById('customer-readiness')?.classList.remove('open');
+      startCustomerGpsTracking();
+      map?.resize();
+      return;
+    }
+    customerReadinessManualLocation = true;
+    customerReadinessBusy = false;
+    renderCustomerReadiness();
+  } catch (error) {
+    customerReadinessBusy = false;
+    if (status) status.textContent = error.message || 'Some browser permissions could not be checked.';
+    renderCustomerReadiness();
+  }
+}
+
+function retryCustomerPermissions() {
+  customerReadinessManualLocation = false;
+  customerReadinessState.location = 'prompt';
+  customerReadinessState.microphone = 'prompt';
+  customerReadinessState.notifications = 'prompt';
+  void continueCustomerReadiness();
+}
+
+async function initCustomerReadiness() {
+  if (customerReadinessInitialized || !token || !user) return;
+  customerReadinessInitialized = true;
+  if (customerReadinessAcknowledged()) {
+    customerReadinessState.location = navigator.geolocation ? 'ready' : 'unavailable';
+    startCustomerGpsTracking();
+    return;
+  }
+  document.getElementById('customer-readiness')?.classList.add('open');
+  await refreshCustomerPermissionStates();
+}
+
 // ── Boot ──────────────────────────────────────────────────────────────────
 function bootApp() {
   document.getElementById('auth-screen').style.display = 'none';
@@ -1459,6 +1731,7 @@ function bootApp() {
   loadEmergencyContacts();   // pre-cache for SOS
   checkUnreadCustTickets();  // badge for unread admin replies
   loadCustomerTerms();
+  void initCustomerReadiness();
   // Double rAF ensures the browser has fully painted the flex layout before
   // MapLibre measures #map — fixes the 0×0 container race condition.
   requestAnimationFrame(() => requestAnimationFrame(() => {
@@ -1582,6 +1855,15 @@ function fitCustomerMapToCoords(coords, padding = 50) {
 
 function initMap() {
   if (map) return;
+  if (typeof maplibregl.setRTLTextPlugin === 'function') {
+    try {
+      maplibregl.setRTLTextPlugin(MAP_RTL_TEXT_PLUGIN_URL, error => {
+        if (error) console.warn('Map label shaping unavailable:', error.message || error);
+      }, true);
+    } catch (error) {
+      console.warn('Map label shaping setup unavailable:', error.message || error);
+    }
+  }
   map = new maplibregl.Map({
     container: 'map',
     style: MAP_STYLE_URL,
@@ -1631,7 +1913,7 @@ function initMap() {
       setStop(idx, lat, lng);
     }
   });
-  startCustomerGpsTracking();
+  if (customerReadinessAcknowledged()) startCustomerGpsTracking();
   // Start showing nearby online drivers after map is ready
   setTimeout(startNearbyDrivers, 800);
 }
@@ -1765,10 +2047,13 @@ function explicitSearchCity(query) {
 
 function locationSearchScope(query, broad = false) {
   const explicitCity = explicitSearchCity(query);
+  const activeCity = canonicalCityName(customerActiveCity);
   return {
-    city: canonicalCityName(explicitCity || customerActiveCity),
+    city: canonicalCityName(explicitCity || activeCity),
     broad: Boolean(broad),
-    explicitCity
+    explicitCity,
+    radiusKm: CUSTOMER_SEARCH_RADIUS_KM,
+    crossCity: Boolean(explicitCity && !cityMatches(explicitCity, activeCity))
   };
 }
 
@@ -1803,11 +2088,31 @@ async function detectCustomerActiveCity(lat, lng) {
   }
 }
 
-async function searchPlaces(query, { city = '', broad = false } = {}) {
+function locationSearchCenter() {
+  const point = customerLocation || pickup || customerCityLocation;
+  if (point && Number.isFinite(Number(point.lat)) && Number.isFinite(Number(point.lng))) {
+    return { lat: Number(point.lat), lng: Number(point.lng) };
+  }
+  if (map) {
+    const center = map.getCenter();
+    return { lat: Number(center.lat), lng: Number(center.lng) };
+  }
+  return null;
+}
+
+async function searchPlaces(query, { city = '', broad = false, explicitCity = '', radiusKm = CUSTOMER_SEARCH_RADIUS_KM } = {}) {
   try {
     const params = new URLSearchParams({ q: query });
     if (city && !broad) params.set('city', city);
     if (broad) params.set('broad', '1');
+    const center = locationSearchCenter();
+    const crossCity = Boolean(explicitCity && !cityMatches(explicitCity, customerActiveCity));
+    if (crossCity) params.set('global', '1');
+    if (center && !broad && !crossCity) {
+      params.set('lat', String(center.lat));
+      params.set('lng', String(center.lng));
+      params.set('radiusKm', String(Math.min(30, Math.max(25, Number(radiusKm) || CUSTOMER_SEARCH_RADIUS_KM))));
+    }
     const r = await fetch(`/api/geocode?${params.toString()}`);
     if (!r.ok) return [];
     const data = await r.json();
@@ -1868,35 +2173,140 @@ function escapeLocationText(value) {
   }[char]));
 }
 
+const LOCATION_SEARCH_CHAR_MAP = {
+  'ا': 'a', 'آ': 'a', 'أ': 'a', 'إ': 'i', 'ی': 'i', 'ي': 'i', 'ے': 'e',
+  'و': 'u', 'ؤ': 'u', 'ہ': 'h', 'ه': 'h', 'ھ': 'h', 'ک': 'k', 'ك': 'k',
+  'گ': 'g', 'ج': 'j', 'چ': 'ch', 'خ': 'kh', 'غ': 'gh', 'ق': 'q', 'ع': 'a',
+  'ب': 'b', 'پ': 'p', 'ت': 't', 'ٹ': 't', 'ث': 's', 'س': 's', 'ص': 's',
+  'ج': 'j', 'د': 'd', 'ڈ': 'd', 'ذ': 'z', 'ز': 'z', 'ض': 'z', 'ظ': 'z',
+  'ر': 'r', 'ڑ': 'r', 'ف': 'f', 'ل': 'l', 'م': 'm', 'ن': 'n', 'ں': 'n',
+  'ش': 'sh', 'ژ': 'zh'
+};
+
+function normalizeSearchValue(value) {
+  return String(value || '')
+    .normalize('NFKD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLocaleLowerCase()
+    .split('')
+    .map(char => LOCATION_SEARCH_CHAR_MAP[char] || char)
+    .join('')
+    .replace(/[^a-z0-9]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function searchCompactValue(value) {
+  return normalizeSearchValue(value).replace(/\s/g, '');
+}
+
+function searchPhoneticKey(value) {
+  const compact = searchCompactValue(value);
+  if (!compact) return '';
+  const first = compact[0];
+  const groups = { b: '1', p: '1', f: '1', v: '1', c: '2', k: '2', q: '2', g: '2', j: '2', x: '2', s: '2', z: '2', d: '3', t: '3', l: '4', m: '5', n: '5', r: '6' };
+  let result = first;
+  let previous = groups[first] || '';
+  for (const char of compact.slice(1)) {
+    const group = groups[char] || '';
+    if (group && group !== previous) result += group;
+    previous = group || previous;
+    if (result.length >= 4) break;
+  }
+  return result.padEnd(4, '0');
+}
+
+const LOCATION_SEARCH_ALIASES = [
+  ['gulberg', 'gulbur', 'gul barg', 'gulberg iii'],
+  ['thokar niaz baig', 'thokar niazi baig', 'thokar'],
+  ['dha phase 5', 'defence phase 5', 'dha p5'],
+  ['bahria town', 'bahriya town'],
+  ['rawalpindi', 'pindi'],
+  ['islamabad', 'islambad'],
+  ['lahore', 'lahor'],
+  ['karachi', 'khi'],
+  ['riksha', 'rickshaw', 'riksah'],
+  ['johar town', 'johar'],
+  ['model town', 'modeltown']
+];
+
+function locationSearchAliases(item) {
+  const primary = normalizeSearchValue(item.primary);
+  return LOCATION_SEARCH_ALIASES
+    .filter(group => group.some(alias => primary === normalizeSearchValue(alias)
+      || primary.includes(normalizeSearchValue(alias))
+      || normalizeSearchValue(alias).includes(primary)))
+    .flatMap(group => group);
+}
+
+function levenshteinDistance(left, right) {
+  const a = String(left || '');
+  const b = String(right || '');
+  if (!a) return b.length;
+  if (!b) return a.length;
+  let previous = Array.from({ length: b.length + 1 }, (_, index) => index);
+  for (let i = 0; i < a.length; i++) {
+    const current = [i + 1];
+    for (let j = 0; j < b.length; j++) {
+      current.push(Math.min(
+        current[j] + 1,
+        previous[j + 1] + 1,
+        previous[j] + (a[i] === b[j] ? 0 : 1)
+      ));
+    }
+    previous = current;
+  }
+  return previous[b.length];
+}
+
+function locationMatchScore(item, query) {
+  const needle = normalizeSearchValue(query);
+  if (!needle) return 99;
+  const values = [
+    item.primary, item.secondary, item.city, item.display_name,
+    item.address?.road, item.address?.suburb, item.address?.neighbourhood,
+    item.address?.city, item.address?.town, ...locationSearchAliases(item)
+  ].filter(Boolean).map(normalizeSearchValue);
+  let best = 99;
+  for (const value of values) {
+    if (!value) continue;
+    if (value === needle) best = Math.min(best, 0);
+    else if (value.startsWith(needle)) best = Math.min(best, 1);
+    else if (value.includes(needle) || value.split(' ').some(token => token.startsWith(needle))) best = Math.min(best, 2);
+    const compact = searchCompactValue(value);
+    const compactNeedle = searchCompactValue(needle);
+    if (compact.includes(compactNeedle)) best = Math.min(best, 2);
+    const tokens = value.split(' ').filter(Boolean);
+    const maxDistance = needle.length < 5 ? 1 : needle.length < 8 ? 2 : 3;
+    if (tokens.some(token => levenshteinDistance(token, needle) <= maxDistance
+      || levenshteinDistance(token, compactNeedle) <= maxDistance)) {
+      best = Math.min(best, 3);
+    }
+    if (searchPhoneticKey(value) === searchPhoneticKey(needle)) best = Math.min(best, 4);
+  }
+  return best;
+}
+
 function localLocationResults(query, { city = '', broad = false } = {}) {
-  const needle = query.trim().toLocaleLowerCase();
+  const needle = normalizeSearchValue(query);
   if (!needle) return [];
-  const center = pickup || (map ? map.getCenter() : null);
+  const center = locationSearchCenter();
   return LOCAL_LOCATION_INDEX
-    .map(([name, city, lat, lon, kind]) => {
-      const searchable = `${name} ${city}`.toLocaleLowerCase();
-      const relevance = searchable.startsWith(needle)
-        ? 0
-        : name.toLocaleLowerCase().startsWith(needle)
-          ? 1
-          : searchable.includes(needle) ? 2 : 3;
+    .map(([name, resultCity, lat, lon, kind]) => {
+      const item = { primary: name, secondary: resultCity, city: resultCity, lat, lon, kind, local: true };
+      const relevance = locationMatchScore(item, query);
       const distance = center ? haversine(center.lat, center.lng, lat, lon) : Number.POSITIVE_INFINITY;
       return {
-        primary: name,
-        secondary: city,
-        city,
-        kind,
-        lat,
-        lon,
-        local: true,
+        ...item,
         relevance,
-        distance
+        distance,
+        localPriority: distance <= CUSTOMER_SEARCH_RADIUS_KM ? 0 : 1
       };
     })
-    .filter(item => item.relevance < 3)
+    .filter(item => item.relevance < 5)
     .filter(item => broad || !city || cityMatches(item.city, city))
-    .sort((a, b) => a.relevance - b.relevance || a.distance - b.distance)
-    .map(({ relevance, distance, ...item }) => item);
+    .sort((a, b) => a.relevance - b.relevance || a.localPriority - b.localPriority || a.distance - b.distance)
+    .map(({ relevance, distance, localPriority, ...item }) => item);
 }
 
 function normalizeLocationResult(item, local = false) {
@@ -1916,51 +2326,32 @@ function normalizeLocationResult(item, local = false) {
   };
 }
 
-function locationSearchText(item) {
-  return [
-    item.primary,
-    item.secondary,
-    item.city,
-    item.display_name,
-    item.address?.road,
-    item.address?.suburb,
-    item.address?.neighbourhood,
-    item.address?.city,
-    item.address?.town
-  ].filter(Boolean).join(' ').toLocaleLowerCase();
-}
-
 function locationRelevance(item, needle) {
-  const primary = String(item.primary || '').toLocaleLowerCase();
-  const secondary = String(item.secondary || '').toLocaleLowerCase();
-  if (primary === needle) return 0;
-  if (primary.startsWith(needle)) return 1;
-  if (primary.includes(needle)) return 2;
-  if (secondary.includes(needle) || locationSearchText(item).includes(needle)) return 3;
-  return 4;
+  return locationMatchScore(item, needle);
 }
 
 function rankLocationResults(results, query, preferredCity = '', { broad = false } = {}) {
-  const needle = query.trim().toLocaleLowerCase();
-  const center = pickup || (map ? map.getCenter() : null);
+  const center = locationSearchCenter();
   return results
     .map(item => normalizeLocationResult(item, item.local))
     .filter(Boolean)
     .map(item => ({
       ...item,
-      relevance: locationRelevance(item, needle),
+      relevance: locationRelevance(item, query),
       cityPriority: preferredCity && cityMatches(item.city, preferredCity) ? 0 : 1,
-      distance: center ? haversine(center.lat, center.lng, item.lat, item.lon) : Number.POSITIVE_INFINITY
+      distance: center ? haversine(center.lat, center.lng, item.lat, item.lon) : Number.POSITIVE_INFINITY,
+      localPriority: center && haversine(center.lat, center.lng, item.lat, item.lon) <= CUSTOMER_SEARCH_RADIUS_KM ? 0 : 1
     }))
     .filter(item => broad || !preferredCity || cityMatches(item.city, preferredCity))
-    .filter(item => item.relevance < 4)
+    .filter(item => item.relevance < 5)
     .sort((a, b) =>
       a.cityPriority - b.cityPriority
       || a.relevance - b.relevance
+      || a.localPriority - b.localPriority
       || a.distance - b.distance
       || String(a.primary).localeCompare(String(b.primary))
     )
-    .map(({ relevance, cityPriority, distance, ...item }) => item);
+    .map(({ relevance, cityPriority, distance, localPriority, ...item }) => item);
 }
 
 function mergeLocationResults(local, remote, query, preferredCity = '', { broad = false } = {}) {
@@ -1983,6 +2374,7 @@ function openLocationSheet(type) {
   const slot = document.getElementById('location-search-slot');
   if (inputWrap && slot && inputWrap.parentElement !== slot) {
     const input = inputWrap.querySelector('input');
+    if (input) input.dir = 'auto';
     const shouldRestoreFocus = document.activeElement === input;
     locationSearchOrigin = {
       type,
@@ -2053,8 +2445,8 @@ function renderLocationSheet(type, results, query = '') {
     previousGroup = group;
     return `${groupHeading}<button type="button" class="sheet-item" data-location-index="${index}">
       <span class="sheet-item-icon">${isPickup ? '📍' : '🎯'}</span><span class="sheet-item-copy">
-      <span class="sheet-item-primary">${escapeLocationText(primary)}</span>
-      ${secondary ? `<span class="sheet-item-secondary">${escapeLocationText(secondary)}</span>` : ''}</span></button>`;
+      <span class="sheet-item-primary" dir="auto">${escapeLocationText(primary)}</span>
+      ${secondary ? `<span class="sheet-item-secondary" dir="auto">${escapeLocationText(secondary)}</span>` : ''}</span></button>`;
   }).join('');
   if (query && scope.city && !locationSearchBroadLoaded) {
     markup += `<button type="button" class="sheet-expand" data-location-action="expand-cities"${
@@ -2171,12 +2563,97 @@ function onLocInput(type) {
   renderLocationSheet(type, local, query);
   if (!query) return;
   locTimer[type] = setTimeout(async () => {
-    const remote = await searchPlaces(query, { city: scope.city, broad: scope.broad });
+    const remote = await searchPlaces(query, scope);
     if (locSearchSeq[type] !== requestId) return;
     locationSearchRemoteResults = remote;
     const merged = mergeLocationResults(local, remote, query, scope.city, { broad: scope.broad });
     renderLocationSheet(type, merged, query);
   }, 140);
+}
+
+function speechRecognitionConstructor() {
+  return window.SpeechRecognition || window.webkitSpeechRecognition || null;
+}
+
+function setVoiceStatus(message = '', isError = false) {
+  const status = document.getElementById('location-voice-status');
+  if (!status) return;
+  status.textContent = message;
+  status.classList.toggle('visible', Boolean(message));
+  status.style.color = isError ? '#c94d3a' : '';
+}
+
+function setVoiceButtonState(type, listening) {
+  document.querySelectorAll('.btn-voice').forEach(button => {
+    const active = button.getAttribute('onclick') === `startVoiceSearch('${type}')`;
+    button.classList.toggle('listening', Boolean(listening && active));
+    button.setAttribute('aria-pressed', active && listening ? 'true' : 'false');
+  });
+}
+
+function startVoiceSearch(type) {
+  const Recognition = speechRecognitionConstructor();
+  const input = document.getElementById(`${type}-input`);
+  if (!Recognition || !input) {
+    setVoiceStatus('Voice search is not supported here. You can type the location instead.', true);
+    return;
+  }
+  if (voiceRecognition) {
+    voiceRecognition.stop();
+    voiceRecognition = null;
+    if (voiceSearchType === type) {
+      voiceSearchType = null;
+      setVoiceButtonState(type, false);
+      return;
+    }
+  }
+  openLocationSheet(type);
+  const language = document.getElementById('voice-language')?.value || 'ur-PK';
+  const recognition = new Recognition();
+  voiceRecognition = recognition;
+  voiceSearchType = type;
+  recognition.lang = language;
+  recognition.continuous = false;
+  recognition.interimResults = false;
+  recognition.maxAlternatives = 1;
+  recognition.onstart = () => {
+    setVoiceButtonState(type, true);
+    setVoiceStatus(`Listening in ${language}…`);
+  };
+  recognition.onresult = event => {
+    const transcript = Array.from(event.results || [])
+      .map(result => result[0]?.transcript || '')
+      .join(' ')
+      .trim();
+    if (!transcript) return;
+    input.value = transcript;
+    input.classList.remove('has-val');
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+    updateClearBtn(type);
+    setVoiceStatus(`Searching for “${transcript}”`);
+  };
+  recognition.onerror = event => {
+    customerReadinessState.microphone = event.error === 'not-allowed' ? 'denied' : customerReadinessState.microphone;
+    const message = event.error === 'not-allowed'
+      ? 'Microphone access was blocked. Allow it in browser settings or type the location.'
+      : event.error === 'no-speech'
+        ? 'No speech heard. Try again or type the location.'
+        : 'Voice search is unavailable right now. You can type the location instead.';
+    setVoiceStatus(message, true);
+  };
+  recognition.onend = () => {
+    setVoiceButtonState(type, false);
+    voiceRecognition = null;
+    voiceSearchType = null;
+  };
+  try {
+    recognition.start();
+  } catch (error) {
+    setVoiceStatus('Voice search could not start. You can type the location instead.', true);
+    voiceRecognition = null;
+    voiceSearchType = null;
+    setVoiceButtonState(type, false);
+  }
 }
 
 async function expandLocationSearch(type) {
