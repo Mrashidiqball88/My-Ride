@@ -946,7 +946,7 @@ body{font-family:'Segoe UI',sans-serif;background:#0a0a0f;color:#fff;height:100d
 const API = '';
 const MAP_STYLE_URL = 'https://tiles.openfreemap.org/styles/liberty';
 const MAP_RTL_TEXT_PLUGIN_URL = 'https://unpkg.com/@mapbox/mapbox-gl-rtl-text@0.4.0/dist/mapbox-gl-rtl-text.js';
-const CUSTOMER_SEARCH_RADIUS_KM = 28;
+const CUSTOMER_SEARCH_LOCAL_PRIORITY_KM = 28;
 const CUSTOMER_MAP_DEFAULT_CENTER = [69.3451, 30.3753]; // Pakistan; GPS or pickup replaces this.
 const CUSTOMER_MAP_DEFAULT_ZOOM = 5.5;
 const MAP_FALLBACK_STYLE = {
@@ -1132,6 +1132,12 @@ const LOCAL_LOCATION_INDEX = [
   ['Emporium Mall', 'Lahore', 31.4697, 74.2728, 'Landmark'],
   ['Centaurus Mall', 'Islamabad', 33.7077, 73.0511, 'Landmark'],
   ['Safa Gold Mall', 'Islamabad', 33.7215, 73.0565, 'Landmark'],
+  ['DHA Phase 5', 'Karachi', 24.8006, 67.0610, 'Area'],
+  ['DHA Phase 6', 'Karachi', 24.7915, 67.0648, 'Area'],
+  ['DHA Phase 8', 'Karachi', 24.7825, 67.0980, 'Area'],
+  ['Defence Housing Authority', 'Karachi', 24.8138, 67.0300, 'Area'],
+  ['Sialkot Cantt', 'Sialkot', 32.4927, 74.5310, 'Area'],
+  ['Paris Road', 'Sialkot', 32.4950, 74.5430, 'Street'],
   ['Salamatpura', 'Lahore', 31.5967, 74.3701, 'Area'],
   ['Sabzazar', 'Lahore', 31.4941, 74.2775, 'Area'],
   ['Samanabad', 'Lahore', 31.5337, 74.2865, 'Area'],
@@ -2079,7 +2085,6 @@ function locationSearchScope(query, broad = false) {
     city: canonicalCityName(explicitCity || activeCity),
     broad: Boolean(broad),
     explicitCity,
-    radiusKm: CUSTOMER_SEARCH_RADIUS_KM,
     crossCity: Boolean(explicitCity && !cityMatches(explicitCity, activeCity))
   };
 }
@@ -2129,7 +2134,7 @@ function locationSearchCenter() {
   return null;
 }
 
-async function searchPlaces(query, { city = '', broad = false, explicitCity = '', radiusKm = CUSTOMER_SEARCH_RADIUS_KM } = {}) {
+async function searchPlaces(query, { city = '', broad = false, explicitCity = '' } = {}) {
   try {
     const params = new URLSearchParams({ q: query });
     if (city && !broad) params.set('city', city);
@@ -2295,6 +2300,33 @@ function locationMatchScore(item, query) {
     item.address?.road, item.address?.suburb, item.address?.neighbourhood,
     item.address?.city, item.address?.town, ...locationSearchAliases(item)
   ].filter(Boolean).map(normalizeSearchValue);
+  const fuzzyTokenScore = (value, queryValue) => {
+    const valueTokens = value.split(' ').filter(Boolean);
+    const queryTokens = queryValue.split(' ').filter(Boolean);
+    if (!valueTokens.length || !queryTokens.length) return 99;
+    const tokenScores = queryTokens.map(queryToken => {
+      let score = 99;
+      valueTokens.forEach(valueToken => {
+        if (valueToken === queryToken) score = Math.min(score, 0);
+        else if (valueToken.startsWith(queryToken)) score = Math.min(score, 1);
+        else if (valueToken.includes(queryToken)) score = Math.min(score, 2);
+        const maxDistance = queryToken.length < 5 ? 1 : queryToken.length < 8 ? 2 : 3;
+        if (levenshteinDistance(valueToken, queryToken) <= maxDistance) {
+          score = Math.min(score, 3);
+        }
+        // Phonetics make short spoken/typed forms such as "pakgs" resolve to
+        // "packages" without weakening the city filter.
+        if (queryToken.length >= 4
+          && searchPhoneticKey(valueToken) === searchPhoneticKey(queryToken)) {
+          score = Math.min(score, 3);
+        }
+      });
+      return score;
+    });
+    return tokenScores.every(score => score < 99)
+      ? Math.max(...tokenScores)
+      : 99;
+  };
   let best = 99;
   for (const value of values) {
     if (!value) continue;
@@ -2310,7 +2342,7 @@ function locationMatchScore(item, query) {
       || levenshteinDistance(token, compactNeedle) <= maxDistance)) {
       best = Math.min(best, 3);
     }
-    if (searchPhoneticKey(value) === searchPhoneticKey(needle)) best = Math.min(best, 4);
+    best = Math.min(best, fuzzyTokenScore(value, needle));
   }
   return best;
 }
@@ -2328,7 +2360,7 @@ function localLocationResults(query, { city = '', broad = false } = {}) {
         ...item,
         relevance,
         distance,
-        localPriority: distance <= CUSTOMER_SEARCH_RADIUS_KM ? 0 : 1
+        localPriority: distance <= CUSTOMER_SEARCH_LOCAL_PRIORITY_KM ? 0 : 1
       };
     })
     .filter(item => item.relevance < 5)
@@ -2368,7 +2400,7 @@ function rankLocationResults(results, query, preferredCity = '', { broad = false
       relevance: locationRelevance(item, query),
       cityPriority: preferredCity && cityMatches(item.city, preferredCity) ? 0 : 1,
       distance: center ? haversine(center.lat, center.lng, item.lat, item.lon) : Number.POSITIVE_INFINITY,
-      localPriority: center && haversine(center.lat, center.lng, item.lat, item.lon) <= CUSTOMER_SEARCH_RADIUS_KM ? 0 : 1
+       localPriority: center && haversine(center.lat, center.lng, item.lat, item.lon) <= CUSTOMER_SEARCH_LOCAL_PRIORITY_KM ? 0 : 1
     }))
     .filter(item => broad || !preferredCity || cityMatches(item.city, preferredCity))
     .filter(item => item.relevance < 5)
@@ -2727,8 +2759,29 @@ function onLocBlur() {
 }
 
 // ── Set Locations ─────────────────────────────────────────────────────────
+function resetCustomerCityContext({ detectGpsFallback = false } = {}) {
+  // A new pickup invalidates the previous city's context immediately. The
+  // reverse lookup below may complete later, but it must never leave the
+  // previous city attached to the new pickup.
+  customerActiveCity = '';
+  customerCityLocation = null;
+  customerCityRequest++;
+  customerCityDetectionInFlight = false;
+  if (detectGpsFallback && customerLocation) {
+    void detectCustomerActiveCity(customerLocation.lat, customerLocation.lng, { force: true });
+  }
+}
+
+function setCustomerPickupCityContext(lat, lng) {
+  const point = { lat: Number(lat), lng: Number(lng) };
+  if (!Number.isFinite(point.lat) || !Number.isFinite(point.lng)) return;
+  resetCustomerCityContext();
+  void detectCustomerActiveCity(point.lat, point.lng, { force: true });
+}
+
 async function setPickup(lat, lng, preDisplay = null) {
   pickup = { lat, lng };
+  setCustomerPickupCityContext(lat, lng);
   if (pickupMarker) pickupMarker.remove();
   pickupMarker = createCustomerDomMarker(lat, lng, { className: 'pickup-marker' });
   closeDropdown('pickup');
@@ -2849,6 +2902,7 @@ function clearLocation(type) {
 
   if (isPickup) {
     pickup = null;
+    resetCustomerCityContext({ detectGpsFallback: true });
     if (pickupMarker) { pickupMarker.remove(); pickupMarker = null; }
     const hint = document.getElementById('map-hint');
     if (hint) { hint.textContent = 'Tap map or search a pickup location below'; hint.className = 'map-hint'; hint.style.display = 'block'; }
