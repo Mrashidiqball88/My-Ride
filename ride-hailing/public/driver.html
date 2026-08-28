@@ -17,9 +17,10 @@
 <script src="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.js"></script>
 <script src="/socket.io/socket.io.js"></script>
 <style>
-@import url('https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Space+Mono:wght@400;700&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Noto+Naskh+Arabic:wght@400;500;600;700&family=Space+Mono:wght@400;700&display=swap');
 *{margin:0;padding:0;box-sizing:border-box;-webkit-tap-highlight-color:transparent}
 body{font-family:'Segoe UI',sans-serif;background:#0a0a0f;color:#fff;height:100dvh;overflow:hidden;display:flex;flex-direction:column}
+.bidi-text,[dir="auto"]{font-family:'Noto Naskh Arabic','Segoe UI',sans-serif;font-feature-settings:"rlig" 1,"calt" 1,"liga" 1;text-rendering:optimizeLegibility;unicode-bidi:plaintext;direction:auto}
 
 /* ── Auth ── */
 #auth-screen{position:fixed;inset:0;z-index:1000;background:#0a0a0f;display:flex;flex-direction:column;align-items:center;justify-content:flex-start;overflow-y:auto;overscroll-behavior-y:contain;scroll-padding-bottom:1.5rem;-webkit-overflow-scrolling:touch;padding:max(1.25rem, env(safe-area-inset-top)) 1.5rem max(4.5rem, calc(env(safe-area-inset-bottom) + 2.5rem))}
@@ -626,16 +627,16 @@ textarea.support-input{resize:vertical;min-height:85px}
         <div class="nav-metric"><div class="nav-metric-value" id="nav-distance">—</div><div class="nav-metric-label">Remaining</div></div>
         <div class="nav-metric"><div class="nav-metric-value" id="nav-eta">—</div><div class="nav-metric-label">ETA</div></div>
       </div>
-      <div class="nav-destination"><span class="nav-destination-icon pickup" id="nav-destination-icon">P</span><div><div class="nav-destination-kicker" id="nav-leg-label">To pickup</div><strong class="nav-destination-name" id="nav-destination">Pickup location</strong></div></div>
+      <div class="nav-destination"><span class="nav-destination-icon pickup" id="nav-destination-icon">P</span><div><div class="nav-destination-kicker" id="nav-leg-label">To pickup</div><strong class="nav-destination-name bidi-text" id="nav-destination" dir="auto">Pickup location</strong></div></div>
       <div class="ap-passenger">
-        <div class="ap-passenger-name" id="ap-passenger-name">Passenger</div>
+        <div class="ap-passenger-name bidi-text" id="ap-passenger-name" dir="auto">Passenger</div>
         <div class="ap-passenger-sub">Trip contact and route details</div>
       </div>
       <div id="ap-call-passenger"></div>
       <div class="navigation-route-details">
         <div class="ap-route">
-        <div class="ap-route-row"><span class="nav-route-symbol pickup">P</span><span id="ap-pickup">—</span></div>
-        <div class="ap-route-row"><span class="nav-route-symbol dropoff">D</span><span id="ap-dropoff">—</span></div>
+        <div class="ap-route-row"><span class="nav-route-symbol pickup">P</span><span class="bidi-text" id="ap-pickup" dir="auto">—</span></div>
+        <div class="ap-route-row"><span class="nav-route-symbol dropoff">D</span><span class="bidi-text" id="ap-dropoff" dir="auto">—</span></div>
         </div>
       </div>
       <div class="ap-status-btns" id="ap-btns"></div>
@@ -727,7 +728,7 @@ textarea.support-input{resize:vertical;min-height:85px}
     <span class="rr-timer" id="rr-timer">25s</span>
   </div>
   <div class="rr-route" id="rr-route">
-    <div class="rr-point"><span class="rr-point-icon">📍</span><span class="rr-point-text" id="rr-pickup">—</span></div>
+    <div class="rr-point"><span class="rr-point-icon">📍</span><span class="rr-point-text bidi-text" id="rr-pickup" dir="auto">—</span></div>
     <!-- stop rows injected dynamically by showRideRequest -->
     <div id="rr-stops-container"></div>
   </div>
@@ -773,6 +774,7 @@ textarea.support-input{resize:vertical;min-height:85px}
 
 <script>
 const MAP_STYLE_URL = 'https://tiles.openfreemap.org/styles/liberty';
+const MAP_RTL_TEXT_PLUGIN_URL = 'https://unpkg.com/@mapbox/mapbox-gl-rtl-text@0.4.0/dist/mapbox-gl-rtl-text.js';
 const MAP_FALLBACK_STYLE = {
   version: 8,
   sources: {
@@ -1652,6 +1654,15 @@ function fitDriverMapToCoords(coords, padding = 60) {
 
 function initMap() {
   if (map) return;
+  if (typeof maplibregl.setRTLTextPlugin === 'function') {
+    try {
+      maplibregl.setRTLTextPlugin(MAP_RTL_TEXT_PLUGIN_URL, error => {
+        if (error) console.warn('Map label shaping unavailable:', error.message || error);
+      }, false);
+    } catch (error) {
+      console.warn('Map label shaping setup unavailable:', error.message || error);
+    }
+  }
   map = new maplibregl.Map({
     container: 'map',
     style: MAP_STYLE_URL,
@@ -2509,7 +2520,7 @@ function showRideRequest(ride, { suppressAlert = false } = {}) {
     <div class="rr-divider"></div>
     <div class="rr-point">
       <span class="rr-point-icon">${stopIcons[i] || '📌'}</span>
-      <span class="rr-point-text">
+      <span class="rr-point-text bidi-text" dir="auto">
         ${stops.length > 1 ? `<span style="font-size:.65rem;color:#666;display:block;margin-bottom:.05rem">${stopLabels[i]}</span>` : ''}
         ${formatStopAddr(s)}
       </span>

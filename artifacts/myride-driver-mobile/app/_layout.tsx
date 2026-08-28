@@ -11,6 +11,12 @@ import {
   Inter_700Bold,
   useFonts,
 } from '@expo-google-fonts/inter';
+import {
+  NotoNaskhArabic_400Regular,
+  NotoNaskhArabic_500Medium,
+  NotoNaskhArabic_600SemiBold,
+  NotoNaskhArabic_700Bold,
+} from '@expo-google-fonts/noto-naskh-arabic';
 import { Stack } from 'expo-router';
 import * as SplashScreen from 'expo-splash-screen';
 import { DriverRuntimeProvider } from '@/context/DriverRuntime';
@@ -34,6 +40,10 @@ export default function RootLayout() {
     Inter_500Medium,
     Inter_600SemiBold,
     Inter_700Bold,
+    NotoNaskhArabic_400Regular,
+    NotoNaskhArabic_500Medium,
+    NotoNaskhArabic_600SemiBold,
+    NotoNaskhArabic_700Bold,
   });
 
   useEffect(() => {

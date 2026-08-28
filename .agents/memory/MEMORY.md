@@ -35,3 +35,4 @@
 - [Deferred map marker selection](deferred-map-marker-selection.md) — commit selected location state before MapLibre is ready, then materialize markers when the map initializes.
 - [Customer live geocoding](customer-live-geocoding.md) — Customer suggestions come only from the nationwide provider; pickup city may rank results but never filters them.
 - [Customer readiness permission timeouts](customer-readiness-permission-timeouts.md) — never let a browser capability prompt keep the booking onboarding modal busy indefinitely.
+- [Urdu font shaping](native-urdu-font-shaping.md) — keep Arabic-capable font loading alongside Inter and scope RTL styling to dynamic Arabic-script Driver text.

@@ -5,6 +5,12 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useColors } from '@/hooks/useColors';
 import { useDriverRuntime } from '@/context/DriverRuntime';
 
+const RTL_TEXT_PATTERN = /[\u0590-\u08ff]/;
+
+function isRtlText(value: unknown) {
+  return RTL_TEXT_PATTERN.test(String(value ?? ''));
+}
+
 function DriverHome() {
   const colors = useColors();
   const insets = useSafeAreaInsets();
@@ -17,6 +23,7 @@ function DriverHome() {
   const report = (message: string) => Alert.alert('My Ride Driver', message);
   const longRangeVehicle = runtime.longRange?.vehicleType || runtime.user?.vehicleType || 'Car Mini Non-AC';
   const longRangeMinimum = Number(runtime.longRange?.settings?.minimumWalletBalances?.[longRangeVehicle] || 0);
+  const userName = runtime.user?.name || '';
   const remainingOfferSeconds = runtime.pendingRide
     ? Math.max(0, Math.ceil((new Date(runtime.pendingRide.broadcastExpiresAt || 0).getTime() - Date.now()) / 1000))
     : 0;
@@ -96,35 +103,35 @@ function DriverHome() {
   const onlineTone = runtime.isOnline ? colors.primary : colors.mutedForeground;
   return <View style={[styles.app, { backgroundColor: colors.background, paddingTop: isWeb ? 67 : insets.top, paddingBottom: isWeb ? 34 : insets.bottom }]}>
     <View style={styles.header}>
-      <View><Text style={[styles.eyebrow, { color: colors.mutedForeground }]}>MY RIDE DRIVER</Text><Text style={[styles.name, { color: colors.foreground }]}>{runtime.user.name}</Text></View>
+      <View><Text style={[styles.eyebrow, { color: colors.mutedForeground }]}>MY RIDE DRIVER</Text><Text style={[styles.name, { color: colors.foreground }, isRtlText(userName) && styles.rtlText]}>{userName}</Text></View>
       <Pressable testID="driver-sign-out" onPress={() => void runtime.signOut()}><Ionicons name="log-out-outline" size={25} color={colors.mutedForeground} /></Pressable>
     </View>
-     {!isWeb && !runtime.alertReadiness.ready && <View testID="driver-alert-readiness" style={[styles.setupCard, { backgroundColor: colors.card, borderColor: colors.primary, borderRadius: colors.radius + 12 }]}>
-       <View style={styles.statusRow}><Ionicons name="shield-checkmark-outline" size={22} color={colors.primary} /><View style={{ flex: 1 }}><Text style={[styles.cardTitle, { color: colors.foreground }]}>Required alert setup</Text><Text style={[styles.statusCopy, { color: colors.mutedForeground }]}>Complete these checks before going online. Ride requests must be able to reach you with the screen locked.</Text></View></View>
-       {[
-         ['Push notifications', runtime.alertReadiness.notificationsGranted],
-         ['Ride-alert channel and lock-screen visibility', runtime.alertReadiness.alertChannelReady],
-         ['Precise foreground location', runtime.alertReadiness.foregroundLocationGranted],
-         ['Background location / screen-off service', runtime.alertReadiness.backgroundLocationGranted],
-         ['Expo Push registration', runtime.alertReadiness.pushTokenRegistered],
-         ['Lock-screen alerts confirmed', runtime.alertReadiness.lockScreenConfirmed],
-         ['Foreground service verified', runtime.alertReadiness.foregroundServiceReady],
-       ].map(([label, passed]) => <View key={String(label)} style={styles.setupRow}><Ionicons name={passed ? 'checkmark-circle' : 'ellipse-outline'} size={17} color={passed ? colors.primary : colors.mutedForeground} /><Text style={[styles.setupRowText, { color: passed ? colors.foreground : colors.mutedForeground }]}>{label}</Text></View>)}
-       {runtime.alertReadiness.message && <Text style={[styles.setupMessage, { color: colors.destructive }]}>{runtime.alertReadiness.message}</Text>}
-       <View style={styles.setupActions}>
-         <Pressable testID="driver-alert-setup" onPress={() => void prepareAlerts()} disabled={busy || runtime.alertReadiness.checking} style={[styles.primaryButton, { backgroundColor: colors.primary, borderRadius: colors.radius, opacity: busy ? .7 : 1 }]}><Text style={[styles.buttonText, { color: colors.primaryForeground }]}>{runtime.alertReadiness.checking ? 'Checking…' : 'Check & enable permissions'}</Text></Pressable>
-         <Pressable onPress={openSettings} style={[styles.secondaryButton, { borderColor: colors.border, borderRadius: colors.radius }]}><Text style={{ color: colors.mutedForeground }}>Open device settings</Text></Pressable>
-         {runtime.alertReadiness.notificationsGranted && runtime.alertReadiness.alertChannelReady && runtime.alertReadiness.backgroundLocationGranted && runtime.alertReadiness.pushTokenRegistered && !runtime.alertReadiness.lockScreenConfirmed && <Pressable testID="driver-confirm-lock-screen" onPress={() => void confirmLockScreen()} style={[styles.secondaryButton, { borderColor: colors.primary, borderRadius: colors.radius }]}><Text style={{ color: colors.primary }}>I enabled lock-screen alerts</Text></Pressable>}
-       </View>
-     </View>}
-     <View style={[styles.statusCard, { backgroundColor: colors.card, borderColor: runtime.isOnline ? colors.primary : colors.border, borderRadius: colors.radius + 12 }]}>
+    {!isWeb && !runtime.alertReadiness.ready && <View testID="driver-alert-readiness" style={[styles.setupCard, { backgroundColor: colors.card, borderColor: colors.primary, borderRadius: colors.radius + 12 }]}>
+      <View style={styles.statusRow}><Ionicons name="shield-checkmark-outline" size={22} color={colors.primary} /><View style={{ flex: 1 }}><Text style={[styles.cardTitle, { color: colors.foreground }]}>Required alert setup</Text><Text style={[styles.statusCopy, { color: colors.mutedForeground }]}>Complete these checks before going online. Ride requests must be able to reach you with the screen locked.</Text></View></View>
+      {[
+        ['Push notifications', runtime.alertReadiness.notificationsGranted],
+        ['Ride-alert channel and lock-screen visibility', runtime.alertReadiness.alertChannelReady],
+        ['Precise foreground location', runtime.alertReadiness.foregroundLocationGranted],
+        ['Background location / screen-off service', runtime.alertReadiness.backgroundLocationGranted],
+        ['Expo Push registration', runtime.alertReadiness.pushTokenRegistered],
+        ['Lock-screen alerts confirmed', runtime.alertReadiness.lockScreenConfirmed],
+        ['Foreground service verified', runtime.alertReadiness.foregroundServiceReady],
+      ].map(([label, passed]) => <View key={String(label)} style={styles.setupRow}><Ionicons name={passed ? 'checkmark-circle' : 'ellipse-outline'} size={17} color={passed ? colors.primary : colors.mutedForeground} /><Text style={[styles.setupRowText, { color: passed ? colors.foreground : colors.mutedForeground }]}>{label}</Text></View>)}
+      {runtime.alertReadiness.message && <Text style={[styles.setupMessage, { color: colors.destructive }]}>{runtime.alertReadiness.message}</Text>}
+      <View style={styles.setupActions}>
+        <Pressable testID="driver-alert-setup" onPress={() => void prepareAlerts()} disabled={busy || runtime.alertReadiness.checking} style={[styles.primaryButton, { backgroundColor: colors.primary, borderRadius: colors.radius, opacity: busy ? .7 : 1 }]}><Text style={[styles.buttonText, { color: colors.primaryForeground }]}>{runtime.alertReadiness.checking ? 'Checking…' : 'Check & enable permissions'}</Text></Pressable>
+        <Pressable onPress={openSettings} style={[styles.secondaryButton, { borderColor: colors.border, borderRadius: colors.radius }]}><Text style={{ color: colors.mutedForeground }}>Open device settings</Text></Pressable>
+        {runtime.alertReadiness.notificationsGranted && runtime.alertReadiness.alertChannelReady && runtime.alertReadiness.backgroundLocationGranted && runtime.alertReadiness.pushTokenRegistered && !runtime.alertReadiness.lockScreenConfirmed && <Pressable testID="driver-confirm-lock-screen" onPress={() => void confirmLockScreen()} style={[styles.secondaryButton, { borderColor: colors.primary, borderRadius: colors.radius }]}><Text style={{ color: colors.primary }}>I enabled lock-screen alerts</Text></Pressable>}
+      </View>
+    </View>}
+    <View style={[styles.statusCard, { backgroundColor: colors.card, borderColor: runtime.isOnline ? colors.primary : colors.border, borderRadius: colors.radius + 12 }]}>
       <View style={styles.statusRow}><View style={[styles.statusDot, { backgroundColor: onlineTone }]} /><View style={{ flex: 1 }}><Text style={[styles.statusTitle, { color: colors.foreground }]}>{runtime.isOnline ? 'You are online' : 'You are offline'}</Text><Text style={[styles.statusCopy, { color: colors.mutedForeground }]}>{runtime.isOnline ? 'Foreground service is keeping location and ride alerts active.' : 'Go online when you are ready for trips.'}</Text></View>
        <Switch testID="driver-online-toggle" value={runtime.isOnline} onValueChange={toggle} disabled={busy || (!isWeb && !runtime.alertReadiness.ready)} trackColor={{ false: colors.muted, true: colors.primary }} thumbColor={colors.primaryForeground} /></View>
       {runtime.isOnline && <View style={[styles.serviceLine, { borderTopColor: colors.border }]}><Ionicons name="shield-checkmark-outline" size={17} color={colors.primary} /><Text style={[styles.serviceText, { color: colors.mutedForeground }]}>Background service active · {runtime.connection === 'connected' ? 'Connected' : 'Reconnecting…'}</Text></View>}
     </View>
     <View testID="driver-vehicle-category" style={[styles.vehicleCard, { backgroundColor: colors.secondary, borderColor: colors.border, borderRadius: colors.radius }]}>
       <Ionicons name="car-sport-outline" size={19} color={colors.primary} />
-      <View style={{ flex: 1 }}><Text style={[styles.vehicleLabel, { color: colors.mutedForeground }]}>YOUR VEHICLE CATEGORY</Text><Text style={[styles.vehicleName, { color: colors.foreground }]}>{runtime.user.vehicleType || 'Vehicle category not set'}</Text></View>
+       <View style={{ flex: 1 }}><Text style={[styles.vehicleLabel, { color: colors.mutedForeground }]}>YOUR VEHICLE CATEGORY</Text><Text style={[styles.vehicleName, { color: colors.foreground }, isRtlText(runtime.user.vehicleType) && styles.rtlText]}>{runtime.user.vehicleType || 'Vehicle category not set'}</Text></View>
     </View>
     {runtime.longRange && <View style={[styles.longRangeCard, { backgroundColor: colors.card, borderColor: runtime.longRange.settings?.enabled ? colors.border : colors.input, borderRadius: colors.radius + 12 }]}>
       <View style={styles.statusRow}><Ionicons name="map-outline" size={20} color={colors.primary} /><View style={{ flex: 1 }}><Text style={[styles.longRangeTitle, { color: colors.foreground }]}>Long Range Rides</Text><Text style={[styles.statusCopy, { color: colors.mutedForeground }]}>{runtime.longRange.settings?.enabled ? `Receive trips from ${Number(runtime.longRange.settings.distanceCutoffKm || 0).toLocaleString()} km+ · ${longRangeVehicle} wallet minimum Rs ${longRangeMinimum.toLocaleString()}` : 'Long Range rides are currently disabled by Admin.'}</Text></View><Switch testID="driver-long-range-toggle" value={runtime.longRange.enabled} onValueChange={toggleLongRange} disabled={busy || !runtime.longRange.settings?.enabled} trackColor={{ false: colors.muted, true: colors.primary }} thumbColor={colors.primaryForeground} /></View>
@@ -133,8 +140,8 @@ function DriverHome() {
     {runtime.pendingRide ? <View style={[styles.rideCard, { backgroundColor: colors.card, borderColor: colors.primary, borderRadius: colors.radius + 12 }]}>
       <View style={styles.rideHeader}><Text style={[styles.rideLabel, { color: colors.primary }]}>{runtime.pendingRide.isLongRange ? 'LONG RANGE RIDE' : 'NEW RIDE'}</Text><Text style={[styles.fare, { color: colors.foreground }]}>Rs {Number(runtime.pendingRide.fare).toLocaleString()}</Text></View>
       <View style={[styles.offerTimer, { backgroundColor: colors.secondary, borderColor: colors.border }]}><Ionicons name="time-outline" size={15} color={colors.primary} /><Text style={[styles.offerTimerText, { color: colors.secondaryForeground }]}>Reply within {remainingOfferSeconds}s</Text></View>
-      <Text style={[styles.location, { color: colors.foreground }]} numberOfLines={1}>{runtime.pendingRide.pickupLocation?.address || 'Pickup location shared'}</Text>
-      <Text style={[styles.route, { color: colors.mutedForeground }]} numberOfLines={1}>To {runtime.pendingRide.dropoffLocation?.address || 'Drop-off location'} · {runtime.pendingRide.distance?.toFixed(1) || '—'} km</Text>
+       <Text style={[styles.location, { color: colors.foreground }, isRtlText(runtime.pendingRide.pickupLocation?.address) && styles.rtlText]} numberOfLines={1}>{runtime.pendingRide.pickupLocation?.address || 'Pickup location shared'}</Text>
+       <Text style={[styles.route, { color: colors.mutedForeground }, isRtlText(runtime.pendingRide.dropoffLocation?.address) && styles.rtlText]} numberOfLines={1}>To {runtime.pendingRide.dropoffLocation?.address || 'Drop-off location'} · {runtime.pendingRide.distance?.toFixed(1) || '—'} km</Text>
       <View style={styles.rideActions}><Pressable onPress={runtime.dismissRide} style={[styles.secondaryButton, { borderColor: colors.border, borderRadius: colors.radius }]}><Text style={{ color: colors.mutedForeground }}>Dismiss</Text></Pressable><Pressable testID="driver-accept-ride" onPress={() => void runtime.acceptRide()} style={[styles.acceptButton, { backgroundColor: colors.primary, borderRadius: colors.radius }]}><Text style={[styles.buttonText, { color: colors.primaryForeground }]}>Accept</Text></Pressable></View>
     </View> : <View style={[styles.waiting, { borderColor: colors.border, borderRadius: colors.radius + 12 }]}><Ionicons name={runtime.isOnline ? 'radio-outline' : 'power-outline'} size={32} color={onlineTone} /><Text style={[styles.waitingTitle, { color: colors.foreground }]}>{runtime.isOnline ? 'Waiting for rides' : 'Ready when you are'}</Text><Text style={[styles.waitingCopy, { color: colors.mutedForeground }]}>{runtime.isOnline ? 'Ride alerts will appear here and in your device notifications.' : 'Turn on availability to start receiving ride requests.'}</Text></View>}
     <View style={[styles.info, { backgroundColor: colors.secondary, borderRadius: colors.radius }]}><Ionicons name="information-circle-outline" size={18} color={colors.mutedForeground} /><Text style={[styles.infoText, { color: colors.secondaryForeground }]}>Keep location access set to “Allow all the time.” Android may also ask you to allow the My Ride foreground-service notification.</Text></View>
@@ -162,4 +169,5 @@ const styles = StyleSheet.create({
   location: { fontFamily: 'Inter_600SemiBold', fontSize: 16, marginTop: 15 }, route: { fontFamily: 'Inter_400Regular', fontSize: 13, marginTop: 6 }, rideActions: { flexDirection: 'row', gap: 10, marginTop: 18 }, secondaryButton: { flex: 1, height: 46, borderWidth: 1, alignItems: 'center', justifyContent: 'center' }, acceptButton: { flex: 1, height: 46, alignItems: 'center', justifyContent: 'center' },
   waiting: { marginTop: 18, borderWidth: 1, borderStyle: 'dashed', padding: 30, alignItems: 'center' }, waitingTitle: { fontFamily: 'Inter_700Bold', fontSize: 18, marginTop: 12 }, waitingCopy: { fontFamily: 'Inter_400Regular', textAlign: 'center', fontSize: 13, lineHeight: 20, marginTop: 7 },
   info: { flexDirection: 'row', gap: 9, padding: 14, marginTop: 18, alignItems: 'flex-start' }, infoText: { flex: 1, fontFamily: 'Inter_400Regular', fontSize: 12, lineHeight: 18 }, error: { padding: 12, marginTop: 14 }, webNote: { textAlign: 'center', fontSize: 12, marginTop: 16 },
+  rtlText: { fontFamily: 'NotoNaskhArabic_400Regular', writingDirection: 'rtl', textAlign: 'right' },
 });
