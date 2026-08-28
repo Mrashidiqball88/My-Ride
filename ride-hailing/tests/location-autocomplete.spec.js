@@ -91,7 +91,9 @@ test.describe('dynamic city location autocomplete', () => {
     );
     expect(localSearchRequest.searchParams.get('lat')).toBe('24.8607');
     expect(localSearchRequest.searchParams.get('lng')).toBe('67.0011');
-    expect(localSearchRequest.searchParams.get('radiusKm')).toBe('28');
+    expect(localSearchRequest.searchParams.get('radiusKm')).toBeNull();
+    expect(localSearchRequest.searchParams.get('viewbox')).toBeNull();
+    expect(localSearchRequest.searchParams.get('bounded')).toBeNull();
 
     const firstName = await page.locator('#location-sheet-list [data-location-index] .sheet-item-primary').first().textContent();
     expect(firstName).toBe('Gulshan-e-Iqbal');
@@ -146,12 +148,64 @@ test.describe('dynamic city location autocomplete', () => {
     await setSearch(page, 'packages Mall');
     await expect(page.locator('#location-sheet-list')).toContainText('Packages Mall');
 
+    await setSearch(page, 'PACAGES');
+    await expect(page.locator('#location-sheet-list')).toContainText('Packages Mall');
+
+    await setSearch(page, 'PAKGS');
+    await expect(page.locator('#location-sheet-list')).toContainText('Packages Mall');
+
     await page.evaluate(() => {
       window.SpeechRecognition = undefined;
       window.webkitSpeechRecognition = undefined;
       startVoiceSearch('pickup');
     });
     await expect(page.locator('#location-voice-status')).toContainText('not supported');
+  });
+
+  test('uses the first pickup pin to replace the active city and prioritize the matching DHA', async ({ page }) => {
+    const requests = [];
+    await page.route(/\/api\/geocode(?:\/reverse)?(?:\?|$)/, async route => {
+      const url = new URL(route.request().url());
+      requests.push(url);
+      if (url.pathname.endsWith('/reverse')) {
+        return route.fulfill({
+          contentType: 'application/json',
+          body: JSON.stringify({
+            city: 'Karachi',
+            display_name: 'DHA Phase 6, Karachi, Pakistan',
+            address: { city: 'Karachi' }
+          })
+        });
+      }
+      return route.fulfill({
+        contentType: 'application/json',
+        body: JSON.stringify([
+          geocodeResult('DHA Phase 6', 'Karachi', 24.7915, 67.0648),
+          geocodeResult('DHA Phase 5', 'Lahore', 31.4697, 74.4087)
+        ])
+      });
+    });
+
+    await page.goto('/customer');
+    await page.evaluate(async () => {
+      customerActiveCity = 'Lahore';
+      customerCityLocation = { lat: 31.5204, lng: 74.3587 };
+      pickup = { lat: 24.7915, lng: 67.0648, address: 'DHA Phase 6' };
+      setCustomerPickupCityContext(24.7915, 67.0648);
+      await new Promise(resolve => setTimeout(resolve, 20));
+    });
+    await expect.poll(() => page.evaluate(() => customerActiveCity)).toBe('Karachi');
+
+    await setSearch(page, 'DHA');
+    await expect.poll(() => visibleLocationNames(page)).not.toHaveLength(0);
+    await expect(page.locator('#location-sheet-list [data-location-index] .sheet-item-primary').first())
+      .toHaveText('DHA Phase 6');
+    expect(await page.evaluate(() => pickup)).toMatchObject({ lat: 24.7915, lng: 67.0648 });
+    await expect.poll(() => requests.some(url => url.pathname.endsWith('/api/geocode'))).toBe(true);
+    const searchRequest = requests.find(url => url.pathname.endsWith('/api/geocode'));
+    expect(searchRequest.searchParams.get('city')).toBe('Karachi');
+    expect(searchRequest.searchParams.get('lat')).toBe('24.7915');
+    expect(searchRequest.searchParams.get('lng')).toBe('67.0648');
   });
 
   test('shows actionable capability states and keeps the search sheet usable', async ({ page }) => {

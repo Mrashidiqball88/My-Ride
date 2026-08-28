@@ -2316,7 +2316,9 @@ function locationMatchScore(item, query) {
         }
         // Phonetics make short spoken/typed forms such as "pakgs" resolve to
         // "packages" without weakening the city filter.
+        const phoneticDistanceLimit = Math.min(3, Math.max(2, Math.ceil(queryToken.length * .5)));
         if (queryToken.length >= 4
+          && levenshteinDistance(valueToken, queryToken) <= phoneticDistanceLimit
           && searchPhoneticKey(valueToken) === searchPhoneticKey(queryToken)) {
           score = Math.min(score, 3);
         }
@@ -2330,6 +2332,16 @@ function locationMatchScore(item, query) {
   let best = 99;
   for (const value of values) {
     if (!value) continue;
+    // One-character searches are useful for quick discovery, but edit
+    // distance and substring matching would make a query like "g" match
+    // unrelated words such as "Housing" or the number "5".
+    if (needle.length === 1) {
+      const startsWithNeedle = value === needle
+        || value.startsWith(needle)
+        || value.split(' ').some(token => token.startsWith(needle));
+      if (startsWithNeedle) best = Math.min(best, value === needle ? 0 : 1);
+      continue;
+    }
     if (value === needle) best = Math.min(best, 0);
     else if (value.startsWith(needle)) best = Math.min(best, 1);
     else if (value.includes(needle) || value.split(' ').some(token => token.startsWith(needle))) best = Math.min(best, 2);
@@ -2338,8 +2350,12 @@ function locationMatchScore(item, query) {
     if (compact.includes(compactNeedle)) best = Math.min(best, 2);
     const tokens = value.split(' ').filter(Boolean);
     const maxDistance = needle.length < 5 ? 1 : needle.length < 8 ? 2 : 3;
-    if (tokens.some(token => levenshteinDistance(token, needle) <= maxDistance
-      || levenshteinDistance(token, compactNeedle) <= maxDistance)) {
+    const hasFuzzyToken = needle.length >= 3 && tokens.some(token => {
+      if (/^\d+$/.test(token)) return false;
+      return levenshteinDistance(token, needle) <= maxDistance
+        || levenshteinDistance(token, compactNeedle) <= maxDistance;
+    });
+    if (hasFuzzyToken) {
       best = Math.min(best, 3);
     }
     best = Math.min(best, fuzzyTokenScore(value, needle));
