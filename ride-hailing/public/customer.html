@@ -2779,10 +2779,21 @@ function startVoiceSearch(type) {
       .trim();
     if (!transcript) return;
     input.value = transcript;
-    input.classList.remove('has-val');
+    input.classList.add('has-val');
     input.dispatchEvent(new Event('input', { bubbles: true }));
     updateClearBtn(type);
-    setVoiceStatus(`Searching for “${transcript}”`);
+    // The local index renders synchronously. Promote an immediate fuzzy/phonetic
+    // hit to the input so voice search shows the actual location name instead
+    // of leaving a short or Urdu transcript that looks like a failed search.
+    const immediateMatch = locationSheetResults[0];
+    if (immediateMatch?.primary) {
+      input.value = immediateMatch.primary;
+      input.classList.add('has-val');
+      updateClearBtn(type);
+      setVoiceStatus(`Found “${immediateMatch.primary}”`);
+    } else {
+      setVoiceStatus(`Searching for “${transcript}”`);
+    }
   };
   recognition.onerror = event => {
     if (voiceSearchSession !== session || voiceRecognition !== recognition) return;
@@ -2801,6 +2812,18 @@ function startVoiceSearch(type) {
     setVoiceButtonState(type, false);
     voiceRecognition = null;
     voiceSearchType = null;
+    // Do not erase the result/error message when the browser closes a
+    // one-shot recognition session. onresult/onerror already left useful
+    // feedback, and the input/suggestion list remains available for selection.
+    const status = document.getElementById('location-voice-status');
+    if (!status?.textContent.trim()) {
+      setVoiceStatus(
+        input.value.trim()
+          ? 'Voice search finished. Choose a location or try again.'
+          : 'Voice search ended without a location. Try again or type the location.',
+        !input.value.trim()
+      );
+    }
   };
   voiceSearchTimeout = setTimeout(() => {
     if (voiceSearchSession !== session || voiceRecognition !== recognition) return;

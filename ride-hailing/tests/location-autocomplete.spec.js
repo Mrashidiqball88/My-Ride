@@ -154,12 +154,46 @@ test.describe('dynamic city location autocomplete', () => {
     await setSearch(page, 'PAKGS');
     await expect(page.locator('#location-sheet-list')).toContainText('Packages Mall');
 
+    await setSearch(page, 'PACAG');
+    await expect(page.locator('#location-sheet-list')).toContainText('Packages Mall');
+
+    await setSearch(page, 'PAKAG');
+    await expect(page.locator('#location-sheet-list')).toContainText('Packages Mall');
+
     await page.evaluate(() => {
       window.SpeechRecognition = undefined;
       window.webkitSpeechRecognition = undefined;
       startVoiceSearch('pickup');
     });
     await expect(page.locator('#location-voice-status')).toContainText('not supported');
+  });
+
+  test('keeps the spoken location visible after recognition ends', async ({ page }) => {
+    await page.addInitScript(() => {
+      window.__recognition = null;
+      window.SpeechRecognition = class {
+        constructor() { window.__recognition = this; }
+        start() { this.onstart?.(); }
+        abort() {}
+        stop() { this.onend?.(); }
+      };
+    });
+
+    await page.goto('/customer');
+    await page.evaluate(() => {
+      customerActiveCity = 'Lahore';
+      customerCityLocation = { lat: 31.5204, lng: 74.3587 };
+      startVoiceSearch('pickup');
+    });
+    await page.evaluate(() => {
+      window.__recognition.onresult({ results: [[{ transcript: 'PACAG' }]] });
+      window.__recognition.onend();
+    });
+
+    await expect(page.locator('#pickup-input')).toHaveValue('Packages Mall');
+    await expect(page.locator('#location-sheet-list')).toContainText('Packages Mall');
+    await expect(page.locator('#location-voice-status')).toContainText('Found');
+    await expect(page.locator('#location-voice-status')).toContainText('Packages Mall');
   });
 
   test('uses the first pickup pin to replace the active city and prioritize the matching DHA', async ({ page }) => {

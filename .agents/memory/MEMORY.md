@@ -31,3 +31,4 @@
 - [Legacy Admin shell refresh](legacy-admin-shell-refresh.md) — restart the Ride Hailing workflow before browser checks when static Admin HTML edits are not reflected by the serving process.
 - [Workspace security scan gate](workspace-security-scan-gate.md) — dependency findings can come from any workspace artifact, so map each advisory to its owning direct or transitive package before release.
 - [Pickup city search context](pickup-city-search-context.md) — the first pickup pin replaces stale GPS or previous-city state as the Customer search anchor.
+- [Voice search end state](voice-search-end-state.md) — preserve transcript matches and error feedback after one-shot recognition fires its onend callback.
