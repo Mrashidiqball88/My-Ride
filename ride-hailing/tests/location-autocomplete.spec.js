@@ -146,6 +146,26 @@ test.describe('live nationwide location autocomplete', () => {
       .toHaveText(/\d+\.\d{4},\s+\d+\.\d{4}/);
   });
 
+  test('preserves mixed Urdu and English input for the live provider query', async ({ page }) => {
+    let requestedQuery;
+    await page.route(/\/api\/geocode(?:\?|$)/, async route => {
+      requestedQuery = new URL(route.request().url()).searchParams.get('q');
+      return route.fulfill({
+        contentType: 'application/json',
+        body: JSON.stringify([
+          poiResult('Jinnah International Airport', 'Karachi', 24.9058, 67.1614, 'aerodrome')
+        ])
+      });
+    });
+
+    await page.goto('/customer');
+    const query = 'جناح  airport';
+    await setSearch(page, query);
+
+    await expect(page.locator('#location-sheet-list')).toContainText('Jinnah International Airport');
+    expect(requestedQuery).toBe(query);
+  });
+
   test('keeps vital POI categories from multiple cities and labels provider metadata', async ({ page }) => {
     const requests = [];
     await page.route(/\/api\/geocode(?:\?|$)/, async route => {

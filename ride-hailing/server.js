@@ -3777,16 +3777,28 @@ app.post('/api/sos', authMiddleware, async (req, res) => {
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Geocode Proxy — forwards to LocationIQ (if LOCATIONIQ_KEY set) or Nominatim
-// Keeps API keys server-side and adds a proper User-Agent for Nominatim ToS.
+// Geocode Proxy — forwards Customer search to Photon
+// Photon is a free OpenStreetMap-based geocoder with fuzzy and multilingual
+// matching, so Customer search does not require a provider key or exact spelling.
 // This endpoint deliberately does not accept or forward a city, radius, map
 // viewport, bounded, feature-type, or category filter. The Customer search is
 // nationwide within Pakistan; the live provider owns the POI index.
 // ─────────────────────────────────────────────────────────────────────────────
 
+const PHOTON_GEOCODE_URL = 'https://photon.komoot.io/api/';
+const PHOTON_RESULT_LIMIT = 50;
+const PHOTON_MAX_RESPONSE_BYTES = 1_048_576;
+const PAKISTAN_GEOCODE_BOUNDS = {
+  minLat: 23,
+  maxLat: 38.5,
+  minLng: 60,
+  maxLng: 78.5
+};
+
 function geocodeProviderType(result) {
   const address = result?.address && typeof result.address === 'object' ? result.address : {};
   return String(
+    result?.providerType ||
     result?.type ||
     result?.category ||
     result?.class ||
@@ -3798,36 +3810,153 @@ function geocodeProviderType(result) {
   ).trim();
 }
 
-async function geocodeProviderSearch(query) {
-  const key = process.env.LOCATIONIQ_KEY;
-  let url, headers = {};
-  if (key) {
-    url = `https://us1.locationiq.com/v1/search` +
-      `?key=${encodeURIComponent(key)}` +
-      `&q=${encodeURIComponent(query)}` +
-      `&format=json&limit=50` +
-      `&countrycodes=pk&addressdetails=1&normalizeaddress=1&dedupe=1&namedetails=1`;
-  } else {
-    url = `https://nominatim.openstreetmap.org/search` +
-      `?q=${encodeURIComponent(query)}` +
-      `&format=json&limit=50&countrycodes=pk` +
-      `&addressdetails=1&dedupe=1&namedetails=1&extratags=1`;
-    headers = {
-      'User-Agent': 'MyRide-App/1.0 (ride-hailing)',
-      'Accept-Language': 'en,ur,pa,hi,sd'
-    };
+function photonAddress(properties) {
+  const address = {};
+  const propertyMap = {
+    name: 'name',
+    street: 'road',
+    housenumber: 'house_number',
+    locality: 'suburb',
+    district: 'district',
+    city: 'city',
+    town: 'town',
+    village: 'village',
+    county: 'county',
+    state: 'state',
+    postcode: 'postcode',
+    country: 'country',
+    countrycode: 'country_code'
+  };
+  for (const [source, target] of Object.entries(propertyMap)) {
+    if (properties[source] !== undefined && properties[source] !== null && String(properties[source]).trim()) {
+      address[target] = String(properties[source]).trim();
+    }
   }
+  if (properties.osm_key === 'amenity') address.amenity = String(properties.osm_value || '').trim();
+  if (properties.osm_key === 'public_transport') address.public_transport = String(properties.osm_value || '').trim();
+  if (properties.osm_key === 'aeroway') address.aeroway = String(properties.osm_value || '').trim();
+  if (properties.osm_key === 'highway') address.highway = String(properties.osm_value || '').trim();
+  if (properties.osm_key === 'tourism') address.tourism = String(properties.osm_value || '').trim();
+  if (properties.osm_key === 'landuse') address.landuse = String(properties.osm_value || '').trim();
+  return address;
+}
+
+function photonDisplayName(properties, address) {
+  const street = [address.house_number, address.road].filter(Boolean).join(' ');
+  const parts = [
+    address.name || properties.name,
+    street,
+    address.suburb,
+    address.district,
+    address.city || address.town || address.village,
+    address.county,
+    address.state,
+    address.country
+  ].map(value => String(value || '').trim()).filter(Boolean);
+  return parts.filter((part, index) => parts.findIndex(candidate => candidate.toLocaleLowerCase() === part.toLocaleLowerCase()) === index)
+    .join(', ');
+}
+
+function isPakistanPhotonFeature(properties, [lng, lat]) {
+  const countryCode = String(properties.countrycode || '').trim().toLocaleLowerCase();
+  const country = String(properties.country || '').trim().toLocaleLowerCase();
+  const hasPakistanCountry = countryCode === 'pk'
+    || country.includes('pakistan')
+    || country.includes('پاکستان')
+    || country.includes('پاكستان');
+  return hasPakistanCountry
+    && Number.isFinite(Number(lat))
+    && Number.isFinite(Number(lng))
+    && Number(lat) >= PAKISTAN_GEOCODE_BOUNDS.minLat
+    && Number(lat) <= PAKISTAN_GEOCODE_BOUNDS.maxLat
+    && Number(lng) >= PAKISTAN_GEOCODE_BOUNDS.minLng
+    && Number(lng) <= PAKISTAN_GEOCODE_BOUNDS.maxLng;
+}
+
+function normalizePhotonFeature(feature) {
+  const properties = feature?.properties && typeof feature.properties === 'object'
+    ? feature.properties
+    : {};
+  const coordinates = feature?.geometry?.type === 'Point' && Array.isArray(feature.geometry.coordinates)
+    ? feature.geometry.coordinates
+    : [];
+  const [lng, lat] = coordinates;
+  if (!isPakistanPhotonFeature(properties, [lng, lat])
+    || !hasValidCoordinates({ lat, lng })) return null;
+
+  const address = photonAddress(properties);
+  const providerType = String(
+    properties.osm_value || properties.osm_key || properties.type || ''
+  ).trim();
+  const displayName = photonDisplayName(properties, address);
+  return {
+    display_name: displayName || 'Pakistan location',
+    name: String(properties.name || address.name || '').trim(),
+    lat: String(lat),
+    lon: String(lng),
+    type: providerType,
+    category: String(properties.osm_key || '').trim(),
+    providerType,
+    address,
+    osm_type: properties.osm_type,
+    osm_id: properties.osm_id
+  };
+}
+
+async function readJsonResponseWithLimit(response, maxBytes) {
+  const contentLength = Number(response.headers?.get?.('content-length'));
+  if (Number.isFinite(contentLength) && contentLength > maxBytes) {
+    throw new Error('Geocode upstream response is too large');
+  }
+
+  if (response.body?.getReader) {
+    const reader = response.body.getReader();
+    const chunks = [];
+    let totalBytes = 0;
+    try {
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        totalBytes += value.byteLength;
+        if (totalBytes > maxBytes) {
+          await reader.cancel();
+          throw new Error('Geocode upstream response is too large');
+        }
+        chunks.push(Buffer.from(value));
+      }
+    } finally {
+      reader.releaseLock();
+    }
+    return JSON.parse(Buffer.concat(chunks).toString('utf8'));
+  }
+
+  if (typeof response.text === 'function') {
+    const text = await response.text();
+    if (Buffer.byteLength(text, 'utf8') > maxBytes) {
+      throw new Error('Geocode upstream response is too large');
+    }
+    return JSON.parse(text);
+  }
+
+  // Lightweight test doubles and older fetch implementations may only expose
+  // json(). Real Node fetch responses use the bounded body path above.
+  return response.json();
+}
+
+async function geocodeProviderSearch(query) {
+  const url = `${PHOTON_GEOCODE_URL}?q=${encodeURIComponent(query)}&limit=${PHOTON_RESULT_LIMIT}`;
+  const headers = {
+    'User-Agent': 'MyRide-App/1.0 (ride-hailing)',
+    'Accept-Language': 'en,ur,pa,hi,sd'
+  };
   const upstream = await fetch(url, { headers, signal: AbortSignal.timeout(5000) });
   if (!upstream.ok) throw new Error(`Geocode upstream ${upstream.status}`);
-  const data = await upstream.json();
-  return Array.isArray(data)
-    ? data
-      .filter(result => hasValidCoordinates({ lat: result?.lat, lng: result?.lon }))
-      .map(result => ({
-        ...result,
-        providerType: geocodeProviderType(result)
-      }))
-    : [];
+  const data = await readJsonResponseWithLimit(upstream, PHOTON_MAX_RESPONSE_BYTES);
+  if (!Array.isArray(data?.features)) return [];
+  return data.features.map(normalizePhotonFeature).filter(Boolean).map(result => ({
+    ...result,
+    providerType: geocodeProviderType(result)
+  }));
 }
 
 function mergeGeocodeResults(rawResults, aliasResults) {
@@ -3846,8 +3975,8 @@ function mergeGeocodeResults(rawResults, aliasResults) {
 app.get('/api/geocode', async (req, res) => {
   // Preserve the user's exact text for the raw nationwide lookup. Normalizing
   // is only for matching configured aliases, never for the provider query.
-  const q = String(req.query.q || '').trim();
-  if (!q) return res.json([]);
+  const q = String(req.query.q || '');
+  if (!q.trim()) return res.json([]);
 
   try {
     const aliases = await getCustomerLocationAliases();

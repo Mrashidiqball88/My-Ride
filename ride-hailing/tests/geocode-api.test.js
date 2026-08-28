@@ -33,19 +33,33 @@ async function withServer(callback) {
   }
 }
 
-function providerPoi(name, city, type, lat, lon) {
+function photonFeature(name, city, osmKey, osmValue, lat, lon, extra = {}) {
   return {
-    display_name: `${name}, ${city}, Pakistan`,
-    lat: String(lat),
-    lon: String(lon),
-    type,
-    address: { city }
+    type: 'Feature',
+    properties: {
+      osm_type: 'N',
+      osm_id: 123,
+      osm_key: osmKey,
+      osm_value: osmValue,
+      type: 'house',
+      name,
+      city,
+      state: 'Punjab',
+      country: 'Pakistan',
+      countrycode: 'PK',
+      ...extra
+    },
+    geometry: {
+      type: 'Point',
+      coordinates: [lon, lat]
+    }
   };
 }
 
 function assertNationwideQuery(url, query) {
   assert.equal(url.searchParams.get('q'), query);
-  assert.equal(url.searchParams.get('countrycodes'), 'pk');
+  assert.equal(url.searchParams.get('limit'), '50');
+  assert.equal(url.searchParams.get('countrycodes'), null);
   for (const forbidden of [
     'city', 'radius', 'viewbox', 'bounded', 'featuretype', 'type',
     'class', 'amenity', 'lat', 'lon', 'lng'
@@ -54,70 +68,66 @@ function assertNationwideQuery(url, query) {
   }
 }
 
-test('Nominatim search keeps every valid nationwide POI category and metadata', async () => {
-  delete process.env.LOCATIONIQ_KEY;
+test('Photon search maps valid Pakistan GeoJSON features and preserves POI metadata', async () => {
+  process.env.LOCATIONIQ_KEY = 'must-not-be-used-for-photon-search';
   let requested;
-  const upstreamResults = [
-    providerPoi('Islamabad International Airport', 'Islamabad', 'aerodrome', 33.5607, 72.8516),
-    providerPoi('Daewoo Bus Terminal', 'Lahore', 'bus_station', 31.4686, 74.2728),
-    providerPoi('Shifa International Hospital', 'Islamabad', 'hospital', 33.7069, 73.0498),
-    providerPoi('Beaconhouse School', 'Karachi', 'school', 24.8607, 67.0011),
-    providerPoi('Government College University', 'Faisalabad', 'college', 31.4180, 73.0790),
-    providerPoi('University of Peshawar', 'Peshawar', 'university', 34.0209, 71.4874),
-    providerPoi('Liberty Chowk', 'Lahore', 'junction', 31.5107, 74.3441),
-    providerPoi('Pakistan Monument', 'Islamabad', 'monument', 33.6938, 73.0652),
-    providerPoi('Unknown Community Place', 'Quetta', 'community_centre', 30.1798, 66.9750),
-    { display_name: 'Bad coordinates', lat: 'not-a-number', lon: '0', type: 'hospital' }
+  const features = [
+    photonFeature('جناح بین الاقوامی ہوائی اڈہ', 'کراچی', 'aeroway', 'aerodrome', 24.9058, 67.1614, {
+      street: 'New Terminal Road',
+      locality: 'ڈرگ کالونی'
+    }),
+    photonFeature('Shifa International Hospital', 'Islamabad', 'amenity', 'hospital', 33.7069, 73.0498),
+    photonFeature('Jinnah Street', 'Rawalpindi', 'highway', 'residential', 33.5968, 73.1330),
+    photonFeature('جناح بین الاقوامی ہوائی اڈہ', 'کراچی', 'aeroway', 'aerodrome', 24.9058, 67.1614, {
+      street: 'New Terminal Road',
+      locality: 'ڈرگ کالونی'
+    }),
+    photonFeature('Outside Pakistan', 'Delhi', 'amenity', 'hospital', 28.6139, 77.2090, {
+      country: 'India',
+      countrycode: 'IN'
+    }),
+    photonFeature('Bad coordinates', 'Lahore', 'amenity', 'hospital', 0, 0),
+    { type: 'Feature', properties: { countrycode: 'PK' }, geometry: { type: 'LineString', coordinates: [] } }
   ];
   global.fetch = async (url, options) => {
     requested = { url: new URL(url), options };
-    return { ok: true, json: async () => upstreamResults };
+    return { ok: true, json: async () => ({ type: 'FeatureCollection', features }) };
   };
 
   await withServer(async server => {
-    const result = await request(server, `/api/geocode?q=${encodeURIComponent('airport hospital chowk')}`);
+    const query = 'airport  جناح';
+    const result = await request(server, `/api/geocode?q=${encodeURIComponent(query)}`);
     assert.equal(result.response.status, 200);
-    assert.equal(result.body.length, 9);
-    assert.deepEqual(result.body.map(item => item.type), upstreamResults.slice(0, 9).map(item => item.type));
-    assert.equal(result.body.find(item => item.type === 'aerodrome').providerType, 'aerodrome');
-    assert.equal(result.body.find(item => item.type === 'community_centre').providerType, 'community_centre');
+    assert.equal(result.body.length, 3);
+    assert.deepEqual(result.body.map(item => item.type), ['aerodrome', 'hospital', 'residential']);
+    assert.equal(result.body[0].providerType, 'aerodrome');
+    assert.equal(result.body[0].address.city, 'کراچی');
+    assert.match(result.body[0].display_name, /New Terminal Road/);
+    assert.equal(result.body[1].address.amenity, 'hospital');
+    assert.equal(result.body[2].address.highway, 'residential');
     assert.equal(requested.options.headers['User-Agent'], 'MyRide-App/1.0 (ride-hailing)');
     assert.equal(requested.options.headers['Accept-Language'], 'en,ur,pa,hi,sd');
-    assert.equal(requested.url.searchParams.get('format'), 'json');
-    assert.equal(requested.url.searchParams.get('limit'), '50');
-    assert.equal(requested.url.searchParams.get('addressdetails'), '1');
-    assert.equal(requested.url.searchParams.get('namedetails'), '1');
-    assert.equal(requested.url.searchParams.get('extratags'), '1');
-    assertNationwideQuery(requested.url, 'airport hospital chowk');
+    assert.equal(requested.url.origin, 'https://photon.komoot.io');
+    assert.equal(requested.url.pathname, '/api/');
+    assertNationwideQuery(requested.url, query);
   });
 });
 
-test('LocationIQ search keeps provider categories without adding local narrowing', async () => {
-  process.env.LOCATIONIQ_KEY = 'test-locationiq-key';
+test('Photon keeps mixed-language queries unchanged and returns a clear upstream failure', async () => {
+  delete process.env.LOCATIONIQ_KEY;
   let requested;
   global.fetch = async (url, options) => {
     requested = { url: new URL(url), options };
-    return {
-      ok: true,
-      json: async () => [
-        providerPoi('Jinnah International Airport', 'Karachi', 'airport', 24.9065, 67.1608),
-        providerPoi('Aga Khan University Hospital', 'Karachi', 'hospital', 24.8934, 67.0746)
-      ]
-    };
+    return { ok: false, status: 429, json: async () => ({}) };
   };
 
   await withServer(async server => {
-    const result = await request(server, `/api/geocode?q=${encodeURIComponent('Jinnah airport')}`);
-    assert.equal(result.response.status, 200);
-    assert.equal(result.body.length, 2);
-    assert.deepEqual(result.body.map(item => item.providerType), ['airport', 'hospital']);
-    assert.deepEqual(requested.options.headers, {});
-    assert.equal(requested.url.searchParams.get('key'), 'test-locationiq-key');
-    assert.equal(requested.url.searchParams.get('format'), 'json');
-    assert.equal(requested.url.searchParams.get('limit'), '50');
-    assert.equal(requested.url.searchParams.get('addressdetails'), '1');
-    assert.equal(requested.url.searchParams.get('namedetails'), '1');
-    assertNationwideQuery(requested.url, 'Jinnah airport');
+    const query = ' جناح  ائیرپورٹ ';
+    const result = await request(server, `/api/geocode?q=${encodeURIComponent(query)}`);
+    assert.equal(result.response.status, 502);
+    assert.equal(result.body.error, 'Internal server error');
+    assertNationwideQuery(requested.url, query);
+    assert.equal(requested.url.searchParams.get('key'), null);
   });
 });
 
