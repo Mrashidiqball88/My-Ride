@@ -1203,6 +1203,13 @@ function normalizeCustomerLocationAliasText(value) {
   return String(value || '')
     .normalize('NFKC')
     .toLocaleLowerCase()
+    // Urdu text is often pasted or transcribed with Arabic glyph variants,
+    // tatweel, or invisible joiners. Canonicalize those only for alias
+    // matching; the original query is still sent unchanged to live providers.
+    .replace(/[\u0640\u200B-\u200D\u2060]/g, '')
+    .replace(/[ىیي]/g, 'ی')
+    .replace(/[كک]/g, 'ک')
+    .replace(/[هةھ]/g, 'ہ')
     .replace(/[\u064B-\u065F\u0670]/g, '')
     .replace(/['’`"“”.,،؛;:()[\]{}|/\\_+=*&^%$#@!?<>~-]+/g, ' ')
     .replace(/\s+/g, ' ')
@@ -6159,6 +6166,7 @@ module.exports = {
   normalizeCustomerLocationAlias,
   validateCustomerLocationAlias,
   normalizeCustomerLocationAliases,
+  customerLocationAliasMatch,
   matchCustomerLocationAliases,
   isSafeDirectCustomerAlias,
   rideOfferIsStillOpenQuery,

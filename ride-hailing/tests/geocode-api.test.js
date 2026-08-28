@@ -3,7 +3,11 @@
 const { test, afterEach } = require('node:test');
 const assert = require('node:assert/strict');
 
-const { app } = require('../server');
+const {
+  app,
+  normalizeCustomerLocationAliasText,
+  customerLocationAliasMatch
+} = require('../server');
 
 const originalFetch = global.fetch;
 const httpFetch = global.fetch;
@@ -115,4 +119,21 @@ test('LocationIQ search keeps provider categories without adding local narrowing
     assert.equal(requested.url.searchParams.get('namedetails'), '1');
     assertNationwideQuery(requested.url, 'Jinnah airport');
   });
+});
+
+test('Customer alias matching is bilingual and independent of UI language selection', () => {
+  const alias = {
+    displayName: 'Jinnah Airport',
+    canonicalQuery: 'Jinnah International Airport',
+    variants: [
+      normalizeCustomerLocationAliasText('Jinnah Airport'),
+      normalizeCustomerLocationAliasText('جناح ائیرپورٹ')
+    ],
+    confidence: 1,
+    enabled: true
+  };
+
+  assert.equal(customerLocationAliasMatch('Jinnah Airport', alias)?.exact, true);
+  assert.equal(customerLocationAliasMatch('جناح ائیرپورٹ', alias)?.exact, true);
+  assert.equal(customerLocationAliasMatch('جناح ائیرپورٹ\u200c', alias)?.exact, true);
 });
