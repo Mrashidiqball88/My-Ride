@@ -463,6 +463,7 @@ input[type=date]:focus{border-color:#f5c518}
       <div class="sb-item"        onclick="showSection('blk-pass')"     data-sec="blk-pass">    <span class="sb-icon">🚫</span> Blocked Customers</div>
       <div class="sb-group-label">System & Pricing</div>
       <div class="sb-item"        onclick="showSection('app-settings')" data-sec="app-settings"><span class="sb-icon">⚙️</span> App Settings / Pricing</div>
+      <div class="sb-item"        onclick="showSection('location-aliases')" data-sec="location-aliases"><span class="sb-icon">📍</span> Customer Location Aliases</div>
        <div class="sb-item"        onclick="showSection('terms-settings')" data-sec="terms-settings"><span class="sb-icon">📜</span> Terms & Conditions Settings</div>
       <div class="sb-item"        onclick="showSection('live-rides')"   data-sec="live-rides">  <span class="sb-icon">🗺️</span> Live Rides</div>
        <div class="sb-item"        onclick="showSection('ride-retention')" data-sec="ride-retention"><span class="sb-icon">🧹</span> Rides Data Retention</div>
@@ -994,6 +995,12 @@ input[type=date]:focus{border-color:#f5c518}
             <p>Maintain separate terms for Customers and Drivers and publish updates live.</p>
             <button class="btn btn-primary" onclick="showSection('terms-settings')">Manage terms</button>
           </article>
+          <article class="settings-card" id="location-aliases-card">
+            <div class="settings-icon">📍</div>
+            <h3>Local Location Names</h3>
+            <p>Teach search Pakistani landmarks, stops, hospitals, abbreviations, Urdu variants, and common misspellings.</p>
+            <button class="btn btn-primary" onclick="showSection('location-aliases')">Manage aliases</button>
+          </article>
         </div>
       </div>
 
@@ -1079,6 +1086,35 @@ input[type=date]:focus{border-color:#f5c518}
           <div id="terms-driver-feedback" style="min-height:1.25rem;font-size:.8rem;margin:.7rem 0"></div>
           <button class="btn btn-primary" type="button" onclick="saveTerms('driver')">💾 Save Driver Terms</button>
         </div>
+      </div>
+      <div class="section-panel" id="sec-location-aliases">
+        <div class="sec-hdr"><h2>📍 Customer Location Aliases</h2><div class="sec-hdr-actions"><button class="btn-refresh" onclick="loadLocationAliases()">↻ Reload</button></div></div>
+        <p style="font-size:.8rem;color:#475569;margin-bottom:1.1rem">
+          Add the names Customers actually say or type. Every search still checks the live nationwide provider; aliases add a fast official query and may use coordinates only when confidence is high.
+        </p>
+        <div style="background:#0f0f1e;border:1px solid #1e1e2e;border-radius:14px;padding:1rem;max-width:900px;margin-bottom:1rem">
+          <input type="hidden" id="location-alias-id">
+          <div class="field-row">
+            <div class="field-item"><div class="field-label">Official place name</div><input class="modal-input" id="location-alias-display-name" placeholder="e.g. Daewoo Bus Terminal Lahore"></div>
+            <div class="field-item"><div class="field-label">Live provider query</div><input class="modal-input" id="location-alias-canonical-query" placeholder="e.g. Daewoo Bus Terminal, Lahore, Pakistan"></div>
+          </div>
+          <div class="field-item"><div class="field-label">Search names / variants</div><input class="modal-input" id="location-alias-variants" placeholder="Comma-separated: daewoo terminal, daewoo adda, ڈائیوو اڈہ"></div>
+          <div class="field-row">
+            <div class="field-item"><div class="field-label">City hint (ranking only)</div><input class="modal-input" id="location-alias-city-hint" placeholder="Optional, never filters nationwide results"></div>
+            <div class="field-item"><div class="field-label">Confidence (0 to 1)</div><input class="modal-input" id="location-alias-confidence" type="number" min="0" max="1" step=".01" value=".95"></div>
+          </div>
+          <div class="field-row">
+            <div class="field-item"><div class="field-label">Latitude (optional vetted direct match)</div><input class="modal-input" id="location-alias-lat" type="number" min="23" max="37.5" step="any"></div>
+            <div class="field-item"><div class="field-label">Longitude (optional vetted direct match)</div><input class="modal-input" id="location-alias-lng" type="number" min="60" max="78.5" step="any"></div>
+          </div>
+          <label style="display:flex;align-items:center;gap:.5rem;color:#cbd5e1;font-size:.8rem;margin:.75rem 0"><input id="location-alias-enabled" type="checkbox" checked> Enabled for Customer search</label>
+          <div style="display:flex;gap:.5rem;flex-wrap:wrap">
+            <button class="btn btn-primary" type="button" onclick="saveLocationAlias()">💾 <span id="location-alias-save-label">Add alias</span></button>
+            <button class="btn btn-gray" type="button" onclick="resetLocationAliasForm()">Clear form</button>
+          </div>
+          <div id="location-alias-form-feedback" style="min-height:1.25rem;font-size:.8rem;margin-top:.7rem"></div>
+        </div>
+        <div id="location-alias-list" style="max-width:900px"><div class="loading-row">Loading…</div></div>
       </div>
 
       <!-- ════ 12. RATINGS & FEEDBACK ════ -->
@@ -1417,23 +1453,24 @@ const SUB_ADMIN_PERMISSION_CATALOG = [
   ['Operations', 'manageSupport', 'Reply to and resolve support tickets'],
   ['System configuration', 'manageRideSettings', 'Manage ride broadcast settings'],
   ['System configuration', 'manageFareSettings', 'Manage fare rates & pricing rules'],
+  ['System configuration', 'manageLocationAliases', 'Manage Customer location aliases'],
   ['System configuration', 'managePaymentSettings', 'Manage receiving account settings'],
   ['System configuration', 'viewAuditLogs', 'View payment and pass audit logs']
 ];
-const SENSITIVE_PERMISSION_KEYS = new Set(['viewPaymentProofs', 'approveWalletTopups', 'manageDriverPasses', 'manageFareSettings', 'managePaymentSettings']);
+const SENSITIVE_PERMISSION_KEYS = new Set(['viewPaymentProofs', 'approveWalletTopups', 'manageDriverPasses', 'manageFareSettings', 'manageLocationAliases', 'managePaymentSettings']);
 const SECTION_PERMISSION = {
   overview: 'viewOverview', payments: 'viewPayments', drivers: 'viewDrivers',
   'new-requests': 'manageDriverApprovals', 'fee-compliance': 'viewDriverPasses',
   'temp-blocked': 'manageDriverStatus', passengers: 'viewCustomers',
   'blk-pass': 'manageCustomers', 'live-rides': 'viewRides', sos: 'viewSOS',
   ratings: 'viewRatings', support: 'viewSupport', 'audit-logs': 'viewAuditLogs',
-  'ride-settings': 'manageRideSettings', 'fare-settings': 'manageFareSettings', 'long-range-settings': 'manageFareSettings', 'terms-settings': 'manageFareSettings',
+  'ride-settings': 'manageRideSettings', 'fare-settings': 'manageFareSettings', 'long-range-settings': 'manageFareSettings', 'terms-settings': 'manageFareSettings', 'location-aliases': 'manageLocationAliases',
   'pay-settings': 'managePaymentSettings'
 };
 function hasSectionAccess(name) {
   if (SECTION_PERMISSION[name]) return hasPermission(SECTION_PERMISSION[name]);
   if (name === 'app-settings') {
-    return ['manageRideSettings', 'manageFareSettings', 'managePaymentSettings'].some(hasPermission);
+    return ['manageRideSettings', 'manageFareSettings', 'manageLocationAliases', 'managePaymentSettings'].some(hasPermission);
   }
   if (['sub-admins', 'deletions', 'ride-retention'].includes(name)) return isSuperAdmin;
   return false;
@@ -1715,9 +1752,9 @@ const SECTION_TITLES = {
   'temp-blocked':'Driver Status', 'blk-pass':'Blocked Customers',
   'live-rides':'Live Rides & History', sos:'SOS Alert Monitor',
   'fee-compliance':'Driver Wallets & Daily Fees',
-  'app-settings':'App Settings / Pricing', 'terms-settings':'Terms & Conditions Settings',
+  'app-settings':'App Settings / Pricing', 'terms-settings':'Terms & Conditions Settings', 'location-aliases':'Customer Location Aliases',
   'ride-settings':'Ride Settings', 'fare-settings':'Daily Fare Settings', 'long-range-settings':'Long Range Ride Settings', 'pay-settings':'Payment Settings', 'ride-retention':'Rides Data Retention', ratings:'Ratings & Feedback', support:'Support Tickets', 'audit-logs':'Payment & Pass Audit Logs',
-  deletions:'Account Deletion Requests', 'sub-admins':'Sub-Admin User Management'
+    deletions:'Account Deletion Requests', 'sub-admins':'Sub-Admin User Management'
 };
 const SECTION_SAVE_HANDLERS = {
   'pay-settings': 'savePaymentSettings',
@@ -1846,7 +1883,7 @@ function showSection(name) {
     'new-requests': loadNewRequests, 'temp-blocked': loadTempBlocked,
     'blk-pass': loadBlockedPass, 'live-rides': () => loadRides(currentRideStatus),
     'ride-retention': loadRideRetention,
-    sos: () => loadSOS(currentSOSFilter), 'ride-settings': loadRideSettings, 'fare-settings': loadFareSettings, 'long-range-settings': loadLongRangeSettings, 'terms-settings': loadTermsSettings, 'pay-settings': loadPaymentSettings,
+    sos: () => loadSOS(currentSOSFilter), 'ride-settings': loadRideSettings, 'fare-settings': loadFareSettings, 'long-range-settings': loadLongRangeSettings, 'terms-settings': loadTermsSettings, 'location-aliases': loadLocationAliases, 'pay-settings': loadPaymentSettings,
     'fee-compliance': loadFeeCompliance,
     ratings: loadRatings, support: () => loadSupportTickets(currentSupStatus),
     deletions: loadDeletionRequests,
@@ -3700,6 +3737,116 @@ function syncRideRadiusFromInput() {
   }
 }
 
+// ── Customer Location Alias Settings ────────────────────────────────────────────
+let locationAliasesState = [];
+
+function resetLocationAliasForm() {
+  ['location-alias-id', 'location-alias-display-name', 'location-alias-canonical-query',
+    'location-alias-variants', 'location-alias-city-hint', 'location-alias-lat',
+    'location-alias-lng'].forEach(id => { const input = document.getElementById(id); if (input) input.value = ''; });
+  document.getElementById('location-alias-confidence').value = '.95';
+  document.getElementById('location-alias-enabled').checked = true;
+  document.getElementById('location-alias-save-label').textContent = 'Add alias';
+  document.getElementById('location-alias-form-feedback').textContent = '';
+}
+
+function renderLocationAliases(aliases = []) {
+  locationAliasesState = aliases;
+  const list = document.getElementById('location-alias-list');
+  if (!list) return;
+  if (!aliases.length) {
+    list.innerHTML = '<div class="empty-state">No local aliases configured yet. Add the names Customers use most often.</div>';
+    return;
+  }
+  list.innerHTML = aliases.map(alias => {
+    const coordinates = alias.coordinates ? `${alias.coordinates.lat}, ${alias.coordinates.lng}` : 'Live provider only';
+    return `<article style="background:#0f0f1e;border:1px solid ${alias.enabled ? '#1e1e2e' : '#3a2020'};border-radius:12px;padding:.9rem 1rem;margin:.55rem 0">
+      <div style="display:flex;align-items:flex-start;gap:.75rem;justify-content:space-between">
+        <div style="min-width:0"><strong style="color:#e2e8f0;font-size:.84rem">${escHtml(alias.displayName)}</strong>
+          <div style="color:#94a3b8;font-size:.72rem;margin-top:.2rem">Variants: ${escHtml((alias.variants || []).join(' · '))}</div>
+          <div style="color:#64748b;font-size:.7rem;margin-top:.2rem">Provider: ${escHtml(alias.canonicalQuery)}${alias.cityHint ? ` · Hint: ${escHtml(alias.cityHint)}` : ''}</div>
+          <div style="color:#64748b;font-size:.7rem;margin-top:.2rem">Confidence ${Number(alias.confidence).toFixed(2)} · ${escHtml(coordinates)} · ${alias.enabled ? 'Enabled' : 'Disabled'}</div>
+        </div>
+        <div style="display:flex;gap:.35rem;flex-shrink:0"><button class="btn btn-blue" type="button" onclick="editLocationAlias('${escHtml(alias.id)}')">Edit</button><button class="btn btn-red" type="button" onclick="deleteLocationAlias('${escHtml(alias.id)}')">Delete</button></div>
+      </div>
+    </article>`;
+  }).join('');
+}
+
+async function loadLocationAliases() {
+  const list = document.getElementById('location-alias-list');
+  if (list) list.innerHTML = '<div class="loading-row">Loading…</div>';
+  try {
+    const result = await api('/api/admin/customer-location-aliases');
+    renderLocationAliases(result.aliases || []);
+  } catch (error) {
+    if (list) list.innerHTML = `<div class="error-state">⚠ ${escHtml(error.message)}</div>`;
+  }
+}
+
+function readLocationAliasForm() {
+  const lat = document.getElementById('location-alias-lat').value.trim();
+  const lng = document.getElementById('location-alias-lng').value.trim();
+  return {
+    displayName: document.getElementById('location-alias-display-name').value.trim(),
+    canonicalQuery: document.getElementById('location-alias-canonical-query').value.trim(),
+    variants: document.getElementById('location-alias-variants').value.split(',').map(value => value.trim()).filter(Boolean),
+    cityHint: document.getElementById('location-alias-city-hint').value.trim(),
+    confidence: document.getElementById('location-alias-confidence').value,
+    enabled: document.getElementById('location-alias-enabled').checked,
+    ...(lat || lng ? { coordinates: { lat, lng } } : {})
+  };
+}
+
+async function saveLocationAlias() {
+  const feedback = document.getElementById('location-alias-form-feedback');
+  const id = document.getElementById('location-alias-id').value;
+  feedback.textContent = 'Saving…'; feedback.style.color = '#64748b';
+  try {
+    const result = await api(id
+      ? `/api/admin/customer-location-aliases/${encodeURIComponent(id)}`
+      : '/api/admin/customer-location-aliases',
+      id ? 'PATCH' : 'POST',
+      readLocationAliasForm());
+    renderLocationAliases(result.aliases || []);
+    resetLocationAliasForm();
+    feedback.textContent = '✓ Alias saved. Customer searches use it immediately.';
+    feedback.style.color = '#22c55e';
+    showToast('Customer location alias saved ✓', 'success');
+  } catch (error) {
+    const details = Array.isArray(error.errors) ? `: ${error.errors.join('; ')}` : '';
+    feedback.textContent = `✕ ${error.message}${details}`;
+    feedback.style.color = '#ef4444';
+  }
+}
+
+function editLocationAlias(id) {
+  const alias = locationAliasesState.find(item => item.id === id);
+  if (!alias) return;
+  document.getElementById('location-alias-id').value = alias.id;
+  document.getElementById('location-alias-display-name').value = alias.displayName || '';
+  document.getElementById('location-alias-canonical-query').value = alias.canonicalQuery || '';
+  document.getElementById('location-alias-variants').value = (alias.variants || []).join(', ');
+  document.getElementById('location-alias-city-hint').value = alias.cityHint || '';
+  document.getElementById('location-alias-confidence').value = alias.confidence ?? '.95';
+  document.getElementById('location-alias-lat').value = alias.coordinates?.lat ?? '';
+  document.getElementById('location-alias-lng').value = alias.coordinates?.lng ?? '';
+  document.getElementById('location-alias-enabled').checked = alias.enabled !== false;
+  document.getElementById('location-alias-save-label').textContent = 'Update alias';
+  document.getElementById('location-alias-display-name').focus();
+}
+
+async function deleteLocationAlias(id) {
+  if (!confirm('Remove this Customer location alias?')) return;
+  try {
+    const result = await api(`/api/admin/customer-location-aliases/${encodeURIComponent(id)}`, 'DELETE');
+    renderLocationAliases(result.aliases || []);
+    showToast('Customer location alias removed', 'success');
+  } catch (error) {
+    showToast(error.message || 'Could not remove alias', 'error');
+  }
+}
+
 // ── Payment Settings ──────────────────────────────────────────────────────────
 async function loadPaymentSettings() {
   try {
@@ -4121,7 +4268,7 @@ function applyPermissions() {
     const item = document.querySelector(`[data-sec="${section}"]`);
     if (item) item.style.display = hasPermission(permission) ? '' : 'none';
   });
-  const hasAnySettings = ['manageRideSettings', 'manageFareSettings', 'managePaymentSettings'].some(hasPermission);
+  const hasAnySettings = ['manageRideSettings', 'manageFareSettings', 'manageLocationAliases', 'managePaymentSettings'].some(hasPermission);
   const settingsNav = document.querySelector('[data-sec="app-settings"]');
   if (settingsNav) settingsNav.style.display = hasAnySettings ? '' : 'none';
   const settingsCardVisibility = {
@@ -4129,6 +4276,7 @@ function applyPermissions() {
     'fare-settings-card': 'manageFareSettings',
     'long-range-settings-card': 'manageFareSettings',
     'terms-settings-card': 'manageFareSettings',
+    'location-aliases-card': 'manageLocationAliases',
     'driver-fees-card': 'viewDriverPasses',
     'payment-settings-card': 'managePaymentSettings'
   };

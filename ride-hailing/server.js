@@ -1094,6 +1094,7 @@ const SUB_ADMIN_PERMISSION_CATALOG = Object.freeze([
   { key: 'manageSupport',         group: 'Operations',         label: 'Reply to and resolve support tickets' },
   { key: 'manageRideSettings',    group: 'System configuration', label: 'Manage ride broadcast settings' },
   { key: 'manageFareSettings',    group: 'System configuration', label: 'Manage fare rates & pricing rules' },
+  { key: 'manageLocationAliases', group: 'System configuration', label: 'Manage Customer location aliases' },
   { key: 'managePaymentSettings', group: 'System configuration', label: 'Manage receiving account settings' },
   { key: 'viewAuditLogs',         group: 'System configuration', label: 'View payment and pass audit logs' }
 ]);
@@ -1190,6 +1191,167 @@ const Payment  = mongoose.model('Payment',  paymentSchema);
 const Ticket   = mongoose.model('Ticket',   ticketSchema);
 const Settings = mongoose.model('Settings', settingsSchema);
 const PushSub  = mongoose.model('PushSub',  pushSubSchema);
+
+const CUSTOMER_LOCATION_ALIASES_KEY = 'customer_location_aliases';
+const CUSTOMER_LOCATION_ALIAS_LIMIT = 1000;
+const CUSTOMER_LOCATION_ALIAS_VARIANT_LIMIT = 40;
+const CUSTOMER_LOCATION_ALIAS_TEXT_LIMIT = 160;
+const CUSTOMER_LOCATION_ALIAS_CONFIDENCE_MIN = 0.85;
+const PAKISTAN_LOCATION_BOUNDS = Object.freeze({ minLat: 23, maxLat: 37.5, minLng: 60, maxLng: 78.5 });
+
+function normalizeCustomerLocationAliasText(value) {
+  return String(value || '')
+    .normalize('NFKC')
+    .toLocaleLowerCase()
+    .replace(/[\u064B-\u065F\u0670]/g, '')
+    .replace(/['’`"“”.,،؛;:()[\]{}|/\\_+=*&^%$#@!?<>~-]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function aliasConfidenceValue(value, fallback = 0) {
+  if (typeof value === 'string') {
+    const named = { high: 0.95, medium: 0.75, low: 0.45 };
+    const normalized = value.trim().toLocaleLowerCase();
+    if (named[normalized] !== undefined) return named[normalized];
+  }
+  const numeric = Number(value);
+  return Number.isFinite(numeric) ? Math.max(0, Math.min(1, numeric)) : fallback;
+}
+
+function normalizeCustomerLocationAlias(input = {}, { preserveId = true } = {}) {
+  const coordinates = input.coordinates && typeof input.coordinates === 'object'
+    ? input.coordinates
+    : input;
+  const lat = Number(coordinates.lat);
+  const lng = Number(coordinates.lng ?? coordinates.lon);
+  const hasCoordinates = hasValidCoordinates({ lat, lng })
+    && lat >= PAKISTAN_LOCATION_BOUNDS.minLat && lat <= PAKISTAN_LOCATION_BOUNDS.maxLat
+    && lng >= PAKISTAN_LOCATION_BOUNDS.minLng && lng <= PAKISTAN_LOCATION_BOUNDS.maxLng;
+  const variants = Array.isArray(input.variants)
+    ? input.variants
+      .map(value => String(value || '').slice(0, CUSTOMER_LOCATION_ALIAS_TEXT_LIMIT).trim())
+      .filter(Boolean)
+    : [];
+  const displayName = String(input.displayName ?? input.officialName ?? input.name ?? '')
+    .slice(0, CUSTOMER_LOCATION_ALIAS_TEXT_LIMIT).trim();
+  const canonicalQuery = String(input.canonicalQuery ?? input.providerQuery ?? displayName)
+    .slice(0, CUSTOMER_LOCATION_ALIAS_TEXT_LIMIT).trim();
+  const normalizedVariants = [...new Set([
+    displayName,
+    ...variants
+  ].map(normalizeCustomerLocationAliasText).filter(Boolean))].slice(0, CUSTOMER_LOCATION_ALIAS_VARIANT_LIMIT);
+  return {
+    ...(preserveId && (input.id || input._id) ? { id: String(input.id || input._id) } : {}),
+    displayName,
+    canonicalQuery,
+    variants: normalizedVariants,
+    cityHint: String(input.cityHint || '').slice(0, 80).trim(),
+    confidence: aliasConfidenceValue(input.confidence ?? input.confidenceLevel, 0),
+    enabled: input.enabled !== false,
+    ...(hasCoordinates ? { coordinates: { lat, lng } } : {})
+  };
+}
+
+function validateCustomerLocationAlias(input) {
+  const alias = normalizeCustomerLocationAlias(input);
+  const errors = [];
+  if (!alias.displayName) errors.push('displayName is required');
+  if (!alias.canonicalQuery) errors.push('canonicalQuery is required');
+  if (!alias.variants.length) errors.push('At least one searchable variant is required');
+  if (Number(input?.confidence) < 0 || Number(input?.confidence) > 1) errors.push('confidence must be between 0 and 1');
+  if (input?.coordinates && !alias.coordinates) errors.push('coordinates must be valid Pakistan coordinates');
+  return { alias, errors };
+}
+
+function normalizeCustomerLocationAliases(value) {
+  const raw = Array.isArray(value) ? value : value?.aliases;
+  if (!Array.isArray(raw)) return [];
+  return raw
+    .slice(0, CUSTOMER_LOCATION_ALIAS_LIMIT)
+    .map(item => normalizeCustomerLocationAlias(item))
+    .filter(item => item.displayName && item.canonicalQuery && item.variants.length);
+}
+
+async function getCustomerLocationAliases() {
+  // Geocoding must remain available in no-database test/preview mode.
+  if (!dbConnected && mongoose.connection.readyState !== 1) return [];
+  try {
+    const doc = await Settings.findOne({ key: CUSTOMER_LOCATION_ALIASES_KEY }).lean();
+    return normalizeCustomerLocationAliases(doc?.value);
+  } catch (error) {
+    console.warn('[location-aliases] settings read failed:', error.message);
+    return [];
+  }
+}
+
+function boundedLevenshtein(left, right, limit) {
+  if (Math.abs(left.length - right.length) > limit) return limit + 1;
+  let previous = Array.from({ length: right.length + 1 }, (_, index) => index);
+  for (let row = 1; row <= left.length; row++) {
+    const current = [row];
+    let rowMinimum = current[0];
+    for (let column = 1; column <= right.length; column++) {
+      const cost = left[row - 1] === right[column - 1] ? 0 : 1;
+      const value = Math.min(current[column - 1] + 1, previous[column] + 1, previous[column - 1] + cost);
+      current[column] = value;
+      rowMinimum = Math.min(rowMinimum, value);
+    }
+    if (rowMinimum > limit) return limit + 1;
+    previous = current;
+  }
+  return previous[right.length];
+}
+
+function customerLocationAliasMatch(query, alias) {
+  const normalizedQuery = normalizeCustomerLocationAliasText(query);
+  if (!normalizedQuery || !alias.enabled) return null;
+  const exact = alias.variants.includes(normalizedQuery)
+    || normalizeCustomerLocationAliasText(alias.displayName) === normalizedQuery;
+  if (exact) return { alias, score: 1, exact: true, matchedBy: 'exact alias' };
+  const maxDistance = normalizedQuery.length <= 7 ? 1 : normalizedQuery.length <= 18 ? 2 : 3;
+  let bestDistance = maxDistance + 1;
+  let bestVariant = '';
+  for (const variant of alias.variants) {
+    if (Math.abs(variant.length - normalizedQuery.length) > maxDistance) continue;
+    const distance = boundedLevenshtein(normalizedQuery, variant, maxDistance);
+    if (distance < bestDistance) {
+      bestDistance = distance;
+      bestVariant = variant;
+    }
+  }
+  if (bestDistance > maxDistance) return null;
+  const score = 1 - bestDistance / Math.max(normalizedQuery.length, bestVariant.length, 1);
+  if (score < 0.78) return null;
+  return { alias, score, exact: false, matchedBy: 'close spelling' };
+}
+
+function matchCustomerLocationAliases(query, aliases) {
+  return (aliases || [])
+    .map(alias => customerLocationAliasMatch(query, alias))
+    .filter(Boolean)
+    .sort((left, right) =>
+      Number(right.exact) - Number(left.exact)
+      || right.alias.confidence - left.alias.confidence
+      || right.score - left.score
+    )
+    .slice(0, 8);
+}
+
+function isSafeDirectCustomerAlias(match) {
+  const coordinates = match?.alias?.coordinates;
+  return Boolean(
+    match?.exact &&
+    match.alias.enabled &&
+    match.alias.confidence >= CUSTOMER_LOCATION_ALIAS_CONFIDENCE_MIN &&
+    coordinates &&
+    hasValidCoordinates(coordinates) &&
+    coordinates.lat >= PAKISTAN_LOCATION_BOUNDS.minLat &&
+    coordinates.lat <= PAKISTAN_LOCATION_BOUNDS.maxLat &&
+    coordinates.lng >= PAKISTAN_LOCATION_BOUNDS.minLng &&
+    coordinates.lng <= PAKISTAN_LOCATION_BOUNDS.maxLng
+  );
+}
 
 const TERMS_SETTINGS_KEY = 'terms_and_conditions';
 const DEFAULT_TERMS = Object.freeze({
@@ -3629,51 +3791,108 @@ function geocodeProviderType(result) {
   ).trim();
 }
 
+async function geocodeProviderSearch(query) {
+  const key = process.env.LOCATIONIQ_KEY;
+  let url, headers = {};
+  if (key) {
+    url = `https://us1.locationiq.com/v1/search` +
+      `?key=${encodeURIComponent(key)}` +
+      `&q=${encodeURIComponent(query)}` +
+      `&format=json&limit=50` +
+      `&countrycodes=pk&addressdetails=1&normalizeaddress=1&dedupe=1&namedetails=1`;
+  } else {
+    url = `https://nominatim.openstreetmap.org/search` +
+      `?q=${encodeURIComponent(query)}` +
+      `&format=json&limit=50&countrycodes=pk` +
+      `&addressdetails=1&dedupe=1&namedetails=1&extratags=1`;
+    headers = {
+      'User-Agent': 'MyRide-App/1.0 (ride-hailing)',
+      'Accept-Language': 'en,ur,pa,hi,sd'
+    };
+  }
+  const upstream = await fetch(url, { headers, signal: AbortSignal.timeout(5000) });
+  if (!upstream.ok) throw new Error(`Geocode upstream ${upstream.status}`);
+  const data = await upstream.json();
+  return Array.isArray(data)
+    ? data
+      .filter(result => hasValidCoordinates({ lat: result?.lat, lng: result?.lon }))
+      .map(result => ({
+        ...result,
+        providerType: geocodeProviderType(result)
+      }))
+    : [];
+}
+
+function mergeGeocodeResults(rawResults, aliasResults) {
+  const seen = new Set();
+  return [...rawResults, ...aliasResults].filter(result => {
+    const lat = Number(result.lat);
+    const lon = Number(result.lon ?? result.lng);
+    const name = String(result.display_name || result.primary || result.aliasOf || '').toLocaleLowerCase();
+    const key = `${name}|${lat.toFixed(5)}|${lon.toFixed(5)}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
 app.get('/api/geocode', async (req, res) => {
-  const q = (req.query.q || '').trim();
-  if (!q || q.length < 1) return res.json([]);
+  // Preserve the user's exact text for the raw nationwide lookup. Normalizing
+  // is only for matching configured aliases, never for the provider query.
+  const q = String(req.query.q || '').trim();
+  if (!q) return res.json([]);
 
   try {
-    const key = process.env.LOCATIONIQ_KEY;
-    let url, headers = {};
-    if (key) {
-      url = `https://us1.locationiq.com/v1/search` +
-        `?key=${encodeURIComponent(key)}` +
-        `&q=${encodeURIComponent(q)}` +
-        `&format=json&limit=50` +
-        `&countrycodes=pk&addressdetails=1&normalizeaddress=1&dedupe=1&namedetails=1`;
-    } else {
-      url = `https://nominatim.openstreetmap.org/search` +
-        `?q=${encodeURIComponent(q)}` +
-        `&format=json&limit=50&countrycodes=pk` +
-        `&addressdetails=1&dedupe=1&namedetails=1&extratags=1`;
-      headers = {
-        'User-Agent': 'MyRide-App/1.0 (ride-hailing)',
-        'Accept-Language': 'en,ur,pa,hi,sd'
-      };
-    }
-    const upstream = await fetch(url, { headers, signal: AbortSignal.timeout(5000) });
-    if (!upstream.ok) throw new Error(`Geocode upstream ${upstream.status}`);
-    const data = await upstream.json();
-    const results = Array.isArray(data)
-      ? data
-        .filter(result => hasValidCoordinates({ lat: result?.lat, lng: result?.lon }))
-        .map(result => ({
-          ...result,
-          // Keep provider metadata explicit for clients that need a stable
-          // category field, while returning all other provider fields intact.
-          providerType: geocodeProviderType(result)
-        }))
-      : [];
-    const seen = new Set();
-    res.json(results.filter(result => {
-      const lat = Number(result.lat);
-      const lon = Number(result.lon ?? result.lng);
-      const key = `${String(result.display_name || result.primary || '').toLocaleLowerCase()}|${lat.toFixed(5)}|${lon.toFixed(5)}`;
-      if (seen.has(key)) return false;
-      seen.add(key);
-      return true;
-    }));
+    const aliases = await getCustomerLocationAliases();
+    const matches = matchCustomerLocationAliases(q, aliases);
+    const canonicalQueries = [...new Set(matches
+      .filter(match =>
+        (match.exact || match.alias.confidence >= CUSTOMER_LOCATION_ALIAS_CONFIDENCE_MIN) &&
+        match.alias.canonicalQuery &&
+        match.alias.canonicalQuery !== q
+      )
+      .map(match => match.alias.canonicalQuery)
+    )].slice(0, 4);
+    const directResults = matches
+      .filter(isSafeDirectCustomerAlias)
+      .map(match => ({
+        display_name: `${match.alias.displayName}${match.alias.cityHint ? `, ${match.alias.cityHint}` : ''}, Pakistan`,
+        name: match.alias.displayName,
+        lat: String(match.alias.coordinates.lat),
+        lon: String(match.alias.coordinates.lng),
+        type: 'alias',
+        providerType: 'alias',
+        address: { city: match.alias.cityHint || '' },
+        aliasMatch: true,
+        aliasOf: match.alias.displayName,
+        aliasMatchedBy: match.matchedBy,
+        aliasConfidence: match.alias.confidence
+      }));
+    const providerResults = await Promise.all([
+      geocodeProviderSearch(q).catch(error => {
+        if (directResults.length) {
+          console.warn('[location-aliases] raw lookup failed; returning vetted direct alias:', error.message);
+          return [];
+        }
+        throw error;
+      }),
+      ...canonicalQueries.map(query => geocodeProviderSearch(query).catch(error => {
+        console.warn(`[location-aliases] canonical lookup failed for "${query}":`, error.message);
+        return [];
+      }))
+    ]);
+    const rawResults = providerResults[0] || [];
+    const aliasResults = providerResults.slice(1).flatMap((results, index) => {
+      const match = matches.find(candidate => candidate.alias.canonicalQuery === canonicalQueries[index]);
+      return (results || []).map(result => ({
+        ...result,
+        aliasMatch: true,
+        aliasOf: match?.alias.displayName || '',
+        aliasMatchedBy: match?.matchedBy || 'configured alias',
+        aliasConfidence: match?.alias.confidence || 0
+      }));
+    });
+    res.json(mergeGeocodeResults(rawResults, [...aliasResults, ...directResults]));
   } catch (err) {
     console.error('Geocode error:', err.message);
     res.status(502).json({ error: 'Geocoding is temporarily unavailable' });
@@ -4779,6 +4998,78 @@ function publicRideBroadcastSettings(value) {
   return normalizeRideBroadcastSettings(value);
 }
 
+function aliasListWithIds(value) {
+  return normalizeCustomerLocationAliases(value).map(alias => ({
+    ...alias,
+    id: alias.id || crypto.randomUUID()
+  }));
+}
+
+async function saveCustomerLocationAliases(aliases) {
+  const value = aliasListWithIds(aliases);
+  await Settings.findOneAndUpdate(
+    { key: CUSTOMER_LOCATION_ALIASES_KEY },
+    { key: CUSTOMER_LOCATION_ALIASES_KEY, value },
+    { upsert: true, new: true, setDefaultsOnInsert: true }
+  );
+  return value;
+}
+
+app.get('/api/admin/customer-location-aliases', adminJwt, requirePerm('manageLocationAliases'), async (_req, res) => {
+  try {
+    const doc = await Settings.findOne({ key: CUSTOMER_LOCATION_ALIASES_KEY }).lean();
+    res.json({ aliases: aliasListWithIds(doc?.value) });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/admin/customer-location-aliases', adminJwt, requirePerm('manageLocationAliases'), async (req, res) => {
+  try {
+    const validated = validateCustomerLocationAlias(req.body);
+    if (validated.errors.length) return res.status(422).json({ error: 'Invalid location alias', errors: validated.errors });
+    const doc = await Settings.findOne({ key: CUSTOMER_LOCATION_ALIASES_KEY }).lean();
+    const current = aliasListWithIds(doc?.value);
+    if (current.length >= CUSTOMER_LOCATION_ALIAS_LIMIT) {
+      return res.status(422).json({ error: `At most ${CUSTOMER_LOCATION_ALIAS_LIMIT} aliases can be configured` });
+    }
+    const alias = { ...validated.alias, id: crypto.randomUUID() };
+    const aliases = await saveCustomerLocationAliases([...current, alias]);
+    res.status(201).json({ success: true, alias, aliases });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.patch('/api/admin/customer-location-aliases/:id', adminJwt, requirePerm('manageLocationAliases'), async (req, res) => {
+  try {
+    const validated = validateCustomerLocationAlias(req.body);
+    if (validated.errors.length) return res.status(422).json({ error: 'Invalid location alias', errors: validated.errors });
+    const doc = await Settings.findOne({ key: CUSTOMER_LOCATION_ALIASES_KEY }).lean();
+    const current = aliasListWithIds(doc?.value);
+    const index = current.findIndex(alias => alias.id === req.params.id);
+    if (index < 0) return res.status(404).json({ error: 'Location alias not found' });
+    const alias = { ...validated.alias, id: req.params.id };
+    current[index] = alias;
+    const aliases = await saveCustomerLocationAliases(current);
+    res.json({ success: true, alias, aliases });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.delete('/api/admin/customer-location-aliases/:id', adminJwt, requirePerm('manageLocationAliases'), async (req, res) => {
+  try {
+    const doc = await Settings.findOne({ key: CUSTOMER_LOCATION_ALIASES_KEY }).lean();
+    const current = aliasListWithIds(doc?.value);
+    if (!current.some(alias => alias.id === req.params.id)) return res.status(404).json({ error: 'Location alias not found' });
+    const aliases = await saveCustomerLocationAliases(current.filter(alias => alias.id !== req.params.id));
+    res.json({ success: true, aliases });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // Driver-only receiving account details. Never return gateway credentials or
 // webhook secrets to browsers.
 app.get('/api/settings/payment', authMiddleware, driverOnly, async (req, res) => {
@@ -5864,6 +6155,12 @@ module.exports = {
   runDailyDeduction,
   normalizeRideBroadcastSettings,
   validateRideBroadcastSettings,
+  normalizeCustomerLocationAliasText,
+  normalizeCustomerLocationAlias,
+  validateCustomerLocationAlias,
+  normalizeCustomerLocationAliases,
+  matchCustomerLocationAliases,
+  isSafeDirectCustomerAlias,
   rideOfferIsStillOpenQuery,
   haversineKm,
   findRideBroadcastDrivers,
