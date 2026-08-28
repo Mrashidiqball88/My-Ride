@@ -32,3 +32,4 @@
 - [Workspace security scan gate](workspace-security-scan-gate.md) — dependency findings can come from any workspace artifact, so map each advisory to its owning direct or transitive package before release.
 - [Pickup city search context](pickup-city-search-context.md) — the first pickup pin replaces stale GPS or previous-city state as the Customer search anchor.
 - [Voice search end state](voice-search-end-state.md) — preserve transcript matches and error feedback after one-shot recognition fires its onend callback.
+- [Deferred map marker selection](deferred-map-marker-selection.md) — commit selected location state before MapLibre is ready, then materialize markers when the map initializes.

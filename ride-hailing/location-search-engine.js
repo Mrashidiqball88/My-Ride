@@ -13,6 +13,9 @@ const LOCAL_LOCATIONS = [
   ['Grand Trunk Road', 'Lahore', 31.5900, 74.3450, 'Street'],
   ['Packages Mall', 'Lahore', 31.4320, 74.2630, 'Landmark'],
   ['Emporium Mall', 'Lahore', 31.4697, 74.2728, 'Landmark'],
+  ['Shalimar Hospital', 'Lahore', 31.5822, 74.3921, 'Landmark'],
+  ['Children Hospital Lahore', 'Lahore', 31.5003, 74.3297, 'Landmark'],
+  ['Chowk Yateem Khana', 'Lahore', 31.5089, 74.2817, 'Landmark'],
   ['Centaurus Mall', 'Islamabad', 33.7077, 73.0511, 'Landmark'],
   ['Safa Gold Mall', 'Islamabad', 33.7215, 73.0565, 'Landmark'],
   ['DHA Phase 5', 'Karachi', 24.8006, 67.0610, 'Area'],
@@ -88,7 +91,10 @@ const ALIASES = new Map([
   ['lahore', ['lahor']],
   ['karachi', ['khi']],
   ['johar town', ['johar']],
-  ['model town', ['modeltown']]
+  ['model town', ['modeltown']],
+  ['shalimar hospital', ['shalamar hospital', 'shalimar hosp', 'inshallah hospital', 'inshallah']],
+  ['children hospital lahore', ['children hospital', "children's hospital", 'childrens hospital', 'bachon ka hospital']],
+  ['chowk yateem khana', ['chowk yateemkhan', 'yateem khana chowk', 'yatim khana chowk', 'yateem khana', 'yatim khana']]
 ]);
 
 const CITY_ALIASES = new Map([
@@ -273,6 +279,7 @@ function searchLocations(query, { city = '', lat, lng, broad = false, limit = 24
         lon: record.lon,
         kind: record.kind,
         display_name: `${record.primary}, ${record.city}, Pakistan`,
+        address: `${record.primary}, ${record.city}, Pakistan`,
         local: true,
         relevance,
         cityPriority: preferredCity && cityMatches(record.city, preferredCity) ? 0 : 1,

@@ -135,8 +135,9 @@ body{font-family:'Segoe UI',sans-serif;background:#0a0a0f;color:#fff;height:100d
 .sheet-controls{display:flex;align-items:center;gap:.4rem;flex-shrink:0}.voice-language{background:#0a0a0f;border:1px solid #3a3a4a;color:#ccc;border-radius:8px;padding:.35rem .4rem;font-size:.68rem;max-width:112px}.voice-language:focus{border-color:#f5c518;outline:none}
 .sheet-close{width:32px;height:32px;border:1px solid #343448;background:#1e1e2e;color:#bbb;border-radius:50%;font-size:.9rem;cursor:pointer}
 .sheet-list{min-height:0;flex:1;overflow-y:auto;overscroll-behavior:contain;-webkit-overflow-scrolling:touch;padding:.35rem .7rem 1.2rem;touch-action:pan-y;scrollbar-width:thin}
-.sheet-item{display:flex;align-items:center;gap:.7rem;width:100%;border:0;border-bottom:1px solid #242436;background:transparent;color:#fff;text-align:left;padding:.78rem .45rem;cursor:pointer;min-height:58px}
+.sheet-item{display:flex;align-items:flex-start;gap:.7rem;width:100%;border:0;border-bottom:1px solid #242436;background:transparent;color:#fff;text-align:left;padding:.78rem .45rem;cursor:pointer;min-height:58px}
 .sheet-item:last-child{border-bottom:0}.sheet-item:active,.sheet-item:focus-visible{background:#22223a;outline:none}.sheet-item-icon{width:30px;text-align:center;font-size:1.15rem}.sheet-item-copy{min-width:0}.sheet-item-primary{font-size:.86rem;color:#eee;font-weight:650;line-height:1.3}.sheet-item-secondary{font-size:.7rem;color:#777;margin-top:.15rem;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.sheet-item.my-location{background:#142333;border:1px solid #22547b;border-radius:11px;margin:.3rem 0 .45rem;padding:.72rem .45rem}.sheet-section-label{padding:.55rem .45rem .25rem;color:#f5c518;font-size:.62rem;font-weight:800;letter-spacing:.08em;text-transform:uppercase}.sheet-empty{padding:1rem .5rem;text-align:center;color:#777;font-size:.8rem}
+.sheet-item-tertiary{font-size:.67rem;color:#9292a5;margin-top:.18rem;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.sheet-item-coordinates{font-size:.62rem;color:#5f8fb9;margin-top:.18rem;letter-spacing:.02em}
 .sheet-expand{width:100%;margin:.65rem 0 .35rem;padding:.7rem .8rem;border:1px solid #3b4260;border-radius:10px;background:#1a1d31;color:#f5c518;font-size:.78rem;font-weight:750;cursor:pointer}.sheet-expand:disabled{opacity:.65;cursor:wait}
 
 .divider-line{display:flex;align-items:center;gap:.5rem;margin:.25rem 0;color:#444;font-size:.7rem}
@@ -1003,6 +1004,7 @@ let locSearchTimeout = {};
 let activeLocationSearch = null;
 let locationSheetResults = [];
 let locationSheetDrag = null;
+let ignoreNextCustomerMapClick = false;
 let locationSearchOrigin = null;
 let customerActiveCity = '';
 let customerCityLocation = null;
@@ -1013,6 +1015,7 @@ let locationSearchCity = '';
 let locationSearchRemoteResults = [];
 let locationSearchBroadLoaded = false;
 let locationSearchBroadLoading = false;
+let locationSearchContextFallback = false;
 let locationSearchLoading = false;
 let locationSearchError = '';
 let customerReadinessState = {
@@ -1046,6 +1049,7 @@ let liveTripRouteOrigin = null;
 let liveTripRouteDestinationKey = '';
 let customerGpsWatchId = null;
 let customerGpsHasFix = false;
+let customerAutoPickupEnabled = true;
 let customerMapAutoCenter = true;
 let customerLocation = null;
 let customerLocationMarker = null;
@@ -1135,6 +1139,9 @@ const LOCAL_LOCATION_INDEX = [
   ['Grand Trunk Road', 'Lahore', 31.5900, 74.3450, 'Street'],
   ['Packages Mall', 'Lahore', 31.4320, 74.2630, 'Landmark'],
   ['Emporium Mall', 'Lahore', 31.4697, 74.2728, 'Landmark'],
+  ['Shalimar Hospital', 'Lahore', 31.5822, 74.3921, 'Landmark'],
+  ['Children Hospital Lahore', 'Lahore', 31.5003, 74.3297, 'Landmark'],
+  ['Chowk Yateem Khana', 'Lahore', 31.5089, 74.2817, 'Landmark'],
   ['Centaurus Mall', 'Islamabad', 33.7077, 73.0511, 'Landmark'],
   ['Safa Gold Mall', 'Islamabad', 33.7215, 73.0565, 'Landmark'],
   ['DHA Phase 5', 'Karachi', 24.8006, 67.0610, 'Area'],
@@ -1794,6 +1801,7 @@ async function loadCustomerPerKmRates() {
 
 // ── Map ───────────────────────────────────────────────────────────────────
 function createCustomerDomMarker(lat, lng, { className = '', html = '', interactive = true } = {}) {
+  if (!map) return null;
   const element = document.createElement('div');
   element.className = `map-marker-shell ${className}`.trim();
   element.innerHTML = html;
@@ -1804,6 +1812,7 @@ function createCustomerDomMarker(lat, lng, { className = '', html = '', interact
 }
 
 function setCustomerMapCenter(point, zoom, { animate = false, duration = .45 } = {}) {
+  if (!map) return;
   const camera = { center: [Number(point.lng), Number(point.lat)], zoom: Number(zoom) };
   if (animate && typeof map.easeTo === 'function') map.easeTo({ ...camera, duration: duration * 1000 });
   else if (typeof map.jumpTo === 'function') map.jumpTo(camera);
@@ -1902,6 +1911,19 @@ function initMap() {
     dragRotate: false,
     touchPitch: false
   });
+  // A location card or browser GPS callback may have completed before the
+  // map container finished initializing. Materialize those state-owned pins
+  // as soon as a map instance exists.
+  if (pickup && !pickupMarker) {
+    pickupMarker = createCustomerDomMarker(pickup.lat, pickup.lng, { className: 'pickup-marker' });
+  }
+  dropoffs.forEach((dropoff, index) => {
+    if (dropoff && !stopMarkers[index]) {
+      stopMarkers[index] = createCustomerDomMarker(dropoff.lat, dropoff.lng, {
+        className: index === 0 ? 'dropoff-marker' : 'dropoff-marker stop-extra-marker'
+      });
+    }
+  });
   let mapFallbackTried = false;
   map.on('error', event => {
     if (!mapFallbackTried && !map.isStyleLoaded() && event?.error) {
@@ -1942,6 +1964,10 @@ function initMap() {
   });
 
   map.on('click', (e) => {
+    if (ignoreNextCustomerMapClick) {
+      ignoreNextCustomerMapClick = false;
+      return;
+    }
     const { lat, lng } = e.lngLat;
     if (mapMode === 'pickup') {
       setPickup(lat, lng);
@@ -1979,6 +2005,12 @@ function applyCustomerGpsPosition(pos, { forceCenter = false } = {}) {
     setCustomerMapCenter({ lat, lng }, zoom);
   }
   if (!pickup) detectCustomerActiveCity(lat, lng);
+  // The first valid live fix is the default pickup. After any user-selected
+  // pickup or an explicit clear, GPS continues to update the blue location
+  // marker but never overrides that manual choice.
+  if (!pickup && customerAutoPickupEnabled && isFirstFix) {
+    void setPickup(lat, lng, null, { source: 'gps' });
+  }
   return true;
 }
 
@@ -2044,53 +2076,21 @@ function cityMatches(left, right) {
   return Boolean(a && b && (a === b || a.includes(b) || b.includes(a)));
 }
 
-const LOCATION_CITY_ALIASES = [
-  ['lahore', 'Lahore'],
-  ['gujranwala', 'Gujranwala'],
-  ['gujrat', 'Gujrat'],
-  ['islamabad', 'Islamabad'],
-  ['karachi', 'Karachi'],
-  ['multan', 'Multan'],
-  ['rawalpindi', 'Rawalpindi'],
-  ['faisalabad', 'Faisalabad'],
-  ['peshawar', 'Peshawar'],
-  ['quetta', 'Quetta'],
-  ['sialkot', 'Sialkot'],
-  ['bahawalpur', 'Bahawalpur'],
-  ['hyderabad', 'Hyderabad'],
-  ['abbottabad', 'Abbottabad'],
-  ['sargodha', 'Sargodha'],
-  ['sukkur', 'Sukkur'],
-  ['mardan', 'Mardan'],
-  ['kasur', 'Kasur'],
-  ['sheikhupura', 'Sheikhupura'],
-  ['jhelum', 'Jhelum'],
-  ['dera ghazi khan', 'Dera Ghazi Khan'],
-  ['rahim yar khan', 'Rahim Yar Khan']
-];
-
 function canonicalCityName(value) {
-  const normalized = normalizeCityName(value);
-  const alias = LOCATION_CITY_ALIASES.find(([needle]) => normalized === needle || normalized.includes(needle));
-  return alias ? alias[1] : String(value || '').trim();
-}
-
-function explicitSearchCity(query) {
-  const normalized = normalizeCityName(query);
-  if (!normalized) return '';
-  return LOCATION_CITY_ALIASES
-    .filter(([needle]) => normalized.includes(needle))
-    .sort((a, b) => b[0].length - a[0].length)[0]?.[1] || '';
+  return String(value || '')
+    .trim()
+    .replace(/\s+/g, ' ')
+    .replace(/\s+capital territory$/i, '');
 }
 
 function locationSearchScope(query, broad = false) {
-  const explicitCity = explicitSearchCity(query);
   const activeCity = canonicalCityName(customerActiveCity);
   return {
-    city: canonicalCityName(explicitCity || activeCity),
+    // The active city comes only from reverse geocoding the current pickup.
+    // There is deliberately no browser-side list of Pakistani cities.
+    city: activeCity,
     broad: Boolean(broad),
-    explicitCity,
-    crossCity: Boolean(explicitCity && !cityMatches(explicitCity, activeCity))
+    crossCity: false
   };
 }
 
@@ -2186,7 +2186,8 @@ function buildLabel(item) {
       : item.type === 'suburb' || item.type === 'neighbourhood'
         ? 'Area'
         : '';
-  return { primary, secondary: ctx, city, kind };
+  const addressLine = parts.filter(part => part && part !== 'Pakistan').slice(0, 4).join(', ');
+  return { primary, secondary: ctx, city, kind, addressLine };
 }
 
 async function reverseLocationLabel(lat, lng) {
@@ -2268,7 +2269,10 @@ const LOCATION_SEARCH_ALIASES = [
   ['karachi', 'khi'],
   ['riksha', 'rickshaw', 'riksah'],
   ['johar town', 'johar'],
-  ['model town', 'modeltown']
+  ['model town', 'modeltown'],
+  ['shalimar hospital', 'shalamar hospital', 'shalimar hosp', 'inshallah hospital', 'inshallah'],
+  ['children hospital lahore', 'children hospital', "children's hospital", 'childrens hospital', 'bachon ka hospital'],
+  ['chowk yateem khana', 'chowk yateemkhan', 'yateem khana', 'yatim khana', 'yateem khana chowk', 'yatim khana chowk']
 ];
 
 function locationSearchAliases(item) {
@@ -2375,7 +2379,7 @@ function localLocationResults(query, { city = '', broad = false } = {}) {
   const needle = normalizeSearchValue(query);
   if (!needle) return [];
   const center = locationSearchCenter();
-  return LOCAL_LOCATION_INDEX
+  const scored = LOCAL_LOCATION_INDEX
     .map(([name, resultCity, lat, lon, kind]) => {
       const item = { primary: name, secondary: resultCity, city: resultCity, lat, lon, kind, local: true };
       const relevance = locationMatchScore(item, query);
@@ -2386,9 +2390,14 @@ function localLocationResults(query, { city = '', broad = false } = {}) {
         distance,
         localPriority: distance <= CUSTOMER_SEARCH_LOCAL_PRIORITY_KM ? 0 : 1
       };
-    })
+    });
+  const normalizedQueryCity = normalizeCityName(query);
+  const queryNamesCity = normalizedQueryCity.length >= 3
+    && scored.some(item => normalizeCityName(item.city) === normalizedQueryCity);
+  return scored
     .filter(item => item.relevance < 5)
-    .filter(item => broad || !city || cityMatches(item.city, city))
+    .filter(item => broad || !city || cityMatches(item.city, city)
+      || (queryNamesCity && normalizeCityName(item.city) === normalizedQueryCity))
     .sort((a, b) => a.relevance - b.relevance || a.localPriority - b.localPriority || a.distance - b.distance)
     .map(({ relevance, distance, localPriority, ...item }) => item);
 }
@@ -2406,6 +2415,10 @@ function normalizeLocationResult(item, local = false) {
     lat,
     lon,
     city,
+    addressLine: item.addressLine
+      || (typeof item.address === 'string' ? item.address : '')
+      || label.addressLine
+      || `${label.primary}${city ? `, ${city}` : ''}, Pakistan`,
     local: local || Boolean(item.local)
   };
 }
@@ -2416,9 +2429,16 @@ function locationRelevance(item, needle) {
 
 function rankLocationResults(results, query, preferredCity = '', { broad = false } = {}) {
   const center = locationSearchCenter();
-  return results
+  const normalizedResults = results
     .map(item => normalizeLocationResult(item, item.local))
-    .filter(Boolean)
+    .filter(Boolean);
+  // A complete query matching a geocoder-returned city is an explicit
+  // cross-city request. This is discovered from live results, not a browser
+  // allowlist of Pakistani cities.
+  const normalizedQueryCity = normalizeCityName(query);
+  const queryNamesCity = normalizedQueryCity.length >= 3
+    && normalizedResults.some(item => normalizeCityName(item.city) === normalizedQueryCity);
+  return normalizedResults
     .map(item => ({
       ...item,
       relevance: locationRelevance(item, query),
@@ -2426,7 +2446,8 @@ function rankLocationResults(results, query, preferredCity = '', { broad = false
       distance: center ? haversine(center.lat, center.lng, item.lat, item.lon) : Number.POSITIVE_INFINITY,
        localPriority: center && haversine(center.lat, center.lng, item.lat, item.lon) <= CUSTOMER_SEARCH_LOCAL_PRIORITY_KM ? 0 : 1
     }))
-    .filter(item => broad || !preferredCity || cityMatches(item.city, preferredCity))
+    .filter(item => broad || !preferredCity || cityMatches(item.city, preferredCity)
+      || (queryNamesCity && normalizeCityName(item.city) === normalizedQueryCity))
     .filter(item => item.relevance < 5)
     .sort((a, b) =>
       a.cityPriority - b.cityPriority
@@ -2522,7 +2543,8 @@ function renderLocationSheet(type, results, query = '', { loading = locationSear
   let previousGroup = '';
   markup += locationSheetResults.map((item, index) => {
     const primary = item.primary;
-    const secondary = [item.kind, item.secondary].filter(Boolean).join(' · ');
+    const secondary = [item.kind || 'Place', item.city || item.secondary].filter(Boolean).join(' · ');
+    const address = item.addressLine || item.display_name || `${primary}, ${item.city || 'Pakistan'}`;
     const group = canonicalCityName(item.city || (item.secondary || '').split(',')[0]) || 'Other locations';
     const groupHeading = group !== previousGroup
       ? `<div class="sheet-section-label">${escapeLocationText(group)}</div>`
@@ -2531,7 +2553,9 @@ function renderLocationSheet(type, results, query = '', { loading = locationSear
     return `${groupHeading}<button type="button" class="sheet-item" data-location-index="${index}">
       <span class="sheet-item-icon">${isPickup ? '📍' : '🎯'}</span><span class="sheet-item-copy">
       <span class="sheet-item-primary" dir="auto">${escapeLocationText(primary)}</span>
-      ${secondary ? `<span class="sheet-item-secondary" dir="auto">${escapeLocationText(secondary)}</span>` : ''}</span></button>`;
+      ${secondary ? `<span class="sheet-item-secondary" dir="auto">${escapeLocationText(secondary)}</span>` : ''}
+      <span class="sheet-item-tertiary" dir="auto">${escapeLocationText(address)}</span>
+      <span class="sheet-item-coordinates">${escapeLocationText(formatCoordinateLabel(item.lat, item.lon))}</span></span></button>`;
   }).join('');
   if (query && scope.city && !locationSearchBroadLoaded) {
     markup += `<button type="button" class="sheet-expand" data-location-action="expand-cities"${
@@ -2544,8 +2568,8 @@ function renderLocationSheet(type, results, query = '', { loading = locationSear
       : error
         ? escapeLocationText(error)
         : query
-          ? 'No matching areas yet. Try another letter or search phrase.'
-          : 'Start typing to see matching areas. You can also pin the location directly on the map.'
+           ? 'No places found in this area yet. Keep typing or search another city.'
+           : 'Start typing to search places, streets, and landmarks anywhere in Pakistan.'
   }</div>`;
   list.innerHTML = markup;
   openLocationSheet(type);
@@ -2561,6 +2585,11 @@ function selectLocationFromSheet(index) {
   const item = locationSheetResults[index];
   const type = activeLocationSearch;
   if (!item || !type) return;
+  // The sheet overlays the map. On some MapLibre/browser combinations the
+  // same pointer gesture is delivered to the map after the result button,
+  // which would apply the old mapMode and undo the selected result.
+  ignoreNextCustomerMapClick = true;
+  setTimeout(() => { ignoreNextCustomerMapClick = false; }, 250);
   // Close first so the customer immediately returns to the normal booking
   // view before the map marker/geocoding work begins.
   closeLocationSheet();
@@ -2687,6 +2716,7 @@ function onLocInput(type) {
   locationSearchRemoteResults = [];
   locationSearchBroadLoaded = false;
   locationSearchBroadLoading = false;
+  locationSearchContextFallback = false;
   locationSearchLoading = Boolean(query);
   locationSearchError = '';
   setVoiceStatus('', false);
@@ -2704,7 +2734,16 @@ function onLocInput(type) {
       locationSearchRemoteResults = remote;
       locationSearchLoading = false;
       locationSearchError = '';
-      const merged = mergeLocationResults(local, remote, query, scope.city, { broad: scope.broad });
+      const hasContextResults = remote.some(item => !item.contextFallback);
+      locationSearchContextFallback = Boolean(scope.city && remote.length && !hasContextResults);
+      locationSearchBroadLoaded = locationSearchContextFallback;
+      const merged = mergeLocationResults(
+        local,
+        remote,
+        query,
+        scope.city,
+        { broad: scope.broad || locationSearchContextFallback }
+      );
       setVoiceStatus('', false);
       renderLocationSheet(type, merged, query, { loading: false });
     } finally {
@@ -2917,11 +2956,14 @@ function setCustomerPickupCityContext(lat, lng) {
   void detectCustomerActiveCity(point.lat, point.lng, { force: true });
 }
 
-async function setPickup(lat, lng, preDisplay = null) {
+async function setPickup(lat, lng, preDisplay = null, { source = 'manual' } = {}) {
+  if (source !== 'gps') customerAutoPickupEnabled = false;
   pickup = { lat, lng };
   setCustomerPickupCityContext(lat, lng);
   if (pickupMarker) pickupMarker.remove();
-  pickupMarker = createCustomerDomMarker(lat, lng, { className: 'pickup-marker' });
+  pickupMarker = map
+    ? createCustomerDomMarker(lat, lng, { className: 'pickup-marker' })
+    : null;
   closeDropdown('pickup');
   document.getElementById('pickup-input').value = preDisplay || 'Locating…';
   document.getElementById('pickup-input').classList.add('has-val');
@@ -2962,9 +3004,11 @@ async function setPickup(lat, lng, preDisplay = null) {
 async function setStop(idx, lat, lng, preDisplay = null) {
   dropoffs[idx] = { lat, lng };
   if (stopMarkers[idx]) stopMarkers[idx].remove();
-  stopMarkers[idx] = createCustomerDomMarker(lat, lng, {
-    className: idx === 0 ? 'dropoff-marker' : 'dropoff-marker stop-extra-marker'
-  });
+  stopMarkers[idx] = map
+    ? createCustomerDomMarker(lat, lng, {
+      className: idx === 0 ? 'dropoff-marker' : 'dropoff-marker stop-extra-marker'
+    })
+    : null;
   closeDropdown(`stop-${idx}`);
   document.getElementById(`stop-${idx}-input`).value = preDisplay || 'Locating…';
   document.getElementById(`stop-${idx}-input`).classList.add('has-val');
@@ -3039,6 +3083,9 @@ function clearLocation(type) {
   closeDropdown(type);
 
   if (isPickup) {
+    // Clearing is an intentional manual override; subsequent watchPosition
+    // updates must not silently recreate the pickup pin.
+    customerAutoPickupEnabled = false;
     pickup = null;
     resetCustomerCityContext({ detectGpsFallback: true });
     if (pickupMarker) { pickupMarker.remove(); pickupMarker = null; }

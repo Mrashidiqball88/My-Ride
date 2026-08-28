@@ -196,6 +196,86 @@ test.describe('dynamic city location autocomplete', () => {
     await expect(page.locator('#location-voice-status')).toContainText('Packages Mall');
   });
 
+  test('renders rich Lahore landmark cards from voice search and pins the selected drop-off', async ({ page }) => {
+    await page.addInitScript(() => {
+      window.__recognition = null;
+      window.SpeechRecognition = class {
+        constructor() { window.__recognition = this; }
+        start() { this.onstart?.(); }
+        abort() {}
+        stop() { this.onend?.(); }
+      };
+    });
+    await page.goto('/customer');
+    await page.evaluate(() => {
+      document.getElementById('auth-screen').style.display = 'none';
+      document.getElementById('app').style.display = 'flex';
+      customerActiveCity = 'Lahore';
+      customerCityLocation = { lat: 31.5204, lng: 74.3587 };
+      startVoiceSearch('pickup');
+    });
+    await page.evaluate(() => {
+      window.__recognition.onresult({ results: [[{ transcript: 'inshallah hospital' }]] });
+      window.__recognition.onend();
+    });
+
+    await expect(page.locator('#pickup-input')).toHaveValue('Shalimar Hospital');
+    await expect(page.locator('#location-sheet-list')).toContainText('Shalimar Hospital');
+    await expect(page.locator('#location-sheet-list .sheet-item-tertiary').first())
+      .toContainText('Lahore');
+    await expect(page.locator('#location-sheet-list .sheet-item-coordinates').first())
+      .toHaveText(/\d+\.\d{4},\s+\d+\.\d{4}/);
+    await page.locator('#location-sheet-list [data-location-index]')
+      .filter({ hasText: 'Shalimar Hospital' }).first().click();
+    await expect.poll(() => page.evaluate(() => pickup)).toMatchObject({
+      lat: 31.5822,
+      lng: 74.3921
+    });
+
+    await page.evaluate(() => {
+      const input = document.getElementById('stop-0-input');
+      input.value = 'Chowk Yateem Khana';
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+    await expect(page.locator('#location-sheet-list')).toContainText('Chowk Yateem Khana');
+    await page.locator('#location-sheet-list [data-location-index]').filter({ hasText: 'Chowk Yateem Khana' }).first().click();
+    await expect.poll(() => page.evaluate(() => ({
+      dropoff: dropoffs[0],
+      mode: mapMode,
+      input: document.getElementById('stop-0-input').value
+    }))).toMatchObject({
+      dropoff: { lat: 31.5089, lng: 74.2817 },
+      mode: 'idle',
+      input: 'Chowk Yateem Khana'
+    });
+  });
+
+  test('uses the first valid GPS fix as pickup, then preserves a manual clear', async ({ page }) => {
+    await page.goto('/customer');
+    await page.evaluate(() => {
+      document.getElementById('auth-screen').style.display = 'none';
+      document.getElementById('app').style.display = 'flex';
+      if (!map) initMap();
+    });
+    await expect.poll(() => page.evaluate(() => Boolean(map))).toBe(true);
+    await page.evaluate(() => {
+      pickup = null;
+      customerGpsHasFix = false;
+      customerAutoPickupEnabled = true;
+      applyCustomerGpsPosition({ coords: { latitude: 31.5822, longitude: 74.3921 } });
+    });
+    await expect.poll(() => page.evaluate(() => pickup)).toMatchObject({
+      lat: 31.5822,
+      lng: 74.3921
+    });
+    await expect.poll(() => page.evaluate(() => mapMode)).toBe('stop-0');
+    await page.evaluate(() => clearLocation('pickup'));
+    await page.evaluate(() => {
+      applyCustomerGpsPosition({ coords: { latitude: 31.5832, longitude: 74.3931 } });
+    });
+    await expect.poll(() => page.evaluate(() => pickup)).toBeNull();
+  });
+
   test('uses the first pickup pin to replace the active city and prioritize the matching DHA', async ({ page }) => {
     const requests = [];
     await page.route(/\/api\/geocode(?:\/reverse)?(?:\?|$)/, async route => {

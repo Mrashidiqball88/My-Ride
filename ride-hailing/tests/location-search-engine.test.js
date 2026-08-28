@@ -10,6 +10,25 @@ test('returns local fuzzy and phonetic matches without provider work', () => {
   assert.equal(searchLocations('DHA 5', { city: 'Karachi' })[0].primary, 'DHA Phase 5');
 });
 
+test('recognizes Lahore landmarks and common spoken/Roman-Urdu variants', () => {
+  const cases = [
+    ['Shalimar Hospital', 'Shalimar Hospital'],
+    ['shalamar hospital', 'Shalimar Hospital'],
+    ['inshallah hospital', 'Shalimar Hospital'],
+    ['Children Hospital', 'Children Hospital Lahore'],
+    ['childrens hospital', 'Children Hospital Lahore'],
+    ['Yatim Khana', 'Chowk Yateem Khana'],
+    ['yateem khana chowk', 'Chowk Yateem Khana']
+  ];
+  for (const [query, expected] of cases) {
+    const result = searchLocations(query, { city: 'Lahore' })[0];
+    assert.equal(result?.primary, expected, query);
+    assert.equal(result?.city, 'Lahore', query);
+    assert.ok(Number.isFinite(result?.lat) && Number.isFinite(result?.lon), query);
+    assert.match(result?.address || '', /Pakistan$/, query);
+  }
+});
+
 test('ranks the pickup city before another city with the same area name', () => {
   const results = searchLocations('DHA', {
     city: 'Karachi',
