@@ -122,8 +122,9 @@ body{font-family:'Segoe UI',sans-serif;background:#0a0a0f;color:#fff;height:100d
 .loc-primary{font-size:.85rem;color:#ddd;font-weight:600;line-height:1.3}
 .loc-secondary{font-size:.72rem;color:#555;margin-top:.1rem}
 .loc-loading{padding:.6rem .85rem;font-size:.8rem;color:#555;text-align:center}
-.location-sheet{position:fixed;left:0;right:0;bottom:0;z-index:40;display:flex;flex-direction:column;max-height:min(72vh,620px);min-height:260px;background:#13131a;border-top:1px solid #3a3a4a;border-radius:20px 20px 0 0;box-shadow:0 -12px 35px rgba(0,0,0,.5);transform:translateY(110%);transition:transform .22s ease;pointer-events:none;touch-action:none}
+.location-sheet{position:fixed;left:0;right:0;bottom:0;z-index:40;display:flex;flex-direction:column;max-height:min(72vh,620px);min-height:260px;background:#13131a;border-top:1px solid #3a3a4a;border-radius:20px 20px 0 0;box-shadow:0 -12px 35px rgba(0,0,0,.5);transform:translateY(110%);transition:transform .22s ease;pointer-events:none;touch-action:manipulation;visibility:hidden}
 .location-sheet.open{transform:translateY(0);pointer-events:auto}.location-sheet.expanded{max-height:min(88vh,760px)}
+.location-sheet.open{visibility:visible}
 .location-sheet.dragging{transition:none}
 .sheet-grabber{width:52px;height:5px;border-radius:99px;background:#555;margin:.7rem auto .4rem;cursor:grab;flex:0 0 auto}
 .location-search-slot{position:sticky;top:0;z-index:3;flex:0 0 auto;padding:.65rem 1rem .55rem;background:#13131a;border-bottom:1px solid #252535}
@@ -133,7 +134,7 @@ body{font-family:'Segoe UI',sans-serif;background:#0a0a0f;color:#fff;height:100d
 .sheet-header-copy{flex:1}.sheet-kicker{font-size:.63rem;color:#f5c518;font-weight:800;text-transform:uppercase;letter-spacing:.08em}.sheet-title{font-size:.92rem;color:#fff;font-weight:700;margin-top:.15rem}
 .sheet-controls{display:flex;align-items:center;gap:.4rem;flex-shrink:0}.voice-language{background:#0a0a0f;border:1px solid #3a3a4a;color:#ccc;border-radius:8px;padding:.35rem .4rem;font-size:.68rem;max-width:112px}.voice-language:focus{border-color:#f5c518;outline:none}
 .sheet-close{width:32px;height:32px;border:1px solid #343448;background:#1e1e2e;color:#bbb;border-radius:50%;font-size:.9rem;cursor:pointer}
-.sheet-list{min-height:0;flex:1;overflow-y:auto;overscroll-behavior:contain;-webkit-overflow-scrolling:touch;padding:.35rem .7rem 1.2rem;touch-action:pan-y}
+.sheet-list{min-height:0;flex:1;overflow-y:auto;overscroll-behavior:contain;-webkit-overflow-scrolling:touch;padding:.35rem .7rem 1.2rem;touch-action:pan-y;scrollbar-width:thin}
 .sheet-item{display:flex;align-items:center;gap:.7rem;width:100%;border:0;border-bottom:1px solid #242436;background:transparent;color:#fff;text-align:left;padding:.78rem .45rem;cursor:pointer;min-height:58px}
 .sheet-item:last-child{border-bottom:0}.sheet-item:active,.sheet-item:focus-visible{background:#22223a;outline:none}.sheet-item-icon{width:30px;text-align:center;font-size:1.15rem}.sheet-item-copy{min-width:0}.sheet-item-primary{font-size:.86rem;color:#eee;font-weight:650;line-height:1.3}.sheet-item-secondary{font-size:.7rem;color:#777;margin-top:.15rem;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.sheet-item.my-location{background:#142333;border:1px solid #22547b;border-radius:11px;margin:.3rem 0 .45rem;padding:.72rem .45rem}.sheet-section-label{padding:.55rem .45rem .25rem;color:#f5c518;font-size:.62rem;font-weight:800;letter-spacing:.08em;text-transform:uppercase}.sheet-empty{padding:1rem .5rem;text-align:center;color:#777;font-size:.8rem}
 .sheet-expand{width:100%;margin:.65rem 0 .35rem;padding:.7rem .8rem;border:1px solid #3b4260;border-radius:10px;background:#1a1d31;color:#f5c518;font-size:.78rem;font-weight:750;cursor:pointer}.sheet-expand:disabled{opacity:.65;cursor:wait}
@@ -944,7 +945,7 @@ body{font-family:'Segoe UI',sans-serif;background:#0a0a0f;color:#fff;height:100d
 // ── Constants ─────────────────────────────────────────────────────────────
 const API = '';
 const MAP_STYLE_URL = 'https://tiles.openfreemap.org/styles/liberty';
-const MAP_RTL_TEXT_PLUGIN_URL = 'https://unpkg.com/@mapbox/mapbox-gl-rtl-text@0.3.0/mapbox-gl-rtl-text.js';
+const MAP_RTL_TEXT_PLUGIN_URL = 'https://unpkg.com/@mapbox/mapbox-gl-rtl-text@0.4.0/dist/mapbox-gl-rtl-text.js';
 const CUSTOMER_SEARCH_RADIUS_KM = 28;
 const MAP_FALLBACK_STYLE = {
   version: 8,
@@ -1007,6 +1008,8 @@ let locationSearchCity = '';
 let locationSearchRemoteResults = [];
 let locationSearchBroadLoaded = false;
 let locationSearchBroadLoading = false;
+let locationSearchLoading = false;
+let locationSearchError = '';
 let customerReadinessState = {
   location: 'checking',
   microphone: 'checking',
@@ -1123,6 +1126,10 @@ const LOCAL_LOCATION_INDEX = [
   ['Garhi Shahu', 'Lahore', 31.5684, 74.3430, 'Area'],
   ['Guru Mangat Road', 'Lahore', 31.5293, 74.3547, 'Street'],
   ['Grand Trunk Road', 'Lahore', 31.5900, 74.3450, 'Street'],
+  ['Packages Mall', 'Lahore', 31.4320, 74.2630, 'Landmark'],
+  ['Emporium Mall', 'Lahore', 31.4697, 74.2728, 'Landmark'],
+  ['Centaurus Mall', 'Islamabad', 33.7077, 73.0511, 'Landmark'],
+  ['Safa Gold Mall', 'Islamabad', 33.7215, 73.0565, 'Landmark'],
   ['Salamatpura', 'Lahore', 31.5967, 74.3701, 'Area'],
   ['Sabzazar', 'Lahore', 31.4941, 74.2775, 'Area'],
   ['Samanabad', 'Lahore', 31.5337, 74.2865, 'Area'],
@@ -1168,7 +1175,15 @@ const LOCAL_LOCATION_INDEX = [
   ['Jalalpur Jattan Road', 'Gujrat', 32.5900, 74.0850, 'Street'],
   ['Islamabad', 'Islamabad Capital Territory', 33.6844, 73.0479, 'City'],
   ['Blue Area', 'Islamabad', 33.7077, 73.0500, 'Area'],
+  ['F-6 Markaz', 'Islamabad', 33.7238, 73.0708, 'Area'],
   ['F-7 Markaz', 'Islamabad', 33.7215, 73.0565, 'Area'],
+  ['F-8 Markaz', 'Islamabad', 33.7073, 73.0350, 'Area'],
+  ['G-9 Markaz', 'Islamabad', 33.6881, 73.0410, 'Area'],
+  ['G-10 Markaz', 'Islamabad', 33.6705, 73.0137, 'Area'],
+  ['I-8 Markaz', 'Islamabad', 33.6676, 73.0762, 'Area'],
+  ['Daman-e-Koh', 'Islamabad', 33.7380, 73.0550, 'Landmark'],
+  ['Margalla Road', 'Islamabad', 33.7150, 73.0630, 'Street'],
+  ['Kashmir Highway', 'Islamabad', 33.6660, 73.0930, 'Street'],
   ['Karachi', 'Karachi', 24.8607, 67.0011, 'City'],
   ['Clifton', 'Karachi', 24.8138, 67.0300, 'Area']
 ];
@@ -1859,7 +1874,7 @@ function initMap() {
     try {
       maplibregl.setRTLTextPlugin(MAP_RTL_TEXT_PLUGIN_URL, error => {
         if (error) console.warn('Map label shaping unavailable:', error.message || error);
-      }, true);
+    }, false);
     } catch (error) {
       console.warn('Map label shaping setup unavailable:', error.message || error);
     }
@@ -1882,6 +1897,16 @@ function initMap() {
       map.setStyle(MAP_FALLBACK_STYLE);
     }
   });
+  const preserveMapLabels = () => {
+    const layers = map?.getStyle?.()?.layers || [];
+    layers.forEach(layer => {
+      if (layer.type === 'symbol' && map.getLayoutProperty(layer.id, 'visibility') === 'none') {
+        map.setLayoutProperty(layer.id, 'visibility', 'visible');
+      }
+    });
+  };
+  map.on('styledata', preserveMapLabels);
+  map.once('load', preserveMapLabels);
   map.addControl(new maplibregl.NavigationControl({ showCompass: false }), 'top-right');
 
   // MapLibre observes its container, so one resize after flex layout is enough.
@@ -2412,7 +2437,7 @@ function closeLocationSheet() {
   sheet.setAttribute('aria-hidden', 'true');
 }
 
-function renderLocationSheet(type, results, query = '') {
+function renderLocationSheet(type, results, query = '', { loading = locationSearchLoading, error = locationSearchError } = {}) {
   const list = document.getElementById('location-sheet-list');
   const title = document.getElementById('location-sheet-title');
   const kicker = document.getElementById('location-sheet-kicker');
@@ -2454,9 +2479,13 @@ function renderLocationSheet(type, results, query = '') {
     }>${locationSearchBroadLoading ? 'Loading other cities…' : 'Show more cities'}</button>`;
   }
   list.innerHTML = markup || `<div class="sheet-empty">${
-    query
-      ? 'No matching areas yet. Try another letter or search phrase.'
-      : 'Start typing to see matching areas. You can also pin the location directly on the map.'
+    loading
+      ? 'Searching nearby and wider areas…'
+      : error
+        ? 'Search is temporarily unavailable. Try another phrase or pin the location on the map.'
+        : query
+          ? 'No matching areas yet. Try another letter or search phrase.'
+          : 'Start typing to see matching areas. You can also pin the location directly on the map.'
   }</div>`;
   openLocationSheet(type);
 }
@@ -2559,15 +2588,24 @@ function onLocInput(type) {
   locationSearchRemoteResults = [];
   locationSearchBroadLoaded = false;
   locationSearchBroadLoading = false;
+  locationSearchLoading = Boolean(query);
+  locationSearchError = '';
+  setVoiceStatus('', false);
   const local = localLocationResults(query, { city: scope.city, broad: scope.broad });
   renderLocationSheet(type, local, query);
   if (!query) return;
   locTimer[type] = setTimeout(async () => {
-    const remote = await searchPlaces(query, scope);
+    let remote = await searchPlaces(query, scope);
+    if (!remote.length && scope.city) {
+      remote = await searchPlaces(query, { ...scope, broad: true });
+    }
     if (locSearchSeq[type] !== requestId) return;
     locationSearchRemoteResults = remote;
+    locationSearchLoading = false;
+    locationSearchError = '';
     const merged = mergeLocationResults(local, remote, query, scope.city, { broad: scope.broad });
-    renderLocationSheet(type, merged, query);
+    setVoiceStatus('', false);
+    renderLocationSheet(type, merged, query, { loading: false });
   }, 140);
 }
 

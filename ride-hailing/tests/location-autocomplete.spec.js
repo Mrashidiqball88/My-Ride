@@ -139,6 +139,13 @@ test.describe('dynamic city location autocomplete', () => {
     await setSearch(page, 'gulbur');
     await expect(page.locator('#location-sheet-list')).toContainText('Gulberg');
 
+    await setSearch(page, 'Islamabad');
+    await expect(page.locator('#location-sheet-list')).toContainText('F-7 Markaz');
+    await expect(page.locator('#location-sheet-list')).toContainText('G-9 Markaz');
+
+    await setSearch(page, 'packages Mall');
+    await expect(page.locator('#location-sheet-list')).toContainText('Packages Mall');
+
     await page.evaluate(() => {
       window.SpeechRecognition = undefined;
       window.webkitSpeechRecognition = undefined;

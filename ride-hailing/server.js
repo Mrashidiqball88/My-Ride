@@ -3617,9 +3617,8 @@ function normalizeGeocodeCity(value) {
 }
 
 function geocodeResultCity(result) {
-  if (result?.city) return result.city;
   const address = result?.address || {};
-  return address.city || address.town || address.municipality || address.village || '';
+  return address.city || address.town || address.municipality || address.village || result?.city || '';
 }
 
 function geocodeCityMatches(left, right) {
@@ -3670,19 +3669,19 @@ app.get('/api/geocode', async (req, res) => {
       url = `https://us1.locationiq.com/v1/search` +
             `?key=${encodeURIComponent(key)}` +
             `&q=${encodeURIComponent(upstreamQuery)}` +
-            `&format=json&limit=20` +
+            `&format=json&limit=50` +
              `&addressdetails=1&normalizeaddress=1&dedupe=1&namedetails=1` +
              (viewbox && !broad && !globalSearch ? `&viewbox=${encodeURIComponent(viewbox.join(','))}&bounded=1` : '');
     } else {
       // Enhanced Nominatim fallback (OSM data)
       url = `https://nominatim.openstreetmap.org/search` +
              `?q=${encodeURIComponent(upstreamQuery)}` +
-             `&format=json&limit=20` +
+             `&format=json&limit=50` +
              `&addressdetails=1&dedupe=1&namedetails=1` +
              (viewbox && !broad && !globalSearch ? `&viewbox=${encodeURIComponent(viewbox.join(','))}&bounded=1` : '');
       headers = {
         'User-Agent': 'MyRide-App/1.0 (ride-hailing)',
-        'Accept-Language': 'en,ur'
+        'Accept-Language': 'en,ur,pa,hi,sd'
       };
     }
 
@@ -3691,11 +3690,6 @@ app.get('/api/geocode', async (req, res) => {
     const data = await r.json();
     const results = Array.isArray(data)
       ? data.filter(result => hasValidCoordinates({ lat: result?.lat, lng: result?.lon }))
-        .map(result => (
-          city && !broad && String(result?.address?.country_code || '').toLowerCase() === 'pk'
-            ? { ...result, city }
-            : result
-        ))
         .filter(result => broad || !city || !geocodeResultCity(result)
           || geocodeCityMatches(geocodeResultCity(result), city))
       : [];
