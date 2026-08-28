@@ -282,6 +282,12 @@ test('recovery-key setup works, rate limits attempts, and invalidates old Super 
     });
     assert.equal(oldTokenResult.response.status, 200);
     const oldToken = oldTokenResult.body.token;
+    const oldTokenClaims = jwt.verify(oldToken, JWT_SECRET);
+    assert.equal(oldTokenClaims.id, 'super-admin');
+    assert.equal(oldTokenClaims.isAdmin, true);
+    assert.equal(oldTokenClaims.isSuperAdmin, true);
+    assert.equal(oldTokenClaims.email, configuredAdminEmail());
+    assert.equal(oldTokenClaims.adminSessionVersion, 0);
 
     const setup = await request(server, '/api/admin/security/recovery-key', {
       method: 'PUT',
@@ -316,6 +322,9 @@ test('recovery-key setup works, rate limits attempts, and invalidates old Super 
       headers: { authorization: `Bearer ${newLogin.body.token}` }
     });
     assert.equal(newSession.response.status, 200);
+    const newTokenClaims = jwt.verify(newLogin.body.token, JWT_SECRET);
+    assert.equal(newTokenClaims.isSuperAdmin, true);
+    assert.equal(newTokenClaims.adminSessionVersion, 1);
   });
 });
 

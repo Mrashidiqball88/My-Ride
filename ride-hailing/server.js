@@ -4115,7 +4115,13 @@ app.post('/api/admin/login', async (req, res) => {
       return res.status(401).json({ error: 'Invalid admin credentials' });
     }
     const token = jwt.sign(
-      { isAdmin: true, email: adminEmail, adminSessionVersion: security.sessionVersion },
+      {
+        id: 'super-admin',
+        isAdmin: true,
+        isSuperAdmin: true,
+        email: adminEmail,
+        adminSessionVersion: security.sessionVersion
+      },
       JWT_SECRET, { expiresIn: '12h' }
     );
     res.json({ token, admin: { email: adminEmail, recoveryKeyConfigured: !!security.recoveryKeyHash } });
