@@ -947,7 +947,6 @@ body{font-family:'Segoe UI',sans-serif;background:#0a0a0f;color:#fff;height:100d
 const API = '';
 const MAP_STYLE_URL = 'https://tiles.openfreemap.org/styles/liberty';
 const MAP_RTL_TEXT_PLUGIN_URL = 'https://unpkg.com/@mapbox/mapbox-gl-rtl-text@0.4.0/dist/mapbox-gl-rtl-text.js';
-const CUSTOMER_SEARCH_LOCAL_PRIORITY_KM = 28;
 const CUSTOMER_SEARCH_TIMEOUT_MS = Number(window.__CUSTOMER_SEARCH_TIMEOUT_MS) || 5500;
 const CUSTOMER_MAP_DEFAULT_CENTER = [69.3451, 30.3753]; // Pakistan; GPS or pickup replaces this.
 const CUSTOMER_MAP_DEFAULT_ZOOM = 5.5;
@@ -1011,11 +1010,6 @@ let customerCityLocation = null;
 let customerCityRequest = 0;
 let customerCityDetectionInFlight = false;
 let locationSearchQuery = '';
-let locationSearchCity = '';
-let locationSearchRemoteResults = [];
-let locationSearchBroadLoaded = false;
-let locationSearchBroadLoading = false;
-let locationSearchContextFallback = false;
 let locationSearchLoading = false;
 let locationSearchError = '';
 let customerReadinessState = {
@@ -1124,89 +1118,6 @@ document.getElementById('booking-sheet-handle')?.addEventListener('pointercancel
   panel?.classList.remove('sheet-dragging');
   if (panel) panel.style.transform = 'translateX(-50%)';
 });
-
-const LOCAL_LOCATION_INDEX = [
-  // Instant multi-city fallback index — remote search remains the source of truth.
-  ['Gulberg', 'Lahore', 31.5100, 74.3500, 'Area'],
-  ['Gulberg Main Boulevard', 'Lahore', 31.5152, 74.3547, 'Street'],
-  ['Gulberg III', 'Lahore', 31.5140, 74.3520, 'Area'],
-  ['Garden Town', 'Lahore', 31.4920, 74.3210, 'Area'],
-  ['Garden Town Main Boulevard', 'Lahore', 31.4910, 74.3190, 'Street'],
-  ['Green Town', 'Lahore', 31.4495, 74.2975, 'Area'],
-  ['Gulshan-e-Ravi', 'Lahore', 31.5067, 74.2828, 'Area'],
-  ['Garhi Shahu', 'Lahore', 31.5684, 74.3430, 'Area'],
-  ['Guru Mangat Road', 'Lahore', 31.5293, 74.3547, 'Street'],
-  ['Grand Trunk Road', 'Lahore', 31.5900, 74.3450, 'Street'],
-  ['Packages Mall', 'Lahore', 31.4320, 74.2630, 'Landmark'],
-  ['Emporium Mall', 'Lahore', 31.4697, 74.2728, 'Landmark'],
-  ['Shalimar Hospital', 'Lahore', 31.5822, 74.3921, 'Landmark'],
-  ['Children Hospital Lahore', 'Lahore', 31.5003, 74.3297, 'Landmark'],
-  ['Chowk Yateem Khana', 'Lahore', 31.5089, 74.2817, 'Landmark'],
-  ['Centaurus Mall', 'Islamabad', 33.7077, 73.0511, 'Landmark'],
-  ['Safa Gold Mall', 'Islamabad', 33.7215, 73.0565, 'Landmark'],
-  ['DHA Phase 5', 'Karachi', 24.8006, 67.0610, 'Area'],
-  ['DHA Phase 6', 'Karachi', 24.7915, 67.0648, 'Area'],
-  ['DHA Phase 8', 'Karachi', 24.7825, 67.0980, 'Area'],
-  ['Defence Housing Authority', 'Karachi', 24.8138, 67.0300, 'Area'],
-  ['Sialkot Cantt', 'Sialkot', 32.4927, 74.5310, 'Area'],
-  ['Paris Road', 'Sialkot', 32.4950, 74.5430, 'Street'],
-  ['Salamatpura', 'Lahore', 31.5967, 74.3701, 'Area'],
-  ['Sabzazar', 'Lahore', 31.4941, 74.2775, 'Area'],
-  ['Samanabad', 'Lahore', 31.5337, 74.2865, 'Area'],
-  ['Shadbagh', 'Lahore', 31.5885, 74.3432, 'Area'],
-  ['Shahdara', 'Lahore', 31.6200, 74.2875, 'Area'],
-  ['Tajpura', 'Lahore', 31.5701, 74.3868, 'Area'],
-  ['Township', 'Lahore', 31.4580, 74.3040, 'Area'],
-  ['Tufailabad', 'Lahore', 31.5535, 74.3195, 'Area'],
-  ['Thokar Niaz Baig', 'Lahore', 31.4300, 74.2510, 'Area'],
-  ['Model Town', 'Lahore', 31.4800, 74.3250, 'Area'],
-  ['Model Town Link Road', 'Lahore', 31.4826, 74.3268, 'Street'],
-  ['DHA Phase 5', 'Lahore', 31.4697, 74.4087, 'Area'],
-  ['DHA Phase 6', 'Lahore', 31.4628, 74.4120, 'Area'],
-  ['DHA Phase 8', 'Lahore', 31.4424, 74.4014, 'Area'],
-  ['Johar Town', 'Lahore', 31.4697, 74.2728, 'Area'],
-  ['Expo Center Lahore', 'Lahore', 31.4670, 74.2650, 'Landmark'],
-  ['Wapda Town', 'Lahore', 31.4437, 74.2764, 'Area'],
-  ['Valencia Town', 'Lahore', 31.4147, 74.2518, 'Area'],
-  ['Iqbal Town', 'Lahore', 31.5095, 74.2840, 'Area'],
-  ['Allama Iqbal Town', 'Lahore', 31.5095, 74.2840, 'Area'],
-  ['Faisal Town', 'Lahore', 31.4865, 74.3005, 'Area'],
-  ['Ferozepur Road', 'Lahore', 31.4930, 74.3280, 'Street'],
-  ['Canal Road Lahore', 'Lahore', 31.4970, 74.3650, 'Street'],
-  ['Jail Road Lahore', 'Lahore', 31.5410, 74.3470, 'Street'],
-  ['Mall Road Lahore', 'Lahore', 31.5620, 74.3260, 'Street'],
-  ['Raiwind Road', 'Lahore', 31.4010, 74.2480, 'Street'],
-  ['Lahore Ring Road', 'Lahore', 31.4900, 74.2200, 'Street'],
-  ['Liberty Market', 'Lahore', 31.5116, 74.3448, 'Landmark'],
-  ['Anarkali Bazaar', 'Lahore', 31.5655, 74.3135, 'Landmark'],
-  ['Ichhra', 'Lahore', 31.5290, 74.3220, 'Area'],
-  ['Shadman', 'Lahore', 31.5470, 74.3340, 'Area'],
-  ['Muslim Town', 'Lahore', 31.5100, 74.3310, 'Area'],
-  ['Harbanspura', 'Lahore', 31.5830, 74.3950, 'Area'],
-  ['LDA Avenue', 'Lahore', 31.4350, 74.2810, 'Area'],
-  ['Bahria Town Lahore', 'Lahore', 31.3680, 74.1880, 'Area'],
-  // Broader locations stay behind the detected active city until expansion.
-  ['Gujranwala', 'Gujranwala', 32.1877, 74.1945, 'City'],
-  ['Satellite Town', 'Gujranwala', 32.1710, 74.1900, 'Area'],
-  ['Model Town', 'Gujranwala', 32.1770, 74.1900, 'Area'],
-  ['GT Road', 'Gujranwala', 32.1900, 74.1800, 'Street'],
-  ['Gujrat', 'Gujrat', 32.5731, 74.0780, 'City'],
-  ['Model Town', 'Gujrat', 32.5750, 74.0800, 'Area'],
-  ['Jalalpur Jattan Road', 'Gujrat', 32.5900, 74.0850, 'Street'],
-  ['Islamabad', 'Islamabad Capital Territory', 33.6844, 73.0479, 'City'],
-  ['Blue Area', 'Islamabad', 33.7077, 73.0500, 'Area'],
-  ['F-6 Markaz', 'Islamabad', 33.7238, 73.0708, 'Area'],
-  ['F-7 Markaz', 'Islamabad', 33.7215, 73.0565, 'Area'],
-  ['F-8 Markaz', 'Islamabad', 33.7073, 73.0350, 'Area'],
-  ['G-9 Markaz', 'Islamabad', 33.6881, 73.0410, 'Area'],
-  ['G-10 Markaz', 'Islamabad', 33.6705, 73.0137, 'Area'],
-  ['I-8 Markaz', 'Islamabad', 33.6676, 73.0762, 'Area'],
-  ['Daman-e-Koh', 'Islamabad', 33.7380, 73.0550, 'Landmark'],
-  ['Margalla Road', 'Islamabad', 33.7150, 73.0630, 'Street'],
-  ['Kashmir Highway', 'Islamabad', 33.6660, 73.0930, 'Street'],
-  ['Karachi', 'Karachi', 24.8607, 67.0011, 'City'],
-  ['Clifton', 'Karachi', 24.8138, 67.0300, 'Area']
-];
 
 // ── Toast ─────────────────────────────────────────────────────────────────
 function showToast(msg, type = 'info') {
@@ -2083,14 +1994,12 @@ function canonicalCityName(value) {
     .replace(/\s+capital territory$/i, '');
 }
 
-function locationSearchScope(query, broad = false) {
+function locationSearchScope() {
   const activeCity = canonicalCityName(customerActiveCity);
   return {
-    // The active city comes only from reverse geocoding the current pickup.
-    // There is deliberately no browser-side list of Pakistani cities.
-    city: activeCity,
-    broad: Boolean(broad),
-    crossCity: false
+    // The active city is only an ordering hint. The live provider remains
+    // nationwide and is never filtered by this context.
+    city: activeCity
   };
 }
 
@@ -2139,25 +2048,21 @@ function locationSearchCenter() {
   return null;
 }
 
-async function searchPlaces(query, { city = '', broad = false, explicitCity = '' } = {}, { signal } = {}) {
+async function searchPlaces(query, _context = {}, { signal } = {}) {
   try {
     const params = new URLSearchParams({ q: query });
-    if (city && !broad) params.set('city', city);
-    if (broad) params.set('broad', '1');
     const center = locationSearchCenter();
-    const crossCity = Boolean(explicitCity && !cityMatches(explicitCity, customerActiveCity));
-    if (crossCity) params.set('global', '1');
-    if (center && !broad && !crossCity) {
+    if (center) {
       params.set('lat', String(center.lat));
       params.set('lng', String(center.lng));
     }
     const r = await fetch(`/api/geocode?${params.toString()}`, { signal });
-    if (!r.ok) return [];
+    if (!r.ok) throw new Error(`Location provider returned ${r.status}`);
     const data = await r.json();
     return Array.isArray(data) ? data : [];
   } catch (error) {
     if (error?.name !== 'AbortError') console.warn('Location search unavailable:', error.message);
-    return [];
+    throw error;
   }
 }
 
@@ -2215,193 +2120,6 @@ function escapeLocationText(value) {
   }[char]));
 }
 
-const LOCATION_SEARCH_CHAR_MAP = {
-  'ا': 'a', 'آ': 'a', 'أ': 'a', 'إ': 'i', 'ی': 'i', 'ي': 'i', 'ے': 'e',
-  'و': 'u', 'ؤ': 'u', 'ہ': 'h', 'ه': 'h', 'ھ': 'h', 'ک': 'k', 'ك': 'k',
-  'گ': 'g', 'ج': 'j', 'چ': 'ch', 'خ': 'kh', 'غ': 'gh', 'ق': 'q', 'ع': 'a',
-  'ب': 'b', 'پ': 'p', 'ت': 't', 'ٹ': 't', 'ث': 's', 'س': 's', 'ص': 's',
-  'ج': 'j', 'د': 'd', 'ڈ': 'd', 'ذ': 'z', 'ز': 'z', 'ض': 'z', 'ظ': 'z',
-  'ر': 'r', 'ڑ': 'r', 'ف': 'f', 'ل': 'l', 'م': 'm', 'ن': 'n', 'ں': 'n',
-  'ش': 'sh', 'ژ': 'zh'
-};
-
-function normalizeSearchValue(value) {
-  return String(value || '')
-    .normalize('NFKD')
-    .replace(/[\u0300-\u036f]/g, '')
-    .toLocaleLowerCase()
-    .split('')
-    .map(char => LOCATION_SEARCH_CHAR_MAP[char] || char)
-    .join('')
-    .replace(/[^a-z0-9]+/g, ' ')
-    .replace(/\s+/g, ' ')
-    .trim();
-}
-
-function searchCompactValue(value) {
-  return normalizeSearchValue(value).replace(/\s/g, '');
-}
-
-function searchPhoneticKey(value) {
-  const compact = searchCompactValue(value);
-  if (!compact) return '';
-  const first = compact[0];
-  const groups = { b: '1', p: '1', f: '1', v: '1', c: '2', k: '2', q: '2', g: '2', j: '2', x: '2', s: '2', z: '2', d: '3', t: '3', l: '4', m: '5', n: '5', r: '6' };
-  let result = first;
-  let previous = groups[first] || '';
-  for (const char of compact.slice(1)) {
-    const group = groups[char] || '';
-    if (group && group !== previous) result += group;
-    previous = group || previous;
-    if (result.length >= 4) break;
-  }
-  return result.padEnd(4, '0');
-}
-
-const LOCATION_SEARCH_ALIASES = [
-  ['gulberg', 'gulbur', 'gul barg', 'gulberg iii'],
-  ['thokar niaz baig', 'thokar niazi baig', 'thokar'],
-  ['dha phase 5', 'defence phase 5', 'dha p5'],
-  ['bahria town', 'bahriya town'],
-  ['rawalpindi', 'pindi'],
-  ['islamabad', 'islambad'],
-  ['lahore', 'lahor'],
-  ['karachi', 'khi'],
-  ['riksha', 'rickshaw', 'riksah'],
-  ['johar town', 'johar'],
-  ['model town', 'modeltown'],
-  ['shalimar hospital', 'shalamar hospital', 'shalimar hosp', 'inshallah hospital', 'inshallah'],
-  ['children hospital lahore', 'children hospital', "children's hospital", 'childrens hospital', 'bachon ka hospital'],
-  ['chowk yateem khana', 'chowk yateemkhan', 'yateem khana', 'yatim khana', 'yateem khana chowk', 'yatim khana chowk']
-];
-
-function locationSearchAliases(item) {
-  const primary = normalizeSearchValue(item.primary);
-  return LOCATION_SEARCH_ALIASES
-    .filter(group => group.some(alias => primary === normalizeSearchValue(alias)
-      || primary.includes(normalizeSearchValue(alias))
-      || normalizeSearchValue(alias).includes(primary)))
-    .flatMap(group => group);
-}
-
-function levenshteinDistance(left, right) {
-  const a = String(left || '');
-  const b = String(right || '');
-  if (!a) return b.length;
-  if (!b) return a.length;
-  let previous = Array.from({ length: b.length + 1 }, (_, index) => index);
-  for (let i = 0; i < a.length; i++) {
-    const current = [i + 1];
-    for (let j = 0; j < b.length; j++) {
-      current.push(Math.min(
-        current[j] + 1,
-        previous[j + 1] + 1,
-        previous[j] + (a[i] === b[j] ? 0 : 1)
-      ));
-    }
-    previous = current;
-  }
-  return previous[b.length];
-}
-
-function locationMatchScore(item, query) {
-  const needle = normalizeSearchValue(query);
-  if (!needle) return 99;
-  const values = [
-    item.primary, item.secondary, item.city, item.display_name,
-    item.address?.road, item.address?.suburb, item.address?.neighbourhood,
-    item.address?.city, item.address?.town, ...locationSearchAliases(item)
-  ].filter(Boolean).map(normalizeSearchValue);
-  const fuzzyTokenScore = (value, queryValue) => {
-    const valueTokens = value.split(' ').filter(Boolean);
-    const queryTokens = queryValue.split(' ').filter(Boolean);
-    if (!valueTokens.length || !queryTokens.length) return 99;
-    const tokenScores = queryTokens.map(queryToken => {
-      let score = 99;
-      valueTokens.forEach(valueToken => {
-        if (valueToken === queryToken) score = Math.min(score, 0);
-        else if (valueToken.startsWith(queryToken)) score = Math.min(score, 1);
-        else if (valueToken.includes(queryToken)) score = Math.min(score, 2);
-        const maxDistance = queryToken.length < 5 ? 1 : queryToken.length < 8 ? 2 : 3;
-        if (levenshteinDistance(valueToken, queryToken) <= maxDistance) {
-          score = Math.min(score, 3);
-        }
-        // Phonetics make short spoken/typed forms such as "pakgs" resolve to
-        // "packages" without weakening the city filter.
-        const phoneticDistanceLimit = Math.min(3, Math.max(2, Math.ceil(queryToken.length * .5)));
-        if (queryToken.length >= 4
-          && levenshteinDistance(valueToken, queryToken) <= phoneticDistanceLimit
-          && searchPhoneticKey(valueToken) === searchPhoneticKey(queryToken)) {
-          score = Math.min(score, 3);
-        }
-      });
-      return score;
-    });
-    return tokenScores.every(score => score < 99)
-      ? Math.max(...tokenScores)
-      : 99;
-  };
-  let best = 99;
-  for (const value of values) {
-    if (!value) continue;
-    // One-character searches are useful for quick discovery, but edit
-    // distance and substring matching would make a query like "g" match
-    // unrelated words such as "Housing" or the number "5".
-    if (needle.length === 1) {
-      const startsWithNeedle = value === needle
-        || value.startsWith(needle)
-        || value.split(' ').some(token => token.startsWith(needle));
-      if (startsWithNeedle) best = Math.min(best, value === needle ? 0 : 1);
-      continue;
-    }
-    if (value === needle) best = Math.min(best, 0);
-    else if (value.startsWith(needle)) best = Math.min(best, 1);
-    else if (value.includes(needle) || value.split(' ').some(token => token.startsWith(needle))) best = Math.min(best, 2);
-    const compact = searchCompactValue(value);
-    const compactNeedle = searchCompactValue(needle);
-    if (compact.includes(compactNeedle)) best = Math.min(best, 2);
-    const tokens = value.split(' ').filter(Boolean);
-    const maxDistance = needle.length < 5 ? 1 : needle.length < 8 ? 2 : 3;
-    const hasFuzzyToken = needle.length >= 3 && tokens.some(token => {
-      if (/^\d+$/.test(token)) return false;
-      return levenshteinDistance(token, needle) <= maxDistance
-        || levenshteinDistance(token, compactNeedle) <= maxDistance;
-    });
-    if (hasFuzzyToken) {
-      best = Math.min(best, 3);
-    }
-    best = Math.min(best, fuzzyTokenScore(value, needle));
-  }
-  return best;
-}
-
-function localLocationResults(query, { city = '', broad = false } = {}) {
-  const needle = normalizeSearchValue(query);
-  if (!needle) return [];
-  const center = locationSearchCenter();
-  const scored = LOCAL_LOCATION_INDEX
-    .map(([name, resultCity, lat, lon, kind]) => {
-      const item = { primary: name, secondary: resultCity, city: resultCity, lat, lon, kind, local: true };
-      const relevance = locationMatchScore(item, query);
-      const distance = center ? haversine(center.lat, center.lng, lat, lon) : Number.POSITIVE_INFINITY;
-      return {
-        ...item,
-        relevance,
-        distance,
-        localPriority: distance <= CUSTOMER_SEARCH_LOCAL_PRIORITY_KM ? 0 : 1
-      };
-    });
-  const normalizedQueryCity = normalizeCityName(query);
-  const queryNamesCity = normalizedQueryCity.length >= 3
-    && scored.some(item => normalizeCityName(item.city) === normalizedQueryCity);
-  return scored
-    .filter(item => item.relevance < 5)
-    .filter(item => broad || !city || cityMatches(item.city, city)
-      || (queryNamesCity && normalizeCityName(item.city) === normalizedQueryCity))
-    .sort((a, b) => a.relevance - b.relevance || a.localPriority - b.localPriority || a.distance - b.distance)
-    .map(({ relevance, distance, localPriority, ...item }) => item);
-}
-
 function normalizeLocationResult(item, local = false) {
   const label = item.primary ? item : buildLabel(item);
   const lat = Number(item.lat);
@@ -2423,52 +2141,36 @@ function normalizeLocationResult(item, local = false) {
   };
 }
 
-function locationRelevance(item, needle) {
-  return locationMatchScore(item, needle);
-}
-
-function rankLocationResults(results, query, preferredCity = '', { broad = false } = {}) {
+function rankLiveLocationResults(results, preferredCity = '') {
   const center = locationSearchCenter();
   const normalizedResults = results
     .map(item => normalizeLocationResult(item, item.local))
     .filter(Boolean);
-  // A complete query matching a geocoder-returned city is an explicit
-  // cross-city request. This is discovered from live results, not a browser
-  // allowlist of Pakistani cities.
-  const normalizedQueryCity = normalizeCityName(query);
-  const queryNamesCity = normalizedQueryCity.length >= 3
-    && normalizedResults.some(item => normalizeCityName(item.city) === normalizedQueryCity);
   return normalizedResults
     .map(item => ({
       ...item,
-      relevance: locationRelevance(item, query),
       cityPriority: preferredCity && cityMatches(item.city, preferredCity) ? 0 : 1,
-      distance: center ? haversine(center.lat, center.lng, item.lat, item.lon) : Number.POSITIVE_INFINITY,
-       localPriority: center && haversine(center.lat, center.lng, item.lat, item.lon) <= CUSTOMER_SEARCH_LOCAL_PRIORITY_KM ? 0 : 1
+      distance: center ? haversine(center.lat, center.lng, item.lat, item.lon) : Number.POSITIVE_INFINITY
     }))
-    .filter(item => broad || !preferredCity || cityMatches(item.city, preferredCity)
-      || (queryNamesCity && normalizeCityName(item.city) === normalizedQueryCity))
-    .filter(item => item.relevance < 5)
     .sort((a, b) =>
       a.cityPriority - b.cityPriority
-      || a.relevance - b.relevance
-      || a.localPriority - b.localPriority
       || a.distance - b.distance
       || String(a.primary).localeCompare(String(b.primary))
     )
-    .map(({ relevance, cityPriority, distance, localPriority, ...item }) => item);
+    .map(({ cityPriority, distance, ...item }) => item);
 }
 
-function mergeLocationResults(local, remote, query, preferredCity = '', { broad = false } = {}) {
-  const candidates = [...local, ...(remote || []).map(item => normalizeLocationResult(item)).filter(Boolean)];
+function prepareLiveLocationResults(results, preferredCity = '') {
   const seen = new Set();
-  const unique = candidates.filter(item => {
-    const key = `${String(item.primary).toLocaleLowerCase()}|${item.lat.toFixed(5)}|${item.lon.toFixed(5)}`;
+  const unique = (results || []).filter(item => {
+    const normalized = normalizeLocationResult(item);
+    if (!normalized) return false;
+    const key = `${String(normalized.primary).toLocaleLowerCase()}|${normalized.lat.toFixed(5)}|${normalized.lon.toFixed(5)}`;
     if (seen.has(key)) return false;
     seen.add(key);
     return true;
   });
-  return rankLocationResults(unique, query, preferredCity, { broad });
+  return rankLiveLocationResults(unique, preferredCity);
 }
 
 function openLocationSheet(type) {
@@ -2532,13 +2234,8 @@ function renderLocationSheet(type, results, query = '', { loading = locationSear
       <span class="sheet-item-primary">Pin-Point / My Location</span>
       <span class="sheet-item-secondary">Use your phone GPS for the pickup point</span></span></button>`;
   }
-  const scope = locationSearchScope(query, locationSearchBroadLoaded);
-  locationSheetResults = rankLocationResults(
-    results || [],
-    query,
-    scope.city,
-    { broad: scope.broad }
-  ).slice(0, 24);
+  const scope = locationSearchScope(query);
+  locationSheetResults = prepareLiveLocationResults(results || [], scope.city).slice(0, 24);
   const hasResults = locationSheetResults.length > 0;
   let previousGroup = '';
   markup += locationSheetResults.map((item, index) => {
@@ -2557,18 +2254,13 @@ function renderLocationSheet(type, results, query = '', { loading = locationSear
       <span class="sheet-item-tertiary" dir="auto">${escapeLocationText(address)}</span>
       <span class="sheet-item-coordinates">${escapeLocationText(formatCoordinateLabel(item.lat, item.lon))}</span></span></button>`;
   }).join('');
-  if (query && scope.city && !locationSearchBroadLoaded) {
-    markup += `<button type="button" class="sheet-expand" data-location-action="expand-cities"${
-      locationSearchBroadLoading ? ' disabled' : ''
-    }>${locationSearchBroadLoading ? 'Loading other cities…' : 'Show more cities'}</button>`;
-  }
   if (!hasResults) markup += `<div class="sheet-empty">${
     loading
-      ? 'Searching nearby and wider areas…'
+      ? 'Searching places across Pakistan…'
       : error
         ? escapeLocationText(error)
         : query
-           ? 'No places found in this area yet. Keep typing or search another city.'
+           ? 'No places found. Keep typing or try another location.'
            : 'Start typing to search places, streets, and landmarks anywhere in Pakistan.'
   }</div>`;
   list.innerHTML = markup;
@@ -2600,19 +2292,9 @@ function selectLocationFromSheet(index) {
 document.getElementById('location-sheet-list')?.addEventListener('click', event => {
   const option = event.target.closest('[data-location-index]');
   if (option) return selectLocationFromSheet(Number(option.dataset.locationIndex));
-  if (event.target.closest('[data-location-action="expand-cities"]')) {
-    return expandLocationSearch(activeLocationSearch);
-  }
   if (event.target.closest('[data-location-action="locate"]')) {
     closeLocationSheet();
     locateMe();
-  }
-});
-
-document.getElementById('location-sheet-list')?.addEventListener('scroll', event => {
-  const list = event.currentTarget;
-  if (activeLocationSearch && list.scrollTop + list.clientHeight >= list.scrollHeight - 48) {
-    expandLocationSearch(activeLocationSearch);
   }
 });
 
@@ -2684,8 +2366,6 @@ function beginLocationSearchRequest(type, requestId) {
     timedOut = true;
     locSearchSeq[type]++;
     controller.abort();
-    locationSearchRemoteResults = [];
-    locationSearchBroadLoading = false;
     locationSearchLoading = false;
     locationSearchError = 'Search timed out. Try again or pin the location on the map.';
     setVoiceStatus(locationSearchError, true);
@@ -2712,40 +2392,26 @@ function onLocInput(type) {
   locSearchSeq[type] = requestId;
   const scope = locationSearchScope(query);
   locationSearchQuery = query;
-  locationSearchCity = scope.city;
-  locationSearchRemoteResults = [];
-  locationSearchBroadLoaded = false;
-  locationSearchBroadLoading = false;
-  locationSearchContextFallback = false;
   locationSearchLoading = Boolean(query);
   locationSearchError = '';
   setVoiceStatus('', false);
-  const local = localLocationResults(query, { city: scope.city, broad: scope.broad });
-  renderLocationSheet(type, local, query);
+  renderLocationSheet(type, [], query);
   if (!query) return;
   locTimer[type] = setTimeout(async () => {
     const request = beginLocationSearchRequest(type, requestId);
     try {
-      let remote = await searchPlaces(query, scope, { signal: request.signal });
-      if (!remote.length && scope.city && locSearchSeq[type] === requestId) {
-        remote = await searchPlaces(query, { ...scope, broad: true }, { signal: request.signal });
-      }
+      const remote = await searchPlaces(query, scope, { signal: request.signal });
       if (locSearchSeq[type] !== requestId || request.wasTimedOut()) return;
-      locationSearchRemoteResults = remote;
       locationSearchLoading = false;
       locationSearchError = '';
-      const hasContextResults = remote.some(item => !item.contextFallback);
-      locationSearchContextFallback = Boolean(scope.city && remote.length && !hasContextResults);
-      locationSearchBroadLoaded = locationSearchContextFallback;
-      const merged = mergeLocationResults(
-        local,
-        remote,
-        query,
-        scope.city,
-        { broad: scope.broad || locationSearchContextFallback }
-      );
       setVoiceStatus('', false);
-      renderLocationSheet(type, merged, query, { loading: false });
+      renderLocationSheet(type, prepareLiveLocationResults(remote, scope.city), query, { loading: false });
+    } catch (error) {
+      if (locSearchSeq[type] !== requestId || request.wasTimedOut() || error?.name === 'AbortError') return;
+      locationSearchLoading = false;
+      locationSearchError = 'Location search is unavailable right now. Try again or pin the location on the map.';
+      setVoiceStatus(locationSearchError, true);
+      renderLocationSheet(type, [], query, { loading: false, error: locationSearchError });
     } finally {
       request.finish();
     }
@@ -2826,18 +2492,9 @@ function startVoiceSearch(type) {
     // Speech builds the reparented sheet input may not reliably dispatch or
     // route a synthetic input event.
     onLocInput(type);
-    // The local index renders synchronously. Promote an immediate fuzzy/phonetic
-    // hit to the input so voice search shows the actual location name instead
-    // of leaving a short or Urdu transcript that looks like a failed search.
-    const immediateMatch = locationSheetResults[0];
-    if (immediateMatch?.primary) {
-      input.value = immediateMatch.primary;
-      input.classList.add('has-val');
-      updateClearBtn(type);
-      setVoiceStatus(`Found “${immediateMatch.primary}”`);
-    } else {
-      setVoiceStatus(`Searching for “${transcript}”`);
-    }
+    // The provider response is the sole source of suggestions. Keep the
+    // spoken transcript visible while the live request is in flight.
+    setVoiceStatus(`Searching for “${transcript}”`);
   };
   recognition.onerror = event => {
     if (voiceSearchSession !== session || voiceRecognition !== recognition) return;
@@ -2898,31 +2555,6 @@ function startVoiceSearch(type) {
     voiceRecognition = null;
     voiceSearchType = null;
     setVoiceButtonState(type, false);
-  }
-}
-
-async function expandLocationSearch(type) {
-  if (!type || !locationSearchQuery || locationSearchBroadLoaded || locationSearchBroadLoading) return;
-  const query = locationSearchQuery;
-  const requestId = (locSearchSeq[type] || 0) + 1;
-  locSearchSeq[type] = requestId;
-  locationSearchBroadLoading = true;
-  renderLocationSheet(type, locationSearchRemoteResults, query);
-  const request = beginLocationSearchRequest(type, requestId);
-  try {
-    const broadRemote = await searchPlaces(query, { broad: true }, { signal: request.signal });
-    if (locSearchSeq[type] !== requestId || request.wasTimedOut()) return;
-    locationSearchRemoteResults = [...locationSearchRemoteResults, ...broadRemote];
-    locationSearchBroadLoaded = true;
-    locationSearchBroadLoading = false;
-    const local = localLocationResults(query, { broad: true });
-    renderLocationSheet(
-      type,
-      mergeLocationResults(local, locationSearchRemoteResults, query, locationSearchCity, { broad: true }),
-      query
-    );
-  } finally {
-    request.finish();
   }
 }
 

@@ -33,3 +33,4 @@
 - [Pickup city search context](pickup-city-search-context.md) — the first pickup pin replaces stale GPS or previous-city state as the Customer search anchor.
 - [Voice search end state](voice-search-end-state.md) — preserve transcript matches and error feedback after one-shot recognition fires its onend callback.
 - [Deferred map marker selection](deferred-map-marker-selection.md) — commit selected location state before MapLibre is ready, then materialize markers when the map initializes.
+- [Customer live geocoding](customer-live-geocoding.md) — Customer suggestions come only from the nationwide provider; pickup city may rank results but never filters them.

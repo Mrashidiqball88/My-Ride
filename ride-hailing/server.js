@@ -5,7 +5,6 @@
 
 require('dotenv').config({ path: require('path').resolve(__dirname, '..', '.env') });
 const { computeBackfillPaidUntil } = require('./lib/backfillPaidUntil');
-const { searchLocations } = require('./location-search-engine');
 
 // ─── Global crash protection ──────────────────────────────────────────────────
 // Catch any unhandled error/rejection so the server never exits unexpectedly.
@@ -3631,69 +3630,34 @@ function geocodeCityMatches(left, right) {
 app.get('/api/geocode', async (req, res) => {
   const q = (req.query.q || '').trim();
   if (!q || q.length < 1) return res.json([]);
-  const city = String(req.query.city || '').trim().slice(0, 80);
-  const broad = ['1', 'true', 'yes'].includes(String(req.query.broad || '').toLowerCase());
-  const globalSearch = ['1', 'true', 'yes'].includes(String(req.query.global || '').toLowerCase());
-  const localResults = searchLocations(q, {
-    city: globalSearch ? '' : city,
-    lat: Number(req.query.lat),
-    lng: Number(req.query.lng),
-    broad
-  });
 
   try {
     const key = process.env.LOCATIONIQ_KEY;
-    const contextualQuery = city && !broad && !globalSearch
-      && !normalizeGeocodeCity(q).includes(normalizeGeocodeCity(city))
-      ? `${q}, ${city}`
-      : q;
-    const buildProviderUrl = query => {
-      let url, headers = {};
-      if (key) {
-        url = `https://us1.locationiq.com/v1/search` +
-          `?key=${encodeURIComponent(key)}` +
-          `&q=${encodeURIComponent(query)}` +
-          `&format=json&limit=50` +
-          `&countrycodes=pk&addressdetails=1&normalizeaddress=1&dedupe=1&namedetails=1`;
-      } else {
-        url = `https://nominatim.openstreetmap.org/search` +
-          `?q=${encodeURIComponent(query)}` +
-          `&format=json&limit=50&countrycodes=pk` +
-          `&addressdetails=1&dedupe=1&namedetails=1`;
-        headers = {
-          'User-Agent': 'MyRide-App/1.0 (ride-hailing)',
-          'Accept-Language': 'en,ur,pa,hi,sd'
-        };
-      }
-      return { url, headers };
-    };
-    const searchProvider = async (query, { fallback = false } = {}) => {
-      const { url, headers } = buildProviderUrl(query);
-      const response = await fetch(url, { headers, signal: AbortSignal.timeout(5000) });
-      if (!response.ok) throw new Error(`Geocode upstream ${response.status}`);
-      const data = await response.json();
-      return Array.isArray(data)
-        ? data
-          .filter(result => hasValidCoordinates({ lat: result?.lat, lng: result?.lon }))
-          .filter(result => broad || !city || fallback || !geocodeResultCity(result)
-            || geocodeCityMatches(geocodeResultCity(result), city))
-          .map(result => fallback ? { ...result, contextFallback: true } : result)
-        : [];
-    };
-
-    // Always perform a live provider lookup. The local index is only an
-    // immediate cache, so common places stay fast without making nationwide
-    // search dependent on a finite hardcoded corpus.
-    let results = await searchProvider(contextualQuery);
-    // If the active city has no hit, retry globally. This lets a customer
-    // search for a pickup in another Pakistani city without a browser-side
-    // city allowlist or a separate city database.
-    if (!results.length && city && !broad && !globalSearch) {
-      results = await searchProvider(q, { fallback: true });
+    let url, headers = {};
+    if (key) {
+      url = `https://us1.locationiq.com/v1/search` +
+        `?key=${encodeURIComponent(key)}` +
+        `&q=${encodeURIComponent(q)}` +
+        `&format=json&limit=50` +
+        `&countrycodes=pk&addressdetails=1&normalizeaddress=1&dedupe=1&namedetails=1`;
+    } else {
+      url = `https://nominatim.openstreetmap.org/search` +
+        `?q=${encodeURIComponent(q)}` +
+        `&format=json&limit=50&countrycodes=pk` +
+        `&addressdetails=1&dedupe=1&namedetails=1`;
+      headers = {
+        'User-Agent': 'MyRide-App/1.0 (ride-hailing)',
+        'Accept-Language': 'en,ur,pa,hi,sd'
+      };
     }
-    const combined = [...localResults, ...results];
+    const upstream = await fetch(url, { headers, signal: AbortSignal.timeout(5000) });
+    if (!upstream.ok) throw new Error(`Geocode upstream ${upstream.status}`);
+    const data = await upstream.json();
+    const results = Array.isArray(data)
+      ? data.filter(result => hasValidCoordinates({ lat: result?.lat, lng: result?.lon }))
+      : [];
     const seen = new Set();
-    res.json(combined.filter(result => {
+    res.json(results.filter(result => {
       const lat = Number(result.lat);
       const lon = Number(result.lon ?? result.lng);
       const key = `${String(result.display_name || result.primary || '').toLocaleLowerCase()}|${lat.toFixed(5)}|${lon.toFixed(5)}`;
@@ -3703,8 +3667,6 @@ app.get('/api/geocode', async (req, res) => {
     }));
   } catch (err) {
     console.error('Geocode error:', err.message);
-    // A provider outage should not erase already available local matches.
-    if (localResults.length) return res.json(localResults);
     res.status(502).json({ error: 'Geocoding is temporarily unavailable' });
   }
 });
