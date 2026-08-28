@@ -239,4 +239,57 @@ test.describe('dynamic city location autocomplete', () => {
       getComputedStyle(element).position
     )).toBe('sticky');
   });
+
+  test('clears stale results and resets the search state after the deadline', async ({ page }) => {
+    await page.addInitScript(() => {
+      window.__CUSTOMER_SEARCH_TIMEOUT_MS = 40;
+    });
+    await page.route(/\/api\/geocode(?:\?|$)/, route => new Promise(resolve => {
+      setTimeout(() => resolve(route.fulfill({
+        contentType: 'application/json',
+        body: '[]'
+      })), 200);
+    }));
+
+    await page.goto('/customer');
+    await setSearch(page, 'unknown remote landmark');
+    await expect.poll(() => page.evaluate(() => locationSearchError)).toContain('timed out');
+    await expect(page.locator('#location-sheet-list')).toContainText('timed out');
+    await expect.poll(() => page.evaluate(() => ({
+      loading: locationSearchLoading,
+      aborted: locSearchAbort.pickup === null
+    }))).toEqual({ loading: false, aborted: true });
+  });
+
+  test('auto-resets a stuck voice session and allows the next attempt', async ({ page }) => {
+    await page.addInitScript(() => {
+      window.__CUSTOMER_SEARCH_TIMEOUT_MS = 40;
+      let starts = 0;
+      window.SpeechRecognition = class {
+        start() { starts += 1; window.voiceStartCount = starts; }
+        abort() {}
+        stop() {}
+      };
+    });
+
+    await page.goto('/customer');
+    await page.evaluate(() => startVoiceSearch('pickup'));
+    await expect.poll(() => page.evaluate(() => ({
+      recognition: voiceRecognition,
+      type: voiceSearchType,
+      starts: window.voiceStartCount,
+      listening: document.querySelectorAll('.btn-voice.listening').length,
+      input: document.getElementById('pickup-input').value
+    }))).toEqual({
+      recognition: null,
+      type: null,
+      starts: 1,
+      listening: 0,
+      input: ''
+    });
+    await expect(page.locator('#location-voice-status')).toContainText('timed out');
+
+    await page.evaluate(() => startVoiceSearch('pickup'));
+    await expect.poll(() => page.evaluate(() => window.voiceStartCount)).toBe(2);
+  });
 });

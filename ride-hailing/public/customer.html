@@ -947,6 +947,7 @@ const API = '';
 const MAP_STYLE_URL = 'https://tiles.openfreemap.org/styles/liberty';
 const MAP_RTL_TEXT_PLUGIN_URL = 'https://unpkg.com/@mapbox/mapbox-gl-rtl-text@0.4.0/dist/mapbox-gl-rtl-text.js';
 const CUSTOMER_SEARCH_LOCAL_PRIORITY_KM = 28;
+const CUSTOMER_SEARCH_TIMEOUT_MS = Number(window.__CUSTOMER_SEARCH_TIMEOUT_MS) || 5500;
 const CUSTOMER_MAP_DEFAULT_CENTER = [69.3451, 30.3753]; // Pakistan; GPS or pickup replaces this.
 const CUSTOMER_MAP_DEFAULT_ZOOM = 5.5;
 const MAP_FALLBACK_STYLE = {
@@ -997,6 +998,8 @@ let activeLiveFare = 0;
 let activeDriverInfo = null;
 let locTimer = {};                          // keyed by type string e.g. 'pickup','stop-0'
 let locSearchSeq = {};
+let locSearchAbort = {};
+let locSearchTimeout = {};
 let activeLocationSearch = null;
 let locationSheetResults = [];
 let locationSheetDrag = null;
@@ -1023,6 +1026,8 @@ let customerReadinessBusy = false;
 let customerReadinessInitialized = false;
 let voiceRecognition = null;
 let voiceSearchType = null;
+let voiceSearchSession = 0;
+let voiceSearchTimeout = null;
 let bookingSheetDrag = null;
 let currentFareQuote = null;
 let fareQuoteRequest = 0;
@@ -2134,7 +2139,7 @@ function locationSearchCenter() {
   return null;
 }
 
-async function searchPlaces(query, { city = '', broad = false, explicitCity = '' } = {}) {
+async function searchPlaces(query, { city = '', broad = false, explicitCity = '' } = {}, { signal } = {}) {
   try {
     const params = new URLSearchParams({ q: query });
     if (city && !broad) params.set('city', city);
@@ -2146,11 +2151,14 @@ async function searchPlaces(query, { city = '', broad = false, explicitCity = ''
       params.set('lat', String(center.lat));
       params.set('lng', String(center.lng));
     }
-    const r = await fetch(`/api/geocode?${params.toString()}`);
+    const r = await fetch(`/api/geocode?${params.toString()}`, { signal });
     if (!r.ok) return [];
     const data = await r.json();
     return Array.isArray(data) ? data : [];
-  } catch { return []; }
+  } catch (error) {
+    if (error?.name !== 'AbortError') console.warn('Location search unavailable:', error.message);
+    return [];
+  }
 }
 
 // Build the best human-readable label from a geocode result
@@ -2510,6 +2518,7 @@ function renderLocationSheet(type, results, query = '', { loading = locationSear
     scope.city,
     { broad: scope.broad }
   ).slice(0, 24);
+  const hasResults = locationSheetResults.length > 0;
   let previousGroup = '';
   markup += locationSheetResults.map((item, index) => {
     const primary = item.primary;
@@ -2529,15 +2538,16 @@ function renderLocationSheet(type, results, query = '', { loading = locationSear
       locationSearchBroadLoading ? ' disabled' : ''
     }>${locationSearchBroadLoading ? 'Loading other cities…' : 'Show more cities'}</button>`;
   }
-  list.innerHTML = markup || `<div class="sheet-empty">${
+  if (!hasResults) markup += `<div class="sheet-empty">${
     loading
       ? 'Searching nearby and wider areas…'
       : error
-        ? 'Search is temporarily unavailable. Try another phrase or pin the location on the map.'
+        ? escapeLocationText(error)
         : query
           ? 'No matching areas yet. Try another letter or search phrase.'
           : 'Start typing to see matching areas. You can also pin the location directly on the map.'
   }</div>`;
+  list.innerHTML = markup;
   openLocationSheet(type);
 }
 
@@ -2627,10 +2637,48 @@ function closeDropdown(type) {
   if (activeLocationSearch === type) closeLocationSheet();
 }
 
+function cancelLocationSearchRequest(type) {
+  clearTimeout(locTimer[type]);
+  clearTimeout(locSearchTimeout[type]);
+  locSearchAbort[type]?.abort();
+  locSearchAbort[type] = null;
+  locSearchTimeout[type] = null;
+}
+
+function beginLocationSearchRequest(type, requestId) {
+  cancelLocationSearchRequest(type);
+  const controller = new AbortController();
+  let timedOut = false;
+  locSearchAbort[type] = controller;
+  locSearchTimeout[type] = setTimeout(() => {
+    if (locSearchSeq[type] !== requestId) return;
+    timedOut = true;
+    locSearchSeq[type]++;
+    controller.abort();
+    locationSearchRemoteResults = [];
+    locationSearchBroadLoading = false;
+    locationSearchLoading = false;
+    locationSearchError = 'Search timed out. Try again or pin the location on the map.';
+    setVoiceStatus(locationSearchError, true);
+    renderLocationSheet(type, [], locationSearchQuery, { loading: false, error: locationSearchError });
+  }, CUSTOMER_SEARCH_TIMEOUT_MS);
+  return {
+    signal: controller.signal,
+    finish() {
+      clearTimeout(locSearchTimeout[type]);
+      locSearchTimeout[type] = null;
+      if (locSearchAbort[type] === controller) locSearchAbort[type] = null;
+    },
+    wasTimedOut() {
+      return timedOut;
+    }
+  };
+}
+
 function onLocInput(type) {
   const input = document.getElementById(`${type}-input`);
   const query = input.value.trim();
-  clearTimeout(locTimer[type]);
+  cancelLocationSearchRequest(type);
   const requestId = (locSearchSeq[type] || 0) + 1;
   locSearchSeq[type] = requestId;
   const scope = locationSearchScope(query);
@@ -2646,22 +2694,32 @@ function onLocInput(type) {
   renderLocationSheet(type, local, query);
   if (!query) return;
   locTimer[type] = setTimeout(async () => {
-    let remote = await searchPlaces(query, scope);
-    if (!remote.length && scope.city) {
-      remote = await searchPlaces(query, { ...scope, broad: true });
+    const request = beginLocationSearchRequest(type, requestId);
+    try {
+      let remote = await searchPlaces(query, scope, { signal: request.signal });
+      if (!remote.length && scope.city && locSearchSeq[type] === requestId) {
+        remote = await searchPlaces(query, { ...scope, broad: true }, { signal: request.signal });
+      }
+      if (locSearchSeq[type] !== requestId || request.wasTimedOut()) return;
+      locationSearchRemoteResults = remote;
+      locationSearchLoading = false;
+      locationSearchError = '';
+      const merged = mergeLocationResults(local, remote, query, scope.city, { broad: scope.broad });
+      setVoiceStatus('', false);
+      renderLocationSheet(type, merged, query, { loading: false });
+    } finally {
+      request.finish();
     }
-    if (locSearchSeq[type] !== requestId) return;
-    locationSearchRemoteResults = remote;
-    locationSearchLoading = false;
-    locationSearchError = '';
-    const merged = mergeLocationResults(local, remote, query, scope.city, { broad: scope.broad });
-    setVoiceStatus('', false);
-    renderLocationSheet(type, merged, query, { loading: false });
   }, 140);
 }
 
 function speechRecognitionConstructor() {
   return window.SpeechRecognition || window.webkitSpeechRecognition || null;
+}
+
+function clearVoiceSearchTimeout() {
+  clearTimeout(voiceSearchTimeout);
+  voiceSearchTimeout = null;
 }
 
 function setVoiceStatus(message = '', isError = false) {
@@ -2688,6 +2746,8 @@ function startVoiceSearch(type) {
     return;
   }
   if (voiceRecognition) {
+    voiceSearchSession++;
+    clearVoiceSearchTimeout();
     voiceRecognition.stop();
     voiceRecognition = null;
     if (voiceSearchType === type) {
@@ -2699,6 +2759,7 @@ function startVoiceSearch(type) {
   openLocationSheet(type);
   const language = document.getElementById('voice-language')?.value || 'ur-PK';
   const recognition = new Recognition();
+  const session = ++voiceSearchSession;
   voiceRecognition = recognition;
   voiceSearchType = type;
   recognition.lang = language;
@@ -2706,10 +2767,12 @@ function startVoiceSearch(type) {
   recognition.interimResults = false;
   recognition.maxAlternatives = 1;
   recognition.onstart = () => {
+    if (voiceSearchSession !== session) return;
     setVoiceButtonState(type, true);
     setVoiceStatus(`Listening in ${language}…`);
   };
   recognition.onresult = event => {
+    if (voiceSearchSession !== session || voiceRecognition !== recognition) return;
     const transcript = Array.from(event.results || [])
       .map(result => result[0]?.transcript || '')
       .join(' ')
@@ -2722,6 +2785,8 @@ function startVoiceSearch(type) {
     setVoiceStatus(`Searching for “${transcript}”`);
   };
   recognition.onerror = event => {
+    if (voiceSearchSession !== session || voiceRecognition !== recognition) return;
+    clearVoiceSearchTimeout();
     customerReadinessState.microphone = event.error === 'not-allowed' ? 'denied' : customerReadinessState.microphone;
     const message = event.error === 'not-allowed'
       ? 'Microphone access was blocked. Allow it in browser settings or type the location.'
@@ -2731,13 +2796,33 @@ function startVoiceSearch(type) {
     setVoiceStatus(message, true);
   };
   recognition.onend = () => {
+    if (voiceSearchSession !== session) return;
+    clearVoiceSearchTimeout();
     setVoiceButtonState(type, false);
     voiceRecognition = null;
     voiceSearchType = null;
   };
+  voiceSearchTimeout = setTimeout(() => {
+    if (voiceSearchSession !== session || voiceRecognition !== recognition) return;
+    voiceSearchSession++;
+    try {
+      if (typeof recognition.abort === 'function') recognition.abort();
+      else recognition.stop();
+    } catch {}
+    clearVoiceSearchTimeout();
+    voiceRecognition = null;
+    voiceSearchType = null;
+    setVoiceButtonState(type, false);
+    input.value = '';
+    input.classList.remove('has-val');
+    updateClearBtn(type);
+    onLocInput(type);
+    setVoiceStatus('Voice search timed out. Try again or type the location.', true);
+  }, CUSTOMER_SEARCH_TIMEOUT_MS);
   try {
     recognition.start();
   } catch (error) {
+    clearVoiceSearchTimeout();
     setVoiceStatus('Voice search could not start. You can type the location instead.', true);
     voiceRecognition = null;
     voiceSearchType = null;
@@ -2752,17 +2837,22 @@ async function expandLocationSearch(type) {
   locSearchSeq[type] = requestId;
   locationSearchBroadLoading = true;
   renderLocationSheet(type, locationSearchRemoteResults, query);
-  const broadRemote = await searchPlaces(query, { broad: true });
-  if (locSearchSeq[type] !== requestId) return;
-  locationSearchRemoteResults = [...locationSearchRemoteResults, ...broadRemote];
-  locationSearchBroadLoaded = true;
-  locationSearchBroadLoading = false;
-  const local = localLocationResults(query, { broad: true });
-  renderLocationSheet(
-    type,
-    mergeLocationResults(local, locationSearchRemoteResults, query, locationSearchCity, { broad: true }),
-    query
-  );
+  const request = beginLocationSearchRequest(type, requestId);
+  try {
+    const broadRemote = await searchPlaces(query, { broad: true }, { signal: request.signal });
+    if (locSearchSeq[type] !== requestId || request.wasTimedOut()) return;
+    locationSearchRemoteResults = [...locationSearchRemoteResults, ...broadRemote];
+    locationSearchBroadLoaded = true;
+    locationSearchBroadLoading = false;
+    const local = localLocationResults(query, { broad: true });
+    renderLocationSheet(
+      type,
+      mergeLocationResults(local, locationSearchRemoteResults, query, locationSearchCity, { broad: true }),
+      query
+    );
+  } finally {
+    request.finish();
+  }
 }
 
 function onLocFocus(type) {

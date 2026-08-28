@@ -5,6 +5,7 @@
 
 require('dotenv').config({ path: require('path').resolve(__dirname, '..', '.env') });
 const { computeBackfillPaidUntil } = require('./lib/backfillPaidUntil');
+const { searchLocations } = require('./location-search-engine');
 
 // ─── Global crash protection ──────────────────────────────────────────────────
 // Catch any unhandled error/rejection so the server never exits unexpectedly.
@@ -3633,6 +3634,16 @@ app.get('/api/geocode', async (req, res) => {
   const city = String(req.query.city || '').trim().slice(0, 80);
   const broad = ['1', 'true', 'yes'].includes(String(req.query.broad || '').toLowerCase());
   const globalSearch = ['1', 'true', 'yes'].includes(String(req.query.global || '').toLowerCase());
+  const localResults = searchLocations(q, {
+    city: globalSearch ? '' : city,
+    lat: Number(req.query.lat),
+    lng: Number(req.query.lng),
+    broad
+  });
+
+  // The in-process index is the millisecond fast path. Only broad expansion
+  // or an index miss should reach an external provider.
+  if (localResults.length && !broad) return res.json(localResults);
 
   try {
     const key = process.env.LOCATIONIQ_KEY;
@@ -3669,7 +3680,7 @@ app.get('/api/geocode', async (req, res) => {
         .filter(result => broad || !city || !geocodeResultCity(result)
           || geocodeCityMatches(geocodeResultCity(result), city))
       : [];
-    res.json(results);
+    res.json([...localResults, ...results]);
   } catch (err) {
     console.error('Geocode error:', err.message);
     res.status(502).json({ error: 'Geocoding is temporarily unavailable' });
