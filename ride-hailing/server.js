@@ -1999,6 +1999,16 @@ function clearAdminRecoveryThrottle(req) {
   ADMIN_RECOVERY_ATTEMPTS.delete(`${req.ip}:${String(req.body?.email || '').trim().toLowerCase()}`);
 }
 
+function configuredAdminEmail() {
+  return String(process.env.ADMIN_EMAIL || 'admin@myride.com').trim();
+}
+
+function previewAdminPasswordIsAuthoritative() {
+  return process.env.DEMO_ACCOUNTS_ENABLED === 'true' &&
+    process.env.NODE_ENV !== 'production' &&
+    !process.env.MONGO_URI;
+}
+
 async function getAdminSecurity() {
   const doc = await Settings.findOne({ key: ADMIN_SECURITY_KEY }).lean();
   return {
@@ -2018,6 +2028,13 @@ async function saveAdminSecurity(security) {
 
 async function verifySuperAdminPassword(candidate, security = null) {
   const current = security || await getAdminSecurity();
+  // The preview database is intentionally ephemeral. When an Admin password
+  // is changed through the workspace secret, it must take effect immediately
+  // instead of losing to a stale hash left in that in-memory database.
+  // Production deployments with MongoDB continue to use the persisted hash.
+  if (previewAdminPasswordIsAuthoritative() && process.env.ADMIN_PASSWORD) {
+    return constantTimeEqual(candidate, process.env.ADMIN_PASSWORD);
+  }
   if (current.passwordHash) return bcrypt.compare(String(candidate || ''), current.passwordHash);
   // There is deliberately no built-in password. A fresh local/demo instance
   // may opt into ADMIN_PASSWORD explicitly; production must initialize the
@@ -4089,7 +4106,7 @@ app.get('/api/geocode/reverse', authMiddleware, async (req, res) => {
 app.post('/api/admin/login', async (req, res) => {
   try {
     const { email, password } = req.body;
-    const adminEmail = process.env.ADMIN_EMAIL || 'admin@myride.com';
+    const adminEmail = configuredAdminEmail();
     if (!email || !password || String(email).trim().toLowerCase() !== adminEmail.toLowerCase()) {
       return res.status(401).json({ error: 'Invalid admin credentials' });
     }
@@ -4154,7 +4171,7 @@ app.post('/api/admin/forgot-password', async (req, res) => {
     const genericError = 'Unable to reset the password with those recovery details';
     if (!throttleAdminRecovery(req)) return res.status(429).json({ error: 'Too many recovery attempts. Try again later.' });
     const { email, recoveryKey, newPassword } = req.body || {};
-    const adminEmail = process.env.ADMIN_EMAIL || 'admin@myride.com';
+    const adminEmail = configuredAdminEmail();
     if (!validateStrongPassword(newPassword) || !validateRecoveryKey(recoveryKey) ||
         String(email || '').trim().toLowerCase() !== adminEmail.toLowerCase()) {
       return res.status(401).json({ error: genericError });

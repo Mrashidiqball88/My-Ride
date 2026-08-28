@@ -70,6 +70,10 @@ function adminToken(version = 0) {
   return jwt.sign({ isAdmin: true, email: 'admin@myride.com', adminSessionVersion: version }, JWT_SECRET);
 }
 
+function configuredAdminEmail() {
+  return process.env.ADMIN_EMAIL || 'admin@myride.com';
+}
+
 function subAdminToken() {
   return jwt.sign({ isSubAdmin: true, email: 'sub@myride.com' }, JWT_SECRET);
 }
@@ -274,7 +278,7 @@ test('recovery-key setup works, rate limits attempts, and invalidates old Super 
 
     const oldTokenResult = await request(server, '/api/admin/login', {
       method: 'POST',
-      body: JSON.stringify({ email: 'admin@myride.com', password: 'admin1234' })
+        body: JSON.stringify({ email: configuredAdminEmail(), password: 'admin1234' })
     });
     assert.equal(oldTokenResult.response.status, 200);
     const oldToken = oldTokenResult.body.token;
@@ -290,7 +294,7 @@ test('recovery-key setup works, rate limits attempts, and invalidates old Super 
     const reset = await request(server, '/api/admin/forgot-password', {
       method: 'POST',
       body: JSON.stringify({
-        email: 'admin@myride.com',
+          email: configuredAdminEmail(),
         recoveryKey: 'a-secure-recovery-key',
         newPassword: 'new-admin-password'
       })
@@ -305,7 +309,7 @@ test('recovery-key setup works, rate limits attempts, and invalidates old Super 
 
     const newLogin = await request(server, '/api/admin/login', {
       method: 'POST',
-      body: JSON.stringify({ email: 'admin@myride.com', password: 'new-admin-password' })
+        body: JSON.stringify({ email: configuredAdminEmail(), password: 'new-admin-password' })
     });
     assert.equal(newLogin.response.status, 200);
     const newSession = await request(server, '/api/admin/security/status', {
@@ -313,6 +317,47 @@ test('recovery-key setup works, rate limits attempts, and invalidates old Super 
     });
     assert.equal(newSession.response.status, 200);
   });
+});
+
+test('preview Admin password secret overrides a stale ephemeral database hash', async () => {
+  const previousEnv = {
+    ADMIN_EMAIL: process.env.ADMIN_EMAIL,
+    ADMIN_PASSWORD: process.env.ADMIN_PASSWORD,
+    DEMO_ACCOUNTS_ENABLED: process.env.DEMO_ACCOUNTS_ENABLED,
+    NODE_ENV: process.env.NODE_ENV,
+    MONGO_URI: process.env.MONGO_URI
+  };
+  process.env.ADMIN_EMAIL = 'machinescarelab@gmail.com';
+  process.env.ADMIN_PASSWORD = 'preview-admin-password';
+  process.env.DEMO_ACCOUNTS_ENABLED = 'true';
+  process.env.NODE_ENV = 'development';
+  delete process.env.MONGO_URI;
+
+  const staleHash = bcrypt.hashSync('old-preview-password', 4);
+  models.Settings.findOne = () => ({
+    lean: async () => ({ value: { passwordHash: staleHash, recoveryKeyHash: '', sessionVersion: 0 } })
+  });
+
+  try {
+    await withServer(async server => {
+      const staleLogin = await request(server, '/api/admin/login', {
+        method: 'POST',
+        body: JSON.stringify({ email: 'machinescarelab@gmail.com', password: 'old-preview-password' })
+      });
+      assert.equal(staleLogin.response.status, 401);
+
+      const currentLogin = await request(server, '/api/admin/login', {
+        method: 'POST',
+        body: JSON.stringify({ email: 'machinescarelab@gmail.com', password: 'preview-admin-password' })
+      });
+      assert.equal(currentLogin.response.status, 200);
+    });
+  } finally {
+    for (const [key, value] of Object.entries(previousEnv)) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+  }
 });
 
 test('Customer and Driver requests require the latest matching session token', async () => {
