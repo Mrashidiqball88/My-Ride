@@ -547,6 +547,7 @@ body{font-family:'Segoe UI',sans-serif;background:#0a0a0f;color:#fff;height:100d
       <div class="customer-readiness-status" id="customer-readiness-status" role="status" aria-live="polite"></div>
       <div class="customer-readiness-actions">
         <button type="button" class="customer-readiness-secondary" onclick="retryCustomerPermissions()">Try again</button>
+        <button type="button" class="customer-readiness-secondary" onclick="skipCustomerReadiness()">Skip for now</button>
         <button type="button" class="customer-readiness-primary" id="customer-readiness-continue" onclick="continueCustomerReadiness()">Continue</button>
       </div>
     </div>
@@ -948,6 +949,7 @@ const API = '';
 const MAP_STYLE_URL = 'https://tiles.openfreemap.org/styles/liberty';
 const MAP_RTL_TEXT_PLUGIN_URL = 'https://unpkg.com/@mapbox/mapbox-gl-rtl-text@0.4.0/dist/mapbox-gl-rtl-text.js';
 const CUSTOMER_SEARCH_TIMEOUT_MS = Number(window.__CUSTOMER_SEARCH_TIMEOUT_MS) || 5500;
+const CUSTOMER_PERMISSION_TIMEOUT_MS = Number(window.__CUSTOMER_PERMISSION_TIMEOUT_MS) || 4500;
 const CUSTOMER_MAP_DEFAULT_CENTER = [69.3451, 30.3753]; // Pakistan; GPS or pickup replaces this.
 const CUSTOMER_MAP_DEFAULT_ZOOM = 5.5;
 const MAP_FALLBACK_STYLE = {
@@ -1021,6 +1023,7 @@ let customerReadinessState = {
 let customerReadinessManualLocation = false;
 let customerReadinessBusy = false;
 let customerReadinessInitialized = false;
+let customerReadinessRun = 0;
 let voiceRecognition = null;
 let voiceSearchType = null;
 let voiceSearchSession = 0;
@@ -1474,9 +1477,25 @@ function customerReadinessAcknowledged() {
   return sessionStorage.getItem('myride:customer-readiness') === '1';
 }
 
+function customerPermissionWithTimeout(operation, fallback, { rejectOnTimeout = false, onLateResolve } = {}) {
+  const pending = Promise.resolve().then(operation);
+  if (onLateResolve) pending.then(onLateResolve, () => {});
+  let timer = null;
+  const timeout = new Promise((resolve, reject) => {
+    timer = setTimeout(() => {
+      if (rejectOnTimeout) reject(fallback);
+      else resolve(fallback);
+    }, CUSTOMER_PERMISSION_TIMEOUT_MS);
+  });
+  return Promise.race([pending, timeout]).finally(() => clearTimeout(timer));
+}
+
 function customerPermissionState(name) {
   if (!navigator.permissions?.query) return 'prompt';
-  return navigator.permissions.query({ name }).then(result => result.state).catch(() => 'prompt');
+  return customerPermissionWithTimeout(
+    () => navigator.permissions.query({ name }),
+    { state: 'prompt' }
+  ).then(result => result?.state || 'prompt').catch(() => 'prompt');
 }
 
 function renderCustomerReadiness() {
@@ -1544,7 +1563,7 @@ function renderCustomerReadiness() {
     || customerReadinessState.location === 'ready'
     || customerReadinessManualLocation;
   continueButton.disabled = customerReadinessBusy;
-  continueButton.textContent = locationReady ? 'Continue' : 'Use map pin instead';
+  continueButton.textContent = 'Continue';
   if (!status.textContent || customerReadinessBusy) {
     status.textContent = customerReadinessBusy
       ? 'Requesting the selected browser permissions…'
@@ -1571,14 +1590,18 @@ async function refreshCustomerPermissionStates() {
 }
 
 function getCustomerCurrentPosition() {
-  return new Promise((resolve, reject) => {
-    if (!navigator.geolocation) return reject(new Error('Location is not supported by this browser'));
-    navigator.geolocation.getCurrentPosition(resolve, reject, {
-      enableHighAccuracy: true,
-      maximumAge: 10000,
-      timeout: 10000
-    });
-  });
+  return customerPermissionWithTimeout(
+    () => new Promise((resolve, reject) => {
+      if (!navigator.geolocation) return reject(new Error('Location is not supported by this browser'));
+      navigator.geolocation.getCurrentPosition(resolve, reject, {
+        enableHighAccuracy: true,
+        maximumAge: 10000,
+        timeout: 10000
+      });
+    }),
+    new Error('Location permission request timed out'),
+    { rejectOnTimeout: true }
+  );
 }
 
 async function requestCustomerMicrophone() {
@@ -1587,7 +1610,16 @@ async function requestCustomerMicrophone() {
     return;
   }
   try {
-    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    const stopLateStream = stream => stream?.getTracks?.().forEach(track => track.stop());
+    const stream = await customerPermissionWithTimeout(
+      () => navigator.mediaDevices.getUserMedia({ audio: true }),
+      null,
+      { onLateResolve: stopLateStream }
+    );
+    if (!stream) {
+      customerReadinessState.microphone = 'unavailable';
+      return;
+    }
     stream.getTracks().forEach(track => track.stop());
     customerReadinessState.microphone = 'granted';
   } catch (error) {
@@ -1601,11 +1633,15 @@ async function requestCustomerNotifications() {
     return;
   }
   try {
-    const result = Notification.permission === 'default'
-      ? await Notification.requestPermission()
-      : Notification.permission;
+    const result = await customerPermissionWithTimeout(
+      () => Notification.permission === 'default'
+        ? Notification.requestPermission()
+        : Notification.permission,
+      null
+    );
     customerReadinessState.notifications = result === 'granted' ? 'granted'
       : result === 'denied' ? 'denied' : 'prompt';
+    if (result === null) customerReadinessState.notifications = 'unavailable';
   } catch {
     customerReadinessState.notifications = 'unavailable';
   }
@@ -1620,59 +1656,80 @@ async function requestCustomerAudio() {
   try {
     const context = window.__myRideAudioContext || new AudioContextClass();
     window.__myRideAudioContext = context;
-    if (context.state === 'suspended') await context.resume();
+    if (context.state === 'suspended') {
+      const resumed = await customerPermissionWithTimeout(() => context.resume(), false);
+      if (!resumed && context.state !== 'running') {
+        customerReadinessState.audio = 'unavailable';
+        return;
+      }
+    }
     customerReadinessState.audio = 'ready';
   } catch {
     customerReadinessState.audio = 'unavailable';
   }
 }
 
+function dismissCustomerReadiness({ manualLocation = false, startGps = false } = {}) {
+  if (manualLocation) {
+    customerReadinessManualLocation = true;
+    if (!['granted', 'ready'].includes(customerReadinessState.location)) {
+      customerReadinessState.location = 'unavailable';
+    }
+  }
+  customerReadinessBusy = false;
+  sessionStorage.setItem('myride:customer-readiness', '1');
+  const modal = document.getElementById('customer-readiness');
+  modal?.classList.remove('open');
+  modal?.setAttribute('aria-hidden', 'true');
+  if (startGps) startCustomerGpsTracking();
+  map?.resize();
+}
+
 async function continueCustomerReadiness() {
   if (customerReadinessBusy) return;
+  const run = ++customerReadinessRun;
   customerReadinessBusy = true;
   const status = document.getElementById('customer-readiness-status');
   if (status) status.textContent = 'Requesting the selected browser permissions…';
   renderCustomerReadiness();
+  let locationReady = false;
   try {
-    if (customerReadinessState.location !== 'granted' && customerReadinessState.location !== 'ready') {
-      try {
-        await getCustomerCurrentPosition();
-        customerReadinessState.location = 'granted';
-      } catch (error) {
-        customerReadinessState.location = error?.code === 1 ? 'denied' : 'unavailable';
-      }
-    }
+    const locationRequest = customerReadinessState.location === 'granted'
+      || customerReadinessState.location === 'ready'
+      ? Promise.resolve()
+      : getCustomerCurrentPosition()
+        .then(() => { customerReadinessState.location = 'granted'; })
+        .catch(error => {
+          customerReadinessState.location = error?.code === 1 ? 'denied' : 'unavailable';
+        });
     await Promise.all([
+      locationRequest,
       requestCustomerMicrophone(),
       requestCustomerNotifications(),
       requestCustomerAudio()
     ]);
-    await refreshCustomerPermissionStates();
-    if (customerReadinessState.location === 'granted' || customerReadinessState.location === 'ready') {
-      customerReadinessManualLocation = false;
-      customerReadinessBusy = false;
-      sessionStorage.setItem('myride:customer-readiness', '1');
-      document.getElementById('customer-readiness')?.classList.remove('open');
-      startCustomerGpsTracking();
-      map?.resize();
-      return;
-    }
-    customerReadinessManualLocation = true;
-    customerReadinessBusy = false;
-    renderCustomerReadiness();
+    locationReady = customerReadinessState.location === 'granted'
+      || customerReadinessState.location === 'ready';
   } catch (error) {
-    customerReadinessBusy = false;
     if (status) status.textContent = error.message || 'Some browser permissions could not be checked.';
-    renderCustomerReadiness();
+  } finally {
+    if (customerReadinessRun !== run) return;
+    dismissCustomerReadiness({ manualLocation: !locationReady, startGps: locationReady });
   }
 }
 
 function retryCustomerPermissions() {
+  if (customerReadinessBusy) return;
   customerReadinessManualLocation = false;
   customerReadinessState.location = 'prompt';
   customerReadinessState.microphone = 'prompt';
   customerReadinessState.notifications = 'prompt';
   void continueCustomerReadiness();
+}
+
+function skipCustomerReadiness() {
+  customerReadinessRun++;
+  dismissCustomerReadiness({ manualLocation: true });
 }
 
 async function initCustomerReadiness() {
@@ -1684,7 +1741,16 @@ async function initCustomerReadiness() {
     return;
   }
   document.getElementById('customer-readiness')?.classList.add('open');
-  await refreshCustomerPermissionStates();
+  document.getElementById('customer-readiness')?.setAttribute('aria-hidden', 'false');
+  try {
+    await refreshCustomerPermissionStates();
+  } catch {
+    customerReadinessState.location = navigator.geolocation ? 'prompt' : 'unavailable';
+    customerReadinessState.microphone = navigator.mediaDevices?.getUserMedia ? 'prompt' : 'unavailable';
+    customerReadinessState.notifications = 'Notification' in window ? 'prompt' : 'unavailable';
+    customerReadinessState.audio = 'unavailable';
+    renderCustomerReadiness();
+  }
 }
 
 // ── Boot ──────────────────────────────────────────────────────────────────

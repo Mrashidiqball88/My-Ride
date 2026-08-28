@@ -34,3 +34,4 @@
 - [Voice search end state](voice-search-end-state.md) — preserve transcript matches and error feedback after one-shot recognition fires its onend callback.
 - [Deferred map marker selection](deferred-map-marker-selection.md) — commit selected location state before MapLibre is ready, then materialize markers when the map initializes.
 - [Customer live geocoding](customer-live-geocoding.md) — Customer suggestions come only from the nationwide provider; pickup city may rank results but never filters them.
+- [Customer readiness permission timeouts](customer-readiness-permission-timeouts.md) — never let a browser capability prompt keep the booking onboarding modal busy indefinitely.
