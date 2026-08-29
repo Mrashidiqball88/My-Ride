@@ -155,6 +155,32 @@ test.describe('scoped Sub-Admin browser permissions', () => {
     }))).toEqual({ adminToken: null, adminEmail: null });
   });
 
+  test('a stale saved Admin session returns to the login form', async ({ page }) => {
+    await page.addInitScript(() => {
+      if (!sessionStorage.getItem('stale-admin-session-test')) {
+        sessionStorage.setItem('stale-admin-session-test', '1');
+        localStorage.setItem('admin_token', 'stale-admin-token');
+        localStorage.setItem('admin_email', 'stale-admin@example.test');
+      }
+    });
+    await page.route('**/api/admin/session', async route => {
+      await route.fulfill({
+        status: 401,
+        contentType: 'application/json',
+        body: JSON.stringify({ error: 'Invalid or expired Admin session' })
+      });
+    });
+
+    await page.goto(`${baseURL}/admin`);
+    await expect(page).toHaveURL(/\/admin$/);
+    await expect(page.locator('#auth-overlay')).toBeVisible();
+    await expect(page.locator('#admin-app')).toBeHidden();
+    await expect(await page.evaluate(() => ({
+      adminToken: localStorage.getItem('admin_token'),
+      adminEmail: localStorage.getItem('admin_email')
+    }))).toEqual({ adminToken: null, adminEmail: null });
+  });
+
   test('restricted deep links stay on an allowed screen without loading restricted data', async ({ page }) => {
     const restrictedRequests = [];
     await page.route('**/api/admin/**', async route => {
