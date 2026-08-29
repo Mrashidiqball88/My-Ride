@@ -370,6 +370,7 @@ function getMongoRetryOptions() {
 function getDatabaseStatus() {
   if (dbConnected || mongoose.connection.readyState === 1) return 'connected';
   if (process.env.MONGO_URI) return 'connecting';
+  if (process.env.NODE_ENV === 'production') return 'unconfigured';
   return 'testing-mode';
 }
 
@@ -6273,7 +6274,11 @@ async function connectDatabase() {
   console.log('MONGO_URI attached:', !!rawUri);
   if (!rawUri) {
     if (process.env.DEMO_ACCOUNTS_ENABLED !== 'true' || process.env.NODE_ENV === 'production') {
-      console.warn('⚠  MONGO_URI not set — running in testing mode (data not persisted)');
+      console.warn(
+        process.env.NODE_ENV === 'production'
+          ? '⚠  MONGO_URI not set — production persistence is unconfigured'
+          : '⚠  MONGO_URI not set — running in testing mode (data not persisted)'
+      );
       return;
     }
     try {
