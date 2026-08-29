@@ -1526,6 +1526,7 @@ async function api(path, method = 'GET', body = null) {
   const data = await r.json().catch(() => ({}));
   if (!r.ok) {
     const error = new Error(data.error || `HTTP ${r.status}`);
+    error.status = r.status;
     error.errors = data.errors;
     throw error;
   }
@@ -1665,6 +1666,13 @@ async function bootAdmin() {
     adminEmail = session.email || adminEmail;
     adminPerms = session.permissions || {};
   } catch (e) {
+    if (e.status === 401 || e.status === 403) {
+      // A restart or credential reconciliation can invalidate a previously
+      // stored Admin token. Never leave the authenticated shell visible when
+      // the server has rejected that session.
+      adminLogout();
+      return;
+    }
     console.warn('Admin session refresh unavailable:', e.message);
   }
   document.getElementById('admin-email-lbl').textContent = adminEmail;
