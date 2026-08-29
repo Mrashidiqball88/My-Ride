@@ -4234,6 +4234,24 @@ app.get('/api/geocode/reverse', authMiddleware, async (req, res) => {
 // Admin Routes  (/api/admin/*)
 // ─────────────────────────────────────────────────────────────────────────────
 
+// Pre-login configuration intentionally returns only the Admin email. It does
+// not expose a password, recovery key, credential hash, or session metadata.
+// This keeps the login form aligned with the same source of truth used by the
+// login handler across preview and persistent MongoDB deployments.
+app.get('/api/admin/login-config', async (_req, res) => {
+  try {
+    const security = await getAdminSecurity();
+    res.setHeader('Cache-Control', 'no-store');
+    res.json({ email: configuredAdminEmail(security.email) });
+  } catch (err) {
+    console.error('Admin login configuration unavailable:', err.message);
+    // The fallback keeps the form usable while the database is unavailable;
+    // the login handler remains the authority for accepting credentials.
+    res.setHeader('Cache-Control', 'no-store');
+    res.json({ email: configuredAdminEmail() });
+  }
+});
+
 // POST /api/admin/login — password is persisted only as a hash after setup.
 app.post('/api/admin/login', async (req, res) => {
   try {

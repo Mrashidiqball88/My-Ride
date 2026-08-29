@@ -417,7 +417,7 @@ input[type=date]:focus{border-color:#f5c518}
     </div>
     <!-- Super-admin form -->
     <div id="auth-form-superadmin">
-      <div class="form-group"><label>Admin Email</label><input type="email" id="a-email" placeholder="machinescarelab@gmail.com" autocomplete="username"></div>
+      <div class="form-group"><label>Admin Email</label><input type="email" id="a-email" placeholder="Loading configured Admin email…" autocomplete="username"></div>
       <div class="form-group"><label>Password</label><input type="password" id="a-pass" placeholder="••••••••" autocomplete="current-password"></div>
       <button class="btn-admin-login" onclick="adminLogin()">Sign In as Super Admin</button>
       <button class="btn-text-link" style="color:#38bdf8" onclick="showRecoveryForm()">Forgot Password?</button>
@@ -430,7 +430,7 @@ input[type=date]:focus{border-color:#f5c518}
     </div>
     <div id="auth-form-recovery" style="display:none">
       <p style="font-size:.8rem;color:#94a3b8;margin-bottom:1rem">Reset the Super Admin password with your Secret Recovery Key.</p>
-       <div class="form-group"><label>Admin Email</label><input type="email" id="recovery-email" placeholder="machinescarelab@gmail.com"></div>
+       <div class="form-group"><label>Admin Email</label><input type="email" id="recovery-email" placeholder="Loading configured Admin email…"></div>
       <div class="form-group"><label>Secret Recovery Key</label><input type="password" id="recovery-key" autocomplete="off"></div>
       <div class="form-group"><label>New Password</label><input type="password" id="recovery-new-password" placeholder="At least 10 characters" autocomplete="new-password"></div>
       <button class="btn-admin-login" onclick="recoverAdminPassword()">Reset Password</button>
@@ -1534,6 +1534,20 @@ async function api(path, method = 'GET', body = null) {
 }
 
 // ── Auth ──────────────────────────────────────────────────────────────────────
+async function loadAdminLoginConfig() {
+  try {
+    const res = await fetch('/api/admin/login-config', { cache: 'no-store' });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok || typeof data.email !== 'string' || !data.email.trim()) return;
+    ['a-email', 'recovery-email'].forEach(id => {
+      const input = document.getElementById(id);
+      if (input && !input.value.trim()) input.value = data.email.trim();
+    });
+  } catch (e) {
+    console.warn('Admin login configuration unavailable:', e.message);
+  }
+}
+
 async function adminLogin() {
   const email = document.getElementById('a-email').value.trim();
   const pass  = document.getElementById('a-pass').value;
@@ -4504,6 +4518,8 @@ document.addEventListener('keydown', e => {
 });
 
 // ── Init ──────────────────────────────────────────────────────────────────────
+loadAdminLoginConfig();
+
 if (adminToken) {
   // Decode stored JWT to restore isSuperAdmin + adminPerms
   try {

@@ -181,6 +181,21 @@ test.describe('scoped Sub-Admin browser permissions', () => {
     }))).toEqual({ adminToken: null, adminEmail: null });
   });
 
+  test('the login and recovery forms load the live Admin email', async ({ page }) => {
+    await page.route('**/api/admin/login-config', async route => {
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({ email: 'atlas-admin@example.test' })
+      });
+    });
+
+    await page.goto(`${baseURL}/admin`);
+    await expect(page.locator('#a-email')).toHaveValue('atlas-admin@example.test');
+    await page.getByRole('button', { name: 'Forgot Password?' }).click();
+    await expect(page.locator('#recovery-email')).toHaveValue('atlas-admin@example.test');
+  });
+
   test('restricted deep links stay on an allowed screen without loading restricted data', async ({ page }) => {
     const restrictedRequests = [];
     await page.route('**/api/admin/**', async route => {

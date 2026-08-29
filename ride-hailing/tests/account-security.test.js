@@ -369,6 +369,34 @@ test('preview Admin password secret overrides a stale ephemeral database hash', 
   }
 });
 
+test('pre-login Admin configuration returns the persisted email without credential fields', async () => {
+  const previousEmail = process.env.ADMIN_EMAIL;
+  delete process.env.ADMIN_EMAIL;
+  models.Settings.findOne = () => query({
+    value: {
+      email: 'atlas-admin@example.test',
+      passwordHash: 'bcrypt-password-hash',
+      recoveryKeyHash: 'bcrypt-recovery-hash',
+      sessionVersion: 9
+    }
+  });
+
+  try {
+    await withServer(async server => {
+      const result = await request(server, '/api/admin/login-config');
+      assert.equal(result.response.status, 200);
+      assert.deepEqual(result.body, { email: 'atlas-admin@example.test' });
+      assert.equal(result.body.password, undefined);
+      assert.equal(result.body.recoveryKey, undefined);
+      assert.equal(result.body.passwordHash, undefined);
+      assert.equal(result.body.sessionVersion, undefined);
+    });
+  } finally {
+    if (previousEmail === undefined) delete process.env.ADMIN_EMAIL;
+    else process.env.ADMIN_EMAIL = previousEmail;
+  }
+});
+
 test('Admin credential sync initializes MongoDB with hashes and non-sensitive email metadata', async () => {
   const previousEnv = {
     ADMIN_EMAIL: process.env.ADMIN_EMAIL,
