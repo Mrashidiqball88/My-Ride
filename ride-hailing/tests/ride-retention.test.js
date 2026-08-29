@@ -10,6 +10,7 @@ const JWT_SECRET = 'ride-hailing-secret-fallback';
 const original = {
   settingsFindOne: models.Settings.findOne,
   settingsFindOneAndUpdate: models.Settings.findOneAndUpdate,
+  adminFindById: models.Admin.findById,
   rideDeleteMany: models.Ride.deleteMany,
   userFind: models.User.find
 };
@@ -17,6 +18,7 @@ const original = {
 afterEach(() => {
   models.Settings.findOne = original.settingsFindOne;
   models.Settings.findOneAndUpdate = original.settingsFindOneAndUpdate;
+  models.Admin.findById = original.adminFindById;
   models.Ride.deleteMany = original.rideDeleteMany;
   models.User.find = original.userFind;
 });
@@ -26,6 +28,7 @@ function token(overrides = {}) {
 }
 
 async function request(server, path, options = {}) {
+  models.Admin.findById = () => ({ lean: async () => ({ email: 'admin@myride.com', sessionVersion: 0 }) });
   const response = await fetch(`http://127.0.0.1:${server.address().port}${path}`, {
     ...options,
     headers: { 'content-type': 'application/json', authorization: `Bearer ${token()}`, ...(options.headers || {}) }

@@ -1049,9 +1049,27 @@ const userSchema = new mongoose.Schema({
   identityVerificationStatus: { type: String, enum: ['pending', 'approved', 'rejected'], default: null }
 }, { timestamps: true });
 
+const customerSchema = userSchema.clone();
+customerSchema.path('role').default('customer');
+customerSchema.remove('isAdmin');
+const driverSchema = userSchema.clone();
+driverSchema.path('role').default('driver');
+driverSchema.remove('isAdmin');
+
+// Super Admin credentials are deliberately independent from both the generic
+// settings store and all Customer/Driver identity records. The stable id keeps
+// bootstrap and session-version checks independent of the configured email.
+const adminSchema = new mongoose.Schema({
+  _id: { type: String, default: 'super-admin' },
+  email: { type: String, required: true, unique: true, lowercase: true, trim: true },
+  passwordHash: { type: String, default: '' },
+  recoveryKeyHash: { type: String, default: '' },
+  sessionVersion: { type: Number, default: 0, min: 0 }
+}, { timestamps: true, collection: 'admins' });
+
 const rideSchema = new mongoose.Schema({
-  passenger: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
-  driver:    { type: mongoose.Schema.Types.ObjectId, ref: 'User', default: null },
+  passenger: { type: mongoose.Schema.Types.ObjectId, ref: 'Customer', required: true },
+  driver:    { type: mongoose.Schema.Types.ObjectId, ref: 'Driver', default: null },
   pickupLocation: {
     lat:     { type: Number, required: true },
     lng:     { type: Number, required: true },
@@ -1107,7 +1125,7 @@ const rideSchema = new mongoose.Schema({
   paymentMethod: { type: String, enum: ['cash', 'easypaisa', 'jazzcash', 'wallet'], default: 'cash' },
   mobileAccount: { type: String, default: '' },
   counterOffers: [{
-    driver:       { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+    driver:       { type: mongoose.Schema.Types.ObjectId, ref: 'Driver' },
     driverName:   String,
     vehicleModel: String,
     vehiclePlate: String,
@@ -1127,7 +1145,7 @@ const rideSchema = new mongoose.Schema({
   // The exact driver audience that received ride:new. Lifecycle retirement
   // events target these personal rooms too, so a room-membership race cannot
   // leave a delivered offer actionable after it is cancelled or taken.
-  notifiedDriverIds: [{ type: mongoose.Schema.Types.ObjectId, ref: 'User' }],
+  notifiedDriverIds: [{ type: mongoose.Schema.Types.ObjectId, ref: 'Driver' }],
   // The response window is persisted with each request. This makes expiry
   // authoritative across server restarts and lets reconnecting drivers render
   // the remaining time rather than restarting a local countdown.
@@ -1136,7 +1154,7 @@ const rideSchema = new mongoose.Schema({
 }, { timestamps: true });
 
 const walletSchema = new mongoose.Schema({
-  user:           { type: mongoose.Schema.Types.ObjectId, ref: 'User', unique: true },
+  user:           { type: mongoose.Schema.Types.ObjectId, ref: 'Driver', unique: true },
   balance:        { type: Number, default: 0 },             // net spendable (all credits − debits)
   realCashWallet: { type: Number, default: 0 },             // deposits + ride earnings only
   bonusWallet:    { type: Number, default: 0 },             // promotional bonuses only
@@ -1202,7 +1220,8 @@ const subAdminSchema = new mongoose.Schema({
 const SubAdmin = mongoose.model('SubAdmin', subAdminSchema);
 
 const sosSchema = new mongoose.Schema({
-  user:     { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+  user:     { type: mongoose.Schema.Types.ObjectId, refPath: 'userModel' },
+  userModel: { type: String, enum: ['Customer', 'Driver'], default: 'Customer' },
   location: { lat: Number, lng: Number },
   message:  { type: String, default: 'SOS Emergency Alert!' },
   ride:     { type: mongoose.Schema.Types.ObjectId, ref: 'Ride', default: null },
@@ -1210,8 +1229,9 @@ const sosSchema = new mongoose.Schema({
 }, { timestamps: true });
 
 const ticketSchema = new mongoose.Schema({
-  user:       { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
+  user:       { type: mongoose.Schema.Types.ObjectId, refPath: 'userModel', required: true },
   role:       { type: String, enum: ['customer','driver'], required: true },
+  userModel:  { type: String, enum: ['Customer', 'Driver'], required: true },
   subject:    { type: String, required: true, trim: true },
   message:    { type: String, required: true, trim: true },
   status:     { type: String, enum: ['open','resolved'], default: 'open' },
@@ -1221,7 +1241,7 @@ const ticketSchema = new mongoose.Schema({
 }, { timestamps: true });
 
 const paymentSchema = new mongoose.Schema({
-  driver:          { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
+  driver:          { type: mongoose.Schema.Types.ObjectId, ref: 'Driver', required: true },
   trxId:           { type: String, required: true, trim: true, uppercase: true },
   amount:          { type: Number, required: true },
   vehicleCategory: { type: String, required: true },
@@ -1258,14 +1278,17 @@ const settingsSchema = new mongoose.Schema({
 
 // Web-Push subscriptions per driver
 const pushSubSchema = new mongoose.Schema({
-  user:         { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
+  user:         { type: mongoose.Schema.Types.ObjectId, ref: 'Driver', required: true },
   endpoint:     { type: String, required: true },
   keys:         { p256dh: String, auth: String },
   updatedAt:    { type: Date, default: Date.now }
 });
 pushSubSchema.index({ user: 1, endpoint: 1 }, { unique: true });
 
-const User     = mongoose.model('User',     userSchema);
+const LegacyUser = mongoose.model('LegacyUser', userSchema, 'users');
+const Customer = mongoose.model('Customer', customerSchema, 'customers');
+const Driver   = mongoose.model('Driver', driverSchema, 'drivers');
+const Admin    = mongoose.model('Admin', adminSchema, 'admins');
 const Ride     = mongoose.model('Ride',     rideSchema);
 const Wallet   = mongoose.model('Wallet',   walletSchema);
 const SOS      = mongoose.model('SOS',      sosSchema);
@@ -1273,6 +1296,176 @@ const Payment  = mongoose.model('Payment',  paymentSchema);
 const Ticket   = mongoose.model('Ticket',   ticketSchema);
 const Settings = mongoose.model('Settings', settingsSchema);
 const PushSub  = mongoose.model('PushSub',  pushSubSchema);
+
+// Compatibility facade for the pre-partition server surface. It deliberately
+// never queries the legacy users collection. Existing route code and tests can
+// continue to use User while the actual persistence target is determined by
+// role or by the preserved document id.
+function userModelsForFilter(filter = {}) {
+  const role = filter.role;
+  if (role === 'customer' || role?.$eq === 'customer') return [Customer];
+  if (role === 'driver' || role?.$eq === 'driver') return [Driver];
+  if (Array.isArray(role?.$in) && role.$in.length === 1) {
+    return role.$in[0] === 'driver' ? [Driver] : [Customer];
+  }
+  return [Customer, Driver];
+}
+
+async function findUserModel(filter = {}) {
+  for (const model of userModelsForFilter(filter)) {
+    const found = await model.findOne(filter).select('_id').lean();
+    if (found) return model;
+  }
+  return null;
+}
+
+class PartitionedUserQuery {
+  constructor(executor) {
+    this.executor = executor;
+  }
+  select(fields) { this.selectFields = fields; return this; }
+  lean() { this.asLean = true; return this; }
+  sort(spec) { this.sortSpec = spec; return this; }
+  limit(value) { this.limitValue = value; return this; }
+  async exec() { return this.executor(this); }
+  then(resolve, reject) { return this.exec().then(resolve, reject); }
+  catch(reject) { return this.exec().catch(reject); }
+}
+
+function applyUserQueryOptions(query, options) {
+  if (options.selectFields) query.select(options.selectFields);
+  if (options.asLean) query.lean();
+  if (options.sortSpec) query.sort(options.sortSpec);
+  if (options.limitValue !== undefined) query.limit(options.limitValue);
+  return query;
+}
+
+function compareUserDocuments(a, b, spec = {}) {
+  for (const [field, direction] of Object.entries(spec)) {
+    const left = a?.[field] instanceof Date ? a[field].getTime() : a?.[field];
+    const right = b?.[field] instanceof Date ? b[field].getTime() : b?.[field];
+    if (left === right) continue;
+    const order = left > right ? 1 : -1;
+    return order * (Number(direction) < 0 ? -1 : 1);
+  }
+  return 0;
+}
+
+const User = {
+  find(filter = {}) {
+    return new PartitionedUserQuery(async options => {
+      const values = await Promise.all(userModelsForFilter(filter).map(async model => {
+        const query = applyUserQueryOptions(model.find(filter), {
+          ...options,
+          // Global sorting/limiting happens after the role collections merge.
+          limitValue: undefined
+        });
+        return query.exec();
+      }));
+      const merged = values.flat();
+      if (options.sortSpec) merged.sort((a, b) => compareUserDocuments(a, b, options.sortSpec));
+      return options.limitValue === undefined ? merged : merged.slice(0, options.limitValue);
+    });
+  },
+  findOne(filter = {}) {
+    return new PartitionedUserQuery(async options => {
+      for (const model of userModelsForFilter(filter)) {
+        const query = applyUserQueryOptions(model.findOne(filter), options);
+        const result = await query.exec();
+        if (result) return result;
+      }
+      return null;
+    });
+  },
+  findById(id) {
+    return new PartitionedUserQuery(async options => {
+      for (const model of [Customer, Driver]) {
+        const query = applyUserQueryOptions(model.findById(id), options);
+        const result = await query.exec();
+        if (result) return result;
+      }
+      return null;
+    });
+  },
+  create(value) {
+    return (value?.role === 'driver' ? Driver : Customer).create(value);
+  },
+  updateOne(filter, update, options = {}) {
+    return new PartitionedUserQuery(async () => {
+      const model = await findUserModel(filter);
+      if (model) return model.updateOne(filter, update, options);
+      if (options.upsert) {
+        const target = userModelsForFilter(filter)[0];
+        return target.updateOne(filter, update, options);
+      }
+      return { acknowledged: true, matchedCount: 0, modifiedCount: 0 };
+    });
+  },
+  updateMany(filter, update, options = {}) {
+    return new PartitionedUserQuery(async () => {
+      const results = await Promise.all(userModelsForFilter(filter).map(model => model.updateMany(filter, update, options)));
+      return {
+        acknowledged: results.every(result => result.acknowledged !== false),
+        matchedCount: results.reduce((sum, result) => sum + (result.matchedCount || 0), 0),
+        modifiedCount: results.reduce((sum, result) => sum + (result.modifiedCount || 0), 0)
+      };
+    });
+  },
+  findOneAndUpdate(filter, update, options = {}) {
+    return new PartitionedUserQuery(async queryOptions => {
+      const model = options.upsert
+        ? userModelsForFilter(filter)[0]
+        : await findUserModel(filter);
+      if (!model) return null;
+      return applyUserQueryOptions(model.findOneAndUpdate(filter, update, options), queryOptions).exec();
+    });
+  },
+  findByIdAndUpdate(id, update, options = {}) {
+    return new PartitionedUserQuery(async queryOptions => {
+      const model = await findUserModel({ _id: id });
+      if (!model) return null;
+      return applyUserQueryOptions(model.findByIdAndUpdate(id, update, options), queryOptions).exec();
+    });
+  },
+  deleteOne(filter, options = {}) {
+    return new PartitionedUserQuery(async () => {
+      const model = await findUserModel(filter);
+      return model ? model.deleteOne(filter, options) : { acknowledged: true, deletedCount: 0 };
+    });
+  },
+  countDocuments(filter = {}) {
+    return Promise.all(userModelsForFilter(filter).map(model => model.countDocuments(filter)))
+      .then(counts => counts.reduce((sum, count) => sum + count, 0));
+  }
+};
+
+// Copy legacy role records into their isolated collections without changing
+// their ObjectIds. The legacy collection is intentionally never used for
+// authentication after this migration and is not deleted automatically.
+async function migrateLegacyUserData() {
+  const legacyUsers = await LegacyUser.find().lean();
+  let migrated = 0;
+  for (const legacy of legacyUsers) {
+    if (!['customer', 'driver'].includes(legacy.role)) continue;
+    const target = legacy.role === 'driver' ? Driver : Customer;
+    const { _id, isAdmin, createdAt, updatedAt, ...safeLegacy } = legacy;
+    const insertValue = {
+      ...safeLegacy,
+      _id,
+      role: legacy.role,
+      ...(createdAt ? { createdAt } : {}),
+      ...(updatedAt ? { updatedAt } : {})
+    };
+    await target.updateOne(
+      { _id },
+      { $setOnInsert: insertValue },
+      { upsert: true, timestamps: false }
+    );
+    migrated++;
+  }
+  if (migrated) console.log(`✓ Migrated ${migrated} legacy Customer/Driver record(s) into isolated collections`);
+  return migrated;
+}
 
 const CUSTOMER_LOCATION_ALIASES_KEY = 'customer_location_aliases';
 const CUSTOMER_LOCATION_ALIAS_LIMIT = 1000;
@@ -2025,7 +2218,6 @@ async function releaseRidePinAtPickup(ride, location) {
   return true;
 }
 
-const ADMIN_SECURITY_KEY = 'admin_security';
 const ADMIN_RECOVERY_ATTEMPTS = new Map();
 const ADMIN_RECOVERY_WINDOW_MS = 15 * 60 * 1000;
 const ADMIN_RECOVERY_MAX_ATTEMPTS = 5;
@@ -2220,13 +2412,10 @@ function clearAdminRecoveryThrottle(req) {
   ADMIN_RECOVERY_ATTEMPTS.delete(`${req.ip}:${String(req.body?.email || '').trim().toLowerCase()}`);
 }
 
-function configuredAdminEmail(persistedEmail = '') {
-  const configured = String(process.env.ADMIN_EMAIL || persistedEmail || '').trim();
-  if (configured) return configured;
-  // Never present the development fallback as a usable production credential.
-  // A production deployment without ADMIN_EMAIL or a persisted Admin identity
-  // must be repaired explicitly instead of misleading the operator.
-  return adminEnvironmentModeEnabled() ? '' : 'admin@myride.com';
+function configuredAdminEmail(_persistedEmail = '') {
+  // The environment value is authoritative. When it is absent, use the clean
+  // My Ride identity rather than inheriting an email from another collection.
+  return String(process.env.ADMIN_EMAIL || '').trim() || 'admin@myride.com';
 }
 
 function adminEnvironmentModeEnabled() {
@@ -2264,26 +2453,26 @@ function validateAdminCredentialEnvironment() {
 }
 
 async function getAdminSecurity() {
-  const doc = await Settings.findOne({ key: ADMIN_SECURITY_KEY }).lean();
+  const doc = await Admin.findById('super-admin').lean();
   return {
-    email: String(doc?.value?.email || '').trim(),
-    passwordHash: doc?.value?.passwordHash || '',
-    recoveryKeyHash: doc?.value?.recoveryKeyHash || '',
-    sessionVersion: Number.isInteger(doc?.value?.sessionVersion) ? doc.value.sessionVersion : 0,
+    email: String(doc?.email || '').trim(),
+    passwordHash: doc?.passwordHash || '',
+    recoveryKeyHash: doc?.recoveryKeyHash || '',
+    sessionVersion: Number.isInteger(doc?.sessionVersion) ? doc.sessionVersion : 0,
     exists: Boolean(doc)
   };
 }
 
 async function saveAdminSecurity(security) {
   const value = {
-    email: String(security.email || '').trim(),
+    email: String(security.email || '').trim() || configuredAdminEmail(),
     passwordHash: String(security.passwordHash || ''),
     recoveryKeyHash: String(security.recoveryKeyHash || ''),
     sessionVersion: Number.isInteger(security.sessionVersion) ? security.sessionVersion : 0
   };
-  await Settings.findOneAndUpdate(
-    { key: ADMIN_SECURITY_KEY },
-    { key: ADMIN_SECURITY_KEY, value },
+  await Admin.findOneAndUpdate(
+    { _id: 'super-admin' },
+    { $set: value, $setOnInsert: { _id: 'super-admin' } },
     { upsert: true, new: true, setDefaultsOnInsert: true }
   );
   return { ...value, exists: true };
@@ -2312,12 +2501,10 @@ async function syncAdminSecurity() {
   let changed = false;
   let invalidateSessions = false;
 
-  if (configuredEmail && next.email !== configuredEmail) {
+  const authoritativeEmail = configuredAdminEmail();
+  if (next.email !== authoritativeEmail) {
     invalidateSessions = Boolean(next.email);
-    next.email = configuredEmail;
-    changed = true;
-  } else if (!next.email && (configuredEmail || configuredPassword || configuredRecoveryKey)) {
-    next.email = configuredAdminEmail();
+    next.email = authoritativeEmail;
     changed = true;
   }
 
@@ -2342,17 +2529,6 @@ async function syncAdminSecurity() {
 
   if (invalidateSessions) {
     next.sessionVersion += 1;
-  }
-
-  // Avoid creating a useless empty credential record when no Admin
-  // environment values are configured and no database record exists.
-  if (!current.exists && !changed) {
-    return {
-      ...current,
-      passwordConfigured: false,
-      recoveryKeyConfigured: false,
-      updated: false
-    };
   }
 
   if (!changed) {
@@ -2380,7 +2556,7 @@ async function initializeAdminSecurity() {
       const result = await syncAdminSecurity();
       if (result.updated) console.log('✓ Admin credential record synchronized');
       if (!result.passwordConfigured) {
-        console.warn('⚠ Admin password is not initialized; configure ADMIN_PASSWORD or an existing admin_security password hash');
+        console.warn('⚠ Admin password is not initialized; configure ADMIN_PASSWORD or provision the dedicated Admin record');
       }
       if (!result.recoveryKeyConfigured) {
         console.warn('⚠ Admin recovery key is not initialized; configure ADMIN_RECOVERY_KEY or set one from Admin Security');
@@ -2555,11 +2731,9 @@ app.get('/api/routing/road', authMiddleware, async (req, res) => {
 
 // Legacy: used by /api/payments/* routes (needs authMiddleware first)
 async function adminMiddleware(req, res, next) {
-  try {
-    const user = await User.findById(req.user.id).select('isAdmin');
-    if (!user || !user.isAdmin) return res.status(403).json({ error: 'Admin access required' });
-    next();
-  } catch (err) { res.status(500).json({ error: err.message }); }
+  // Kept as a compatibility name for older payment-route wiring. Admin
+  // authorization is never inferred from Customer/Driver records.
+  return adminJwt(req, res, next);
 }
 
 // New: accepts both super-admin JWTs (isAdmin:true) and sub-admin JWTs (isSubAdmin:true)
@@ -6228,6 +6402,12 @@ io.use(async (socket, next) => {
   if (!token) return next(new Error('Authentication required'));
   try {
     socket.user = jwt.verify(token, JWT_SECRET);
+    if (socket.user.isAdmin) {
+      const security = await getAdminSecurity();
+      if (Number(socket.user.adminSessionVersion || 0) !== security.sessionVersion) {
+        return next(new Error('Admin session expired'));
+      }
+    }
     if (socket.user.role === 'customer' || socket.user.role === 'driver') {
       const clientSession = socket.handshake.auth?.sessionToken;
       if (typeof clientSession !== 'string' || !clientSession) {
@@ -6527,6 +6707,7 @@ async function connectDatabase() {
       await mongoose.connect(demoMongo.getUri(), getMongoConnectionOptions());
       dbConnected = true;
       global._demoMongoServer = demoMongo;
+      await migrateLegacyUserData();
       await initializeAdminSecurity();
       await seedDemoAccounts();
       console.log('✓ Preview demo database connected and demo accounts seeded');
@@ -6543,6 +6724,7 @@ async function connectDatabase() {
     dbConnected = true;
     console.log('✓ MongoDB Atlas connected');
 
+    await migrateLegacyUserData();
     await initializeAdminSecurity();
 
     // Migrate email index to sparse (one-time, safe to re-run)
@@ -6941,5 +7123,6 @@ module.exports = {
   getMongoRetryOptions,
   getDatabaseStatus,
   connectDatabase,
-  models: { User, Ride, Wallet, Payment, Settings, SubAdmin }
+  migrateLegacyUserData,
+  models: { User, LegacyUser, Customer, Driver, Admin, Ride, Wallet, Payment, Settings, SubAdmin }
 };

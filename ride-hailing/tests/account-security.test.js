@@ -17,8 +17,8 @@ const original = {
   userUpdateOne: models.User.updateOne,
   walletCreate: models.Wallet.create,
   subAdminFindById: models.SubAdmin.findById,
-  settingsFindOne: models.Settings.findOne,
-  settingsFindOneAndUpdate: models.Settings.findOneAndUpdate
+  adminFindById: models.Admin.findById,
+  adminFindOneAndUpdate: models.Admin.findOneAndUpdate
 };
 
 afterEach(() => {
@@ -30,9 +30,9 @@ afterEach(() => {
   });
   Object.assign(models.Wallet, { create: original.walletCreate });
   Object.assign(models.SubAdmin, { findById: original.subAdminFindById });
-  Object.assign(models.Settings, {
-    findOne: original.settingsFindOne,
-    findOneAndUpdate: original.settingsFindOneAndUpdate
+  Object.assign(models.Admin, {
+    findById: original.adminFindById,
+    findOneAndUpdate: original.adminFindOneAndUpdate
   });
   setEmailTransporterForTests(rideHailing.emailTransporter || { sendMail: async () => {} });
 });
@@ -159,7 +159,7 @@ test('customer identity files are not public and only a Super Admin can retrieve
   fs.writeFileSync(path.join(identityDir, fileName), fileContent, { mode: 0o600 });
 
   const security = { passwordHash: '', recoveryKeyHash: '', sessionVersion: 0 };
-  models.Settings.findOne = () => ({ lean: async () => ({ value: security }) });
+  models.Admin.findById = () => ({ lean: async () => security });
   models.User.findOne = queryInput => queryInput._id === customerId
     ? { select: () => query({ customerIdFront: fileName, identityVerifiedAt: new Date() }) }
     : query(null);
@@ -200,7 +200,7 @@ test('driver identity documents are private and unsafe document URLs are rejecte
   fs.writeFileSync(path.join(documentDir, fileName), fileContent, { mode: 0o600 });
 
   const security = { passwordHash: '', recoveryKeyHash: '', sessionVersion: 0 };
-  models.Settings.findOne = () => ({ lean: async () => ({ value: security }) });
+  models.Admin.findById = () => ({ lean: async () => security });
   models.User.findOne = queryInput => queryInput._id === driverId
     ? { select: () => query({ _id: driverId, role: 'driver', cnicFront: fileName }) }
     : query(null);
@@ -260,10 +260,10 @@ test('recovery-key setup works, rate limits attempts, and invalidates old Super 
     recoveryKeyHash: '',
     sessionVersion: 0
   };
-  models.Settings.findOne = () => ({ lean: async () => ({ value: { ...security } }) });
-  models.Settings.findOneAndUpdate = async (_filter, update) => {
-    Object.assign(security, update.value);
-    return { value: { ...security } };
+  models.Admin.findById = () => ({ lean: async () => ({ ...security }) });
+  models.Admin.findOneAndUpdate = async (_filter, update) => {
+    Object.assign(security, update.$set);
+    return { ...security };
   };
 
   try {
@@ -385,7 +385,7 @@ test('preview Admin password secret overrides a stale ephemeral database hash', 
   delete process.env.MONGO_URI;
 
   const staleHash = bcrypt.hashSync('old-preview-password', 4);
-  models.Settings.findOne = () => ({
+  models.Admin.findById = () => ({
     lean: async () => ({ value: { passwordHash: staleHash, recoveryKeyHash: '', sessionVersion: 0 } })
   });
 
@@ -411,27 +411,59 @@ test('preview Admin password secret overrides a stale ephemeral database hash', 
   }
 });
 
-test('pre-login Admin configuration returns the persisted email without credential fields', async () => {
+test('pre-login Admin configuration uses the clean fallback without credential fields', async () => {
   const previousEmail = process.env.ADMIN_EMAIL;
   delete process.env.ADMIN_EMAIL;
-  models.Settings.findOne = () => query({
-    value: {
-      email: 'atlas-admin@example.test',
+  models.Admin.findById = () => query({
+      email: 'legacy-settings-admin@example.test',
       passwordHash: 'bcrypt-password-hash',
       recoveryKeyHash: 'bcrypt-recovery-hash',
       sessionVersion: 9
-    }
   });
 
   try {
     await withServer(async server => {
       const result = await request(server, '/api/admin/login-config');
       assert.equal(result.response.status, 200);
-      assert.deepEqual(result.body, { email: 'atlas-admin@example.test' });
+       assert.deepEqual(result.body, { email: 'admin@myride.com' });
       assert.equal(result.body.password, undefined);
       assert.equal(result.body.recoveryKey, undefined);
       assert.equal(result.body.passwordHash, undefined);
       assert.equal(result.body.sessionVersion, undefined);
+    });
+  } finally {
+    if (previousEmail === undefined) delete process.env.ADMIN_EMAIL;
+    else process.env.ADMIN_EMAIL = previousEmail;
+  }
+});
+
+test('legacy Settings and shared User Admin-shaped records cannot authenticate', async () => {
+  const previousEmail = process.env.ADMIN_EMAIL;
+  delete process.env.ADMIN_EMAIL;
+  const legacyPasswordHash = bcrypt.hashSync('legacy-admin-password', 4);
+  models.Admin.findById = () => query(null);
+  models.Settings.findOne = () => query({
+    key: 'admin_security',
+    value: {
+      email: 'admin@myride.com',
+      passwordHash: legacyPasswordHash,
+      sessionVersion: 0
+    }
+  });
+  models.User.findOne = () => query({
+    _id: 'legacy-admin',
+    email: 'admin@myride.com',
+    isAdmin: true,
+    password: legacyPasswordHash
+  });
+
+  try {
+    await withServer(async server => {
+      const result = await request(server, '/api/admin/login', {
+        method: 'POST',
+        body: JSON.stringify({ email: 'admin@myride.com', password: 'legacy-admin-password' })
+      });
+      assert.equal(result.response.status, 401);
     });
   } finally {
     if (previousEmail === undefined) delete process.env.ADMIN_EMAIL;
@@ -456,10 +488,10 @@ test('Admin credential sync initializes MongoDB with hashes and non-sensitive em
   delete process.env.DEMO_ACCOUNTS_ENABLED;
 
   let storedValue;
-  models.Settings.findOne = () => query(null);
-  models.Settings.findOneAndUpdate = async (_filter, update) => {
-    storedValue = update.value;
-    return { value: storedValue };
+  models.Admin.findById = () => query(null);
+  models.Admin.findOneAndUpdate = async (_filter, update) => {
+    storedValue = update.$set;
+    return storedValue;
   };
 
   try {
@@ -501,10 +533,10 @@ test('Admin credential sync is idempotent when the database already matches the 
     sessionVersion: 3
   };
   let updateCount = 0;
-  models.Settings.findOne = () => query({ value: stored });
-  models.Settings.findOneAndUpdate = async () => {
+  models.Admin.findById = () => query(stored);
+  models.Admin.findOneAndUpdate = async () => {
     updateCount += 1;
-    return { value: stored };
+    return stored;
   };
 
   try {
@@ -541,10 +573,10 @@ test('Admin credential sync repairs stale backup hashes and invalidates old sess
     sessionVersion: 7
   };
   let updatedValue;
-  models.Settings.findOne = () => query({ value: stored });
-  models.Settings.findOneAndUpdate = async (_filter, update) => {
-    updatedValue = update.value;
-    return { value: updatedValue };
+  models.Admin.findById = () => query(stored);
+  models.Admin.findOneAndUpdate = async (_filter, update) => {
+    updatedValue = update.$set;
+    return updatedValue;
   };
 
   try {
@@ -564,7 +596,7 @@ test('Admin credential sync repairs stale backup hashes and invalidates old sess
   }
 });
 
-test('database-managed Admin credentials remain usable when environment bootstrap values are absent', async () => {
+test('dedicated Admin credentials remain usable when environment bootstrap values are absent', async () => {
   const previousEnv = {
     ADMIN_EMAIL: process.env.ADMIN_EMAIL,
     ADMIN_PASSWORD: process.env.ADMIN_PASSWORD,
@@ -581,22 +613,22 @@ test('database-managed Admin credentials remain usable when environment bootstra
   delete process.env.DEMO_ACCOUNTS_ENABLED;
 
   const stored = {
-    email: 'database-admin@example.test',
+    email: 'admin@myride.com',
     passwordHash: await bcrypt.hash('database-admin-password', 4),
     recoveryKeyHash: await bcrypt.hash('database-recovery-key', 4),
     sessionVersion: 2
   };
   let updateCount = 0;
-  models.Settings.findOne = () => query({ value: stored });
-  models.Settings.findOneAndUpdate = async () => {
+  models.Admin.findById = () => query(stored);
+  models.Admin.findOneAndUpdate = async () => {
     updateCount += 1;
-    return { value: stored };
+    return stored;
   };
 
   try {
     const result = await rideHailing.syncAdminSecurity();
     assert.equal(result.updated, false);
-    assert.equal(result.email, 'database-admin@example.test');
+     assert.equal(result.email, 'admin@myride.com');
     assert.equal(result.passwordConfigured, true);
     assert.equal(result.recoveryKeyConfigured, true);
     assert.equal(updateCount, 0);
@@ -605,7 +637,7 @@ test('database-managed Admin credentials remain usable when environment bootstra
       const login = await request(server, '/api/admin/login', {
         method: 'POST',
         body: JSON.stringify({
-          email: 'database-admin@example.test',
+         email: 'admin@myride.com',
           password: 'database-admin-password'
         })
       });
@@ -672,10 +704,10 @@ test('environment-managed Admin credentials reject database-only password and re
     sessionVersion: 4
   };
   let updateCount = 0;
-  models.Settings.findOne = () => query({ value: stored });
-  models.Settings.findOneAndUpdate = async () => {
+  models.Admin.findById = () => query(stored);
+  models.Admin.findOneAndUpdate = async () => {
     updateCount += 1;
-    return { value: stored };
+    return stored;
   };
   const token = jwt.sign({
     id: 'super-admin',
@@ -758,11 +790,11 @@ test('Admin password changes require a fresh emailed OTP and throttle resend req
   };
   const sentMail = [];
   let updateCount = 0;
-  models.Settings.findOne = () => query({ value: security });
-  models.Settings.findOneAndUpdate = async (_filter, update) => {
+  models.Admin.findById = () => query(security);
+  models.Admin.findOneAndUpdate = async (_filter, update) => {
     updateCount += 1;
-    Object.assign(security, update.value);
-    return { value: { ...security } };
+    Object.assign(security, update.$set);
+    return { ...security };
   };
   setEmailTransporterForTests({ sendMail: async mail => { sentMail.push(mail); } });
 

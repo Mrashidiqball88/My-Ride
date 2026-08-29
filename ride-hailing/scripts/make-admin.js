@@ -1,15 +1,16 @@
 /**
- * Promote a user to admin by email.
- * Usage: node ride-hailing/scripts/make-admin.js <email>
+ * Provision the dedicated Super Admin record.
+ * Usage: node ride-hailing/scripts/make-admin.js [email]
+ *
+ * If ADMIN_PASSWORD or ADMIN_RECOVERY_KEY is present in the environment, only
+ * their bcrypt hashes are written. Existing hashes are preserved when the
+ * corresponding secret is omitted.
  */
 require('dotenv').config({ path: require('path').resolve(__dirname, '..', '..', '.env') });
 const mongoose = require('mongoose');
+const bcrypt = require('bcryptjs');
 
-const email = process.argv[2];
-if (!email) {
-  console.error('Usage: node make-admin.js <email>');
-  process.exit(1);
-}
+const email = String(process.argv[2] || process.env.ADMIN_EMAIL || 'admin@myride.com').trim().toLowerCase();
 
 function normalizeMongoUri(uri) {
   const schemeEnd = uri.indexOf('://');
@@ -29,21 +30,31 @@ function normalizeMongoUri(uri) {
   return `${uri.slice(0, authorityStart)}${norm(username)}:${norm(password)}${uri.slice(userInfoSeparator)}`;
 }
 
-const userSchema = new mongoose.Schema({
-  name: String, email: String, password: String,
-  role: String, isAdmin: { type: Boolean, default: false }
-});
-const User = mongoose.model('User', userSchema);
+const adminSchema = new mongoose.Schema({
+  _id: { type: String, default: 'super-admin' },
+  email: { type: String, required: true, unique: true, lowercase: true, trim: true },
+  passwordHash: { type: String, default: '' },
+  recoveryKeyHash: { type: String, default: '' },
+  sessionVersion: { type: Number, default: 0 }
+}, { timestamps: true, collection: 'admins' });
+const Admin = mongoose.model('Admin', adminSchema);
 
 (async () => {
   const uri = process.env.MONGO_URI;
   if (!uri) { console.error('MONGO_URI not set'); process.exit(1); }
   await mongoose.connect(normalizeMongoUri(uri));
-  const result = await User.updateOne({ email: email.toLowerCase() }, { $set: { isAdmin: true } });
-  if (result.matchedCount === 0) {
-    console.error('No matching user found.');
-  } else {
-    console.log('User promotion completed.');
+  const update = { $set: { email } };
+  if (process.env.ADMIN_PASSWORD) {
+    update.$set.passwordHash = await bcrypt.hash(process.env.ADMIN_PASSWORD, 12);
   }
+  if (process.env.ADMIN_RECOVERY_KEY) {
+    update.$set.recoveryKeyHash = await bcrypt.hash(process.env.ADMIN_RECOVERY_KEY, 12);
+  }
+  await Admin.findOneAndUpdate(
+    { _id: 'super-admin' },
+    { ...update, $setOnInsert: { _id: 'super-admin', sessionVersion: 0 } },
+    { upsert: true, new: true, setDefaultsOnInsert: true }
+  );
+  console.log('Dedicated Super Admin record provisioned.');
   await mongoose.disconnect();
 })();

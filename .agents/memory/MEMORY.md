@@ -40,3 +40,4 @@
 - [Customer live geocoding](customer-live-geocoding.md) — Customer suggestions come only from the nationwide provider; pickup city may rank results but never filters them.
 - [Customer readiness permission timeouts](customer-readiness-permission-timeouts.md) — never let a browser capability prompt keep the booking onboarding modal busy indefinitely.
 - [Urdu font shaping](native-urdu-font-shaping.md) — keep Arabic-capable font loading alongside Inter and scope RTL styling to dynamic Arabic-script Driver text.
+- [Migration upsert timestamps](migration-upsert-timestamps.md) — disable automatic Mongoose timestamps when role-partition upserts preserve legacy timestamp fields.

@@ -11,6 +11,7 @@ const USER_ID = '507f1f77bcf86cd799439011';
 
 const original = {
   settingsFindOne: models.Settings.findOne,
+  adminFindById: models.Admin.findById,
   userFind: models.User.find,
   userFindById: models.User.findById,
   rideFindOne: models.Ride.findOne,
@@ -19,6 +20,7 @@ const original = {
 
 afterEach(() => {
   models.Settings.findOne = original.settingsFindOne;
+  models.Admin.findById = original.adminFindById;
   models.User.find = original.userFind;
   models.User.findById = original.userFindById;
   models.Ride.findOne = original.rideFindOne;
@@ -34,7 +36,7 @@ function driverOnlySubAdminToken() {
 }
 
 function adminSecurityStub() {
-  models.Settings.findOne = () => ({ lean: async () => ({ value: { sessionVersion: 0 } }) });
+  models.Admin.findById = () => ({ lean: async () => ({ email: 'admin@myride.com', sessionVersion: 0 }) });
 }
 
 function listQuery(items) {

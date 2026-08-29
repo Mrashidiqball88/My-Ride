@@ -80,6 +80,11 @@ before(async () => {
   await new Promise(resolve => server.listen(0, resolve));
   baseURL = `http://127.0.0.1:${server.address().port}`;
   adminToken = jwt.sign({ isAdmin: true, username: 'audit-admin' }, JWT_SECRET);
+  await models.Admin.create({
+    _id: 'super-admin',
+    email: 'audit-admin@example.test',
+    sessionVersion: 0
+  });
   await models.Settings.create([
     { key: 'daily_fee_settings', value: dailyFees(100) },
     { key: 'long_range_ride_settings', value: longRangeSettings() }

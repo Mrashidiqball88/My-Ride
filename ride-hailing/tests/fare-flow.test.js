@@ -18,6 +18,7 @@ const originalSettings = {
   findOne: models.Settings.findOne,
   findOneAndUpdate: models.Settings.findOneAndUpdate
 };
+const originalAdminFindById = models.Admin.findById;
 const originalRide = {
   create: models.Ride.create,
   find: models.Ride.find,
@@ -33,6 +34,7 @@ const originalWalletExists = models.Wallet.exists;
 afterEach(() => {
   models.Settings.findOne = originalSettings.findOne;
   models.Settings.findOneAndUpdate = originalSettings.findOneAndUpdate;
+  models.Admin.findById = originalAdminFindById;
   models.Ride.create = originalRide.create;
   models.Ride.find = originalRide.find;
   models.Ride.updateOne = originalRide.updateOne;
@@ -56,6 +58,10 @@ function adminToken() {
   return jwt.sign({ id: 'admin-1', isAdmin: true, email: 'admin@example.test' }, JWT_SECRET);
 }
 
+function stubAdminSecurity() {
+  models.Admin.findById = () => ({ lean: async () => ({ email: 'admin@example.test', sessionVersion: 0 }) });
+}
+
 function customerToken() {
   return jwt.sign({ id: 'customer-1', role: 'customer', name: 'Customer' }, JWT_SECRET);
 }
@@ -66,6 +72,7 @@ function driverToken() {
 const TEST_SESSION = 'test-session';
 
 async function request(server, path, options = {}) {
+  stubAdminSecurity();
   const response = await fetch(`http://127.0.0.1:${server.address().port}${path}`, {
     ...options,
     headers: { 'content-type': 'application/json', ...(options.headers || {}) }

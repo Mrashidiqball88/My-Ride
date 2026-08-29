@@ -17,6 +17,7 @@ const original = {
   walletFindOne: models.Wallet.findOne,
   walletFindOneAndUpdate: models.Wallet.findOneAndUpdate,
   settingsFindOne: models.Settings.findOne,
+  adminFindById: models.Admin.findById,
   subAdminFindById: models.SubAdmin.findById,
 };
 
@@ -30,6 +31,7 @@ afterEach(() => {
   models.Wallet.findOne = original.walletFindOne;
   models.Wallet.findOneAndUpdate = original.walletFindOneAndUpdate;
   models.Settings.findOne = original.settingsFindOne;
+  models.Admin.findById = original.adminFindById;
   models.SubAdmin.findById = original.subAdminFindById;
 });
 
@@ -45,7 +47,12 @@ function superAdminToken() {
   return jwt.sign({ isAdmin: true, username: 'admin' }, 'ride-hailing-secret-fallback');
 }
 
+function stubAdminSecurity() {
+  models.Admin.findById = () => ({ lean: async () => ({ email: 'admin@myride.com', sessionVersion: 0 }) });
+}
+
 async function adminRequest(server, path, token, method = 'GET') {
+  stubAdminSecurity();
   const response = await fetch(`http://127.0.0.1:${server.address().port}${path}`, {
     method,
     headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
@@ -56,6 +63,7 @@ async function adminRequest(server, path, token, method = 'GET') {
 }
 
 async function adminJsonRequest(server, path, token, method, body) {
+  stubAdminSecurity();
   const response = await fetch(`http://127.0.0.1:${server.address().port}${path}`, {
     method,
     headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
