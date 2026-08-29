@@ -137,6 +137,24 @@ test.describe('scoped Sub-Admin browser permissions', () => {
     await expect(page.locator('#pay-list button', { hasText: 'Approve' })).toHaveCount(0);
   });
 
+  test('Admin Logout is visible at the bottom of the sidebar and clears the session', async ({ page }) => {
+    await stubAdminData(page);
+    await login(page, 'ops-scope');
+
+    const logout = page.getByRole('button', { name: /Logout from Admin panel/i });
+    await expect(logout).toBeVisible();
+    await expect(logout).toHaveText(/Logout/);
+    await logout.click();
+
+    await expect(page).toHaveURL(/\/admin$/);
+    await expect(page.locator('#auth-overlay')).toBeVisible();
+    await expect(page.locator('#admin-app')).toBeHidden();
+    await expect(await page.evaluate(() => ({
+      adminToken: localStorage.getItem('admin_token'),
+      adminEmail: localStorage.getItem('admin_email')
+    }))).toEqual({ adminToken: null, adminEmail: null });
+  });
+
   test('restricted deep links stay on an allowed screen without loading restricted data', async ({ page }) => {
     const restrictedRequests = [];
     await page.route('**/api/admin/**', async route => {

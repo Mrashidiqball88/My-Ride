@@ -2,6 +2,7 @@
 - [Paid-until access authority](paid-until-access-authority.md) — any future paid-until date is an online fee pass independent of free-trial flags or real-cash wallet state.
 - [Live fare UI tests](live-fare-ui-tests.md) — exercise the authenticated customer and driver pages so fare assertions cover rendered UI, not only socket payloads.
 - [Admin permission refresh](admin-permission-refresh.md) — refresh the server-side Sub-Admin session before applying client visibility rules.
+- [Admin auth shell visibility](admin-auth-shell-visibility.md) — keep the unauthenticated Admin shell hidden with an explicit auth-state guard, including mobile media layouts.
 - [Admin deep-link guards](admin-deep-link-guards.md) — protect both initial hash loads and later hash changes, with fallback before restricted loaders run.
 - [Live fare fixture eligibility](live-fare-fixture-eligibility.md) — live fare tests must model nearby location, wallet eligibility, and the server's current fare quote shape.
 - [Late database attachment](late-database-attachment.md) — test connections may attach after server import, so runtime database readiness must reflect the live connection state.

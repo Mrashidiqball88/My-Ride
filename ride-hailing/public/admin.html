@@ -26,6 +26,7 @@ body{font-family:'Segoe UI',system-ui,sans-serif;background:#06060e;color:#e2e8f
 
 /* ── Layout ── */
 #admin-app{display:none;width:100vw;height:100vh;overflow:hidden;flex-direction:row}
+#admin-app:not(.authenticated){display:none!important}
 #sidebar{width:230px;min-width:230px;background:#08080f;border-right:1px solid #12122a;display:flex;flex-direction:column;overflow-y:auto;flex-shrink:0}
 #main{flex:1;display:flex;flex-direction:column;overflow:hidden}
 
@@ -1593,6 +1594,7 @@ function adminLogout() {
 
   // Show auth overlay immediately, then reload the Admin route so a stale
   // in-memory page cannot remain behind the login screen.
+  document.getElementById('admin-app').classList.remove('authenticated');
   document.getElementById('admin-app').style.display = 'none';
   document.getElementById('auth-overlay').style.display = 'flex';
 
@@ -1655,6 +1657,7 @@ async function subAdminLogin() {
 // ── Boot ──────────────────────────────────────────────────────────────────────
 async function bootAdmin() {
   document.getElementById('auth-overlay').style.display = 'none';
+  document.getElementById('admin-app').classList.add('authenticated');
   document.getElementById('admin-app').style.display    = 'flex';
   try {
     const session = await api('/api/admin/session');
