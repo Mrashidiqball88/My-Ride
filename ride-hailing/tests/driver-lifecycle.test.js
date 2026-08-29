@@ -377,6 +377,96 @@ test('the Grant Free Bonus handler rejects a missing or non-positive manual amou
   }
 });
 
+test('the Admin wallet bonus action credits only the requested wallet amount', async () => {
+  const walletUpdates = [];
+  const notifications = [];
+  const originalIoTo = service.io.to;
+  models.Settings.findOne = () => ({ lean: async () => null });
+  models.User.find = () => ({
+    select: async () => [{
+      _id: '507f1f77bcf86cd799439011',
+      name: 'Wallet Driver'
+    }]
+  });
+  models.Wallet.findOneAndUpdate = async (query, update) => {
+    walletUpdates.push({ query, update });
+    return { balance: 900, bonusWallet: 400 };
+  };
+  service.io.to = room => ({
+    emit: (event, payload) => notifications.push({ room, event, payload })
+  });
+
+  const server = app.listen(0);
+  try {
+    const response = await adminJsonRequest(
+      server,
+      '/api/admin/drivers/grant-wallet-bonus',
+      superAdminToken(),
+      'POST',
+      { driverIds: ['507f1f77bcf86cd799439011'], amount: 400 }
+    );
+    assert.equal(response.response.status, 200);
+    assert.equal(response.body.credited, 1);
+    assert.equal(response.body.bonusAmount, 400);
+    assert.equal(walletUpdates[0].update.$inc.balance, 400);
+    assert.equal(walletUpdates[0].update.$inc.bonusWallet, 400);
+    assert.equal(walletUpdates[0].update.$push.transactions.amount, 400);
+    assert.match(walletUpdates[0].update.$push.transactions.description, /Wallet Bonus Credit/);
+    assert.deepEqual(notifications, [{
+      room: 'user:507f1f77bcf86cd799439011',
+      event: 'wallet:bonus-credited',
+      payload: { bonusAmount: 400 }
+    }]);
+  } finally {
+    service.io.to = originalIoTo;
+    await new Promise(resolve => server.close(resolve));
+  }
+});
+
+test('duration-based Admin fee grants extend each Driver pass from its current paid-until date', async () => {
+  const updates = [];
+  const notifications = [];
+  const originalIoTo = service.io.to;
+  const currentUntil = new Date(Date.now() + 2 * 24 * 60 * 60 * 1000);
+  models.Settings.findOne = () => ({ lean: async () => null });
+  models.User.find = () => ({
+    select: () => ({
+      lean: async () => [{
+        _id: '507f1f77bcf86cd799439011',
+        paidUntilDate: currentUntil
+      }]
+    })
+  });
+  models.User.updateOne = async (query, update) => {
+    updates.push({ query, update });
+    return { acknowledged: true };
+  };
+  service.io.to = room => ({
+    emit: (event, payload) => notifications.push({ room, event, payload })
+  });
+
+  const server = app.listen(0);
+  try {
+    const response = await adminJsonRequest(
+      server,
+      '/api/admin/drivers/grant-fee-waiver',
+      superAdminToken(),
+      'POST',
+      { driverIds: ['507f1f77bcf86cd799439011'], days: 3 }
+    );
+    assert.equal(response.response.status, 200);
+    assert.equal(response.body.count, 1);
+    assert.equal(response.body.days, 3);
+    assert.equal(updates.length, 1);
+    assert.ok(updates[0].update.paidUntilDate > currentUntil);
+    assert.equal(notifications[0].event, 'fee:waived');
+    assert.equal(notifications[0].payload.paidUntilDate, updates[0].update.paidUntilDate.toISOString());
+  } finally {
+    service.io.to = originalIoTo;
+    await new Promise(resolve => server.close(resolve));
+  }
+});
+
 test('Long Range Only drivers are exempt from Daily Fees while Short Range Only and Both are charged', async () => {
   let walletTouched = false;
   models.Wallet.findOne = () => { walletTouched = true; throw new Error('Long Range Only must not read or debit a Daily Fee wallet'); };
