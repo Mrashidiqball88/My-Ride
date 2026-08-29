@@ -1999,47 +1999,179 @@ function clearAdminRecoveryThrottle(req) {
   ADMIN_RECOVERY_ATTEMPTS.delete(`${req.ip}:${String(req.body?.email || '').trim().toLowerCase()}`);
 }
 
-function configuredAdminEmail() {
-  return String(process.env.ADMIN_EMAIL || 'admin@myride.com').trim();
+function configuredAdminEmail(persistedEmail = '') {
+  return String(process.env.ADMIN_EMAIL || persistedEmail || 'admin@myride.com').trim();
 }
 
-function previewAdminPasswordIsAuthoritative() {
-  return process.env.DEMO_ACCOUNTS_ENABLED === 'true' &&
-    process.env.NODE_ENV !== 'production' &&
-    !process.env.MONGO_URI;
+function adminEnvironmentModeEnabled() {
+  return process.env.NODE_ENV === 'production' ||
+    Boolean(process.env.MONGO_URI) ||
+    process.env.DEMO_ACCOUNTS_ENABLED === 'true';
+}
+
+function environmentAdminPasswordIsAuthoritative() {
+  const password = String(process.env.ADMIN_PASSWORD || '');
+  return adminEnvironmentModeEnabled() && validateStrongPassword(password);
+}
+
+function environmentAdminRecoveryKeyIsAuthoritative() {
+  const recoveryKey = String(process.env.ADMIN_RECOVERY_KEY || '').trim();
+  return adminEnvironmentModeEnabled() && validateRecoveryKey(recoveryKey);
+}
+
+function validateAdminCredentialEnvironment() {
+  const configuredEmail = String(process.env.ADMIN_EMAIL || '').trim();
+  const configuredPassword = String(process.env.ADMIN_PASSWORD || '');
+  const configuredRecoveryKey = String(process.env.ADMIN_RECOVERY_KEY || '').trim();
+  const errors = [];
+
+  if (configuredEmail && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(configuredEmail)) {
+    errors.push('ADMIN_EMAIL must be a valid email address');
+  }
+  if (configuredPassword && !validateStrongPassword(configuredPassword)) {
+    errors.push('ADMIN_PASSWORD must be at least 10 characters');
+  }
+  if (configuredRecoveryKey && !validateRecoveryKey(configuredRecoveryKey)) {
+    errors.push('ADMIN_RECOVERY_KEY must be at least 12 characters');
+  }
+  return errors;
 }
 
 async function getAdminSecurity() {
   const doc = await Settings.findOne({ key: ADMIN_SECURITY_KEY }).lean();
   return {
+    email: String(doc?.value?.email || '').trim(),
     passwordHash: doc?.value?.passwordHash || '',
     recoveryKeyHash: doc?.value?.recoveryKeyHash || '',
-    sessionVersion: Number.isInteger(doc?.value?.sessionVersion) ? doc.value.sessionVersion : 0
+    sessionVersion: Number.isInteger(doc?.value?.sessionVersion) ? doc.value.sessionVersion : 0,
+    exists: Boolean(doc)
   };
 }
 
 async function saveAdminSecurity(security) {
+  const value = {
+    email: String(security.email || '').trim(),
+    passwordHash: String(security.passwordHash || ''),
+    recoveryKeyHash: String(security.recoveryKeyHash || ''),
+    sessionVersion: Number.isInteger(security.sessionVersion) ? security.sessionVersion : 0
+  };
   await Settings.findOneAndUpdate(
     { key: ADMIN_SECURITY_KEY },
-    { key: ADMIN_SECURITY_KEY, value: security },
+    { key: ADMIN_SECURITY_KEY, value },
     { upsert: true, new: true, setDefaultsOnInsert: true }
   );
+  return { ...value, exists: true };
+}
+
+// Reconcile the environment-managed Admin identity into MongoDB after every
+// database connection. Passwords and recovery keys are never stored in
+// plaintext. Existing database-managed credentials remain untouched when the
+// corresponding environment value is absent.
+async function syncAdminSecurity() {
+  const configurationErrors = validateAdminCredentialEnvironment();
+  if (configurationErrors.length) {
+    throw new Error(configurationErrors.join('; '));
+  }
+
+  const current = await getAdminSecurity();
+  const configuredEmail = String(process.env.ADMIN_EMAIL || '').trim();
+  const configuredPassword = String(process.env.ADMIN_PASSWORD || '');
+  const configuredRecoveryKey = String(process.env.ADMIN_RECOVERY_KEY || '').trim();
+  const next = {
+    email: current.email,
+    passwordHash: current.passwordHash,
+    recoveryKeyHash: current.recoveryKeyHash,
+    sessionVersion: current.sessionVersion
+  };
+  let changed = false;
+  let invalidateSessions = false;
+
+  if (configuredEmail && next.email !== configuredEmail) {
+    invalidateSessions = Boolean(next.email);
+    next.email = configuredEmail;
+    changed = true;
+  } else if (!next.email && (configuredEmail || configuredPassword || configuredRecoveryKey)) {
+    next.email = configuredAdminEmail();
+    changed = true;
+  }
+
+  if (configuredPassword) {
+    const passwordMatches = next.passwordHash &&
+      await bcrypt.compare(configuredPassword, next.passwordHash).catch(() => false);
+    if (!passwordMatches) {
+      invalidateSessions = Boolean(next.passwordHash);
+      next.passwordHash = await bcrypt.hash(configuredPassword, 12);
+      changed = true;
+    }
+  }
+
+  if (configuredRecoveryKey) {
+    const recoveryKeyMatches = next.recoveryKeyHash &&
+      await bcrypt.compare(configuredRecoveryKey, next.recoveryKeyHash).catch(() => false);
+    if (!recoveryKeyMatches) {
+      next.recoveryKeyHash = await bcrypt.hash(configuredRecoveryKey, 12);
+      changed = true;
+    }
+  }
+
+  if (invalidateSessions) {
+    next.sessionVersion += 1;
+  }
+
+  // Avoid creating a useless empty credential record when no Admin
+  // environment values are configured and no database record exists.
+  if (!current.exists && !changed) {
+    return {
+      ...current,
+      passwordConfigured: false,
+      recoveryKeyConfigured: false,
+      updated: false
+    };
+  }
+
+  if (!changed) {
+    return {
+      ...current,
+      passwordConfigured: Boolean(next.passwordHash),
+      recoveryKeyConfigured: Boolean(next.recoveryKeyHash),
+      updated: false
+    };
+  }
+
+  const saved = await saveAdminSecurity(next);
+  return {
+    ...saved,
+    passwordConfigured: Boolean(saved.passwordHash),
+    recoveryKeyConfigured: Boolean(saved.recoveryKeyHash),
+    updated: true
+  };
+}
+
+async function initializeAdminSecurity() {
+  try {
+    const result = await syncAdminSecurity();
+    if (result.updated) console.log('✓ Admin credential record synchronized');
+    if (!result.passwordConfigured) {
+      console.warn('⚠ Admin password is not initialized; configure ADMIN_PASSWORD or an existing admin_security password hash');
+    }
+    if (!result.recoveryKeyConfigured) {
+      console.warn('⚠ Admin recovery key is not initialized; configure ADMIN_RECOVERY_KEY or set one from Admin Security');
+    }
+  } catch (err) {
+    console.error('⚠ Admin credential synchronization failed:', err.message);
+  }
 }
 
 async function verifySuperAdminPassword(candidate, security = null) {
   const current = security || await getAdminSecurity();
-  // The preview database is intentionally ephemeral. When an Admin password
-  // is changed through the workspace secret, it must take effect immediately
-  // instead of losing to a stale hash left in that in-memory database.
-  // Production deployments with MongoDB continue to use the persisted hash.
-  if (previewAdminPasswordIsAuthoritative() && process.env.ADMIN_PASSWORD) {
+  // When a deployment or preview explicitly provides ADMIN_PASSWORD, it is
+  // the recovery/bootstrap authority. This repairs stale restored hashes
+  // through syncAdminSecurity while also allowing login during a DB outage.
+  if (environmentAdminPasswordIsAuthoritative()) {
     return constantTimeEqual(candidate, process.env.ADMIN_PASSWORD);
   }
   if (current.passwordHash) return bcrypt.compare(String(candidate || ''), current.passwordHash);
-  // There is deliberately no built-in password. A fresh local/demo instance
-  // may opt into ADMIN_PASSWORD explicitly; production must initialize the
-  // persisted admin password before login can succeed.
-  return Boolean(process.env.ADMIN_PASSWORD) && constantTimeEqual(candidate, process.env.ADMIN_PASSWORD);
+  return false;
 }
 
 async function verifyCustomerIdentityDocuments({ name, nationalId, front, back }) {
@@ -4106,11 +4238,11 @@ app.get('/api/geocode/reverse', authMiddleware, async (req, res) => {
 app.post('/api/admin/login', async (req, res) => {
   try {
     const { email, password } = req.body;
-    const adminEmail = configuredAdminEmail();
+    const security = await getAdminSecurity();
+    const adminEmail = configuredAdminEmail(security.email);
     if (!email || !password || String(email).trim().toLowerCase() !== adminEmail.toLowerCase()) {
       return res.status(401).json({ error: 'Invalid admin credentials' });
     }
-    const security = await getAdminSecurity();
     if (!(await verifySuperAdminPassword(password, security))) {
       return res.status(401).json({ error: 'Invalid admin credentials' });
     }
@@ -4141,6 +4273,11 @@ app.patch('/api/admin/security/password', adminJwt, requireSuperAdmin, async (re
     if (!validateStrongPassword(newPassword)) {
       return res.status(422).json({ error: 'New password must be at least 10 characters' });
     }
+    if (environmentAdminPasswordIsAuthoritative()) {
+      return res.status(409).json({
+        error: 'Admin password is managed by the ADMIN_PASSWORD environment secret. Update that secret instead.'
+      });
+    }
     const security = await getAdminSecurity();
     if (!(await verifySuperAdminPassword(currentPassword, security))) {
       return res.status(401).json({ error: 'Current password is incorrect' });
@@ -4160,6 +4297,11 @@ app.put('/api/admin/security/recovery-key', adminJwt, requireSuperAdmin, async (
     if (!validateRecoveryKey(recoveryKey)) {
       return res.status(422).json({ error: 'Secret Recovery Key must be at least 12 characters' });
     }
+    if (environmentAdminRecoveryKeyIsAuthoritative()) {
+      return res.status(409).json({
+        error: 'Recovery key is managed by the ADMIN_RECOVERY_KEY environment secret. Update that secret instead.'
+      });
+    }
     const security = await getAdminSecurity();
     if (!(await verifySuperAdminPassword(currentPassword, security))) {
       return res.status(401).json({ error: 'Current password is incorrect' });
@@ -4177,12 +4319,17 @@ app.post('/api/admin/forgot-password', async (req, res) => {
     const genericError = 'Unable to reset the password with those recovery details';
     if (!throttleAdminRecovery(req)) return res.status(429).json({ error: 'Too many recovery attempts. Try again later.' });
     const { email, recoveryKey, newPassword } = req.body || {};
-    const adminEmail = configuredAdminEmail();
+    const security = await getAdminSecurity();
+    const adminEmail = configuredAdminEmail(security.email);
     if (!validateStrongPassword(newPassword) || !validateRecoveryKey(recoveryKey) ||
         String(email || '').trim().toLowerCase() !== adminEmail.toLowerCase()) {
       return res.status(401).json({ error: genericError });
     }
-    const security = await getAdminSecurity();
+    if (environmentAdminPasswordIsAuthoritative()) {
+      return res.status(409).json({
+        error: 'Admin password is managed by the ADMIN_PASSWORD environment secret. Update that secret instead.'
+      });
+    }
     if (!security.recoveryKeyHash || !(await bcrypt.compare(recoveryKey.trim(), security.recoveryKeyHash))) {
       return res.status(401).json({ error: genericError });
     }
@@ -5969,6 +6116,7 @@ async function connectDatabase() {
       await mongoose.connect(demoMongo.getUri(), { serverSelectionTimeoutMS: 8000 });
       dbConnected = true;
       global._demoMongoServer = demoMongo;
+      await initializeAdminSecurity();
       await seedDemoAccounts();
       console.log('✓ Preview demo database connected and demo accounts seeded');
       await initVapidKeys();
@@ -5993,10 +6141,13 @@ async function connectDatabase() {
     mongoose.connection.on('reconnected', () => {
       dbConnected = true;
       console.log('✓ MongoDB reconnected');
+      initializeAdminSecurity();
     });
     mongoose.connection.on('error', (mongoErr) => {
       console.error('MongoDB connection error:', mongoErr.message);
     });
+
+    await initializeAdminSecurity();
 
     // Migrate email index to sparse (one-time, safe to re-run)
     try {
@@ -6372,6 +6523,9 @@ module.exports = {
   customerLocationAliasMatch,
   matchCustomerLocationAliases,
   isSafeDirectCustomerAlias,
+  getAdminSecurity,
+  saveAdminSecurity,
+  syncAdminSecurity,
   rideOfferIsStillOpenQuery,
   haversineKm,
   findRideBroadcastDrivers,

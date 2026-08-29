@@ -369,6 +369,218 @@ test('preview Admin password secret overrides a stale ephemeral database hash', 
   }
 });
 
+test('Admin credential sync initializes MongoDB with hashes and non-sensitive email metadata', async () => {
+  const previousEnv = {
+    ADMIN_EMAIL: process.env.ADMIN_EMAIL,
+    ADMIN_PASSWORD: process.env.ADMIN_PASSWORD,
+    ADMIN_RECOVERY_KEY: process.env.ADMIN_RECOVERY_KEY,
+    NODE_ENV: process.env.NODE_ENV,
+    MONGO_URI: process.env.MONGO_URI,
+    DEMO_ACCOUNTS_ENABLED: process.env.DEMO_ACCOUNTS_ENABLED
+  };
+  process.env.ADMIN_EMAIL = 'configured-admin@example.test';
+  process.env.ADMIN_PASSWORD = 'configured-admin-password';
+  process.env.ADMIN_RECOVERY_KEY = 'configured-recovery-key';
+  process.env.NODE_ENV = 'production';
+  process.env.MONGO_URI = 'mongodb://admin-sync.test';
+  delete process.env.DEMO_ACCOUNTS_ENABLED;
+
+  let storedValue;
+  models.Settings.findOne = () => query(null);
+  models.Settings.findOneAndUpdate = async (_filter, update) => {
+    storedValue = update.value;
+    return { value: storedValue };
+  };
+
+  try {
+    const result = await rideHailing.syncAdminSecurity();
+    assert.equal(result.email, 'configured-admin@example.test');
+    assert.equal(result.sessionVersion, 0);
+    assert.equal(await bcrypt.compare('configured-admin-password', storedValue.passwordHash), true);
+    assert.equal(await bcrypt.compare('configured-recovery-key', storedValue.recoveryKeyHash), true);
+    assert.equal(storedValue.password, undefined);
+    assert.equal(storedValue.recoveryKey, undefined);
+    assert.equal(storedValue.ADMIN_PASSWORD, undefined);
+    assert.equal(storedValue.ADMIN_RECOVERY_KEY, undefined);
+  } finally {
+    for (const [key, value] of Object.entries(previousEnv)) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+  }
+});
+
+test('Admin credential sync is idempotent when the database already matches the environment', async () => {
+  const previousEnv = {
+    ADMIN_EMAIL: process.env.ADMIN_EMAIL,
+    ADMIN_PASSWORD: process.env.ADMIN_PASSWORD,
+    ADMIN_RECOVERY_KEY: process.env.ADMIN_RECOVERY_KEY,
+    NODE_ENV: process.env.NODE_ENV,
+    MONGO_URI: process.env.MONGO_URI
+  };
+  process.env.ADMIN_EMAIL = 'configured-admin@example.test';
+  process.env.ADMIN_PASSWORD = 'configured-admin-password';
+  process.env.ADMIN_RECOVERY_KEY = 'configured-recovery-key';
+  process.env.NODE_ENV = 'production';
+  process.env.MONGO_URI = 'mongodb://admin-sync.test';
+
+  const stored = {
+    email: 'configured-admin@example.test',
+    passwordHash: await bcrypt.hash('configured-admin-password', 4),
+    recoveryKeyHash: await bcrypt.hash('configured-recovery-key', 4),
+    sessionVersion: 3
+  };
+  let updateCount = 0;
+  models.Settings.findOne = () => query({ value: stored });
+  models.Settings.findOneAndUpdate = async () => {
+    updateCount += 1;
+    return { value: stored };
+  };
+
+  try {
+    const result = await rideHailing.syncAdminSecurity();
+    assert.equal(result.updated, false);
+    assert.equal(result.sessionVersion, 3);
+    assert.equal(updateCount, 0);
+  } finally {
+    for (const [key, value] of Object.entries(previousEnv)) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+  }
+});
+
+test('Admin credential sync repairs stale backup hashes and invalidates old sessions', async () => {
+  const previousEnv = {
+    ADMIN_EMAIL: process.env.ADMIN_EMAIL,
+    ADMIN_PASSWORD: process.env.ADMIN_PASSWORD,
+    ADMIN_RECOVERY_KEY: process.env.ADMIN_RECOVERY_KEY,
+    NODE_ENV: process.env.NODE_ENV,
+    MONGO_URI: process.env.MONGO_URI
+  };
+  process.env.ADMIN_EMAIL = 'configured-admin@example.test';
+  process.env.ADMIN_PASSWORD = 'configured-admin-password';
+  process.env.ADMIN_RECOVERY_KEY = 'configured-recovery-key';
+  process.env.NODE_ENV = 'production';
+  process.env.MONGO_URI = 'mongodb://admin-sync.test';
+
+  const stored = {
+    email: 'restored-old-admin@example.test',
+    passwordHash: await bcrypt.hash('restored-old-password', 4),
+    recoveryKeyHash: await bcrypt.hash('restored-old-recovery-key', 4),
+    sessionVersion: 7
+  };
+  let updatedValue;
+  models.Settings.findOne = () => query({ value: stored });
+  models.Settings.findOneAndUpdate = async (_filter, update) => {
+    updatedValue = update.value;
+    return { value: updatedValue };
+  };
+
+  try {
+    const result = await rideHailing.syncAdminSecurity();
+    assert.equal(result.updated, true);
+    assert.equal(updatedValue.email, 'configured-admin@example.test');
+    assert.equal(updatedValue.sessionVersion, 8);
+    assert.equal(await bcrypt.compare('configured-admin-password', updatedValue.passwordHash), true);
+    assert.equal(await bcrypt.compare('configured-recovery-key', updatedValue.recoveryKeyHash), true);
+    assert.equal(await bcrypt.compare('restored-old-password', updatedValue.passwordHash), false);
+    assert.equal(await bcrypt.compare('restored-old-recovery-key', updatedValue.recoveryKeyHash), false);
+  } finally {
+    for (const [key, value] of Object.entries(previousEnv)) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+  }
+});
+
+test('database-managed Admin credentials remain usable when environment bootstrap values are absent', async () => {
+  const previousEnv = {
+    ADMIN_EMAIL: process.env.ADMIN_EMAIL,
+    ADMIN_PASSWORD: process.env.ADMIN_PASSWORD,
+    ADMIN_RECOVERY_KEY: process.env.ADMIN_RECOVERY_KEY,
+    NODE_ENV: process.env.NODE_ENV,
+    MONGO_URI: process.env.MONGO_URI,
+    DEMO_ACCOUNTS_ENABLED: process.env.DEMO_ACCOUNTS_ENABLED
+  };
+  delete process.env.ADMIN_EMAIL;
+  delete process.env.ADMIN_PASSWORD;
+  delete process.env.ADMIN_RECOVERY_KEY;
+  process.env.NODE_ENV = 'production';
+  process.env.MONGO_URI = 'mongodb://admin-sync.test';
+  delete process.env.DEMO_ACCOUNTS_ENABLED;
+
+  const stored = {
+    email: 'database-admin@example.test',
+    passwordHash: await bcrypt.hash('database-admin-password', 4),
+    recoveryKeyHash: await bcrypt.hash('database-recovery-key', 4),
+    sessionVersion: 2
+  };
+  let updateCount = 0;
+  models.Settings.findOne = () => query({ value: stored });
+  models.Settings.findOneAndUpdate = async () => {
+    updateCount += 1;
+    return { value: stored };
+  };
+
+  try {
+    const result = await rideHailing.syncAdminSecurity();
+    assert.equal(result.updated, false);
+    assert.equal(result.email, 'database-admin@example.test');
+    assert.equal(result.passwordConfigured, true);
+    assert.equal(result.recoveryKeyConfigured, true);
+    assert.equal(updateCount, 0);
+
+    await withServer(async server => {
+      const login = await request(server, '/api/admin/login', {
+        method: 'POST',
+        body: JSON.stringify({
+          email: 'database-admin@example.test',
+          password: 'database-admin-password'
+        })
+      });
+      assert.equal(login.response.status, 200);
+    });
+  } finally {
+    for (const [key, value] of Object.entries(previousEnv)) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+  }
+});
+
+test('invalid Admin environment credentials fail synchronization without exposing their values', async () => {
+  const previousEnv = {
+    ADMIN_EMAIL: process.env.ADMIN_EMAIL,
+    ADMIN_PASSWORD: process.env.ADMIN_PASSWORD,
+    ADMIN_RECOVERY_KEY: process.env.ADMIN_RECOVERY_KEY,
+    NODE_ENV: process.env.NODE_ENV,
+    MONGO_URI: process.env.MONGO_URI
+  };
+  process.env.ADMIN_EMAIL = 'configured-admin@example.test';
+  process.env.ADMIN_PASSWORD = 'short';
+  process.env.ADMIN_RECOVERY_KEY = 'short-key';
+  process.env.NODE_ENV = 'production';
+  process.env.MONGO_URI = 'mongodb://admin-sync.test';
+
+  try {
+    await assert.rejects(
+      () => rideHailing.syncAdminSecurity(),
+      error => {
+        assert.match(error.message, /ADMIN_PASSWORD must be at least 10 characters/);
+        assert.match(error.message, /ADMIN_RECOVERY_KEY must be at least 12 characters/);
+        assert.doesNotMatch(error.message, /short-key/);
+        return true;
+      }
+    );
+  } finally {
+    for (const [key, value] of Object.entries(previousEnv)) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+  }
+});
+
 test('Customer and Driver requests require the latest matching session token', async () => {
   for (const role of ['customer', 'driver']) {
     const user = { _id: `${role}-1`, activeSessionToken: `${role}-current` };
