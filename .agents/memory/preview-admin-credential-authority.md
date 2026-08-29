@@ -3,8 +3,8 @@ name: Preview Admin credential authority
 description: Authentication precedence for ephemeral demo databases and configured Admin secrets.
 ---
 
-In a non-production preview with demo accounts enabled and no MongoDB URI, the configured Admin password secret is authoritative even if the ephemeral Settings collection contains an older password hash. A real MongoDB deployment must continue to use the persisted password hash as the authority.
+When environment-managed Admin credentials are configured, the environment password and recovery key are authoritative across preview and persistent MongoDB deployments; startup reconciles their bcrypt hashes and email metadata into `admin_security`. When those environment values are absent, valid database-managed credentials remain authoritative.
 
-**Why:** Workspace secret changes are the intended recovery mechanism for the ephemeral preview, while allowing an old in-memory hash to win creates a misleading “password rejected” loop after a restart or reset.
+**Why:** Workspace secret changes must repair stale or missing restored hashes without exposing plaintext credentials, while absent environment values must not strand an intentionally database-managed Admin account.
 
-**How to apply:** Keep the preview-only condition explicit and covered by a regression test that seeds a stale hash, rejects the old password, and accepts the configured current secret. Do not broaden this override to production persistence.
+**How to apply:** Keep environment values out of logs, responses, and MongoDB; invalidate existing Admin sessions when the persisted email or password hash changes; reject Admin UI password/recovery-key edits that cannot update the environment secret; cover both preview and persistent-database paths with regression tests.
