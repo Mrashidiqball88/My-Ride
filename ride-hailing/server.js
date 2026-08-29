@@ -309,6 +309,69 @@ if (isProduction && (!process.env.JWT_SECRET || process.env.JWT_SECRET.length < 
 }
 const JWT_SECRET = process.env.JWT_SECRET || 'ride-hailing-secret-fallback';
 let dbConnected  = false;
+let adminSecurityInitializationPromise = null;
+let mongoConnectionHandlersInstalled = false;
+
+const MONGO_DEFAULT_SERVER_SELECTION_TIMEOUT_MS = 30_000;
+const MONGO_DEFAULT_CONNECT_TIMEOUT_MS = 30_000;
+const MONGO_DEFAULT_HEARTBEAT_FREQUENCY_MS = 10_000;
+const MONGO_DEFAULT_INITIAL_RETRY_DELAY_MS = 5_000;
+const MONGO_DEFAULT_MAX_RETRY_DELAY_MS = 30_000;
+
+function positiveIntegerEnv(name, fallback, { min = 1, max = Number.MAX_SAFE_INTEGER } = {}) {
+  const parsed = Number.parseInt(process.env[name] || '', 10);
+  return Number.isInteger(parsed) && parsed >= min && parsed <= max ? parsed : fallback;
+}
+
+function getMongoConnectionOptions() {
+  const serverSelectionTimeoutMS = positiveIntegerEnv(
+    'MONGO_SERVER_SELECTION_TIMEOUT_MS',
+    MONGO_DEFAULT_SERVER_SELECTION_TIMEOUT_MS,
+    { min: 5_000, max: 120_000 }
+  );
+  return {
+    serverSelectionTimeoutMS,
+    connectTimeoutMS: positiveIntegerEnv(
+      'MONGO_CONNECT_TIMEOUT_MS',
+      MONGO_DEFAULT_CONNECT_TIMEOUT_MS,
+      { min: 5_000, max: 120_000 }
+    ),
+    // Mongoose requires heartbeatFrequencyMS to be lower than the server
+    // selection timeout. Keep a safe margin even when operators customize it.
+    heartbeatFrequencyMS: Math.min(
+      positiveIntegerEnv(
+        'MONGO_HEARTBEAT_FREQUENCY_MS',
+        MONGO_DEFAULT_HEARTBEAT_FREQUENCY_MS,
+        { min: 5_000, max: 60_000 }
+      ),
+      Math.max(5_000, serverSelectionTimeoutMS - 1_000)
+    )
+  };
+}
+
+function getMongoRetryOptions() {
+  return {
+    // Zero means retry indefinitely. A finite value is useful for controlled
+    // deployments/tests that prefer startup to give up after a fixed budget.
+    maxAttempts: positiveIntegerEnv('MONGO_INITIAL_RETRY_ATTEMPTS', 0, { min: 0, max: 100 }),
+    initialDelayMS: positiveIntegerEnv(
+      'MONGO_INITIAL_RETRY_DELAY_MS',
+      MONGO_DEFAULT_INITIAL_RETRY_DELAY_MS,
+      { min: 1_000, max: 60_000 }
+    ),
+    maxDelayMS: positiveIntegerEnv(
+      'MONGO_MAX_RETRY_DELAY_MS',
+      MONGO_DEFAULT_MAX_RETRY_DELAY_MS,
+      { min: 1_000, max: 300_000 }
+    )
+  };
+}
+
+function getDatabaseStatus() {
+  if (dbConnected || mongoose.connection.readyState === 1) return 'connected';
+  if (process.env.MONGO_URI) return 'connecting';
+  return 'testing-mode';
+}
 
 // Gateway credentials are encrypted before they are stored in MongoDB and are
 // never returned to browsers. Set PAYMENT_CONFIG_ENCRYPTION_KEY in production;
@@ -2163,18 +2226,26 @@ async function syncAdminSecurity() {
 }
 
 async function initializeAdminSecurity() {
-  try {
-    const result = await syncAdminSecurity();
-    if (result.updated) console.log('✓ Admin credential record synchronized');
-    if (!result.passwordConfigured) {
-      console.warn('⚠ Admin password is not initialized; configure ADMIN_PASSWORD or an existing admin_security password hash');
+  if (adminSecurityInitializationPromise) return adminSecurityInitializationPromise;
+  adminSecurityInitializationPromise = (async () => {
+    try {
+      const result = await syncAdminSecurity();
+      if (result.updated) console.log('✓ Admin credential record synchronized');
+      if (!result.passwordConfigured) {
+        console.warn('⚠ Admin password is not initialized; configure ADMIN_PASSWORD or an existing admin_security password hash');
+      }
+      if (!result.recoveryKeyConfigured) {
+        console.warn('⚠ Admin recovery key is not initialized; configure ADMIN_RECOVERY_KEY or set one from Admin Security');
+      }
+      return result;
+    } catch (err) {
+      console.error('⚠ Admin credential synchronization failed:', err.message);
+      return null;
+    } finally {
+      adminSecurityInitializationPromise = null;
     }
-    if (!result.recoveryKeyConfigured) {
-      console.warn('⚠ Admin recovery key is not initialized; configure ADMIN_RECOVERY_KEY or set one from Admin Security');
-    }
-  } catch (err) {
-    console.error('⚠ Admin credential synchronization failed:', err.message);
-  }
+  })();
+  return adminSecurityInitializationPromise;
 }
 
 async function verifySuperAdminPassword(candidate, security = null) {
@@ -5852,7 +5923,7 @@ app.post('/api/push/subscribe', authMiddleware, async (req, res) => {
 // Health endpoints — deployment probe checks both /api and /api/health
 app.get('/api', function(_req, res) { res.json({ status: 'ok' }); });
 app.get('/api/health', function(_req, res) {
-  res.json({ status: 'ok', db: dbConnected ? 'connected' : 'testing-mode', ts: new Date().toISOString() });
+  res.json({ status: 'ok', db: getDatabaseStatus(), ts: new Date().toISOString() });
 });
 
 // Diagnostic: confirm PAGES are loaded in this container instance
@@ -6141,6 +6212,62 @@ async function initVapidKeys() {
   console.warn('⚠  Using ephemeral VAPID keys — set VAPID_PUBLIC_KEY & VAPID_PRIVATE_KEY env vars for persistence');
 }
 
+function sleep(milliseconds) {
+  return new Promise(resolve => setTimeout(resolve, milliseconds));
+}
+
+async function connectMongoWithRetry(uri) {
+  const connectionOptions = getMongoConnectionOptions();
+  const retryOptions = getMongoRetryOptions();
+  let attempt = 0;
+
+  while (true) {
+    attempt += 1;
+    try {
+      await mongoose.connect(uri, connectionOptions);
+      if (attempt > 1) console.log(`✓ MongoDB Atlas connected after ${attempt} attempt(s)`);
+      return attempt;
+    } catch (err) {
+      dbConnected = false;
+      const exhausted = retryOptions.maxAttempts > 0 && attempt >= retryOptions.maxAttempts;
+      if (exhausted) throw err;
+
+      // Reset a failed initial connection before trying the same URI again.
+      // Mongoose's normal reconnect behavior remains active after a
+      // successful connection and is handled by the connection event hooks.
+      await mongoose.disconnect().catch(() => {});
+      const delay = Math.min(
+        retryOptions.maxDelayMS,
+        retryOptions.initialDelayMS * (2 ** Math.min(attempt - 1, 8))
+      );
+      console.warn(
+        `⚠ MongoDB connection attempt ${attempt} failed; retrying in ${delay}ms: ${err.message}`
+      );
+      await sleep(delay);
+    }
+  }
+}
+
+function installMongoConnectionHandlers() {
+  if (mongoConnectionHandlersInstalled) return;
+  mongoConnectionHandlersInstalled = true;
+
+  mongoose.connection.on('disconnected', () => {
+    dbConnected = false;
+    console.warn('⚠  MongoDB disconnected — Mongoose will auto-reconnect');
+  });
+  mongoose.connection.on('reconnected', () => {
+    dbConnected = true;
+    console.log('✓ MongoDB reconnected');
+    // Reconcile environment-managed Admin credentials after recovery, but
+    // serialize this with the initial sync and any other reconnect event.
+    void initializeAdminSecurity();
+  });
+  mongoose.connection.on('error', (mongoErr) => {
+    console.error('MongoDB connection error:', mongoErr.message);
+  });
+}
+
 async function connectDatabase() {
   const rawUri = process.env.MONGO_URI;
   console.log('MONGO_URI attached:', !!rawUri);
@@ -6154,7 +6281,7 @@ async function connectDatabase() {
       // and is never used when a production MONGO_URI is configured.
       const { MongoMemoryServer } = require('mongodb-memory-server');
       const demoMongo = await MongoMemoryServer.create();
-      await mongoose.connect(demoMongo.getUri(), { serverSelectionTimeoutMS: 8000 });
+      await mongoose.connect(demoMongo.getUri(), getMongoConnectionOptions());
       dbConnected = true;
       global._demoMongoServer = demoMongo;
       await initializeAdminSecurity();
@@ -6167,26 +6294,11 @@ async function connectDatabase() {
     return;
   }
   const uri = normalizeMongoUri(rawUri);
+  installMongoConnectionHandlers();
   try {
-    await mongoose.connect(uri, {
-      serverSelectionTimeoutMS: 8000,
-      heartbeatFrequencyMS: 10000,
-    });
+    await connectMongoWithRetry(uri);
     dbConnected = true;
     console.log('✓ MongoDB Atlas connected');
-
-    mongoose.connection.on('disconnected', () => {
-      dbConnected = false;
-      console.warn('⚠  MongoDB disconnected — Mongoose will auto-reconnect');
-    });
-    mongoose.connection.on('reconnected', () => {
-      dbConnected = true;
-      console.log('✓ MongoDB reconnected');
-      initializeAdminSecurity();
-    });
-    mongoose.connection.on('error', (mongoErr) => {
-      console.error('MongoDB connection error:', mongoErr.message);
-    });
 
     await initializeAdminSecurity();
 
@@ -6204,7 +6316,7 @@ async function connectDatabase() {
       console.warn('Email index migration skipped:', migrateErr.message);
     }
   } catch (err) {
-    console.warn('⚠  MongoDB unavailable, running in testing mode:', err.message);
+    console.error('⚠  MongoDB unavailable; persistence remains disabled until it is repaired:', err.message);
   }
 
   await initVapidKeys();
@@ -6582,5 +6694,9 @@ module.exports = {
   normalizeSubAdminPermissions,
   hasAdminPermission,
   setEmailTransporterForTests,
+  getMongoConnectionOptions,
+  getMongoRetryOptions,
+  getDatabaseStatus,
+  connectDatabase,
   models: { User, Ride, Wallet, Payment, Settings, SubAdmin }
 };
