@@ -43,9 +43,9 @@ body{font-family:'Segoe UI',system-ui,sans-serif;background:#06060e;color:#e2e8f
 .sb-item.active{color:#f5c518;background:#0f0f18;border-left-color:#f5c518}
 .sb-icon{font-size:1rem;width:18px;text-align:center;flex-shrink:0}
 .sb-badge-count{margin-left:auto;background:#ef4444;color:#fff;border-radius:100px;font-size:.62rem;font-weight:800;padding:.1rem .4rem;min-width:18px;text-align:center}
-.sb-footer{padding:.8rem 1.1rem;border-top:1px solid #12122a;font-size:.72rem;color:#334155}
+.sb-footer{margin-top:auto;padding:.8rem 1.1rem;border-top:1px solid #12122a;font-size:.72rem;color:#334155}
 .btn-signout{background:none;border:1px solid #1e1e3a;color:#64748b;border-radius:8px;padding:.3rem .7rem;font-size:.72rem;cursor:pointer;transition:all .15s;margin-top:.4rem;width:100%}
-.btn-signout:hover{border-color:#ef4444;color:#ef4444}
+.btn-signout:hover,.btn-signout:focus-visible{border-color:#ef4444;color:#ef4444}
 
 /* ── Header ── */
 #top-header{background:#0a0a16;border-bottom:1px solid #12122a;padding:.75rem 1.5rem;display:flex;align-items:center;gap:1rem;flex-shrink:0}
@@ -476,7 +476,7 @@ input[type=date]:focus{border-color:#f5c518}
     </div>
     <div class="sb-footer">
       <div id="admin-email-lbl">—</div>
-      <button type="button" id="admin-signout" class="btn-signout" onclick="adminLogout()" aria-label="Sign out of Admin panel">🚪 Sign Out</button>
+      <button type="button" id="admin-signout" class="btn-signout" onclick="adminLogout()" aria-label="Logout from Admin panel">🚪 Logout</button>
     </div>
   </nav>
 
@@ -1562,12 +1562,26 @@ function adminLogout() {
     adminCityWatchId = null;
   }
 
-  // Wipe all auth state from memory and storage
-  localStorage.clear();
-  sessionStorage.clear();
+  // Remove only Admin credentials. Do not clear Customer/Driver state stored
+  // in the same browser.
+  ['admin_token', 'admin_email'].forEach(key => {
+    localStorage.removeItem(key);
+    sessionStorage.removeItem(key);
+  });
   adminToken   = null;
+  adminEmail   = '';
   isSuperAdmin = true;
   adminPerms   = {};
+  selectedDriverIds.clear();
+  pendingAction = null;
+  if (liveLocationRefreshTimer) {
+    clearInterval(liveLocationRefreshTimer);
+    liveLocationRefreshTimer = null;
+  }
+  if (adminLiveLocationRefreshTimer) {
+    clearInterval(adminLiveLocationRefreshTimer);
+    adminLiveLocationRefreshTimer = null;
+  }
 
   // Clear every login form field so no credentials linger
   ['a-email', 'a-pass', 'sa-username', 'sa-pass'].forEach(id => {
@@ -1577,12 +1591,13 @@ function adminLogout() {
   document.getElementById('a-err').textContent = '';
   switchAuthTab('superadmin');
 
-  // Show auth overlay, hide app
+  // Show auth overlay immediately, then reload the Admin route so a stale
+  // in-memory page cannot remain behind the login screen.
   document.getElementById('admin-app').style.display = 'none';
   document.getElementById('auth-overlay').style.display = 'flex';
 
-  // Replace history so Back button cannot return to the admin panel
-  history.replaceState(null, '', location.pathname);
+  // Replace history so Back button cannot return to the authenticated panel.
+  window.location.replace('/admin');
 }
 
 function switchAuthTab(type) {
