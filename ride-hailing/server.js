@@ -5033,6 +5033,40 @@ app.post('/api/admin/drivers/grant-trial', adminJwt, requirePerm('manageDriverPa
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
+// POST /api/admin/drivers/grant-wallet-bonus — credit a manual amount without changing fee access
+app.post('/api/admin/drivers/grant-wallet-bonus', adminJwt, requirePerm('manageDriverPasses'), async (req, res) => {
+  try {
+    const { driverIds, amount } = req.body;
+    if (!Array.isArray(driverIds) || !driverIds.length)
+      return res.status(400).json({ error: 'driverIds array required' });
+    const bonusAmount = Number(amount);
+    if (!Number.isFinite(bonusAmount) || bonusAmount <= 0)
+      return res.status(400).json({ error: 'A valid bonus amount greater than Rs 0 is required' });
+
+    const drivers = await User.find({ _id: { $in: driverIds }, role: 'driver' }).select('name');
+    const results = [];
+    for (const driver of drivers) {
+      await Wallet.findOneAndUpdate(
+        { user: driver._id },
+        {
+          $inc: { balance: bonusAmount, bonusWallet: bonusAmount },
+          $push: {
+            transactions: {
+              amount: bonusAmount,
+              type: 'credit',
+              description: `Admin Wallet Bonus Credit (Rs ${bonusAmount.toLocaleString('en-PK', { maximumFractionDigits: 2 })})`
+            }
+          }
+        },
+        { upsert: true, new: true }
+      );
+      io.to(`user:${driver._id}`).emit('wallet:bonus-credited', { bonusAmount });
+      results.push({ id: driver._id, name: driver.name, amount: bonusAmount });
+    }
+    res.json({ success: true, credited: results.length, results, bonusAmount });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
 // GET /api/admin/daily-fee-compliance — active drivers grouped by paid / unpaid for today
 app.get('/api/admin/daily-fee-compliance', adminJwt, requirePerm('viewDriverPasses'), async (req, res) => {
   try {
@@ -5123,17 +5157,34 @@ app.get('/api/drivers/nearby', authMiddleware, async (req, res) => {
 // POST /api/admin/drivers/grant-fee-waiver — set paidUntilDate for selected drivers (waiver / advance pay)
 app.post('/api/admin/drivers/grant-fee-waiver', adminJwt, requirePerm('manageDriverPasses'), async (req, res) => {
   try {
-    const { driverIds, paidUntilDate } = req.body;
+    const { driverIds, paidUntilDate, days } = req.body;
     if (!Array.isArray(driverIds) || !driverIds.length)
       return res.status(400).json({ error: 'driverIds array required' });
-    if (!paidUntilDate) return res.status(400).json({ error: 'paidUntilDate required' });
-    const until = new Date(paidUntilDate);
-    until.setUTCHours(23, 59, 59, 999);   // include the full selected day
-    if (isNaN(until)) return res.status(400).json({ error: 'Invalid date' });
-    await User.updateMany({ _id: { $in: driverIds }, role: 'driver' }, { paidUntilDate: until });
-    // Instantly notify each driver via socket so their Accept button lights up immediately
-    driverIds.forEach(id => io.to(`user:${id}`).emit('fee:waived', { paidUntilDate: until.toISOString() }));
-    res.json({ success: true, count: driverIds.length, paidUntilDate: until });
+    if (paidUntilDate) {
+      const until = new Date(paidUntilDate);
+      if (isNaN(until)) return res.status(400).json({ error: 'Invalid date' });
+      until.setUTCHours(23, 59, 59, 999);   // include the full selected day
+      await User.updateMany({ _id: { $in: driverIds }, role: 'driver' }, { paidUntilDate: until });
+      // Instantly notify each driver via socket so their Accept button lights up immediately
+      driverIds.forEach(id => io.to(`user:${id}`).emit('fee:waived', { paidUntilDate: until.toISOString() }));
+      return res.json({ success: true, count: driverIds.length, paidUntilDate: until });
+    }
+
+    const durationDays = Number(days);
+    if (!Number.isInteger(durationDays) || durationDays < 1 || durationDays > 365)
+      return res.status(400).json({ error: 'Choose a valid fee period from 1 to 365 days' });
+    const drivers = await User.find({ _id: { $in: driverIds }, role: 'driver' }).select('_id paidUntilDate').lean();
+    const now = new Date();
+    await Promise.all(drivers.map(async driver => {
+      const currentUntil = driver.paidUntilDate ? new Date(driver.paidUntilDate) : null;
+      const base = currentUntil && !isNaN(currentUntil) && currentUntil > now ? currentUntil : now;
+      const until = new Date(base);
+      until.setDate(until.getDate() + durationDays);
+      until.setUTCHours(23, 59, 59, 999);
+      await User.updateOne({ _id: driver._id }, { paidUntilDate: until });
+      io.to(`user:${driver._id}`).emit('fee:waived', { paidUntilDate: until.toISOString() });
+    }));
+    res.json({ success: true, count: drivers.length, days: durationDays });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 

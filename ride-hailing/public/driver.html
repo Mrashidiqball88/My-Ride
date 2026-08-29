@@ -2236,6 +2236,12 @@ function connectSocket() {
     showToast(msg, 'success');
   });
 
+  socket.on('wallet:bonus-credited', async ({ bonusAmount }) => {
+    await loadWalletSummary();
+    const amount = Number(bonusAmount);
+    showToast(`✅ Wallet bonus of ${formatRsAmount(amount)} credited by Admin.`, 'success');
+  });
+
   // The payment gateway verified a pending TRX. This is the only payment event
   // that unlocks ride acceptance; submitting a TRX alone does not.
   socket.on('payment:approved', async ({ paidUntilDate, amount }) => {

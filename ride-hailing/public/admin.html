@@ -607,9 +607,26 @@ input[type=date]:focus{border-color:#f5c518}
               <div class="ftab" onclick="loadDrivers('suspended');setFTab(this)">Suspended</div>
               <div class="ftab" onclick="loadDrivers('blocked');setFTab(this)">Blocked</div>
             </div>
-            <button id="bulk-trial-btn" class="btn btn-yellow" onclick="grantBulkTrial()" disabled>🎁 Grant Free Bonus</button>
-            <input type="date" id="waiver-date-input" title="Grant Fee Paid Until this date" style="background:#06060e;border:1px solid #1e1e2e;border-radius:8px;padding:.35rem .65rem;color:#94a3b8;font-size:.78rem;outline:none;cursor:pointer">
-            <button id="waiver-btn" class="btn btn-green" onclick="grantFeeWaiver()" disabled>📅 Grant Fee Paid Until</button>
+            <button id="bulk-trial-btn" class="btn btn-yellow" onclick="grantBulkTrial()" disabled>💰 Grant Wallet Bonus</button>
+            <div id="fee-period-controls" style="display:flex;align-items:center;gap:.35rem;flex-wrap:wrap">
+              <span style="font-size:.7rem;color:#64748b;font-weight:700;white-space:nowrap">PAID FEE UNTIL</span>
+              <select id="waiver-duration-input" title="Choose how long the daily fee is paid" onchange="updateWaiverDatePreview()" style="background:#06060e;border:1px solid #1e1e2e;border-radius:8px;padding:.35rem .55rem;color:#cbd5e1;font-size:.78rem;outline:none;cursor:pointer">
+                <option value="1">1 day</option>
+                <option value="2">2 days</option>
+                <option value="3">3 days</option>
+                <option value="7">1 week</option>
+                <option value="14">2 weeks</option>
+                <option value="30" selected>1 month (30 days)</option>
+                <option value="60">2 months (60 days)</option>
+                <option value="90">3 months (90 days)</option>
+                <option value="180">6 months (180 days)</option>
+                <option value="365">1 year</option>
+                <option value="custom">Custom date…</option>
+              </select>
+              <input type="date" id="waiver-date-input" title="Choose a custom Paid Fee Until date" style="display:none;background:#06060e;border:1px solid #1e1e2e;border-radius:8px;padding:.35rem .55rem;color:#94a3b8;font-size:.78rem;outline:none;cursor:pointer" onchange="updateWaiverDatePreview()">
+              <span id="waiver-until-preview" style="font-size:.72rem;color:#22c55e;white-space:nowrap"></span>
+              <button id="waiver-btn" class="btn btn-green" onclick="grantFeeWaiver()" disabled>📅 Grant Paid Fee</button>
+            </div>
             <button class="btn-refresh" onclick="loadDrivers(currentDriverStatus)">↻</button>
           </div>
         </div>
@@ -2097,7 +2114,7 @@ async function loadDrivers(status = 'all') {
         <td><div style="display:flex;gap:.3rem;flex-wrap:wrap">
           <button class="btn btn-blue"   onclick="viewUser('${d._id}','driver')">👁</button>
           <button class="btn btn-gray"   onclick="viewDocs('${d._id}')">📄</button>
-          ${hasPermission('manageDriverPasses') ? `<button class="btn btn-yellow" onclick="grantTrial('${d._id}')" title="Grant Free Bonus">🎁</button>` : ''}
+          ${hasPermission('manageDriverPasses') ? `<button class="btn btn-yellow" onclick="grantTrial('${d._id}')" title="Credit Wallet Bonus">💰</button>` : ''}
           ${d.accountStatus==='pending'   && hasPermission('manageDriverApprovals') ? `<button class="btn btn-green"  onclick="userAction('${d._id}','approve','driver')">✓</button>` : ''}
           ${d.accountStatus==='active'    && hasPermission('manageDriverStatus')   ? `<button class="btn btn-yellow" onclick="userAction('${d._id}','suspend','driver')">⏸</button>
             <button class="btn btn-red"   onclick="userAction('${d._id}','block','driver')">⛔</button>` : ''}
@@ -3520,14 +3537,43 @@ function updateBulkGrantBtn() {
   const n = selectedDriverIds.size;
   const btn = document.getElementById('bulk-trial-btn');
   if (btn) {
-    btn.textContent = n ? `🎁 Grant Free Bonus (${n} selected)` : '🎁 Grant Free Bonus';
+    btn.textContent = n ? `💰 Grant Wallet Bonus (${n} selected)` : '💰 Grant Wallet Bonus';
     btn.disabled = n === 0;
   }
   const wBtn = document.getElementById('waiver-btn');
   if (wBtn) {
-    wBtn.textContent = n ? `📅 Grant Fee Paid Until (${n} selected)` : '📅 Grant Fee Paid Until';
+    wBtn.textContent = n ? `📅 Grant Paid Fee (${n} selected)` : '📅 Grant Paid Fee';
     wBtn.disabled = n === 0;
   }
+}
+
+function updateWaiverDatePreview() {
+  const durationInput = document.getElementById('waiver-duration-input');
+  const dateInput = document.getElementById('waiver-date-input');
+  const preview = document.getElementById('waiver-until-preview');
+  if (!durationInput || !dateInput || !preview) return;
+
+  const today = new Date();
+  const todayValue = [
+    today.getFullYear(),
+    String(today.getMonth() + 1).padStart(2, '0'),
+    String(today.getDate()).padStart(2, '0')
+  ].join('-');
+  dateInput.min = todayValue;
+
+  if (durationInput.value === 'custom') {
+    dateInput.style.display = '';
+    preview.textContent = dateInput.value ? `Until ${dateInput.value}` : 'Choose a date';
+    return;
+  }
+
+  dateInput.style.display = 'none';
+  const days = Number(durationInput.value);
+  const until = new Date(today);
+  until.setDate(until.getDate() + days);
+  preview.textContent = `Until ${until.toLocaleDateString('en-PK', {
+    day: 'numeric', month: 'short', year: 'numeric'
+  })}`;
 }
 
 let _trialDriverIds = [];
@@ -3536,40 +3582,37 @@ function openTrialModal(driverIds) {
   _trialDriverIds = driverIds;
   const desc = document.getElementById('trial-modal-desc');
   if (desc) desc.textContent = driverIds.length === 1
-    ? 'Grant a free bonus and access period to 1 selected driver.'
-    : `Grant a free bonus and access period to ${driverIds.length} selected drivers.`;
-  const inp = document.getElementById('trial-days-input');
-  if (inp) inp.value = '30';
+    ? 'Enter a cash amount to credit directly to 1 selected driver’s wallet.'
+    : `Enter a cash amount to credit directly to ${driverIds.length} selected drivers’ wallets.`;
   const amountInput = document.getElementById('trial-bonus-amount');
   if (amountInput) amountInput.value = '';
   document.getElementById('trial-modal-err').textContent = '';
   const btn = document.getElementById('trial-confirm-btn');
-  if (btn) { btn.disabled = false; btn.textContent = 'Grant Bonus'; }
+  if (btn) { btn.disabled = false; btn.textContent = 'OK — Credit Wallet'; }
   document.getElementById('trial-modal').style.display = 'flex';
+  amountInput?.focus();
 }
 function closeTrialModal() {
   document.getElementById('trial-modal').style.display = 'none';
   _trialDriverIds = [];
 }
 async function submitTrialGrant() {
-  const days  = parseInt(document.getElementById('trial-days-input').value);
   const amount = Number(document.getElementById('trial-bonus-amount').value);
   const errEl = document.getElementById('trial-modal-err');
   if (!Number.isFinite(amount) || amount <= 0) { errEl.textContent = 'Enter a valid bonus amount greater than Rs 0'; return; }
-  if (!days || days < 1 || days > 365) { errEl.textContent = 'Enter a valid number of days (1–365)'; return; }
   errEl.textContent = '';
   const btn = document.getElementById('trial-confirm-btn');
-  btn.disabled = true; btn.textContent = 'Granting Bonus…';
+  btn.disabled = true; btn.textContent = 'Crediting Wallet…';
   try {
-    const res = await api('/api/admin/drivers/grant-trial', 'POST', { driverIds: _trialDriverIds, days, amount });
+    const res = await api('/api/admin/drivers/grant-wallet-bonus', 'POST', { driverIds: _trialDriverIds, amount });
     const creditedAmount = Number(res.bonusAmount ?? amount);
-    showToast(`✓ ${res.credited} driver(s) received Rs ${creditedAmount.toLocaleString('en-PK', { maximumFractionDigits: 2 })} free bonus`, 'success');
+    showToast(`✓ ${res.credited} driver(s) received Rs ${creditedAmount.toLocaleString('en-PK', { maximumFractionDigits: 2 })} in their wallet`, 'success');
     closeTrialModal();
     selectedDriverIds.clear();
     loadDrivers(currentDriverStatus);
   } catch (e) {
     errEl.textContent = e.message;
-    btn.disabled = false; btn.textContent = 'Grant Bonus';
+    btn.disabled = false; btn.textContent = 'OK — Credit Wallet';
   }
 }
 
@@ -3665,16 +3708,24 @@ function grantTrial(driverId) {
 
 async function grantFeeWaiver() {
   if (!selectedDriverIds.size) return showToast('Select at least one driver', 'error');
+  const durationInput = document.getElementById('waiver-duration-input');
   const dateInput = document.getElementById('waiver-date-input');
-  if (!dateInput?.value) return showToast('Pick a date first using the date picker', 'error');
+  const isCustom = durationInput?.value === 'custom';
+  const days = Number(durationInput?.value);
+  if (isCustom && !dateInput?.value) return showToast('Pick a custom Paid Fee Until date first', 'error');
+  if (!isCustom && (!Number.isInteger(days) || days < 1 || days > 365)) return showToast('Choose a valid fee period', 'error');
   const n = selectedDriverIds.size;
-  if (!confirm(`Mark daily fee as paid until ${dateInput.value} for ${n} driver(s)?`)) return;
+  const selectedLabel = isCustom ? dateInput.value : durationInput.options[durationInput.selectedIndex].text;
+  if (!confirm(`Mark daily fee as paid for ${selectedLabel} for ${n} driver(s)?`)) return;
   try {
+    const payload = { driverIds: [...selectedDriverIds] };
+    if (isCustom) payload.paidUntilDate = dateInput.value;
+    else payload.days = days;
     const res = await api('/api/admin/drivers/grant-fee-waiver', 'POST', {
-      driverIds:    [...selectedDriverIds],
-      paidUntilDate: dateInput.value
+      ...payload
     });
-    showToast(`✓ Fee waiver granted to ${res.count} driver(s) until ${dateInput.value}`, 'success');
+    const untilText = res.paidUntilDate ? fmtDate(res.paidUntilDate) : selectedLabel;
+    showToast(`✓ Paid fee granted to ${res.count} driver(s) until ${untilText}`, 'success');
     selectedDriverIds.clear();
     loadDrivers(currentDriverStatus);
   } catch (e) { showToast(e.message, 'error'); }
@@ -4298,8 +4349,9 @@ function applyPermissions() {
     const button = document.getElementById(id);
     if (button) button.style.display = hasPermission('manageDriverPasses') ? '' : 'none';
   });
-  const waiverDate = document.getElementById('waiver-date-input');
-  if (waiverDate) waiverDate.style.display = hasPermission('manageDriverPasses') ? '' : 'none';
+  const feePeriodControls = document.getElementById('fee-period-controls');
+  if (feePeriodControls) feePeriodControls.style.display = hasPermission('manageDriverPasses') ? 'flex' : 'none';
+  updateWaiverDatePreview();
 
   // Show a banner when logged in as sub-admin.
   const lbl = document.getElementById('admin-email-lbl');
@@ -4459,18 +4511,15 @@ if (adminToken) {
 <!-- ── Grant Free Bonus Modal ─────────────────────────────────────────────── -->
 <div id="trial-modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.75);z-index:3100;align-items:center;justify-content:center">
   <div style="background:#0d0d1e;border:1px solid #2a2a4a;border-radius:14px;padding:1.5rem;max-width:340px;width:90%;margin:auto">
-    <h3 style="color:#f5c518;margin:0 0 .6rem;font-size:1rem">🎁 Grant Free Bonus</h3>
+    <h3 style="color:#f5c518;margin:0 0 .6rem;font-size:1rem">💰 Credit Driver Wallet</h3>
     <p id="trial-modal-desc" style="color:#94a3b8;font-size:.82rem;margin:0 0 1rem"></p>
-    <label style="color:#64748b;font-size:.72rem;font-weight:600;display:block;margin-bottom:.35rem">BONUS AMOUNT (RS)</label>
+    <label for="trial-bonus-amount" style="color:#64748b;font-size:.72rem;font-weight:600;display:block;margin-bottom:.35rem">WALLET BONUS AMOUNT (RS)</label>
     <input type="number" id="trial-bonus-amount" min="0.01" step="any" placeholder="Enter amount, e.g. 1000"
-      style="width:100%;padding:.7rem;border-radius:8px;border:1px solid #2a2a4a;background:#06060e;color:#fff;font-size:.95rem;box-sizing:border-box;margin-bottom:.7rem">
-    <label style="color:#64748b;font-size:.72rem;font-weight:600;display:block;margin-bottom:.35rem">ACCESS PERIOD (DAYS)</label>
-    <input type="number" id="trial-days-input" min="1" max="365" value="30" placeholder="e.g. 30"
       style="width:100%;padding:.7rem;border-radius:8px;border:1px solid #2a2a4a;background:#06060e;color:#fff;font-size:.95rem;box-sizing:border-box;margin-bottom:.4rem">
     <p id="trial-modal-err" style="color:#ef4444;font-size:.77rem;min-height:1em;margin-bottom:.65rem"></p>
     <div style="display:flex;gap:.5rem">
       <button onclick="closeTrialModal()" style="flex:1;padding:.7rem;border-radius:8px;border:1px solid #2a2a4a;background:#0d0d1e;color:#94a3b8;cursor:pointer;font-size:.85rem">Cancel</button>
-      <button id="trial-confirm-btn" onclick="submitTrialGrant()" style="flex:1;padding:.7rem;border-radius:8px;border:none;background:#f5c518;color:#000;font-weight:700;cursor:pointer;font-size:.85rem">Grant Bonus</button>
+      <button id="trial-confirm-btn" onclick="submitTrialGrant()" style="flex:1;padding:.7rem;border-radius:8px;border:none;background:#f5c518;color:#000;font-weight:700;cursor:pointer;font-size:.85rem">OK — Credit Wallet</button>
     </div>
   </div>
 </div>
