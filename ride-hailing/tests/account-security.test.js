@@ -581,6 +581,81 @@ test('invalid Admin environment credentials fail synchronization without exposin
   }
 });
 
+test('environment-managed Admin credentials reject database-only password and recovery-key changes', async () => {
+  const previousEnv = {
+    ADMIN_EMAIL: process.env.ADMIN_EMAIL,
+    ADMIN_PASSWORD: process.env.ADMIN_PASSWORD,
+    ADMIN_RECOVERY_KEY: process.env.ADMIN_RECOVERY_KEY,
+    NODE_ENV: process.env.NODE_ENV,
+    MONGO_URI: process.env.MONGO_URI
+  };
+  process.env.ADMIN_EMAIL = 'configured-admin@example.test';
+  process.env.ADMIN_PASSWORD = 'configured-admin-password';
+  process.env.ADMIN_RECOVERY_KEY = 'configured-recovery-key';
+  process.env.NODE_ENV = 'production';
+  process.env.MONGO_URI = 'mongodb://admin-sync.test';
+
+  const stored = {
+    email: 'configured-admin@example.test',
+    passwordHash: await bcrypt.hash('configured-admin-password', 4),
+    recoveryKeyHash: await bcrypt.hash('configured-recovery-key', 4),
+    sessionVersion: 4
+  };
+  let updateCount = 0;
+  models.Settings.findOne = () => query({ value: stored });
+  models.Settings.findOneAndUpdate = async () => {
+    updateCount += 1;
+    return { value: stored };
+  };
+  const token = jwt.sign({
+    id: 'super-admin',
+    isAdmin: true,
+    isSuperAdmin: true,
+    email: stored.email,
+    adminSessionVersion: stored.sessionVersion
+  }, JWT_SECRET);
+
+  try {
+    await withServer(async server => {
+      const passwordChange = await request(server, '/api/admin/security/password', {
+        method: 'PATCH',
+        headers: { authorization: `Bearer ${token}` },
+        body: JSON.stringify({
+          currentPassword: 'configured-admin-password',
+          newPassword: 'another-admin-password'
+        })
+      });
+      assert.equal(passwordChange.response.status, 409);
+
+      const recoveryChange = await request(server, '/api/admin/security/recovery-key', {
+        method: 'PUT',
+        headers: { authorization: `Bearer ${token}` },
+        body: JSON.stringify({
+          currentPassword: 'configured-admin-password',
+          recoveryKey: 'another-recovery-key'
+        })
+      });
+      assert.equal(recoveryChange.response.status, 409);
+
+      const passwordReset = await request(server, '/api/admin/forgot-password', {
+        method: 'POST',
+        body: JSON.stringify({
+          email: stored.email,
+          recoveryKey: 'configured-recovery-key',
+          newPassword: 'another-admin-password'
+        })
+      });
+      assert.equal(passwordReset.response.status, 409);
+      assert.equal(updateCount, 0);
+    });
+  } finally {
+    for (const [key, value] of Object.entries(previousEnv)) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+  }
+});
+
 test('Customer and Driver requests require the latest matching session token', async () => {
   for (const role of ['customer', 'driver']) {
     const user = { _id: `${role}-1`, activeSessionToken: `${role}-current` };
