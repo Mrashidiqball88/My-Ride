@@ -150,7 +150,17 @@ app.use(express.json({
 app.use(express.urlencoded({ limit: process.env.REQUEST_BODY_LIMIT || '32mb', extended: true }));
 // Resolve the public directory absolutely — works in any CWD or spawn context.
 const PUBLIC_DIR = path.resolve(__dirname, 'public');
-app.use(express.static(PUBLIC_DIR));
+app.use(express.static(PUBLIC_DIR, {
+  setHeaders: (res, filePath) => {
+    // The Admin shell contains authentication/bootstrap JavaScript and must
+    // never be served from an old proxy/browser cache after a deployment.
+    if (path.basename(filePath) === 'admin.html') {
+      res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
+      res.setHeader('Pragma', 'no-cache');
+      res.setHeader('Expires', '0');
+    }
+  }
+}));
 
 // Pre-read HTML pages synchronously at startup so we never rely on sendFile's
 // stream/path behaviour in Cloud Run containers.  If a file is missing the
@@ -2000,7 +2010,12 @@ function clearAdminRecoveryThrottle(req) {
 }
 
 function configuredAdminEmail(persistedEmail = '') {
-  return String(process.env.ADMIN_EMAIL || persistedEmail || 'admin@myride.com').trim();
+  const configured = String(process.env.ADMIN_EMAIL || persistedEmail || '').trim();
+  if (configured) return configured;
+  // Never present the development fallback as a usable production credential.
+  // A production deployment without ADMIN_EMAIL or a persisted Admin identity
+  // must be repaired explicitly instead of misleading the operator.
+  return adminEnvironmentModeEnabled() ? '' : 'admin@myride.com';
 }
 
 function adminEnvironmentModeEnabled() {
@@ -5855,6 +5870,14 @@ function servePage(page) {
       if (!content) {
         console.error('[servePage] PAGES["' + page + '"] is empty — startup load failed silently');
         return res.status(500).json({ error: 'page not loaded' });
+      }
+      if (page === 'admin') {
+        // This route bypasses express.static because pages are preloaded at
+        // startup. Apply the same no-cache policy as the direct /admin.html
+        // static asset so reverse proxies cannot retain an old Admin shell.
+        res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
+        res.setHeader('Pragma', 'no-cache');
+        res.setHeader('Expires', '0');
       }
       res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
       res.end(content);
