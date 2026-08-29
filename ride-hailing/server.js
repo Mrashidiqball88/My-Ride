@@ -80,7 +80,15 @@ let emailTransporter = nodemailer.createTransport({
   auth: SMTP_USER && smtpPassword ? { user: SMTP_USER, pass: smtpPassword } : undefined
 });
 function emailOtpConfigured() {
-  return Boolean(SMTP_HOST && SMTP_USER && SMTP_PASS && EMAIL_FROM);
+  // Read the environment at request time as well as startup time so tests and
+  // deployments that attach SMTP configuration after module loading do not
+  // incorrectly report the service as unavailable.
+  return Boolean(
+    (process.env.SMTP_HOST || SMTP_HOST) &&
+    (process.env.SMTP_USER || SMTP_USER) &&
+    (process.env.SMTP_PASS || SMTP_PASS) &&
+    (process.env.EMAIL_FROM || EMAIL_FROM || process.env.SMTP_USER || SMTP_USER)
+  );
 }
 function setEmailTransporterForTests(transporter) {
   emailTransporter = transporter;
@@ -2021,6 +2029,145 @@ const ADMIN_SECURITY_KEY = 'admin_security';
 const ADMIN_RECOVERY_ATTEMPTS = new Map();
 const ADMIN_RECOVERY_WINDOW_MS = 15 * 60 * 1000;
 const ADMIN_RECOVERY_MAX_ATTEMPTS = 5;
+const ADMIN_SECURITY_OTP_TTL_MS = 10 * 60 * 1000;
+const ADMIN_SECURITY_OTP_MAX_ATTEMPTS = 5;
+const ADMIN_SECURITY_OTP_REQUEST_WINDOW_MS = 15 * 60 * 1000;
+const ADMIN_SECURITY_OTP_MAX_REQUESTS = 3;
+const ADMIN_SECURITY_OTP_CHALLENGES = new Map();
+const ADMIN_SECURITY_OTP_REQUESTS = new Map();
+
+function normalizeAdminSecurityOtpAction(action) {
+  const normalized = String(action || '').trim().toLowerCase();
+  return ['password', 'recovery-key', 'password-recovery'].includes(normalized)
+    ? normalized
+    : '';
+}
+
+function adminSecurityOtpChallengeKey(action, email, sessionVersion) {
+  return `${action}:${String(email || '').trim().toLowerCase()}:${Number(sessionVersion || 0)}`;
+}
+
+function adminSecurityOtpRateKey(action, email, ip) {
+  return `${action}:${String(email || '').trim().toLowerCase()}:${String(ip || 'unknown')}`;
+}
+
+function pruneAdminSecurityOtpState(now = Date.now()) {
+  for (const [key, challenge] of ADMIN_SECURITY_OTP_CHALLENGES) {
+    if (challenge.expiresAt <= now || challenge.used) ADMIN_SECURITY_OTP_CHALLENGES.delete(key);
+  }
+  for (const [key, request] of ADMIN_SECURITY_OTP_REQUESTS) {
+    if (request.resetAt <= now) ADMIN_SECURITY_OTP_REQUESTS.delete(key);
+  }
+}
+
+function takeAdminSecurityOtpRequestSlot(key, now = Date.now()) {
+  const current = ADMIN_SECURITY_OTP_REQUESTS.get(key);
+  if (!current || current.resetAt <= now) {
+    ADMIN_SECURITY_OTP_REQUESTS.set(key, {
+      count: 1,
+      resetAt: now + ADMIN_SECURITY_OTP_REQUEST_WINDOW_MS
+    });
+    return true;
+  }
+  if (current.count >= ADMIN_SECURITY_OTP_MAX_REQUESTS) return false;
+  current.count += 1;
+  return true;
+}
+
+async function sendAdminSecurityOtp({ action, email, sessionVersion = 0, ip = 'unknown' }) {
+  const normalizedAction = normalizeAdminSecurityOtpAction(action);
+  const normalizedEmail = String(email || '').trim().toLowerCase();
+  if (!normalizedAction || !normalizedEmail) {
+    return { ok: false, status: 400, error: 'A valid Admin security action and email are required' };
+  }
+  if (!emailOtpConfigured()) {
+    return { ok: false, status: 503, error: 'Admin email OTP service is not configured' };
+  }
+
+  pruneAdminSecurityOtpState();
+  const rateKey = adminSecurityOtpRateKey(normalizedAction, normalizedEmail, ip);
+  if (!takeAdminSecurityOtpRequestSlot(rateKey)) {
+    return { ok: false, status: 429, error: 'Too many verification-code requests. Try again later.' };
+  }
+
+  const otp = String(crypto.randomInt(100000, 1000000));
+  const otpHash = await bcrypt.hash(otp, 10);
+  const actionLabel = normalizedAction === 'recovery-key'
+    ? 'Secret Recovery Key change'
+    : normalizedAction === 'password-recovery'
+      ? 'password recovery'
+      : 'password change';
+
+  try {
+    await emailTransporter.sendMail({
+      from: process.env.EMAIL_FROM || EMAIL_FROM || process.env.SMTP_USER || SMTP_USER,
+      to: normalizedEmail,
+      subject: 'My Ride Admin security verification code',
+      text: `Your My Ride Admin ${actionLabel} verification code is ${otp}. It expires in 10 minutes. If you did not request this, ignore this email.`,
+      html: `<p>Your My Ride Admin ${actionLabel} verification code is <strong>${otp}</strong>.</p><p>It expires in 10 minutes. If you did not request this, ignore this email.</p>`
+    });
+  } catch (err) {
+    // Never log the code, email credentials, or the provider's full error.
+    console.error('Admin security OTP delivery failed');
+    return { ok: false, status: 503, error: 'Unable to send the Admin verification code' };
+  }
+
+  const now = Date.now();
+  ADMIN_SECURITY_OTP_CHALLENGES.set(
+    adminSecurityOtpChallengeKey(normalizedAction, normalizedEmail, sessionVersion),
+    {
+      otpHash,
+      expiresAt: now + ADMIN_SECURITY_OTP_TTL_MS,
+      attempts: 0,
+      used: false,
+      verifying: false,
+      email: normalizedEmail,
+      action: normalizedAction,
+      sessionVersion: Number(sessionVersion || 0)
+    }
+  );
+  return { ok: true };
+}
+
+async function consumeAdminSecurityOtp({ action, email, sessionVersion = 0, otp }) {
+  const normalizedAction = normalizeAdminSecurityOtpAction(action);
+  const normalizedEmail = String(email || '').trim().toLowerCase();
+  const normalizedOtp = String(otp || '').trim();
+  if (!normalizedAction || !normalizedEmail || !/^\d{6}$/.test(normalizedOtp)) {
+    return { ok: false, error: 'A valid 6-digit Admin verification code is required' };
+  }
+
+  pruneAdminSecurityOtpState();
+  const key = adminSecurityOtpChallengeKey(normalizedAction, normalizedEmail, sessionVersion);
+  const challenge = ADMIN_SECURITY_OTP_CHALLENGES.get(key);
+  if (!challenge || challenge.used || challenge.expiresAt <= Date.now()) {
+    ADMIN_SECURITY_OTP_CHALLENGES.delete(key);
+    return { ok: false, error: 'Invalid or expired Admin verification code' };
+  }
+  if (challenge.verifying) {
+    return { ok: false, error: 'Verification already in progress' };
+  }
+  if (challenge.attempts >= ADMIN_SECURITY_OTP_MAX_ATTEMPTS) {
+    ADMIN_SECURITY_OTP_CHALLENGES.delete(key);
+    return { ok: false, error: 'Too many verification attempts. Request a new code.' };
+  }
+
+  challenge.verifying = true;
+  challenge.attempts += 1;
+  const matches = await bcrypt.compare(normalizedOtp, challenge.otpHash).catch(() => false);
+  challenge.verifying = false;
+  if (!matches) {
+    if (challenge.attempts >= ADMIN_SECURITY_OTP_MAX_ATTEMPTS) {
+      ADMIN_SECURITY_OTP_CHALLENGES.delete(key);
+      return { ok: false, error: 'Too many verification attempts. Request a new code.' };
+    }
+    return { ok: false, error: 'Invalid or expired Admin verification code' };
+  }
+
+  challenge.used = true;
+  ADMIN_SECURITY_OTP_CHALLENGES.delete(key);
+  return { ok: true };
+}
 
 function normalizeNationalId(value) {
   return String(value || '').replace(/\D/g, '');
@@ -4365,16 +4512,44 @@ app.post('/api/admin/login', async (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
+app.post('/api/admin/security/otp/request', adminJwt, requireSuperAdmin, async (req, res) => {
+  try {
+    const action = normalizeAdminSecurityOtpAction(req.body?.action);
+    if (!['password', 'recovery-key'].includes(action)) {
+      return res.status(400).json({ error: 'Choose a password or recovery-key change' });
+    }
+    const security = await getAdminSecurity();
+    const email = configuredAdminEmail(security.email);
+    const result = await sendAdminSecurityOtp({
+      action,
+      email,
+      sessionVersion: security.sessionVersion,
+      ip: req.ip
+    });
+    if (!result.ok) return res.status(result.status).json({ error: result.error });
+    res.json({
+      success: true,
+      message: 'A verification code was sent to the configured Admin email. It expires in 10 minutes.'
+    });
+  } catch (err) {
+    res.status(500).json({ error: 'Unable to start Admin security verification' });
+  }
+});
+
 app.get('/api/admin/security/status', adminJwt, requireSuperAdmin, async (_req, res) => {
   try {
     const security = await getAdminSecurity();
-    res.json({ recoveryKeyConfigured: !!security.recoveryKeyHash, passwordManaged: !!security.passwordHash });
+    res.json({
+      recoveryKeyConfigured: !!security.recoveryKeyHash,
+      passwordManaged: environmentAdminPasswordIsAuthoritative(),
+      recoveryKeyManaged: environmentAdminRecoveryKeyIsAuthoritative()
+    });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
 app.patch('/api/admin/security/password', adminJwt, requireSuperAdmin, async (req, res) => {
   try {
-    const { currentPassword, newPassword } = req.body || {};
+    const { currentPassword, newPassword, otp } = req.body || {};
     if (!validateStrongPassword(newPassword)) {
       return res.status(422).json({ error: 'New password must be at least 10 characters' });
     }
@@ -4383,10 +4558,20 @@ app.patch('/api/admin/security/password', adminJwt, requireSuperAdmin, async (re
         error: 'Admin password is managed by the ADMIN_PASSWORD environment secret. Update that secret instead.'
       });
     }
+    if (!/^\d{6}$/.test(String(otp || '').trim())) {
+      return res.status(400).json({ error: 'Enter the 6-digit Admin verification code sent to your email' });
+    }
     const security = await getAdminSecurity();
     if (!(await verifySuperAdminPassword(currentPassword, security))) {
       return res.status(401).json({ error: 'Current password is incorrect' });
     }
+    const verification = await consumeAdminSecurityOtp({
+      action: 'password',
+      email: configuredAdminEmail(security.email),
+      sessionVersion: security.sessionVersion,
+      otp
+    });
+    if (!verification.ok) return res.status(401).json({ error: verification.error });
     await saveAdminSecurity({
       ...security,
       passwordHash: await bcrypt.hash(newPassword, 12),
@@ -4398,7 +4583,7 @@ app.patch('/api/admin/security/password', adminJwt, requireSuperAdmin, async (re
 
 app.put('/api/admin/security/recovery-key', adminJwt, requireSuperAdmin, async (req, res) => {
   try {
-    const { currentPassword, recoveryKey } = req.body || {};
+    const { currentPassword, recoveryKey, otp } = req.body || {};
     if (!validateRecoveryKey(recoveryKey)) {
       return res.status(422).json({ error: 'Secret Recovery Key must be at least 12 characters' });
     }
@@ -4407,23 +4592,66 @@ app.put('/api/admin/security/recovery-key', adminJwt, requireSuperAdmin, async (
         error: 'Recovery key is managed by the ADMIN_RECOVERY_KEY environment secret. Update that secret instead.'
       });
     }
+    if (!/^\d{6}$/.test(String(otp || '').trim())) {
+      return res.status(400).json({ error: 'Enter the 6-digit Admin verification code sent to your email' });
+    }
     const security = await getAdminSecurity();
     if (!(await verifySuperAdminPassword(currentPassword, security))) {
       return res.status(401).json({ error: 'Current password is incorrect' });
     }
+    const verification = await consumeAdminSecurityOtp({
+      action: 'recovery-key',
+      email: configuredAdminEmail(security.email),
+      sessionVersion: security.sessionVersion,
+      otp
+    });
+    if (!verification.ok) return res.status(401).json({ error: verification.error });
     await saveAdminSecurity({
       ...security,
-      recoveryKeyHash: await bcrypt.hash(recoveryKey.trim(), 12)
+      recoveryKeyHash: await bcrypt.hash(recoveryKey.trim(), 12),
+      sessionVersion: security.sessionVersion + 1
     });
-    res.json({ success: true, recoveryKeyConfigured: true });
+    res.json({ success: true, recoveryKeyConfigured: true, message: 'Secret Recovery Key changed. Please sign in again.' });
   } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.post('/api/admin/forgot-password/request-otp', async (req, res) => {
+  try {
+    const genericError = 'Unable to send a verification code with those recovery details';
+    if (!throttleAdminRecovery(req)) {
+      return res.status(429).json({ error: 'Too many recovery attempts. Try again later.' });
+    }
+    const email = String(req.body?.email || '').trim().toLowerCase();
+    const recoveryKey = req.body?.recoveryKey;
+    const security = await getAdminSecurity();
+    const adminEmail = configuredAdminEmail(security.email);
+    if (!email || email !== adminEmail.toLowerCase() ||
+        !validateRecoveryKey(recoveryKey) ||
+        !security.recoveryKeyHash ||
+        !(await bcrypt.compare(String(recoveryKey).trim(), security.recoveryKeyHash))) {
+      return res.status(401).json({ error: genericError });
+    }
+    const result = await sendAdminSecurityOtp({
+      action: 'password-recovery',
+      email: adminEmail,
+      sessionVersion: security.sessionVersion,
+      ip: req.ip
+    });
+    if (!result.ok) return res.status(result.status).json({ error: result.error });
+    res.json({
+      success: true,
+      message: 'A verification code was sent to the configured Admin email. It expires in 10 minutes.'
+    });
+  } catch (err) {
+    res.status(500).json({ error: 'Unable to start password recovery verification' });
+  }
 });
 
 app.post('/api/admin/forgot-password', async (req, res) => {
   try {
     const genericError = 'Unable to reset the password with those recovery details';
     if (!throttleAdminRecovery(req)) return res.status(429).json({ error: 'Too many recovery attempts. Try again later.' });
-    const { email, recoveryKey, newPassword } = req.body || {};
+    const { email, recoveryKey, newPassword, otp } = req.body || {};
     const security = await getAdminSecurity();
     const adminEmail = configuredAdminEmail(security.email);
     if (!validateStrongPassword(newPassword) || !validateRecoveryKey(recoveryKey) ||
@@ -4435,9 +4663,19 @@ app.post('/api/admin/forgot-password', async (req, res) => {
         error: 'Admin password is managed by the ADMIN_PASSWORD environment secret. Update that secret instead.'
       });
     }
+    if (!/^\d{6}$/.test(String(otp || '').trim())) {
+      return res.status(400).json({ error: 'Enter the 6-digit Admin verification code sent to your email' });
+    }
     if (!security.recoveryKeyHash || !(await bcrypt.compare(recoveryKey.trim(), security.recoveryKeyHash))) {
       return res.status(401).json({ error: genericError });
     }
+    const verification = await consumeAdminSecurityOtp({
+      action: 'password-recovery',
+      email: adminEmail,
+      sessionVersion: security.sessionVersion,
+      otp
+    });
+    if (!verification.ok) return res.status(401).json({ error: verification.error });
     await saveAdminSecurity({
       ...security,
       passwordHash: await bcrypt.hash(newPassword, 12),

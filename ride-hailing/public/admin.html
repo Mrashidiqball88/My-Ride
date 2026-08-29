@@ -432,6 +432,8 @@ input[type=date]:focus{border-color:#f5c518}
       <p style="font-size:.8rem;color:#94a3b8;margin-bottom:1rem">Reset the Super Admin password with your Secret Recovery Key.</p>
        <div class="form-group"><label>Admin Email</label><input type="email" id="recovery-email" placeholder="Loading configured Admin email…"></div>
       <div class="form-group"><label>Secret Recovery Key</label><input type="password" id="recovery-key" autocomplete="off"></div>
+      <div class="form-group"><label>Email Verification Code</label><input type="text" id="recovery-otp" inputmode="numeric" autocomplete="one-time-code" maxlength="6" placeholder="Request a code below"></div>
+      <button class="btn-text-link" type="button" id="recovery-otp-btn" style="color:#38bdf8;margin-bottom:.65rem" onclick="requestAdminRecoveryOtp()">Email me a verification code</button>
       <div class="form-group"><label>New Password</label><input type="password" id="recovery-new-password" placeholder="At least 10 characters" autocomplete="new-password"></div>
       <button class="btn-admin-login" onclick="recoverAdminPassword()">Reset Password</button>
       <button class="btn-text-link" style="color:#38bdf8" onclick="switchAuthTab('superadmin')">← Back to sign in</button>
@@ -783,14 +785,25 @@ input[type=date]:focus{border-color:#f5c518}
             <span style="font-size:1.2rem">🔐</span><span style="font-size:.9rem;font-weight:700;color:#38bdf8">Super Admin Security</span>
           </div>
           <p id="recovery-key-status" style="font-size:.76rem;color:#94a3b8;margin:0 0 .9rem">Checking recovery-key setup…</p>
+          <p style="font-size:.76rem;color:#94a3b8;margin:0 0 .9rem">Changing either credential requires a one-time code sent to the configured Admin email. Deployment-managed credentials must be changed in their environment secrets.</p>
           <div class="field-row">
             <div class="field-item"><div class="field-label">Current Password</div><input class="modal-input" id="security-current-password" type="password" autocomplete="current-password"></div>
             <div class="field-item"><div class="field-label">New Password</div><input class="modal-input" id="security-new-password" type="password" placeholder="At least 10 characters" autocomplete="new-password"></div>
           </div>
+          <div class="field-row" style="margin-top:.65rem">
+            <div class="field-item"><div class="field-label">Password Change Verification Code</div><input class="modal-input" id="security-password-otp" type="text" inputmode="numeric" autocomplete="one-time-code" maxlength="6" placeholder="6-digit email code"></div>
+            <div class="field-item" style="display:flex;align-items:flex-end"><button class="btn btn-primary" type="button" id="security-password-otp-btn" onclick="requestAdminSecurityOtp('password')">Email Password Code</button></div>
+          </div>
+          <div id="security-password-otp-status" style="font-size:.75rem;color:#94a3b8;margin-top:.45rem;min-height:1rem" aria-live="polite"></div>
           <button class="btn btn-primary" type="button" onclick="saveAdminPassword()">Change Password</button>
           <div class="field-row" style="margin-top:1rem">
             <div class="field-item"><div class="field-label">Secret Recovery Key</div><input class="modal-input" id="security-recovery-key" type="password" placeholder="At least 12 characters" autocomplete="off"></div>
           </div>
+          <div class="field-row" style="margin-top:.65rem">
+            <div class="field-item"><div class="field-label">Recovery-Key Verification Code</div><input class="modal-input" id="security-recovery-key-otp" type="text" inputmode="numeric" autocomplete="one-time-code" maxlength="6" placeholder="6-digit email code"></div>
+            <div class="field-item" style="display:flex;align-items:flex-end"><button class="btn btn-blue" type="button" id="security-recovery-key-otp-btn" onclick="requestAdminSecurityOtp('recovery-key')">Email Recovery-Key Code</button></div>
+          </div>
+          <div id="security-recovery-key-otp-status" style="font-size:.75rem;color:#94a3b8;margin-top:.45rem;min-height:1rem" aria-live="polite"></div>
           <button class="btn btn-blue" type="button" onclick="saveRecoveryKey()">Set / Replace Secret Recovery Key</button>
           <div id="security-feedback" style="margin-top:.65rem;font-size:.78rem;min-height:1.1rem"></div>
         </div>
@@ -1600,7 +1613,9 @@ function adminLogout() {
   }
 
   // Clear every login form field so no credentials linger
-  ['a-email', 'a-pass', 'sa-username', 'sa-pass'].forEach(id => {
+  ['a-email', 'a-pass', 'sa-username', 'sa-pass', 'recovery-key', 'recovery-otp', 'recovery-new-password',
+    'security-current-password', 'security-new-password', 'security-password-otp', 'security-recovery-key',
+    'security-recovery-key-otp'].forEach(id => {
     const el = document.getElementById(id);
     if (el) el.value = '';
   });
@@ -1626,20 +1641,50 @@ function switchAuthTab(type) {
   document.getElementById('a-err').textContent = '';
 }
 function showRecoveryForm() { switchAuthTab('recovery'); }
+async function requestAdminRecoveryOtp() {
+  const email = document.getElementById('recovery-email').value.trim();
+  const recoveryKey = document.getElementById('recovery-key').value;
+  const button = document.getElementById('recovery-otp-btn');
+  const error = document.getElementById('a-err');
+  error.style.color = '#ef4444';
+  error.textContent = '';
+  if (!email || !recoveryKey) {
+    error.textContent = 'Enter your Admin email and Secret Recovery Key first.';
+    return;
+  }
+  button.disabled = true;
+  try {
+    const res = await fetch('/api/admin/forgot-password/request-otp', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email, recoveryKey })
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.error || 'Unable to send a verification code');
+    error.style.color = '#22c55e';
+    error.textContent = data.message;
+    document.getElementById('recovery-otp').focus();
+  } catch (e) {
+    error.textContent = e.message;
+  } finally {
+    button.disabled = false;
+  }
+}
 async function recoverAdminPassword() {
   const email = document.getElementById('recovery-email').value.trim();
   const recoveryKey = document.getElementById('recovery-key').value;
+  const otp = document.getElementById('recovery-otp').value.trim();
   const newPassword = document.getElementById('recovery-new-password').value;
   try {
     const res = await fetch('/api/admin/forgot-password', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ email, recoveryKey, newPassword })
+      body: JSON.stringify({ email, recoveryKey, newPassword, otp })
     });
     const data = await res.json().catch(() => ({}));
     if (!res.ok) throw new Error(data.error || 'Unable to reset password');
     document.getElementById('a-err').style.color = '#22c55e';
     document.getElementById('a-err').textContent = data.message;
-    ['recovery-key','recovery-new-password'].forEach(id => document.getElementById(id).value = '');
+    ['recovery-key','recovery-otp','recovery-new-password'].forEach(id => document.getElementById(id).value = '');
     switchAuthTab('superadmin');
   } catch (e) {
     document.getElementById('a-err').style.color = '#ef4444';
@@ -1717,18 +1762,50 @@ async function loadAdminSecurity() {
   if (!isSuperAdmin) return;
   try {
     const status = await api('/api/admin/security/status');
-    document.getElementById('recovery-key-status').textContent = status.recoveryKeyConfigured
-      ? 'Secret Recovery Key configured. Keep it offline and never share it.'
-      : 'Action required: set a Secret Recovery Key now so you can recover this Super Admin account.';
+    const recoveryStatus = status.recoveryKeyManaged
+      ? 'Secret Recovery Key is managed by ADMIN_RECOVERY_KEY. Change that deployment secret to update it.'
+      : status.recoveryKeyConfigured
+        ? 'Secret Recovery Key configured. Keep it offline and never share it.'
+        : 'Action required: set a Secret Recovery Key now so you can recover this Super Admin account.';
+    document.getElementById('recovery-key-status').textContent = recoveryStatus;
     if (!status.recoveryKeyConfigured) showToast('Set your Secret Recovery Key in Payment Settings.', 'error');
+    if (status.passwordManaged) {
+      document.getElementById('security-password-otp-status').textContent =
+        'The password is managed by ADMIN_PASSWORD. Update that deployment secret instead.';
+    }
   } catch (e) { console.warn('Security status unavailable:', e.message); }
+}
+async function requestAdminSecurityOtp(action) {
+  const isRecoveryKey = action === 'recovery-key';
+  const status = document.getElementById(
+    isRecoveryKey ? 'security-recovery-key-otp-status' : 'security-password-otp-status'
+  );
+  const button = document.getElementById(
+    isRecoveryKey ? 'security-recovery-key-otp-btn' : 'security-password-otp-btn'
+  );
+  button.disabled = true;
+  status.style.color = '#94a3b8';
+  status.textContent = 'Sending a verification code…';
+  try {
+    const result = await api('/api/admin/security/otp/request', 'POST', { action });
+    status.textContent = result.message;
+    document.getElementById(
+      isRecoveryKey ? 'security-recovery-key-otp' : 'security-password-otp'
+    ).focus();
+  } catch (e) {
+    status.style.color = '#ef4444';
+    status.textContent = e.message;
+  } finally {
+    button.disabled = false;
+  }
 }
 async function saveAdminPassword() {
   const currentPassword = document.getElementById('security-current-password').value;
   const newPassword = document.getElementById('security-new-password').value;
+  const otp = document.getElementById('security-password-otp').value.trim();
   const feedback = document.getElementById('security-feedback');
   try {
-    const result = await api('/api/admin/security/password', 'PATCH', { currentPassword, newPassword });
+    const result = await api('/api/admin/security/password', 'PATCH', { currentPassword, newPassword, otp });
     feedback.style.color = '#22c55e'; feedback.textContent = result.message;
     setTimeout(adminLogout, 900);
   } catch (e) { feedback.style.color = '#ef4444'; feedback.textContent = e.message; }
@@ -1736,12 +1813,14 @@ async function saveAdminPassword() {
 async function saveRecoveryKey() {
   const currentPassword = document.getElementById('security-current-password').value;
   const recoveryKey = document.getElementById('security-recovery-key').value;
+  const otp = document.getElementById('security-recovery-key-otp').value.trim();
   const feedback = document.getElementById('security-feedback');
   try {
-    await api('/api/admin/security/recovery-key', 'PUT', { currentPassword, recoveryKey });
-    feedback.style.color = '#22c55e'; feedback.textContent = 'Secret Recovery Key saved securely.';
+    const result = await api('/api/admin/security/recovery-key', 'PUT', { currentPassword, recoveryKey, otp });
+    feedback.style.color = '#22c55e'; feedback.textContent = result.message || 'Secret Recovery Key changed. Please sign in again.';
     document.getElementById('security-recovery-key').value = '';
-    loadAdminSecurity();
+    document.getElementById('security-recovery-key-otp').value = '';
+    setTimeout(adminLogout, 900);
   } catch (e) { feedback.style.color = '#ef4444'; feedback.textContent = e.message; }
 }
 

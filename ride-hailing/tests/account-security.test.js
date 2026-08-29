@@ -243,6 +243,18 @@ test('driver identity documents are private and unsafe document URLs are rejecte
 });
 
 test('recovery-key setup works, rate limits attempts, and invalidates old Super Admin sessions', async () => {
+  const previousSmtp = {
+    SMTP_HOST: process.env.SMTP_HOST,
+    SMTP_USER: process.env.SMTP_USER,
+    SMTP_PASS: process.env.SMTP_PASS,
+    EMAIL_FROM: process.env.EMAIL_FROM
+  };
+  process.env.SMTP_HOST = 'smtp.test';
+  process.env.SMTP_USER = 'admin@example.test';
+  process.env.SMTP_PASS = 'test-smtp-password';
+  process.env.EMAIL_FROM = 'admin@example.test';
+  const sentMail = [];
+  setEmailTransporterForTests({ sendMail: async mail => { sentMail.push(mail); } });
   const security = {
     passwordHash: bcrypt.hashSync('admin1234', 4),
     recoveryKeyHash: '',
@@ -254,8 +266,9 @@ test('recovery-key setup works, rate limits attempts, and invalidates old Super 
     return { value: { ...security } };
   };
 
-  await withServer(async server => {
-    for (let attempt = 0; attempt < 5; attempt++) {
+  try {
+    await withServer(async server => {
+      for (let attempt = 0; attempt < 5; attempt++) {
       const limited = await request(server, '/api/admin/forgot-password', {
         method: 'POST',
         body: JSON.stringify({
@@ -265,8 +278,8 @@ test('recovery-key setup works, rate limits attempts, and invalidates old Super 
         })
       });
       assert.equal(limited.response.status, 401);
-    }
-    const rateLimited = await request(server, '/api/admin/forgot-password', {
+      }
+      const rateLimited = await request(server, '/api/admin/forgot-password', {
       method: 'POST',
       body: JSON.stringify({
         email: 'rate-limit@example.test',
@@ -274,58 +287,87 @@ test('recovery-key setup works, rate limits attempts, and invalidates old Super 
         newPassword: 'new-admin-password'
       })
     });
-    assert.equal(rateLimited.response.status, 429);
+      assert.equal(rateLimited.response.status, 429);
 
-    const oldTokenResult = await request(server, '/api/admin/login', {
+      const oldTokenResult = await request(server, '/api/admin/login', {
       method: 'POST',
         body: JSON.stringify({ email: configuredAdminEmail(), password: 'admin1234' })
-    });
-    assert.equal(oldTokenResult.response.status, 200);
-    const oldToken = oldTokenResult.body.token;
-    const oldTokenClaims = jwt.verify(oldToken, JWT_SECRET);
-    assert.equal(oldTokenClaims.id, 'super-admin');
-    assert.equal(oldTokenClaims.isAdmin, true);
-    assert.equal(oldTokenClaims.isSuperAdmin, true);
-    assert.equal(oldTokenClaims.email, configuredAdminEmail());
-    assert.equal(oldTokenClaims.adminSessionVersion, 0);
+      });
+      assert.equal(oldTokenResult.response.status, 200);
+      const oldToken = oldTokenResult.body.token;
+      const oldTokenClaims = jwt.verify(oldToken, JWT_SECRET);
+      assert.equal(oldTokenClaims.id, 'super-admin');
+      assert.equal(oldTokenClaims.isAdmin, true);
+      assert.equal(oldTokenClaims.isSuperAdmin, true);
+      assert.equal(oldTokenClaims.email, configuredAdminEmail());
+      assert.equal(oldTokenClaims.adminSessionVersion, 0);
 
-    const setup = await request(server, '/api/admin/security/recovery-key', {
+      const otpRequest = await request(server, '/api/admin/security/otp/request', {
+      method: 'POST',
+      headers: { authorization: `Bearer ${oldToken}` },
+      body: JSON.stringify({ action: 'recovery-key' })
+      });
+      assert.equal(otpRequest.response.status, 200);
+      const setupOtp = sentMail.at(-1).text.match(/\b\d{6}\b/)[0];
+
+      const setup = await request(server, '/api/admin/security/recovery-key', {
       method: 'PUT',
       headers: { authorization: `Bearer ${oldToken}` },
-      body: JSON.stringify({ currentPassword: 'admin1234', recoveryKey: 'a-secure-recovery-key' })
-    });
-    assert.equal(setup.response.status, 200);
-    assert.equal(setup.body.recoveryKeyConfigured, true);
+      body: JSON.stringify({
+        currentPassword: 'admin1234',
+        recoveryKey: 'a-secure-recovery-key',
+        otp: setupOtp
+      })
+      });
+      assert.equal(setup.response.status, 200);
+      assert.equal(setup.body.recoveryKeyConfigured, true);
+      assert.equal(security.sessionVersion, 1);
 
-    const reset = await request(server, '/api/admin/forgot-password', {
+      const resetOtpRequest = await request(server, '/api/admin/forgot-password/request-otp', {
+      method: 'POST',
+      body: JSON.stringify({
+        email: configuredAdminEmail(),
+        recoveryKey: 'a-secure-recovery-key'
+      })
+      });
+      assert.equal(resetOtpRequest.response.status, 200);
+      const resetOtp = sentMail.at(-1).text.match(/\b\d{6}\b/)[0];
+      const reset = await request(server, '/api/admin/forgot-password', {
       method: 'POST',
       body: JSON.stringify({
           email: configuredAdminEmail(),
         recoveryKey: 'a-secure-recovery-key',
-        newPassword: 'new-admin-password'
+        newPassword: 'new-admin-password',
+        otp: resetOtp
       })
-    });
-    assert.equal(reset.response.status, 200);
-    assert.equal(security.sessionVersion, 1);
+      });
+      assert.equal(reset.response.status, 200);
+      assert.equal(security.sessionVersion, 2);
 
-    const oldSession = await request(server, '/api/admin/security/status', {
+      const oldSession = await request(server, '/api/admin/security/status', {
       headers: { authorization: `Bearer ${oldToken}` }
-    });
-    assert.equal(oldSession.response.status, 401);
+      });
+      assert.equal(oldSession.response.status, 401);
 
-    const newLogin = await request(server, '/api/admin/login', {
+      const newLogin = await request(server, '/api/admin/login', {
       method: 'POST',
         body: JSON.stringify({ email: configuredAdminEmail(), password: 'new-admin-password' })
-    });
-    assert.equal(newLogin.response.status, 200);
-    const newSession = await request(server, '/api/admin/security/status', {
+      });
+      assert.equal(newLogin.response.status, 200);
+      const newSession = await request(server, '/api/admin/security/status', {
       headers: { authorization: `Bearer ${newLogin.body.token}` }
+      });
+      assert.equal(newSession.response.status, 200);
+      const newTokenClaims = jwt.verify(newLogin.body.token, JWT_SECRET);
+      assert.equal(newTokenClaims.isSuperAdmin, true);
+      assert.equal(newTokenClaims.adminSessionVersion, 2);
     });
-    assert.equal(newSession.response.status, 200);
-    const newTokenClaims = jwt.verify(newLogin.body.token, JWT_SECRET);
-    assert.equal(newTokenClaims.isSuperAdmin, true);
-    assert.equal(newTokenClaims.adminSessionVersion, 1);
-  });
+  } finally {
+    for (const [key, value] of Object.entries(previousSmtp)) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+  }
 });
 
 test('preview Admin password secret overrides a stale ephemeral database hash', async () => {
@@ -675,6 +717,143 @@ test('environment-managed Admin credentials reject database-only password and re
       });
       assert.equal(passwordReset.response.status, 409);
       assert.equal(updateCount, 0);
+    });
+  } finally {
+    for (const [key, value] of Object.entries(previousEnv)) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+  }
+});
+
+test('Admin password changes require a fresh emailed OTP and throttle resend requests', async () => {
+  const previousEnv = {
+    ADMIN_EMAIL: process.env.ADMIN_EMAIL,
+    ADMIN_PASSWORD: process.env.ADMIN_PASSWORD,
+    ADMIN_RECOVERY_KEY: process.env.ADMIN_RECOVERY_KEY,
+    SMTP_HOST: process.env.SMTP_HOST,
+    SMTP_USER: process.env.SMTP_USER,
+    SMTP_PASS: process.env.SMTP_PASS,
+    EMAIL_FROM: process.env.EMAIL_FROM,
+    NODE_ENV: process.env.NODE_ENV,
+    MONGO_URI: process.env.MONGO_URI,
+    DEMO_ACCOUNTS_ENABLED: process.env.DEMO_ACCOUNTS_ENABLED
+  };
+  process.env.ADMIN_EMAIL = 'admin-otp@example.test';
+  delete process.env.ADMIN_PASSWORD;
+  delete process.env.ADMIN_RECOVERY_KEY;
+  process.env.SMTP_HOST = 'smtp.test';
+  process.env.SMTP_USER = 'admin@example.test';
+  process.env.SMTP_PASS = 'test-smtp-password';
+  process.env.EMAIL_FROM = 'admin@example.test';
+  process.env.NODE_ENV = 'development';
+  delete process.env.MONGO_URI;
+  delete process.env.DEMO_ACCOUNTS_ENABLED;
+
+  const security = {
+    email: process.env.ADMIN_EMAIL,
+    passwordHash: bcrypt.hashSync('current-admin-password', 4),
+    recoveryKeyHash: bcrypt.hashSync('existing-recovery-key', 4),
+    sessionVersion: 0
+  };
+  const sentMail = [];
+  let updateCount = 0;
+  models.Settings.findOne = () => query({ value: security });
+  models.Settings.findOneAndUpdate = async (_filter, update) => {
+    updateCount += 1;
+    Object.assign(security, update.value);
+    return { value: { ...security } };
+  };
+  setEmailTransporterForTests({ sendMail: async mail => { sentMail.push(mail); } });
+
+  try {
+    await withServer(async server => {
+      const login = await request(server, '/api/admin/login', {
+        method: 'POST',
+        body: JSON.stringify({
+          email: security.email,
+          password: 'current-admin-password'
+        })
+      });
+      assert.equal(login.response.status, 200);
+      const token = login.body.token;
+
+      const missingOtp = await request(server, '/api/admin/security/password', {
+        method: 'PATCH',
+        headers: { authorization: `Bearer ${token}` },
+        body: JSON.stringify({
+          currentPassword: 'current-admin-password',
+          newPassword: 'new-admin-password'
+        })
+      });
+      assert.equal(missingOtp.response.status, 400);
+      assert.equal(updateCount, 0);
+
+      const firstRequest = await request(server, '/api/admin/security/otp/request', {
+        method: 'POST',
+        headers: { authorization: `Bearer ${token}` },
+        body: JSON.stringify({ action: 'password' })
+      });
+      assert.equal(firstRequest.response.status, 200);
+      assert.equal(firstRequest.body.otp, undefined);
+      assert.doesNotMatch(JSON.stringify(firstRequest.body), /\d{6}/);
+      assert.match(sentMail.at(-1).text, /\b\d{6}\b/);
+      const otp = sentMail.at(-1).text.match(/\b\d{6}\b/)[0];
+
+      const wrongOtp = await request(server, '/api/admin/security/password', {
+        method: 'PATCH',
+        headers: { authorization: `Bearer ${token}` },
+        body: JSON.stringify({
+          currentPassword: 'current-admin-password',
+          newPassword: 'new-admin-password',
+          otp: '000000'
+        })
+      });
+      assert.equal(wrongOtp.response.status, 401);
+      assert.equal(updateCount, 0);
+
+      const changed = await request(server, '/api/admin/security/password', {
+        method: 'PATCH',
+        headers: { authorization: `Bearer ${token}` },
+        body: JSON.stringify({
+          currentPassword: 'current-admin-password',
+          newPassword: 'new-admin-password',
+          otp
+        })
+      });
+      assert.equal(changed.response.status, 200);
+      assert.equal(security.sessionVersion, 1);
+      assert.equal(await bcrypt.compare('new-admin-password', security.passwordHash), true);
+
+      const replay = await request(server, '/api/admin/security/password', {
+        method: 'PATCH',
+        headers: { authorization: `Bearer ${token}` },
+        body: JSON.stringify({
+          currentPassword: 'current-admin-password',
+          newPassword: 'another-admin-password',
+          otp
+        })
+      });
+      assert.equal(replay.response.status, 401);
+
+      const currentToken = (await request(server, '/api/admin/login', {
+        method: 'POST',
+        body: JSON.stringify({ email: security.email, password: 'new-admin-password' })
+      })).body.token;
+      for (let attempt = 0; attempt < 2; attempt++) {
+        const resend = await request(server, '/api/admin/security/otp/request', {
+          method: 'POST',
+          headers: { authorization: `Bearer ${currentToken}` },
+          body: JSON.stringify({ action: 'password' })
+        });
+        assert.equal(resend.response.status, 200);
+      }
+      const rateLimited = await request(server, '/api/admin/security/otp/request', {
+        method: 'POST',
+        headers: { authorization: `Bearer ${currentToken}` },
+        body: JSON.stringify({ action: 'password' })
+      });
+      assert.equal(rateLimited.response.status, 429);
     });
   } finally {
     for (const [key, value] of Object.entries(previousEnv)) {
