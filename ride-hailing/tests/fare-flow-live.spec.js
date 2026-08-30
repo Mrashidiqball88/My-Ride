@@ -290,12 +290,14 @@ test.describe('live Mongo fare refresh', () => {
         map.easeTo = camera => calls.push(camera);
         activeRide = { status: 'accepted', pickupLocation: pickup, dropoffLocation: dropoff };
         driverLocation = { lat: 31.521, lng: 74.359 };
+        driverHeading = 92;
         navigationFollowing = true;
         driverMapAutoCenter = true;
         map.fire('zoomstart');
         const followingAfterZoom = navigationFollowing;
         const autoCenterAfterZoom = driverMapAutoCenter;
         focusActiveNavigation();
+        const followCall = calls.at(-1);
         if (!map.isStyleLoaded()) await new Promise(resolve => map.once('load', resolve));
         routeLine = null;
         drawNavigationLine([[31.521, 74.359], [31.5204, 74.3587]]);
@@ -306,6 +308,7 @@ test.describe('live Mongo fare refresh', () => {
         clearRideMap();
         return {
           focusCall: calls[0],
+          followCall,
           followingAfterZoom,
           autoCenterAfterZoom,
           routeColors
@@ -313,6 +316,10 @@ test.describe('live Mongo fare refresh', () => {
       }, { pickup, dropoff });
 
       expect(driverCamera.focusCall.zoom).toBe(18);
+      expect(driverCamera.followCall.center).toEqual([74.359, 31.521]);
+      expect(driverCamera.followCall.bearing).toBe(92);
+      expect(driverCamera.followCall.pitch).toBe(45);
+      expect(driverCamera.followCall.essential).toBe(true);
       expect(driverCamera.followingAfterZoom).toBe(false);
       expect(driverCamera.autoCenterAfterZoom).toBe(false);
       expect(driverCamera.routeColors).toEqual(['#092c62', '#2688ff']);

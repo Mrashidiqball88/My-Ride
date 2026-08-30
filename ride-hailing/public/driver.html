@@ -353,7 +353,7 @@ textarea.support-input{resize:vertical;min-height:85px}
 .nav-sheet-handle{display:block;width:48px;height:20px;border:0;background:transparent;margin:0 auto 4px;cursor:grab;touch-action:none;position:relative}.nav-sheet-handle::after{content:'';position:absolute;width:36px;height:4px;border-radius:999px;background:rgba(255,255,255,.32);top:8px;left:6px}.nav-sheet-handle:active{cursor:grabbing}.nav-topline{display:flex;align-items:center;justify-content:space-between;gap:10px}.nav-mode-label{font-size:10px;font-weight:800;letter-spacing:.11em;color:var(--dc-cyan);text-transform:uppercase}.nav-sheet-toggle,.nav-recenter-btn{border:1px solid rgba(116,224,209,.3);background:rgba(116,224,209,.1);color:var(--dc-cyan);border-radius:10px;padding:6px 8px;font-size:11px;font-weight:800;cursor:pointer}.nav-sheet-actions{display:flex;align-items:center;gap:6px}.nav-sheet-toggle{min-width:34px}.nav-metrics{display:grid;grid-template-columns:1fr 1fr;gap:6px;margin:10px 0}.nav-metric{padding:9px 10px;border:1px solid var(--dc-line);border-radius:13px;background:#111b21}.nav-metric-value{font-family:'Space Mono',monospace;font-size:17px;font-weight:700;color:var(--dc-ink)}.nav-metric-label{font-size:9px;color:var(--dc-dim);text-transform:uppercase;letter-spacing:.08em;margin-top:2px}.nav-destination{display:flex;gap:9px;align-items:flex-start;padding:9px 10px;border-radius:13px;background:rgba(116,224,209,.09);margin-bottom:8px}.nav-destination-icon,.nav-route-symbol{display:grid;place-items:center;flex:none;width:20px;height:20px;border-radius:7px;font-family:'Space Mono',monospace;font-size:10px;font-weight:800;background:var(--dc-yellow);color:#10201f}.nav-destination-icon.dropoff,.nav-route-symbol.dropoff{background:var(--dc-coral);color:#fff}.nav-destination-kicker{font-size:9px;font-weight:800;color:var(--dc-cyan);letter-spacing:.09em;text-transform:uppercase}.nav-destination-name{display:block;font-size:13px;font-weight:800;color:var(--dc-ink);line-height:1.3;margin-top:2px}
 .navigation-route-details{display:none}
 #app.navigation-active .navigation-route-details{display:block}.navigation-route-details .ap-route{padding:8px 10px;margin:0 0 8px}.navigation-route-details .ap-route-row{font-size:.72rem;padding:2px 0}
-.map-marker-shell{background:transparent!important;border:0!important}.driver-location-marker{display:grid;place-items:center;width:30px;height:30px;border-radius:50%;background:#3e9cff;border:3px solid #eaf8ff;box-shadow:0 0 0 5px rgba(62,156,255,.2),0 4px 13px rgba(0,0,0,.42)}.driver-location-marker i{width:7px;height:7px;border-radius:50%;background:#fff}.route-marker{display:grid;place-items:center;width:30px;height:30px;border-radius:11px;border:2px solid #f4fbff;color:#10201f;font-family:'Space Mono',monospace;font-size:11px;font-weight:800;box-shadow:0 5px 14px rgba(0,0,0,.42)}.route-marker.pickup{background:var(--dc-yellow)}.route-marker.dropoff{background:var(--dc-coral);color:#fff}
+.map-marker-shell{background:transparent!important;border:0!important}.driver-location-marker{position:relative;display:grid;place-items:center;width:30px;height:30px;border-radius:50%;background:#3e9cff;border:3px solid #eaf8ff;box-shadow:0 0 0 5px rgba(62,156,255,.2),0 4px 13px rgba(0,0,0,.42);transform-origin:center;transition:transform .35s ease}.driver-location-marker::before{content:'';position:absolute;top:-9px;left:50%;width:0;height:0;border-left:6px solid transparent;border-right:6px solid transparent;border-bottom:10px solid #eaf8ff;transform:translateX(-50%)}.driver-location-marker i{position:relative;z-index:1;width:7px;height:7px;border-radius:50%;background:#fff}.route-marker{display:grid;place-items:center;width:30px;height:30px;border-radius:11px;border:2px solid #f4fbff;color:#10201f;font-family:'Space Mono',monospace;font-size:11px;font-weight:800;box-shadow:0 5px 14px rgba(0,0,0,.42)}.route-marker.pickup{background:var(--dc-yellow)}.route-marker.dropoff{background:var(--dc-coral);color:#fff}
 .mapboxgl-ctrl-top-right{margin-top:74px;margin-right:14px}.mapboxgl-ctrl-group{border:0!important;box-shadow:0 8px 20px rgba(0,0,0,.28)!important;background:rgba(17,26,32,.9)!important}.mapboxgl-ctrl-group button{filter:invert(1);opacity:.85}
 .ap-status-text{color:var(--dc-cyan)}.ap-passenger,.ap-route{background:#111819;border:1px solid var(--dc-line)}
 .ap-passenger-name,.ap-route-row{color:var(--dc-ink)}.ap-passenger-sub{color:var(--dc-muted)}
@@ -816,6 +816,7 @@ let navigationRouteRequest = 0;
 let navigationRouteInFlight = false;
 let driverGpsHasFix = false;
 let driverMapAutoCenter = true;
+let driverHeading = null;
 const ACTIVE_RIDE_LOCATION_INTERVAL_MS = 3000;
 let activeRideLocationTimer = null;
 let activeRideLocationRequestInFlight = false;
@@ -1679,6 +1680,14 @@ function initMap() {
     driverMapAutoCenter = false;
     if (activeRide) navigationFollowing = false;
   });
+  map.on('rotatestart', () => {
+    driverMapAutoCenter = false;
+    if (activeRide) navigationFollowing = false;
+  });
+  map.on('pitchstart', () => {
+    driverMapAutoCenter = false;
+    if (activeRide) navigationFollowing = false;
+  });
 
   // Watch driver's own location
   if (navigator.geolocation) {
@@ -1694,11 +1703,21 @@ function initMap() {
       const previousLocation = driverLocation;
       const nextLocation = { lat, lng };
       const movedKm = previousLocation ? haversineKm(previousLocation, nextLocation) : Infinity;
+      const reportedHeading = Number(pos.coords.heading);
+      const inferredHeading = previousLocation && movedKm >= .001
+        ? bearingBetween(previousLocation, nextLocation)
+        : null;
+      if (Number.isFinite(reportedHeading) && reportedHeading >= 0 && reportedHeading <= 360) {
+        driverHeading = normalizeBearing(reportedHeading);
+      } else if (Number.isFinite(inferredHeading)) {
+        driverHeading = smoothBearing(driverHeading, inferredHeading, .35);
+      }
       driverLocation = nextLocation;
       if (myMarker) myMarker.setLngLat([lng, lat]);
       else myMarker = createDriverDomMarker(lat, lng, {
         html: '<span class="driver-location-marker"><i></i></span>'
       });
+      setDriverMarkerBearing(driverHeading);
       const markerElement = myMarker.getElement?.();
       if (markerElement) markerElement.style.transition = 'transform .8s linear';
 
@@ -1707,9 +1726,7 @@ function initMap() {
       }
       if (activeRide && activeRideTick) {
         refreshActiveNavigation({ recenter: false });
-        if (navigationFollowing && driverMapAutoCenter && movedKm >= .003) {
-          map.easeTo({ center: [lng, lat], duration: 550 });
-        }
+        followDriverNavigation(nextLocation, { bearing: driverHeading });
       } else if (driverMapAutoCenter && isFirstFix) {
         const zoom = Math.max(15, map.getZoom());
         setDriverMapCenter({ lat, lng }, zoom);
@@ -1757,6 +1774,59 @@ function centerDriverMapPreservingZoom(point, { animate = true, duration = .45 }
     || lat < -90 || lat > 90 || lng < -180 || lng > 180
     || !Number.isFinite(zoom)) return;
   setDriverMapCenter({ lat, lng }, zoom, { animate, duration });
+}
+
+function normalizeBearing(value) {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) return null;
+  return (numeric % 360 + 360) % 360;
+}
+
+function bearingBetween(from, to) {
+  if (!from || !to) return null;
+  const toRad = value => value * Math.PI / 180;
+  const toDeg = value => value * 180 / Math.PI;
+  const lat1 = toRad(from.lat);
+  const lat2 = toRad(to.lat);
+  const deltaLng = toRad(to.lng - from.lng);
+  const y = Math.sin(deltaLng) * Math.cos(lat2);
+  const x = Math.cos(lat1) * Math.sin(lat2)
+    - Math.sin(lat1) * Math.cos(lat2) * Math.cos(deltaLng);
+  return normalizeBearing(toDeg(Math.atan2(y, x)));
+}
+
+function smoothBearing(previous, next, weight = .35) {
+  const nextBearing = normalizeBearing(next);
+  if (!Number.isFinite(nextBearing)) return normalizeBearing(previous);
+  const previousBearing = normalizeBearing(previous);
+  if (!Number.isFinite(previousBearing)) return nextBearing;
+  const delta = ((nextBearing - previousBearing + 540) % 360) - 180;
+  return normalizeBearing(previousBearing + delta * Math.max(0, Math.min(1, weight)));
+}
+
+function setDriverMarkerBearing(bearing) {
+  const marker = myMarker?.getElement?.().querySelector('.driver-location-marker');
+  const normalized = normalizeBearing(bearing);
+  if (marker && Number.isFinite(normalized)) marker.style.transform = `rotate(${normalized}deg)`;
+}
+
+function followDriverNavigation(point, { bearing = driverHeading, duration = .55 } = {}) {
+  if (!map || !activeRide || !navigationFollowing || !driverMapAutoCenter || !point) return false;
+  const lat = Number(point.lat);
+  const lng = Number(point.lng);
+  const zoom = Math.max(15, Number(map.getZoom()));
+  if (!Number.isFinite(lat) || !Number.isFinite(lng) || !Number.isFinite(zoom)) return false;
+  const camera = {
+    center: [lng, lat],
+    zoom,
+    pitch: 45,
+    duration: Math.max(250, Math.min(750, Number(duration) * 1000)),
+    essential: true
+  };
+  const normalizedBearing = normalizeBearing(bearing);
+  if (Number.isFinite(normalizedBearing)) camera.bearing = normalizedBearing;
+  map.easeTo(camera);
+  return true;
 }
 
 function haversineKm(a, b) {
@@ -1822,7 +1892,9 @@ function focusActiveNavigation() {
   if (!map || !destination) return;
   navigationFollowing = true;
   driverMapAutoCenter = true;
-  centerDriverMapPreservingZoom(driverLocation || destination.point);
+  if (!followDriverNavigation(driverLocation || destination.point, { bearing: driverHeading })) {
+    centerDriverMapPreservingZoom(driverLocation || destination.point);
+  }
 }
 
 async function refreshActiveNavigation({ force = false, recenter = false } = {}) {
@@ -1923,6 +1995,7 @@ function clearRideMap() {
   navigationRoute = null;
   lastNavigationRouteAt = 0;
   lastNavigationRouteOrigin = null;
+  driverHeading = null;
 }
 
 function toggleDriverOps(forceOpen) {
