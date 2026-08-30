@@ -1008,6 +1008,12 @@ input[type=date]:focus{border-color:#f5c518}
             <p>Manage base fares, distance slabs, and time-based rules for each vehicle type.</p>
             <button class="btn btn-primary" onclick="showSection('fare-settings')">Manage fare rates</button>
           </article>
+          <article class="settings-card" id="customer-fare-display-settings-card">
+            <div class="settings-icon">👁️</div>
+            <h3>Customer Fare Display</h3>
+            <p>Choose whether Customers see vehicle /km rates and the detailed fare calculation.</p>
+            <button class="btn btn-primary" onclick="showSection('customer-fare-display-settings')">Control Customer display</button>
+          </article>
           <article class="settings-card" id="long-range-settings-card">
             <div class="settings-icon">🛣️</div>
             <h3>Long Range Rides</h3>
@@ -1075,6 +1081,27 @@ input[type=date]:focus{border-color:#f5c518}
         <div id="fare-settings-feedback" style="min-height:1.25rem;font-size:.8rem;margin-bottom:.8rem"></div>
         <div id="fare-settings-list"></div>
         <button class="btn btn-primary" style="padding:.75rem 2rem;font-size:.9rem" onclick="saveFareSettings()">💾 Save All Daily Fare Settings</button>
+      </div>
+      <div class="section-panel" id="sec-customer-fare-display-settings">
+        <div class="sec-hdr">
+          <h2>👁️ Customer Fare Display</h2>
+          <div class="sec-hdr-actions"><button class="btn-refresh" onclick="loadCustomerFareDisplaySettings()">↻ Reload</button></div>
+        </div>
+        <p style="font-size:.8rem;color:#475569;margin-bottom:1.1rem">
+          These controls change only what is shown in the Customer app. They never change fare calculations, booking data, negotiation limits, or the final fare.
+        </p>
+        <div style="background:#0f0f1e;border:1px solid #1e1e2e;border-radius:14px;padding:1rem;max-width:680px">
+          <label style="display:flex;align-items:flex-start;gap:.65rem;font-weight:700;color:#e2e8f0;margin-bottom:1rem;cursor:pointer">
+            <input id="customer-show-vehicle-rates" type="checkbox" style="margin-top:.15rem;accent-color:#f5c518">
+            <span>Show per-kilometer rates on vehicle options<small style="display:block;color:#64748b;font-size:.72rem;font-weight:400;margin-top:.25rem">When disabled, vehicle selection remains available but the /km labels are hidden.</small></span>
+          </label>
+          <label style="display:flex;align-items:flex-start;gap:.65rem;font-weight:700;color:#e2e8f0;cursor:pointer">
+            <input id="customer-show-fare-breakdown" type="checkbox" style="margin-top:.15rem;accent-color:#f5c518">
+            <span>Show fare formula and breakdown<small style="display:block;color:#64748b;font-size:.72rem;font-weight:400;margin-top:.25rem">When disabled, Customers still see the final offered fare and can use the normal fare controls.</small></span>
+          </label>
+        </div>
+        <div id="customer-fare-display-settings-feedback" style="min-height:1.25rem;font-size:.8rem;margin:.8rem 0"></div>
+        <button class="btn btn-primary" style="padding:.75rem 2rem;font-size:.9rem" onclick="saveCustomerFareDisplaySettings()">💾 Save Customer Display Settings</button>
       </div>
       <div class="section-panel" id="sec-long-range-settings">
         <div class="sec-hdr"><h2>🛣️ Long Range Ride Settings</h2><div class="sec-hdr-actions"><button class="btn-refresh" onclick="loadLongRangeSettings()">↻ Reload</button></div></div>

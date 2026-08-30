@@ -906,6 +906,25 @@ async function getLongRangeSettings() {
   return normalizeLongRangeSettings(doc?.value);
 }
 
+const CUSTOMER_FARE_DISPLAY_SETTINGS_KEY = 'customer_fare_display_settings';
+const DEFAULT_CUSTOMER_FARE_DISPLAY_SETTINGS = Object.freeze({
+  showVehicleRates: true,
+  showFareBreakdown: true
+});
+
+function normalizeCustomerFareDisplaySettings(input = {}) {
+  const source = input && typeof input === 'object' ? input : {};
+  return {
+    showVehicleRates: source.showVehicleRates !== false,
+    showFareBreakdown: source.showFareBreakdown !== false
+  };
+}
+
+async function getCustomerFareDisplaySettings() {
+  const doc = await Settings.findOne({ key: CUSTOMER_FARE_DISPLAY_SETTINGS_KEY }).lean();
+  return normalizeCustomerFareDisplaySettings(doc?.value);
+}
+
 function isLongRangeDistance(distanceKm, settings) {
   return settings.enabled && Number(distanceKm) >= settings.distanceCutoffKm;
 }
@@ -6089,14 +6108,36 @@ app.get('/api/per-km-rates', async (req, res) => {
 // and older clients, while giving the Customer app one coherent payload.
 app.get('/api/customer/fare-config', async (req, res) => {
   try {
-    const [ratesDoc, longRangeDoc] = await Promise.all([
+    const [ratesDoc, longRangeDoc, displayDoc] = await Promise.all([
       Settings.findOne({ key: 'per_km_rates' }).lean(),
-      Settings.findOne({ key: LONG_RANGE_SETTINGS_KEY }).lean()
+      Settings.findOne({ key: LONG_RANGE_SETTINGS_KEY }).lean(),
+      Settings.findOne({ key: CUSTOMER_FARE_DISPLAY_SETTINGS_KEY }).lean()
     ]);
     res.json({
       perKmRates: normalizePerKmRates(ratesDoc?.value),
-      longRangeSettings: normalizeLongRangeSettings(longRangeDoc?.value)
+      longRangeSettings: normalizeLongRangeSettings(longRangeDoc?.value),
+      displaySettings: normalizeCustomerFareDisplaySettings(displayDoc?.value)
     });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.get('/api/admin/customer-fare-display-settings', adminJwt, requirePerm('manageFareSettings'), async (req, res) => {
+  try {
+    res.json(await getCustomerFareDisplaySettings());
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.patch('/api/admin/customer-fare-display-settings', adminJwt, requirePerm('manageFareSettings'), async (req, res) => {
+  try {
+    const settings = normalizeCustomerFareDisplaySettings(req.body?.displaySettings);
+    await Settings.findOneAndUpdate(
+      { key: CUSTOMER_FARE_DISPLAY_SETTINGS_KEY },
+      { key: CUSTOMER_FARE_DISPLAY_SETTINGS_KEY, value: settings },
+      { upsert: true, new: true, setDefaultsOnInsert: true }
+    );
+    const payload = { settings, updatedAt: new Date().toISOString() };
+    io.emit('customer-fare-display-settings:updated', payload);
+    res.json({ success: true, ...payload });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
@@ -7140,6 +7181,8 @@ module.exports = {
   normalizeFareSettings,
   validateFareSettings,
   calculateFareFromSettings,
+  normalizeCustomerFareDisplaySettings,
+  getCustomerFareDisplaySettings,
   normalizeLongRangeSettings,
   validateLongRangeSettings,
   getLongRangeMinimumWalletBalance,
