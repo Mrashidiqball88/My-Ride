@@ -11,12 +11,15 @@ const {
 
 const originalFetch = global.fetch;
 const httpFetch = global.fetch;
-const originalMapboxToken = process.env.MAPBOX_PUBLIC_TOKEN;
+const originalMapboxAccessToken = process.env.MAPBOX_ACCESS_TOKEN;
+const originalMapboxPublicToken = process.env.MAPBOX_PUBLIC_TOKEN;
 
 afterEach(() => {
   global.fetch = originalFetch;
-  if (originalMapboxToken === undefined) delete process.env.MAPBOX_PUBLIC_TOKEN;
-  else process.env.MAPBOX_PUBLIC_TOKEN = originalMapboxToken;
+  if (originalMapboxAccessToken === undefined) delete process.env.MAPBOX_ACCESS_TOKEN;
+  else process.env.MAPBOX_ACCESS_TOKEN = originalMapboxAccessToken;
+  if (originalMapboxPublicToken === undefined) delete process.env.MAPBOX_PUBLIC_TOKEN;
+  else process.env.MAPBOX_PUBLIC_TOKEN = originalMapboxPublicToken;
 });
 
 async function request(server, path) {
@@ -59,9 +62,10 @@ function assertMapboxQuery(url, query) {
   assert.equal(url.searchParams.get('access_token'), 'test-mapbox-token');
   assert.equal(url.searchParams.get('autocomplete'), 'true');
   assert.equal(url.searchParams.get('country'), 'pk');
-  assert.equal(url.searchParams.get('language'), 'en,ur');
+  assert.equal(url.searchParams.get('language'), 'en');
   assert.equal(url.searchParams.get('limit'), '10');
-  assert.match(url.searchParams.get('types'), /poi/);
+  assert.equal(url.searchParams.get('types'), 'address,poi,neighborhood,locality,place,postcode');
+  assert.doesNotMatch(url.searchParams.get('types'), /street/);
   assert.equal(url.searchParams.get('proximity'), null);
   assert.equal(decodeURIComponent(url.pathname).includes(query), true);
 }
@@ -97,7 +101,7 @@ test('Mapbox search maps valid Pakistan features and preserves POI metadata', as
     assert.equal(result.body[0].address.road, 'New Terminal Road');
     assert.equal(result.body[0].display_name, 'جناح بین الاقوامی ہوائی اڈہ, کراچی, Pakistan');
     assert.equal(result.body[1].address.category, 'hospital');
-    assert.equal(requested.options.headers['Accept-Language'], 'en,ur');
+    assert.equal(requested.options.headers['Accept-Language'], 'en');
     assert.equal(requested.url.origin, 'https://api.mapbox.com');
     assert.match(requested.url.pathname, /\/geocoding\/v5\/mapbox\.places\//);
     assertMapboxQuery(requested.url, query);
@@ -118,6 +122,23 @@ test('Mapbox preserves mixed-language queries and returns a clear upstream failu
     assert.equal(result.response.status, 502);
     assert.equal(result.body.error, 'Internal server error');
     assertMapboxQuery(requested.url, query);
+  });
+});
+
+test('Mapbox access token takes precedence over the public-token fallback', async () => {
+  process.env.MAPBOX_ACCESS_TOKEN = 'access-token';
+  process.env.MAPBOX_PUBLIC_TOKEN = 'public-token';
+  let requested;
+  global.fetch = async url => {
+    requested = new URL(url);
+    return { ok: true, json: async () => ({ features: [] }) };
+  };
+
+  await withServer(async server => {
+    const result = await request(server, '/api/geocode?q=Karachi');
+    assert.equal(result.response.status, 200);
+    assert.equal(requested.searchParams.get('access_token'), 'access-token');
+    assert.equal(requested.searchParams.get('language'), 'en');
   });
 });
 

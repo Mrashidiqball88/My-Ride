@@ -14,10 +14,10 @@ for (const envPath of [path.resolve(__dirname, '.env'), path.resolve(__dirname, 
 }
 const { computeBackfillPaidUntil } = require('./lib/backfillPaidUntil');
 
-function getMapboxPublicToken() {
+function getMapboxAccessToken() {
   return String(
-    process.env.MAPBOX_PUBLIC_TOKEN ||
     process.env.MAPBOX_ACCESS_TOKEN ||
+    process.env.MAPBOX_PUBLIC_TOKEN ||
     process.env.MAPBOX_TOKEN ||
     ''
   ).trim();
@@ -314,7 +314,7 @@ function loadPage(file) {
   const full = path.resolve(PUBLIC_DIR, file);
   try {
     const html = fs.readFileSync(full, 'utf8');
-    const mapboxBootstrap = `<script>window.__MYRIDE_MAPBOX_PUBLIC_TOKEN__=${JSON.stringify(getMapboxPublicToken())};</script>`;
+    const mapboxBootstrap = `<script>window.__MYRIDE_MAPBOX_PUBLIC_TOKEN__=${JSON.stringify(getMapboxAccessToken())};</script>`;
     return html.replace('</head>', `${mapboxBootstrap}</head>`);
   } catch (e) {
     // Return a minimal fallback so a missing file never crashes startup or 500s the healthcheck
@@ -2796,7 +2796,7 @@ app.get('/api/routing/road', authMiddleware, async (req, res) => {
   }
   const coordinates = points.map(point => `${point.lng},${point.lat}`).join(';');
   try {
-    const token = getMapboxPublicToken();
+    const token = getMapboxAccessToken();
     if (!token) return res.status(503).json({ error: 'Mapbox routing is not configured' });
     const url = new URL(`https://api.mapbox.com/directions/v5/mapbox/driving/${coordinates}`);
     url.searchParams.set('access_token', token);
@@ -4642,24 +4642,40 @@ async function readJsonResponseWithLimit(response, maxBytes) {
   return response.json();
 }
 
+async function readMapboxErrorMessage(response) {
+  try {
+    if (typeof response?.json !== 'function') return '';
+    const payload = await response.json();
+    const message = payload?.message || payload?.error?.message || payload?.error || '';
+    return String(message).replace(/\s+/g, ' ').trim().slice(0, 240);
+  } catch {
+    return '';
+  }
+}
+
 async function geocodeProviderSearch(query, center = null) {
-  const token = getMapboxPublicToken();
+  const token = getMapboxAccessToken();
   if (!token) throw new Error('Mapbox public token is not configured');
   const url = new URL(`${MAPBOX_GEOCODE_URL}${encodeURIComponent(query)}.json`);
   url.searchParams.set('access_token', token);
   url.searchParams.set('autocomplete', 'true');
   url.searchParams.set('country', 'pk');
-  url.searchParams.set('language', 'en,ur');
+  // Keep the original query text unchanged so Urdu/Roman Urdu searches still
+  // reach Mapbox; English is the supported response language for this endpoint.
+  url.searchParams.set('language', 'en');
   url.searchParams.set('limit', String(MAPBOX_RESULT_LIMIT));
-  url.searchParams.set('types', 'address,street,poi,neighborhood,locality,place,postcode');
+  url.searchParams.set('types', 'address,poi,neighborhood,locality,place,postcode');
   if (center && Number.isFinite(Number(center.lat)) && Number.isFinite(Number(center.lng))) {
     url.searchParams.set('proximity', `${Number(center.lng)},${Number(center.lat)}`);
   }
   const headers = {
-    'Accept-Language': 'en,ur'
+    'Accept-Language': 'en'
   };
   const upstream = await fetch(url, { headers, signal: AbortSignal.timeout(5000) });
-  if (!upstream.ok) throw new Error(`Geocode upstream ${upstream.status}`);
+  if (!upstream.ok) {
+    const detail = await readMapboxErrorMessage(upstream);
+    throw new Error(`Geocode upstream ${upstream.status}${detail ? `: ${detail}` : ''}`);
+  }
   const data = await readJsonResponseWithLimit(upstream, MAPBOX_MAX_RESPONSE_BYTES);
   if (!Array.isArray(data?.features)) return [];
   return data.features.map(normalizeMapboxFeature).filter(Boolean).map(result => ({
@@ -4758,17 +4774,20 @@ app.get('/api/geocode/reverse', authMiddleware, async (req, res) => {
   }
 
   try {
-    const token = getMapboxPublicToken();
+    const token = getMapboxAccessToken();
     if (!token) throw new Error('Mapbox public token is not configured');
     const url = new URL(`${MAPBOX_GEOCODE_URL}${encodeURIComponent(`${lng},${lat}`)}.json`);
     url.searchParams.set('access_token', token);
-    url.searchParams.set('language', 'en,ur');
-    url.searchParams.set('types', 'address,street,neighborhood,locality,place,postcode');
+    url.searchParams.set('language', 'en');
+    url.searchParams.set('types', 'address,neighborhood,locality,place,postcode');
     const upstream = await fetch(url, {
-      headers: { 'Accept-Language': 'en,ur' },
+      headers: { 'Accept-Language': 'en' },
       signal: AbortSignal.timeout(5000)
     });
-    if (!upstream.ok) throw new Error(`Reverse geocode upstream ${upstream.status}`);
+    if (!upstream.ok) {
+      const detail = await readMapboxErrorMessage(upstream);
+      throw new Error(`Reverse geocode upstream ${upstream.status}${detail ? `: ${detail}` : ''}`);
+    }
     const data = await readJsonResponseWithLimit(upstream, MAPBOX_MAX_RESPONSE_BYTES);
     const result = data?.features?.map(normalizeMapboxFeature).find(Boolean);
     const address = result?.address || {};
