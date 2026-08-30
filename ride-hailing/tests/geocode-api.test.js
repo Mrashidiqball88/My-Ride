@@ -11,12 +11,12 @@ const {
 
 const originalFetch = global.fetch;
 const httpFetch = global.fetch;
-const originalLocationIqKey = process.env.LOCATIONIQ_KEY;
+const originalMapboxToken = process.env.MAPBOX_PUBLIC_TOKEN;
 
 afterEach(() => {
   global.fetch = originalFetch;
-  if (originalLocationIqKey === undefined) delete process.env.LOCATIONIQ_KEY;
-  else process.env.LOCATIONIQ_KEY = originalLocationIqKey;
+  if (originalMapboxToken === undefined) delete process.env.MAPBOX_PUBLIC_TOKEN;
+  else process.env.MAPBOX_PUBLIC_TOKEN = originalMapboxToken;
 });
 
 async function request(server, path) {
@@ -33,61 +33,53 @@ async function withServer(callback) {
   }
 }
 
-function photonFeature(name, city, osmKey, osmValue, lat, lon, extra = {}) {
+function mapboxFeature(name, city, type, category, lat, lon, extra = {}) {
   return {
     type: 'Feature',
-    properties: {
-      osm_type: 'N',
-      osm_id: 123,
-      osm_key: osmKey,
-      osm_value: osmValue,
-      type: 'house',
-      name,
-      city,
-      state: 'Punjab',
-      country: 'Pakistan',
-      countrycode: 'PK',
-      ...extra
-    },
+    id: `${type}.123`,
+    text: name,
+    place_name: `${name}, ${city}, Pakistan`,
+    place_type: [type],
+    properties: { category, ...extra },
     geometry: {
       type: 'Point',
       coordinates: [lon, lat]
-    }
+    },
+    context: [
+      { id: 'street.1', text: 'New Terminal Road' },
+      { id: 'neighborhood.1', text: 'Durg Colony' },
+      { id: 'place.1', text: city },
+      { id: 'region.1', text: 'Punjab' },
+      { id: 'country.1', short_code: 'pk', text: 'Pakistan' }
+    ]
   };
 }
 
-function assertNationwideQuery(url, query) {
-  assert.equal(url.searchParams.get('q'), query);
-  assert.equal(url.searchParams.get('limit'), '50');
-  assert.equal(url.searchParams.get('countrycodes'), null);
-  for (const forbidden of [
-    'city', 'radius', 'viewbox', 'bounded', 'featuretype', 'type',
-    'class', 'amenity', 'lat', 'lon', 'lng'
-  ]) {
-    assert.equal(url.searchParams.get(forbidden), null, `${forbidden} must not narrow Customer search`);
-  }
+function assertMapboxQuery(url, query) {
+  assert.equal(url.searchParams.get('access_token'), 'test-mapbox-token');
+  assert.equal(url.searchParams.get('autocomplete'), 'true');
+  assert.equal(url.searchParams.get('country'), 'pk');
+  assert.equal(url.searchParams.get('language'), 'en,ur');
+  assert.equal(url.searchParams.get('limit'), '10');
+  assert.match(url.searchParams.get('types'), /poi/);
+  assert.equal(url.searchParams.get('proximity'), null);
+  assert.equal(decodeURIComponent(url.pathname).includes(query), true);
 }
 
-test('Photon search maps valid Pakistan GeoJSON features and preserves POI metadata', async () => {
-  process.env.LOCATIONIQ_KEY = 'must-not-be-used-for-photon-search';
+test('Mapbox search maps valid Pakistan features and preserves POI metadata', async () => {
+  process.env.MAPBOX_PUBLIC_TOKEN = 'test-mapbox-token';
   let requested;
   const features = [
-    photonFeature('جناح بین الاقوامی ہوائی اڈہ', 'کراچی', 'aeroway', 'aerodrome', 24.9058, 67.1614, {
-      street: 'New Terminal Road',
-      locality: 'ڈرگ کالونی'
-    }),
-    photonFeature('Shifa International Hospital', 'Islamabad', 'amenity', 'hospital', 33.7069, 73.0498),
-    photonFeature('Jinnah Street', 'Rawalpindi', 'highway', 'residential', 33.5968, 73.1330),
-    photonFeature('جناح بین الاقوامی ہوائی اڈہ', 'کراچی', 'aeroway', 'aerodrome', 24.9058, 67.1614, {
-      street: 'New Terminal Road',
-      locality: 'ڈرگ کالونی'
-    }),
-    photonFeature('Outside Pakistan', 'Delhi', 'amenity', 'hospital', 28.6139, 77.2090, {
-      country: 'India',
-      countrycode: 'IN'
-    }),
-    photonFeature('Bad coordinates', 'Lahore', 'amenity', 'hospital', 0, 0),
-    { type: 'Feature', properties: { countrycode: 'PK' }, geometry: { type: 'LineString', coordinates: [] } }
+    mapboxFeature('جناح بین الاقوامی ہوائی اڈہ', 'کراچی', 'poi', 'airport', 24.9058, 67.1614),
+    mapboxFeature('Shifa International Hospital', 'Islamabad', 'poi', 'hospital', 33.7069, 73.0498),
+    mapboxFeature('Jinnah Street', 'Rawalpindi', 'street', 'street', 33.5968, 73.1330),
+    mapboxFeature('جناح بین الاقوامی ہوائی اڈہ', 'کراچی', 'poi', 'airport', 24.9058, 67.1614),
+    Object.assign(
+      mapboxFeature('Outside Pakistan', 'Delhi', 'poi', 'hospital', 28.6139, 77.2090),
+      { context: [{ id: 'country.1', short_code: 'in', text: 'India' }] }
+    ),
+    mapboxFeature('Bad coordinates', 'Lahore', 'poi', 'hospital', 0, 0),
+    { type: 'Feature', geometry: { type: 'LineString', coordinates: [] }, context: [] }
   ];
   global.fetch = async (url, options) => {
     requested = { url: new URL(url), options };
@@ -99,22 +91,21 @@ test('Photon search maps valid Pakistan GeoJSON features and preserves POI metad
     const result = await request(server, `/api/geocode?q=${encodeURIComponent(query)}`);
     assert.equal(result.response.status, 200);
     assert.equal(result.body.length, 3);
-    assert.deepEqual(result.body.map(item => item.type), ['aerodrome', 'hospital', 'residential']);
-    assert.equal(result.body[0].providerType, 'aerodrome');
+    assert.deepEqual(result.body.map(item => item.type), ['airport', 'hospital', 'street']);
+    assert.equal(result.body[0].providerType, 'airport');
     assert.equal(result.body[0].address.city, 'کراچی');
-    assert.match(result.body[0].display_name, /New Terminal Road/);
-    assert.equal(result.body[1].address.amenity, 'hospital');
-    assert.equal(result.body[2].address.highway, 'residential');
-    assert.equal(requested.options.headers['User-Agent'], 'MyRide-App/1.0 (ride-hailing)');
-    assert.equal(requested.options.headers['Accept-Language'], 'en,ur,pa,hi,sd');
-    assert.equal(requested.url.origin, 'https://photon.komoot.io');
-    assert.equal(requested.url.pathname, '/api/');
-    assertNationwideQuery(requested.url, query);
+    assert.equal(result.body[0].address.road, 'New Terminal Road');
+    assert.equal(result.body[0].display_name, 'جناح بین الاقوامی ہوائی اڈہ, کراچی, Pakistan');
+    assert.equal(result.body[1].address.category, 'hospital');
+    assert.equal(requested.options.headers['Accept-Language'], 'en,ur');
+    assert.equal(requested.url.origin, 'https://api.mapbox.com');
+    assert.match(requested.url.pathname, /\/geocoding\/v5\/mapbox\.places\//);
+    assertMapboxQuery(requested.url, query);
   });
 });
 
-test('Photon keeps mixed-language queries unchanged and returns a clear upstream failure', async () => {
-  delete process.env.LOCATIONIQ_KEY;
+test('Mapbox preserves mixed-language queries and returns a clear upstream failure', async () => {
+  process.env.MAPBOX_PUBLIC_TOKEN = 'test-mapbox-token';
   let requested;
   global.fetch = async (url, options) => {
     requested = { url: new URL(url), options };
@@ -126,8 +117,25 @@ test('Photon keeps mixed-language queries unchanged and returns a clear upstream
     const result = await request(server, `/api/geocode?q=${encodeURIComponent(query)}`);
     assert.equal(result.response.status, 502);
     assert.equal(result.body.error, 'Internal server error');
-    assertNationwideQuery(requested.url, query);
-    assert.equal(requested.url.searchParams.get('key'), null);
+    assertMapboxQuery(requested.url, query);
+  });
+});
+
+test('Customer search adds proximity for current pickup context without narrowing nationwide results', async () => {
+  process.env.MAPBOX_PUBLIC_TOKEN = 'test-mapbox-token';
+  let requested;
+  global.fetch = async url => {
+    requested = new URL(url);
+    return { ok: true, json: async () => ({ features: [] }) };
+  };
+
+  await withServer(async server => {
+    const result = await request(server, '/api/geocode?q=Lahore&lat=31.5204&lng=74.3587');
+    assert.equal(result.response.status, 200);
+    assert.equal(requested.searchParams.get('proximity'), '74.3587,31.5204');
+    assert.equal(requested.searchParams.get('country'), 'pk');
+    assert.equal(requested.searchParams.get('city'), null);
+    assert.equal(requested.searchParams.get('radius'), null);
   });
 });
 

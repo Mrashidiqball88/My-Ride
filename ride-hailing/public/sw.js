@@ -1,7 +1,7 @@
 // MyRide Service Worker — v24
 // Strategy: network-first for API/socket, cache-first for static assets.
 
-const CACHE_NAME = 'myride-v24';
+const CACHE_NAME = 'myride-v25';
 
 // Static assets worth caching for fast repeat loads
 const PRECACHE = [
@@ -10,8 +10,8 @@ const PRECACHE = [
   '/icon-192.png',
   '/icon-512.png',
   '/apple-touch-icon.png',
-  'https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.css',
-  'https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.js',
+  'https://api.mapbox.com/mapbox-gl-js/v3.15.0/mapbox-gl.css',
+  'https://api.mapbox.com/mapbox-gl-js/v3.15.0/mapbox-gl.js',
 ];
 
 // ── Install: pre-cache static shell ─────────────────────────────────────────

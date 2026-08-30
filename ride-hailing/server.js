@@ -14,6 +14,15 @@ for (const envPath of [path.resolve(__dirname, '.env'), path.resolve(__dirname, 
 }
 const { computeBackfillPaidUntil } = require('./lib/backfillPaidUntil');
 
+function getMapboxPublicToken() {
+  return String(
+    process.env.MAPBOX_PUBLIC_TOKEN ||
+    process.env.MAPBOX_ACCESS_TOKEN ||
+    process.env.MAPBOX_TOKEN ||
+    ''
+  ).trim();
+}
+
 // ─── Global crash protection ──────────────────────────────────────────────────
 // Catch any unhandled error/rejection so the server never exits unexpectedly.
 // Log the problem and keep running — the request that caused it will simply
@@ -304,7 +313,9 @@ function deletePrivateIdentityDocuments(filenames = []) {
 function loadPage(file) {
   const full = path.resolve(PUBLIC_DIR, file);
   try {
-    return fs.readFileSync(full, 'utf8');
+    const html = fs.readFileSync(full, 'utf8');
+    const mapboxBootstrap = `<script>window.__MYRIDE_MAPBOX_PUBLIC_TOKEN__=${JSON.stringify(getMapboxPublicToken())};</script>`;
+    return html.replace('</head>', `${mapboxBootstrap}</head>`);
   } catch (e) {
     // Return a minimal fallback so a missing file never crashes startup or 500s the healthcheck
     console.error(`[startup] Warning: cannot load ${full}: ${e.message}`);
@@ -2731,7 +2742,7 @@ async function customerCanBook(req, res, next) {
 
 // Road geometry is requested through the authenticated app server rather than
 // exposing pickup, drop-off, or live driver coordinates to a public router
-// directly from a browser.
+// directly from a browser. Mapbox Directions remains behind this boundary.
 app.get('/api/routing/road', authMiddleware, async (req, res) => {
   const rawPoints = String(req.query.points || '').split(';').filter(Boolean);
   if (rawPoints.length < 2 || rawPoints.length > 8) {
@@ -2746,7 +2757,14 @@ app.get('/api/routing/road', authMiddleware, async (req, res) => {
   }
   const coordinates = points.map(point => `${point.lng},${point.lat}`).join(';');
   try {
-    const response = await fetch(`https://router.project-osrm.org/route/v1/driving/${coordinates}?overview=full&geometries=geojson&steps=false`);
+    const token = getMapboxPublicToken();
+    if (!token) return res.status(503).json({ error: 'Mapbox routing is not configured' });
+    const url = new URL(`https://api.mapbox.com/directions/v5/mapbox/driving/${coordinates}`);
+    url.searchParams.set('access_token', token);
+    url.searchParams.set('overview', 'full');
+    url.searchParams.set('geometries', 'geojson');
+    url.searchParams.set('steps', 'false');
+    const response = await fetch(url);
     if (!response.ok) return res.status(502).json({ error: 'Road routing service unavailable' });
     const payload = await response.json();
     const route = payload.routes?.[0];
@@ -4367,17 +4385,16 @@ app.post('/api/sos', authMiddleware, async (req, res) => {
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Geocode Proxy — forwards Customer search to Photon
-// Photon is a free OpenStreetMap-based geocoder with fuzzy and multilingual
-// matching, so Customer search does not require a provider key or exact spelling.
-// This endpoint deliberately does not accept or forward a city, radius, map
-// viewport, bounded, feature-type, or category filter. The Customer search is
-// nationwide within Pakistan; the live provider owns the POI index.
+// Geocode Proxy — forwards Customer autocomplete to Mapbox
+// Mapbox's Geocoding API provides autocomplete, POI, street, neighborhood, and
+// place results while the server keeps the access token out of request URLs
+// visible to browsers. The lookup remains nationwide within Pakistan; proximity
+// only ranks nearby results and never filters another city out.
 // ─────────────────────────────────────────────────────────────────────────────
 
-const PHOTON_GEOCODE_URL = 'https://photon.komoot.io/api/';
-const PHOTON_RESULT_LIMIT = 50;
-const PHOTON_MAX_RESPONSE_BYTES = 1_048_576;
+const MAPBOX_GEOCODE_URL = 'https://api.mapbox.com/geocoding/v5/mapbox.places/';
+const MAPBOX_RESULT_LIMIT = 10;
+const MAPBOX_MAX_RESPONSE_BYTES = 1_048_576;
 const PAKISTAN_GEOCODE_BOUNDS = {
   minLat: 23,
   maxLat: 38.5,
@@ -4400,46 +4417,51 @@ function geocodeProviderType(result) {
   ).trim();
 }
 
-function photonAddress(properties) {
+function mapboxAddress(feature) {
+  const properties = feature?.properties && typeof feature.properties === 'object'
+    ? feature.properties
+    : {};
+  const context = Array.isArray(feature?.context) ? feature.context : [];
   const address = {};
-  const propertyMap = {
-    name: 'name',
-    street: 'road',
-    housenumber: 'house_number',
-    locality: 'suburb',
-    district: 'district',
-    city: 'city',
-    town: 'town',
-    village: 'village',
-    county: 'county',
-    state: 'state',
-    postcode: 'postcode',
-    country: 'country',
-    countrycode: 'country_code'
-  };
-  for (const [source, target] of Object.entries(propertyMap)) {
-    if (properties[source] !== undefined && properties[source] !== null && String(properties[source]).trim()) {
-      address[target] = String(properties[source]).trim();
-    }
+  const valuesById = new Map();
+  for (const item of context) {
+    if (item?.id) valuesById.set(String(item.id).split('.')[0], item);
   }
-  if (properties.osm_key === 'amenity') address.amenity = String(properties.osm_value || '').trim();
-  if (properties.osm_key === 'public_transport') address.public_transport = String(properties.osm_value || '').trim();
-  if (properties.osm_key === 'aeroway') address.aeroway = String(properties.osm_value || '').trim();
-  if (properties.osm_key === 'highway') address.highway = String(properties.osm_value || '').trim();
-  if (properties.osm_key === 'tourism') address.tourism = String(properties.osm_value || '').trim();
-  if (properties.osm_key === 'landuse') address.landuse = String(properties.osm_value || '').trim();
+  const directText = (key) => String(feature?.[key] || '').trim();
+  const contextText = (...ids) => {
+    for (const id of ids) {
+      const item = valuesById.get(id);
+      if (item?.text) return String(item.text).trim();
+    }
+    return '';
+  };
+  const set = (key, value) => {
+    const text = String(value || '').trim();
+    if (text) address[key] = text;
+  };
+  set('name', directText('text') || properties.name);
+  set('road', contextText('street') || ((feature?.place_type || []).includes('address') ? directText('text') : ''));
+  set('house_number', directText('address'));
+  set('suburb', contextText('neighborhood', 'locality'));
+  set('district', contextText('district'));
+  set('city', contextText('place', 'locality'));
+  set('state', contextText('region'));
+  set('postcode', contextText('postcode'));
+  set('country', contextText('country'));
+  const country = valuesById.get('country');
+  set('country_code', country?.short_code);
+  if (properties.category) set('category', properties.category);
   return address;
 }
 
-function photonDisplayName(properties, address) {
+function mapboxDisplayName(feature, address) {
   const street = [address.house_number, address.road].filter(Boolean).join(' ');
   const parts = [
-    address.name || properties.name,
+    address.name || feature?.text,
     street,
     address.suburb,
     address.district,
-    address.city || address.town || address.village,
-    address.county,
+    address.city,
     address.state,
     address.country
   ].map(value => String(value || '').trim()).filter(Boolean);
@@ -4447,9 +4469,11 @@ function photonDisplayName(properties, address) {
     .join(', ');
 }
 
-function isPakistanPhotonFeature(properties, [lng, lat]) {
-  const countryCode = String(properties.countrycode || '').trim().toLocaleLowerCase();
-  const country = String(properties.country || '').trim().toLocaleLowerCase();
+function isPakistanMapboxFeature(feature, [lng, lat]) {
+  const context = Array.isArray(feature?.context) ? feature.context : [];
+  const countryContext = context.find(item => String(item?.id || '').startsWith('country.'));
+  const countryCode = String(countryContext?.short_code || '').trim().toLocaleLowerCase();
+  const country = String(countryContext?.text || '').trim().toLocaleLowerCase();
   const hasPakistanCountry = countryCode === 'pk'
     || country.includes('pakistan')
     || country.includes('پاکستان')
@@ -4463,33 +4487,31 @@ function isPakistanPhotonFeature(properties, [lng, lat]) {
     && Number(lng) <= PAKISTAN_GEOCODE_BOUNDS.maxLng;
 }
 
-function normalizePhotonFeature(feature) {
-  const properties = feature?.properties && typeof feature.properties === 'object'
-    ? feature.properties
-    : {};
+function normalizeMapboxFeature(feature) {
   const coordinates = feature?.geometry?.type === 'Point' && Array.isArray(feature.geometry.coordinates)
     ? feature.geometry.coordinates
     : [];
   const [lng, lat] = coordinates;
-  if (!isPakistanPhotonFeature(properties, [lng, lat])
+  if (!isPakistanMapboxFeature(feature, [lng, lat])
     || !hasValidCoordinates({ lat, lng })) return null;
 
-  const address = photonAddress(properties);
+  const address = mapboxAddress(feature);
   const providerType = String(
-    properties.osm_value || properties.osm_key || properties.type || ''
+    feature?.properties?.category ||
+    feature?.place_type?.[0] ||
+    ''
   ).trim();
-  const displayName = photonDisplayName(properties, address);
+  const displayName = mapboxDisplayName(feature, address);
   return {
-    display_name: displayName || 'Pakistan location',
-    name: String(properties.name || address.name || '').trim(),
+    display_name: String(feature?.place_name || displayName || 'Pakistan location').trim(),
+    name: String(feature?.text || address.name || '').trim(),
     lat: String(lat),
     lon: String(lng),
     type: providerType,
-    category: String(properties.osm_key || '').trim(),
+    category: providerType,
     providerType,
     address,
-    osm_type: properties.osm_type,
-    osm_id: properties.osm_id
+    mapbox_id: feature?.id || ''
   };
 }
 
@@ -4533,17 +4555,27 @@ async function readJsonResponseWithLimit(response, maxBytes) {
   return response.json();
 }
 
-async function geocodeProviderSearch(query) {
-  const url = `${PHOTON_GEOCODE_URL}?q=${encodeURIComponent(query)}&limit=${PHOTON_RESULT_LIMIT}`;
+async function geocodeProviderSearch(query, center = null) {
+  const token = getMapboxPublicToken();
+  if (!token) throw new Error('Mapbox public token is not configured');
+  const url = new URL(`${MAPBOX_GEOCODE_URL}${encodeURIComponent(query)}.json`);
+  url.searchParams.set('access_token', token);
+  url.searchParams.set('autocomplete', 'true');
+  url.searchParams.set('country', 'pk');
+  url.searchParams.set('language', 'en,ur');
+  url.searchParams.set('limit', String(MAPBOX_RESULT_LIMIT));
+  url.searchParams.set('types', 'address,street,poi,neighborhood,locality,place,postcode');
+  if (center && Number.isFinite(Number(center.lat)) && Number.isFinite(Number(center.lng))) {
+    url.searchParams.set('proximity', `${Number(center.lng)},${Number(center.lat)}`);
+  }
   const headers = {
-    'User-Agent': 'MyRide-App/1.0 (ride-hailing)',
-    'Accept-Language': 'en,ur,pa,hi,sd'
+    'Accept-Language': 'en,ur'
   };
   const upstream = await fetch(url, { headers, signal: AbortSignal.timeout(5000) });
   if (!upstream.ok) throw new Error(`Geocode upstream ${upstream.status}`);
-  const data = await readJsonResponseWithLimit(upstream, PHOTON_MAX_RESPONSE_BYTES);
+  const data = await readJsonResponseWithLimit(upstream, MAPBOX_MAX_RESPONSE_BYTES);
   if (!Array.isArray(data?.features)) return [];
-  return data.features.map(normalizePhotonFeature).filter(Boolean).map(result => ({
+  return data.features.map(normalizeMapboxFeature).filter(Boolean).map(result => ({
     ...result,
     providerType: geocodeProviderType(result)
   }));
@@ -4567,6 +4599,10 @@ app.get('/api/geocode', async (req, res) => {
   // is only for matching configured aliases, never for the provider query.
   const q = String(req.query.q || '');
   if (!q.trim()) return res.json([]);
+  const center = {
+    lat: Number(req.query.lat),
+    lng: Number(req.query.lng)
+  };
 
   try {
     const aliases = await getCustomerLocationAliases();
@@ -4595,14 +4631,14 @@ app.get('/api/geocode', async (req, res) => {
         aliasConfidence: match.alias.confidence
       }));
     const providerResults = await Promise.all([
-      geocodeProviderSearch(q).catch(error => {
+      geocodeProviderSearch(q, center).catch(error => {
         if (directResults.length) {
           console.warn('[location-aliases] raw lookup failed; returning vetted direct alias:', error.message);
           return [];
         }
         throw error;
       }),
-      ...canonicalQueries.map(query => geocodeProviderSearch(query).catch(error => {
+      ...canonicalQueries.map(query => geocodeProviderSearch(query, center).catch(error => {
         console.warn(`[location-aliases] canonical lookup failed for "${query}":`, error.message);
         return [];
       }))
@@ -4635,32 +4671,24 @@ app.get('/api/geocode/reverse', authMiddleware, async (req, res) => {
   }
 
   try {
-    const key = process.env.LOCATIONIQ_KEY;
-    let url, headers = {};
-    if (key) {
-      url = `https://us1.locationiq.com/v1/reverse` +
-        `?key=${encodeURIComponent(key)}` +
-        `&lat=${encodeURIComponent(lat)}&lon=${encodeURIComponent(lng)}` +
-        `&format=json&addressdetails=1&normalizeaddress=1`;
-    } else {
-      url = `https://nominatim.openstreetmap.org/reverse` +
-        `?lat=${encodeURIComponent(lat)}&lon=${encodeURIComponent(lng)}` +
-        `&format=json&addressdetails=1`;
-      headers = {
-        'User-Agent': 'MyRide-App/1.0 (ride-hailing)',
-        'Accept-Language': 'en,ur'
-      };
-    }
-
-    const upstream = await fetch(url, { headers, signal: AbortSignal.timeout(5000) });
+    const token = getMapboxPublicToken();
+    if (!token) throw new Error('Mapbox public token is not configured');
+    const url = new URL(`${MAPBOX_GEOCODE_URL}${encodeURIComponent(`${lng},${lat}`)}.json`);
+    url.searchParams.set('access_token', token);
+    url.searchParams.set('language', 'en,ur');
+    url.searchParams.set('types', 'address,street,neighborhood,locality,place,postcode');
+    const upstream = await fetch(url, {
+      headers: { 'Accept-Language': 'en,ur' },
+      signal: AbortSignal.timeout(5000)
+    });
     if (!upstream.ok) throw new Error(`Reverse geocode upstream ${upstream.status}`);
-    const data = await upstream.json();
-    const address = data?.address && typeof data.address === 'object' ? data.address : {};
-    const city = address.city || address.town || address.municipality
-      || address.village || address.county || '';
+    const data = await readJsonResponseWithLimit(upstream, MAPBOX_MAX_RESPONSE_BYTES);
+    const result = data?.features?.map(normalizeMapboxFeature).find(Boolean);
+    const address = result?.address || {};
+    const city = address.city || address.district || address.state || '';
     res.json({
       city: String(city).trim(),
-      display_name: data?.display_name || '',
+      display_name: result?.display_name || '',
       address,
       lat,
       lng

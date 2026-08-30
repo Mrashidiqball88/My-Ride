@@ -9,13 +9,13 @@ const ADMIN_TOKEN = jwt.sign(
   'ride-hailing-secret-fallback'
 );
 
-test.describe('Admin MapLibre maps and city-aware place search', () => {
+test.describe('Admin Mapbox maps and city-aware place search', () => {
   test('renders both Admin maps without Leaflet and prioritizes the GPS city', async ({ page }) => {
     const reverseRequests = [];
     const placeRequests = [];
     const forbiddenMapRequests = [];
     page.on('request', request => {
-      if (/leaflet|tile\.openstreetmap\.org|\.tile\.osm/i.test(request.url())) {
+      if (/leaflet|maplibre|openfreemap|tile\.openstreetmap\.org|\.tile\.osm/i.test(request.url())) {
         forbiddenMapRequests.push(request.url());
       }
     });
@@ -110,12 +110,12 @@ test.describe('Admin MapLibre maps and city-aware place search', () => {
     await page.goto('/admin');
     await expect(page.locator('#admin-app')).toBeVisible();
     await expect.poll(() => reverseRequests.length).toBeGreaterThan(0);
-    await expect(page.locator('#admin-live-map .maplibregl-canvas')).toBeVisible();
+    await expect(page.locator('#admin-live-map .mapboxgl-canvas')).toBeVisible();
     await expect.poll(() => page.evaluate(() => ({
-      hasMapLibre: Boolean(window.maplibregl),
+      hasMapbox: Boolean(window.mapboxgl),
       hasLeaflet: Boolean(window.L),
       markerCount: adminLiveMarkers.size
-    }))).toEqual({ hasMapLibre: true, hasLeaflet: false, markerCount: 1 });
+    }))).toEqual({ hasMapbox: true, hasLeaflet: false, markerCount: 1 });
     expect(forbiddenMapRequests).toEqual([]);
 
     const placeInput = page.locator('#admin-place-search-input');
@@ -140,7 +140,7 @@ test.describe('Admin MapLibre maps and city-aware place search', () => {
 
     await page.evaluate(() => openLiveLocationMap('driver-1'));
     await expect(page.locator('#live-location-modal')).toHaveClass(/open/);
-    await expect(page.locator('#live-location-map .maplibregl-canvas')).toBeVisible();
+    await expect(page.locator('#live-location-map .mapboxgl-canvas')).toBeVisible();
     await expect.poll(() => page.evaluate(() => Boolean(liveLocationMap))).toBe(true);
     await page.evaluate(() => closeLiveLocationMap());
     await expect.poll(() => page.evaluate(() => liveLocationMap === null)).toBe(true);

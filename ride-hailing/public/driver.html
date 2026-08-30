@@ -13,8 +13,8 @@
 <link rel="apple-touch-icon" href="/logo-driver.svg">
 <link rel="icon" type="image/svg+xml" href="/logo-driver.svg">
 <title>My Ride - Driver</title>
-<link rel="stylesheet" href="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.css"/>
-<script src="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.js"></script>
+<link rel="stylesheet" href="https://api.mapbox.com/mapbox-gl-js/v3.15.0/mapbox-gl.css"/>
+<script src="https://api.mapbox.com/mapbox-gl-js/v3.15.0/mapbox-gl.js"></script>
 <script src="/socket.io/socket.io.js"></script>
 <style>
 @import url('https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Noto+Naskh+Arabic:wght@400;500;600;700&family=Space+Mono:wght@400;700&display=swap');
@@ -215,8 +215,8 @@ body{font-family:'Segoe UI',sans-serif;background:#0a0a0f;color:#fff;height:100d
 .toast.error{border-left:3px solid #ff5555}
 .toast.info{border-left:3px solid #f5c518}
 
-.maplibregl-map{background:#1a1a2a}
-.maplibregl-ctrl-attrib{font-size:9px;line-height:1.1;padding:2px 4px!important;background:rgba(10,10,15,.62)!important;box-shadow:none!important}
+.mapboxgl-map{background:#1a1a2a}
+.mapboxgl-ctrl-attrib{font-size:9px;line-height:1.1;padding:2px 4px!important;background:rgba(10,10,15,.62)!important;box-shadow:none!important}
 .pickup-icon{background:#2266cc;border:3px solid #fff;width:16px;height:16px;border-radius:50%}
 .dropoff-icon{background:#cc6622;border:3px solid #fff;width:16px;height:16px;border-radius:50%}
 
@@ -303,7 +303,7 @@ textarea.support-input{resize:vertical;min-height:85px}
 :root{--dc-ink:#f7f7f3;--dc-muted:#9aa3a5;--dc-dim:#667174;--dc-line:rgba(255,255,255,.11);--dc-night:#111718;--dc-panel:#182022;--dc-panel2:#202a2c;--dc-map-charcoal:#202a2c;--dc-cyan:#74e0d1;--dc-yellow:#f5cc68;--dc-coral:#ff8e78}
 #app{position:relative;display:none;background:var(--dc-night);color:var(--dc-ink);overflow:hidden;font-family:'DM Sans','Segoe UI',sans-serif}
 #map{position:absolute;inset:0;width:100%;height:100%;z-index:1;filter:none;background:var(--dc-map-charcoal)}
-.maplibregl-map{background:var(--dc-map-charcoal)}
+.mapboxgl-map{background:var(--dc-map-charcoal)}
 .header{position:absolute;top:0;left:0;right:0;height:62px;padding:14px 16px 12px;background:linear-gradient(180deg,rgba(17,23,24,.96),rgba(17,23,24,.55),transparent);border:0;z-index:20}
 .header-logo{font-size:20px;letter-spacing:-.04em;color:var(--dc-ink)}
 .header-logo span{color:var(--dc-cyan)}
@@ -354,7 +354,7 @@ textarea.support-input{resize:vertical;min-height:85px}
 .navigation-route-details{display:none}
 #app.navigation-active .navigation-route-details{display:block}.navigation-route-details .ap-route{padding:8px 10px;margin:0 0 8px}.navigation-route-details .ap-route-row{font-size:.72rem;padding:2px 0}
 .map-marker-shell{background:transparent!important;border:0!important}.driver-location-marker{display:grid;place-items:center;width:30px;height:30px;border-radius:50%;background:#3e9cff;border:3px solid #eaf8ff;box-shadow:0 0 0 5px rgba(62,156,255,.2),0 4px 13px rgba(0,0,0,.42)}.driver-location-marker i{width:7px;height:7px;border-radius:50%;background:#fff}.route-marker{display:grid;place-items:center;width:30px;height:30px;border-radius:11px;border:2px solid #f4fbff;color:#10201f;font-family:'Space Mono',monospace;font-size:11px;font-weight:800;box-shadow:0 5px 14px rgba(0,0,0,.42)}.route-marker.pickup{background:var(--dc-yellow)}.route-marker.dropoff{background:var(--dc-coral);color:#fff}
-.maplibregl-ctrl-top-right{margin-top:74px;margin-right:14px}.maplibregl-ctrl-group{border:0!important;box-shadow:0 8px 20px rgba(0,0,0,.28)!important;background:rgba(17,26,32,.9)!important}.maplibregl-ctrl-group button{filter:invert(1);opacity:.85}
+.mapboxgl-ctrl-top-right{margin-top:74px;margin-right:14px}.mapboxgl-ctrl-group{border:0!important;box-shadow:0 8px 20px rgba(0,0,0,.28)!important;background:rgba(17,26,32,.9)!important}.mapboxgl-ctrl-group button{filter:invert(1);opacity:.85}
 .ap-status-text{color:var(--dc-cyan)}.ap-passenger,.ap-route{background:#111819;border:1px solid var(--dc-line)}
 .ap-passenger-name,.ap-route-row{color:var(--dc-ink)}.ap-passenger-sub{color:var(--dc-muted)}
 .ap-btn.arrived{background:#182c35;color:var(--dc-cyan);border-color:#376c72}.ap-btn.start{background:#18352f;color:var(--dc-cyan);border-color:#4b978b}.ap-btn.complete{background:#2a3020;color:var(--dc-yellow);border-color:#89733d}
@@ -773,20 +773,8 @@ textarea.support-input{resize:vertical;min-height:85px}
 </div>
 
 <script>
-const MAP_STYLE_URL = 'https://tiles.openfreemap.org/styles/liberty';
-const MAP_RTL_TEXT_PLUGIN_URL = 'https://unpkg.com/@mapbox/mapbox-gl-rtl-text@0.4.0/dist/mapbox-gl-rtl-text.js';
-const MAP_FALLBACK_STYLE = {
-  version: 8,
-  sources: {
-    openstreetmap: {
-      type: 'raster',
-      tiles: ['https://tile.openstreetmap.org/{z}/{x}/{y}.png'],
-      tileSize: 256,
-      attribution: '© OpenStreetMap contributors'
-    }
-  },
-  layers: [{ id: 'openstreetmap', type: 'raster', source: 'openstreetmap' }]
-};
+const MAPBOX_PUBLIC_TOKEN = String(window.__MYRIDE_MAPBOX_PUBLIC_TOKEN__ || '').trim();
+if (MAPBOX_PUBLIC_TOKEN && window.mapboxgl) mapboxgl.accessToken = MAPBOX_PUBLIC_TOKEN;
 const DRIVER_ROUTE_IDS = {
   source: 'driver-route-source',
   shadow: 'driver-route-shadow',
@@ -1503,7 +1491,7 @@ function bootApp() {
     registerPushSubscription();
   }
   // Double rAF ensures the browser has fully painted the flex layout before
-  // MapLibre measures #map — fixes the 0×0 container race condition.
+  // Mapbox measures #map — fixes the 0×0 container race condition.
   requestAnimationFrame(() => requestAnimationFrame(() => {
     initMap();
     renderAvailabilityState();
@@ -1582,7 +1570,7 @@ function createDriverDomMarker(lat, lng, { html = '', className = '', interactiv
   element.className = `map-marker-shell ${className}`.trim();
   element.innerHTML = html;
   element.style.pointerEvents = interactive ? 'auto' : 'none';
-  return new maplibregl.Marker({ element, anchor: 'center' })
+  return new mapboxgl.Marker({ element, anchor: 'center' })
     .setLngLat([Number(lng), Number(lat)])
     .addTo(map);
 }
@@ -1647,25 +1635,20 @@ function setDriverMapLine(coords, { dashed = false } = {}) {
 
 function fitDriverMapToCoords(coords, padding = 60) {
   if (!map || !coords?.length) return;
-  const bounds = new maplibregl.LngLatBounds();
+  const bounds = new mapboxgl.LngLatBounds();
   coords.forEach(([lat, lng]) => bounds.extend([Number(lng), Number(lat)]));
   if (!bounds.isEmpty()) map.fitBounds(bounds, { padding, maxZoom: 16, duration: 450 });
 }
 
 function initMap() {
   if (map) return;
-  if (typeof maplibregl.setRTLTextPlugin === 'function') {
-    try {
-      maplibregl.setRTLTextPlugin(MAP_RTL_TEXT_PLUGIN_URL, error => {
-        if (error) console.warn('Map label shaping unavailable:', error.message || error);
-      }, false);
-    } catch (error) {
-      console.warn('Map label shaping setup unavailable:', error.message || error);
-    }
+  if (!MAPBOX_PUBLIC_TOKEN || !window.mapboxgl) {
+    showToast('Map is unavailable until Mapbox is configured.', 'error');
+    return;
   }
-  map = new maplibregl.Map({
+  map = new mapboxgl.Map({
     container: 'map',
-    style: MAP_STYLE_URL,
+    style: 'mapbox://styles/mapbox/streets-v12',
     center: [74.3587, 31.5204],
     zoom: 16,
     maxZoom: 20,
@@ -1673,17 +1656,12 @@ function initMap() {
     dragRotate: false,
     touchPitch: false
   });
-  let mapFallbackTried = false;
   map.on('error', event => {
-    if (!mapFallbackTried && !map.isStyleLoaded() && event?.error) {
-      mapFallbackTried = true;
-      console.warn('MapLibre vector style unavailable; using OSM raster fallback.', event.error);
-      map.setStyle(MAP_FALLBACK_STYLE);
-    }
+    if (event?.error) console.warn('Mapbox map error:', event.error);
   });
-  map.addControl(new maplibregl.NavigationControl({ showCompass: false }), 'top-right');
+  map.addControl(new mapboxgl.NavigationControl({ showCompass: false }), 'top-right');
 
-  // MapLibre observes its container, so one resize after flex layout is enough.
+  // Mapbox observes its container, so one resize after flex layout is enough.
   requestAnimationFrame(() => map?.resize());
   let resizeFrame = null;
   window.addEventListener('resize', () => {

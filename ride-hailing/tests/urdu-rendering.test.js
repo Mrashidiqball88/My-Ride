@@ -11,10 +11,13 @@ const driverHtml = read('public/driver.html');
 const nativeLayout = read('../artifacts/myride-driver-mobile/app/_layout.tsx');
 const nativeHome = read('../artifacts/myride-driver-mobile/app/index.tsx');
 
-test('Customer and web Driver maps register MapLibre Arabic text shaping', () => {
-  assert.match(customerHtml, /setRTLTextPlugin/);
-  assert.match(driverHtml, /setRTLTextPlugin/);
-  assert.match(driverHtml, /MAP_RTL_TEXT_PLUGIN_URL/);
+test('Customer and web Driver use Mapbox maps with Urdu-capable document text', () => {
+  assert.match(customerHtml, /api\.mapbox\.com\/mapbox-gl-js\/v3\.15\.0\/mapbox-gl\.js/);
+  assert.match(driverHtml, /api\.mapbox\.com\/mapbox-gl-js\/v3\.15\.0\/mapbox-gl\.js/);
+  assert.match(customerHtml, /mapbox:\/\/styles\/mapbox\/streets-v12/);
+  assert.match(driverHtml, /mapbox:\/\/styles\/mapbox\/streets-v12/);
+  assert.doesNotMatch(customerHtml, /maplibre|openfreemap|openstreetmap/i);
+  assert.doesNotMatch(driverHtml, /maplibre|openfreemap|openstreetmap/i);
 });
 
 test('web Driver location surfaces opt into an Urdu-capable font and bidi direction', () => {

@@ -4,9 +4,9 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>My Ride Admin Panel</title>
-<link rel="stylesheet" href="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.css">
+<link rel="stylesheet" href="https://api.mapbox.com/mapbox-gl-js/v3.15.0/mapbox-gl.css">
 <script src="/socket.io/socket.io.js"></script>
-<script src="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.js"></script>
+<script src="https://api.mapbox.com/mapbox-gl-js/v3.15.0/mapbox-gl.js"></script>
 <style>
 *{margin:0;padding:0;box-sizing:border-box}
 body{font-family:'Segoe UI',system-ui,sans-serif;background:#06060e;color:#e2e8f0;height:100vh;overflow:hidden;display:flex}
@@ -155,12 +155,12 @@ body{font-family:'Segoe UI',system-ui,sans-serif;background:#06060e;color:#e2e8f
 .admin-map-pin{width:32px;height:32px;border-radius:50%;display:grid;place-items:center;border:3px solid #fff;box-shadow:0 4px 14px rgba(0,0,0,.5);font-size:.62rem;font-weight:900;color:#07111b}
 .admin-map-pin.driver{background:#38bdf8}.admin-map-pin.customer{background:#f5c518;color:#241b00}
 .admin-live-marker{display:grid;place-items:center;background:transparent;border:0}
-.maplibregl-popup-content{background:#0f0f1e;color:#e2e8f0;border:1px solid #1e1e2e;border-radius:10px;padding:.7rem .8rem;box-shadow:0 8px 24px rgba(0,0,0,.45);font-size:.75rem;line-height:1.45}
-.maplibregl-popup-tip{border-top-color:#0f0f1e;border-bottom-color:#0f0f1e}
-.maplibregl-popup-close-button{color:#94a3b8;font-size:1rem;padding:.25rem .45rem}
-.maplibregl-ctrl-group{background:#0f0f1e;border:1px solid #1e1e2e;box-shadow:0 4px 12px rgba(0,0,0,.35)}
-.maplibregl-ctrl-group button{filter:invert(1) hue-rotate(180deg);opacity:.8}
-.maplibregl-ctrl-attrib{font-size:9px;background:rgba(15,15,30,.8);color:#94a3b8}
+.mapboxgl-popup-content{background:#0f0f1e;color:#e2e8f0;border:1px solid #1e1e2e;border-radius:10px;padding:.7rem .8rem;box-shadow:0 8px 24px rgba(0,0,0,.45);font-size:.75rem;line-height:1.45}
+.mapboxgl-popup-tip{border-top-color:#0f0f1e;border-bottom-color:#0f0f1e}
+.mapboxgl-popup-close-button{color:#94a3b8;font-size:1rem;padding:.25rem .45rem}
+.mapboxgl-ctrl-group{background:#0f0f1e;border:1px solid #1e1e2e;box-shadow:0 4px 12px rgba(0,0,0,.35)}
+.mapboxgl-ctrl-group button{filter:invert(1) hue-rotate(180deg);opacity:.8}
+.mapboxgl-ctrl-attrib{font-size:9px;background:rgba(15,15,30,.8);color:#94a3b8}
 .income-section{margin-top:0;background:#0f0f1e;border:1px solid #1e1e2e;border-radius:14px;padding:1rem}
 .income-section .sec-hdr{margin-bottom:.75rem}
 @media (max-width:980px) and (min-width:701px){
@@ -1416,19 +1416,8 @@ input[type=date]:focus{border-color:#f5c518}
 <script>
 // ── Constants / State ─────────────────────────────────────────────────────────
 const API = '';
-const MAP_STYLE_URL = 'https://tiles.openfreemap.org/styles/liberty';
-const MAP_FALLBACK_STYLE = {
-  version: 8,
-  sources: {
-    openstreetmap: {
-      type: 'raster',
-      tiles: ['https://tile.openstreetmap.org/{z}/{x}/{y}.png'],
-      tileSize: 256,
-      attribution: '© OpenStreetMap contributors'
-    }
-  },
-  layers: [{ id: 'openstreetmap', type: 'raster', source: 'openstreetmap' }]
-};
+const MAPBOX_PUBLIC_TOKEN = String(window.__MYRIDE_MAPBOX_PUBLIC_TOKEN__ || '').trim();
+if (MAPBOX_PUBLIC_TOKEN && window.mapboxgl) mapboxgl.accessToken = MAPBOX_PUBLIC_TOKEN;
 let adminToken = localStorage.getItem('admin_token');
 let adminEmail = localStorage.getItem('admin_email') || '';
 let socket = null;
@@ -2797,14 +2786,14 @@ document.getElementById('admin-place-search-results')?.addEventListener('scroll'
 
 function initAdminLiveMap() {
   const mapEl = document.getElementById('admin-live-map');
-  if (!mapEl || !window.maplibregl) return false;
+  if (!mapEl || !window.mapboxgl || !MAPBOX_PUBLIC_TOKEN) return false;
   if (adminLiveMap) {
     requestAnimationFrame(() => adminLiveMap?.resize());
     return true;
   }
-  adminLiveMap = new maplibregl.Map({
+  adminLiveMap = new mapboxgl.Map({
     container: mapEl,
-    style: MAP_STYLE_URL,
+    style: 'mapbox://styles/mapbox/streets-v12',
     center: [0, 20],
     zoom: 2,
     maxZoom: 20,
@@ -2812,7 +2801,7 @@ function initAdminLiveMap() {
     dragRotate: false,
     touchPitch: false
   });
-  adminLiveMap.addControl(new maplibregl.NavigationControl({ showCompass: false }), 'top-right');
+  adminLiveMap.addControl(new mapboxgl.NavigationControl({ showCompass: false }), 'top-right');
   adminLiveMap.on('load', () => {
     adminLiveMap?.resize();
     if (adminLiveLocations.length) renderAdminLiveLocations(adminLiveLocations);
@@ -2828,9 +2817,9 @@ function createAdminLiveMarker(location) {
   element.setAttribute('aria-label', location.name || role);
   element.textContent = role === 'driver' ? 'D' : 'C';
   element.addEventListener('click', () => { selectedMapUserId = String(location._id); });
-  return new maplibregl.Marker({ element, anchor: 'center' })
+  return new mapboxgl.Marker({ element, anchor: 'center' })
     .setLngLat([Number(location.location.lng), Number(location.location.lat)])
-    .setPopup(new maplibregl.Popup({ closeButton: true, maxWidth: '240px', offset: 18 }).setHTML(liveLocationPopup(location)))
+    .setPopup(new mapboxgl.Popup({ closeButton: true, maxWidth: '240px', offset: 18 }).setHTML(liveLocationPopup(location)))
     .addTo(adminLiveMap);
 }
 
@@ -2885,7 +2874,7 @@ function renderAdminLiveLocations(locations) {
   if (!validLocations.length) {
     adminLiveMapHasFitted = false;
   } else if (!adminLiveMapHasFitted) {
-    const bounds = new maplibregl.LngLatBounds();
+    const bounds = new mapboxgl.LngLatBounds();
     validLocations.forEach(location => bounds.extend([
       Number(location.location.lng), Number(location.location.lat)
     ]));
@@ -2991,7 +2980,7 @@ function createAdminSelectedMarker(location) {
   element.className = 'admin-map-pin ' + (location.role === 'driver' ? 'driver' : 'customer');
   element.setAttribute('aria-label', location.name || 'Live location');
   element.textContent = location.role === 'driver' ? 'D' : 'C';
-  return new maplibregl.Marker({ element, anchor: 'center' })
+  return new mapboxgl.Marker({ element, anchor: 'center' })
     .setLngLat([Number(location.location.lng), Number(location.location.lat)])
     .addTo(liveLocationMap);
 }
@@ -3007,14 +2996,14 @@ function renderLiveLocation(location) {
   if (role) role.textContent = `${location.role === 'driver' ? 'Driver' : 'Customer'} · ${location.status || 'active'}`;
   if (updated) updated.textContent = formatLiveLocationTime(location.updatedAt);
   if (meta) meta.textContent = `Coordinates received ${formatLiveLocationTime(location.updatedAt).toLowerCase()}. Refreshes every 10 seconds while open.`;
-  if (!mapEl || !window.maplibregl || !location.location) return showLiveLocationState('Map is unavailable. Please refresh and try again.');
+  if (!mapEl || !window.mapboxgl || !MAPBOX_PUBLIC_TOKEN || !location.location) return showLiveLocationState('Map is unavailable. Please refresh and try again.');
   mapEl.style.display = 'block';
   state?.classList.remove('visible');
   const center = [Number(location.location.lng), Number(location.location.lat)];
   if (!liveLocationMap) {
-    liveLocationMap = new maplibregl.Map({
+    liveLocationMap = new mapboxgl.Map({
       container: mapEl,
-      style: MAP_STYLE_URL,
+      style: 'mapbox://styles/mapbox/streets-v12',
       center,
       zoom: 16,
       maxZoom: 20,
@@ -3022,15 +3011,10 @@ function renderLiveLocation(location) {
       dragRotate: false,
       touchPitch: false
     });
-  let mapFallbackTried = false;
   liveLocationMap.on('error', event => {
-    if (!mapFallbackTried && !liveLocationMap.isStyleLoaded() && event?.error) {
-      mapFallbackTried = true;
-      console.warn('MapLibre vector style unavailable; using OSM raster fallback.', event.error);
-      liveLocationMap.setStyle(MAP_FALLBACK_STYLE);
-    }
+    if (event?.error) console.warn('Mapbox map error:', event.error);
   });
-    liveLocationMap.addControl(new maplibregl.NavigationControl({ showCompass: false }), 'top-right');
+    liveLocationMap.addControl(new mapboxgl.NavigationControl({ showCompass: false }), 'top-right');
     liveLocationMap.on('load', () => liveLocationMap?.resize());
   } else {
     liveLocationMap.resize();

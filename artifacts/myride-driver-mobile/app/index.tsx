@@ -1,9 +1,10 @@
 import React, { useEffect, useState } from 'react';
-import { ActivityIndicator, Alert, Linking, Platform, Pressable, StyleSheet, Switch, Text, TextInput, View } from 'react-native';
+import { ActivityIndicator, Alert, Image, Linking, Platform, Pressable, StyleSheet, Switch, Text, TextInput, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useColors } from '@/hooks/useColors';
 import { useDriverRuntime } from '@/context/DriverRuntime';
+import { mapboxStaticMapUrl } from '@/lib/mapbox';
 
 const RTL_TEXT_PATTERN = /[\u0590-\u08ff]/;
 
@@ -27,6 +28,12 @@ function DriverHome() {
   const remainingOfferSeconds = runtime.pendingRide
     ? Math.max(0, Math.ceil((new Date(runtime.pendingRide.broadcastExpiresAt || 0).getTime() - Date.now()) / 1000))
     : 0;
+  const pickupMapUrl = runtime.pendingRide?.pickupLocation
+    ? mapboxStaticMapUrl({
+      latitude: Number(runtime.pendingRide.pickupLocation.lat),
+      longitude: Number(runtime.pendingRide.pickupLocation.lng),
+    })
+    : null;
 
   useEffect(() => {
     if (!runtime.pendingRide) return;
@@ -140,6 +147,7 @@ function DriverHome() {
     {runtime.pendingRide ? <View style={[styles.rideCard, { backgroundColor: colors.card, borderColor: colors.primary, borderRadius: colors.radius + 12 }]}>
       <View style={styles.rideHeader}><Text style={[styles.rideLabel, { color: colors.primary }]}>{runtime.pendingRide.isLongRange ? 'LONG RANGE RIDE' : 'NEW RIDE'}</Text><Text style={[styles.fare, { color: colors.foreground }]}>Rs {Number(runtime.pendingRide.fare).toLocaleString()}</Text></View>
       <View style={[styles.offerTimer, { backgroundColor: colors.secondary, borderColor: colors.border }]}><Ionicons name="time-outline" size={15} color={colors.primary} /><Text style={[styles.offerTimerText, { color: colors.secondaryForeground }]}>Reply within {remainingOfferSeconds}s</Text></View>
+       {pickupMapUrl && <View style={[styles.pickupMapCard, { borderColor: colors.border, backgroundColor: colors.secondary }]}><Image source={{ uri: pickupMapUrl }} style={styles.pickupMap} accessibilityLabel="Mapbox pickup preview" /><Text style={[styles.mapCaption, { color: colors.mutedForeground }]}>Mapbox pickup preview</Text></View>}
        <Text style={[styles.location, { color: colors.foreground }, isRtlText(runtime.pendingRide.pickupLocation?.address) && styles.rtlText]} numberOfLines={1}>{runtime.pendingRide.pickupLocation?.address || 'Pickup location shared'}</Text>
        <Text style={[styles.route, { color: colors.mutedForeground }, isRtlText(runtime.pendingRide.dropoffLocation?.address) && styles.rtlText]} numberOfLines={1}>To {runtime.pendingRide.dropoffLocation?.address || 'Drop-off location'} · {runtime.pendingRide.distance?.toFixed(1) || '—'} km</Text>
       <View style={styles.rideActions}><Pressable onPress={runtime.dismissRide} style={[styles.secondaryButton, { borderColor: colors.border, borderRadius: colors.radius }]}><Text style={{ color: colors.mutedForeground }}>Dismiss</Text></Pressable><Pressable testID="driver-accept-ride" onPress={() => void runtime.acceptRide()} style={[styles.acceptButton, { backgroundColor: colors.primary, borderRadius: colors.radius }]}><Text style={[styles.buttonText, { color: colors.primaryForeground }]}>Accept</Text></Pressable></View>
@@ -164,7 +172,7 @@ const styles = StyleSheet.create({
   longRangeCard: { borderWidth: 1, padding: 16, marginTop: 12 }, longRangeTitle: { fontFamily: 'Inter_700Bold', fontSize: 15 }, longRangeReminder: { flexDirection: 'row', alignItems: 'flex-start', gap: 7, borderWidth: 1, padding: 10, marginTop: 14, borderRadius: 10 }, longRangeReminderText: { flex: 1, fontFamily: 'Inter_600SemiBold', fontSize: 12, lineHeight: 17 },
   serviceLine: { borderTopWidth: 1, flexDirection: 'row', gap: 8, alignItems: 'center', marginTop: 15, paddingTop: 14 }, serviceText: { fontFamily: 'Inter_500Medium', fontSize: 12 },
   vehicleCard: { marginTop: 12, borderWidth: 1, flexDirection: 'row', alignItems: 'center', gap: 10, padding: 13 }, vehicleLabel: { fontFamily: 'Inter_700Bold', fontSize: 10, letterSpacing: .8 }, vehicleName: { fontFamily: 'Inter_600SemiBold', fontSize: 14, marginTop: 2 },
-  rideCard: { marginTop: 18, borderWidth: 1, padding: 18 }, rideHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'baseline' }, rideLabel: { fontFamily: 'Inter_700Bold', letterSpacing: 1.1, fontSize: 12 }, fare: { fontFamily: 'Inter_700Bold', fontSize: 23 },
+  rideCard: { marginTop: 18, borderWidth: 1, padding: 18 }, rideHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'baseline' }, rideLabel: { fontFamily: 'Inter_700Bold', letterSpacing: 1.1, fontSize: 12 }, fare: { fontFamily: 'Inter_700Bold', fontSize: 23 }, pickupMapCard: { marginTop: 14, borderWidth: 1, overflow: 'hidden' }, pickupMap: { width: '100%', height: 150 }, mapCaption: { fontFamily: 'Inter_500Medium', fontSize: 11, paddingHorizontal: 10, paddingVertical: 7 },
   offerTimer: { flexDirection: 'row', alignItems: 'center', gap: 6, alignSelf: 'flex-start', borderWidth: 1, borderRadius: 9, paddingHorizontal: 9, paddingVertical: 6, marginTop: 11 }, offerTimerText: { fontFamily: 'Inter_700Bold', fontSize: 12 },
   location: { fontFamily: 'Inter_600SemiBold', fontSize: 16, marginTop: 15 }, route: { fontFamily: 'Inter_400Regular', fontSize: 13, marginTop: 6 }, rideActions: { flexDirection: 'row', gap: 10, marginTop: 18 }, secondaryButton: { flex: 1, height: 46, borderWidth: 1, alignItems: 'center', justifyContent: 'center' }, acceptButton: { flex: 1, height: 46, alignItems: 'center', justifyContent: 'center' },
   waiting: { marginTop: 18, borderWidth: 1, borderStyle: 'dashed', padding: 30, alignItems: 'center' }, waitingTitle: { fontFamily: 'Inter_700Bold', fontSize: 18, marginTop: 12 }, waitingCopy: { fontFamily: 'Inter_400Regular', textAlign: 'center', fontSize: 13, lineHeight: 20, marginTop: 7 },

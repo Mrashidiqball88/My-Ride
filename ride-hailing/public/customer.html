@@ -13,8 +13,8 @@
 <link rel="apple-touch-icon" href="/logo-customer.svg">
 <link rel="icon" type="image/svg+xml" href="/logo-customer.svg">
 <title>My Ride</title>
-<link rel="stylesheet" href="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.css"/>
-<script src="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.js"></script>
+<link rel="stylesheet" href="https://api.mapbox.com/mapbox-gl-js/v3.15.0/mapbox-gl.css"/>
+<script src="https://api.mapbox.com/mapbox-gl-js/v3.15.0/mapbox-gl.js"></script>
 <script src="/socket.io/socket.io.js"></script>
 <style>
 @import url('https://fonts.googleapis.com/css2?family=Noto+Naskh+Arabic:wght@400;500;600;700&display=swap');
@@ -303,8 +303,8 @@ body{font-family:'Segoe UI',sans-serif;background:#0a0a0f;color:#fff;height:100d
 .btn-modal-confirm{flex:2;border:none;border-radius:10px;padding:.7rem;font-size:.9rem;font-weight:700;cursor:pointer;transition:opacity .2s}
 .btn-modal-confirm:hover{opacity:.9}
 
-/* ── MapLibre markers and controls ── */
-.maplibregl-map{background:#1a1a2a}
+/* ── Mapbox markers and controls ── */
+.mapboxgl-map{background:#1a1a2a}
 .pickup-marker{background:#2266cc;border:3px solid #fff;width:18px;height:18px;border-radius:50%;box-shadow:0 0 8px rgba(34,102,204,.8)}
 .dropoff-marker{background:#cc6622;border:3px solid #fff;width:18px;height:18px;border-radius:50%;box-shadow:0 0 8px rgba(204,102,34,.8)}
 .driver-marker{font-size:24px;line-height:1}
@@ -332,11 +332,11 @@ body{font-family:'Segoe UI',sans-serif;background:#0a0a0f;color:#fff;height:100d
 .customer-permission-list{display:grid;gap:.5rem;margin-bottom:.85rem}.customer-permission-row{display:grid;grid-template-columns:34px minmax(0,1fr) auto;align-items:center;gap:.6rem;padding:.65rem .7rem;border:1px solid var(--lr-line);border-radius:13px;background:#fffaf4}.customer-permission-icon{width:30px;height:30px;border-radius:10px;background:var(--lr-paper-deep);display:grid;place-items:center;font-size:1rem}.customer-permission-name{font-size:.78rem;font-weight:850}.customer-permission-detail{font-size:.67rem;color:var(--lr-muted);line-height:1.3;margin-top:.1rem}.customer-permission-state{font-size:.64rem;font-weight:850;color:var(--lr-muted);white-space:nowrap}.customer-permission-row.ready .customer-permission-state{color:#2e8b57}.customer-permission-row.blocked .customer-permission-state{color:#c94d3a}.customer-readiness-status{min-height:1.2rem;color:var(--lr-muted);font-size:.7rem;line-height:1.4;margin:.6rem 0}.customer-readiness-actions{display:flex;gap:.5rem}.customer-readiness-actions button{flex:1;border-radius:11px;padding:.7rem .75rem;font-size:.78rem;font-weight:850;cursor:pointer}.customer-readiness-primary{background:var(--lr-coral);color:#fff;border:1px solid var(--lr-coral)}.customer-readiness-secondary{background:transparent;color:var(--lr-ink);border:1px solid var(--lr-line)}.customer-readiness-actions button:disabled{opacity:.55;cursor:wait}
 #app{position:relative;display:none;background:var(--lr-paper);color:var(--lr-ink);overflow:hidden}
 #map{position:absolute;inset:0;width:100%;height:100%;z-index:1;filter:none;background:#d8ddd9}
-.maplibregl-map{background:#d8ddd9}
-.maplibregl-ctrl-top-right{margin-top:5.6rem;margin-right:1rem}
-.maplibregl-ctrl-group{border:0!important;box-shadow:0 8px 20px rgba(16,35,55,.12)!important;background:rgba(246,241,233,.94)!important}
-.maplibregl-ctrl-group button{background:transparent!important;color:var(--lr-ink)!important}
-.maplibregl-ctrl-attrib{font-size:9px;line-height:1.1;padding:2px 4px!important;background:rgba(246,241,233,.78)!important;box-shadow:none!important}
+.mapboxgl-map{background:#d8ddd9}
+.mapboxgl-ctrl-top-right{margin-top:5.6rem;margin-right:1rem}
+.mapboxgl-ctrl-group{border:0!important;box-shadow:0 8px 20px rgba(16,35,55,.12)!important;background:rgba(246,241,233,.94)!important}
+.mapboxgl-ctrl-group button{background:transparent!important;color:var(--lr-ink)!important}
+.mapboxgl-ctrl-attrib{font-size:9px;line-height:1.1;padding:2px 4px!important;background:rgba(246,241,233,.78)!important;box-shadow:none!important}
 .header{position:absolute;top:0;left:0;right:0;height:72px;padding:1rem clamp(1rem,4vw,3rem);background:linear-gradient(180deg,rgba(246,241,233,.98),rgba(246,241,233,.84),transparent);border:0;z-index:60;color:var(--lr-ink)}
 .header-logo{font-family:Georgia,serif;font-size:1.25rem;letter-spacing:-.03em;color:var(--lr-ink)}
 .header-logo span{color:var(--lr-ink)}
@@ -948,24 +948,12 @@ body{font-family:'Segoe UI',sans-serif;background:#0a0a0f;color:#fff;height:100d
 <script>
 // ── Constants ─────────────────────────────────────────────────────────────
 const API = '';
-const MAP_STYLE_URL = 'https://tiles.openfreemap.org/styles/liberty';
-const MAP_RTL_TEXT_PLUGIN_URL = 'https://unpkg.com/@mapbox/mapbox-gl-rtl-text@0.4.0/dist/mapbox-gl-rtl-text.js';
+const MAPBOX_PUBLIC_TOKEN = String(window.__MYRIDE_MAPBOX_PUBLIC_TOKEN__ || '').trim();
+if (MAPBOX_PUBLIC_TOKEN && window.mapboxgl) mapboxgl.accessToken = MAPBOX_PUBLIC_TOKEN;
 const CUSTOMER_SEARCH_TIMEOUT_MS = Number(window.__CUSTOMER_SEARCH_TIMEOUT_MS) || 5500;
 const CUSTOMER_PERMISSION_TIMEOUT_MS = Number(window.__CUSTOMER_PERMISSION_TIMEOUT_MS) || 4500;
 const CUSTOMER_MAP_DEFAULT_CENTER = [69.3451, 30.3753]; // Pakistan; GPS or pickup replaces this.
 const CUSTOMER_MAP_DEFAULT_ZOOM = 5.5;
-const MAP_FALLBACK_STYLE = {
-  version: 8,
-  sources: {
-    openstreetmap: {
-      type: 'raster',
-      tiles: ['https://tile.openstreetmap.org/{z}/{x}/{y}.png'],
-      tileSize: 256,
-      attribution: '© OpenStreetMap contributors'
-    }
-  },
-  layers: [{ id: 'openstreetmap', type: 'raster', source: 'openstreetmap' }]
-};
 const CUSTOMER_ROUTE_IDS = {
   source: 'customer-route-source',
   shadow: 'customer-route-shadow',
@@ -1768,7 +1756,7 @@ function bootApp() {
   loadCustomerTerms();
   void initCustomerReadiness();
   // Double rAF ensures the browser has fully painted the flex layout before
-  // MapLibre measures #map — fixes the 0×0 container race condition.
+  // Mapbox measures #map — fixes the 0×0 container race condition.
   requestAnimationFrame(() => requestAnimationFrame(() => {
     initMap();
   }));
@@ -1806,7 +1794,7 @@ function createCustomerDomMarker(lat, lng, { className = '', html = '', interact
   element.className = `map-marker-shell ${className}`.trim();
   element.innerHTML = html;
   element.style.pointerEvents = interactive ? 'auto' : 'none';
-  return new maplibregl.Marker({ element, anchor: 'center' })
+  return new mapboxgl.Marker({ element, anchor: 'center' })
     .setLngLat([Number(lng), Number(lat)])
     .addTo(map);
 }
@@ -1885,25 +1873,20 @@ function setCustomerMapLine(ids, coords, { color, shadowColor, width, shadowWidt
 
 function fitCustomerMapToCoords(coords, padding = 50) {
   if (!map || !coords?.length) return;
-  const bounds = new maplibregl.LngLatBounds();
+  const bounds = new mapboxgl.LngLatBounds();
   coords.forEach(([lat, lng]) => bounds.extend([Number(lng), Number(lat)]));
   if (!bounds.isEmpty()) map.fitBounds(bounds, { padding, maxZoom: 16, duration: 450 });
 }
 
 function initMap() {
   if (map) return;
-  if (typeof maplibregl.setRTLTextPlugin === 'function') {
-    try {
-      maplibregl.setRTLTextPlugin(MAP_RTL_TEXT_PLUGIN_URL, error => {
-        if (error) console.warn('Map label shaping unavailable:', error.message || error);
-    }, false);
-    } catch (error) {
-      console.warn('Map label shaping setup unavailable:', error.message || error);
-    }
+  if (!MAPBOX_PUBLIC_TOKEN || !window.mapboxgl) {
+    showToast('Map is unavailable until Mapbox is configured.', 'error');
+    return;
   }
-  map = new maplibregl.Map({
+  map = new mapboxgl.Map({
     container: 'map',
-    style: MAP_STYLE_URL,
+    style: 'mapbox://styles/mapbox/streets-v12',
     center: CUSTOMER_MAP_DEFAULT_CENTER,
     zoom: CUSTOMER_MAP_DEFAULT_ZOOM,
     maxZoom: 20,
@@ -1924,13 +1907,8 @@ function initMap() {
       });
     }
   });
-  let mapFallbackTried = false;
   map.on('error', event => {
-    if (!mapFallbackTried && !map.isStyleLoaded() && event?.error) {
-      mapFallbackTried = true;
-      console.warn('MapLibre vector style unavailable; using OSM raster fallback.', event.error);
-      map.setStyle(MAP_FALLBACK_STYLE);
-    }
+    if (event?.error) console.warn('Mapbox map error:', event.error);
   });
   const preserveMapLabels = () => {
     const layers = map?.getStyle?.()?.layers || [];
@@ -1942,9 +1920,9 @@ function initMap() {
   };
   map.on('styledata', preserveMapLabels);
   map.once('load', preserveMapLabels);
-  map.addControl(new maplibregl.NavigationControl({ showCompass: false }), 'top-right');
+  map.addControl(new mapboxgl.NavigationControl({ showCompass: false }), 'top-right');
 
-  // MapLibre observes its container, so one resize after flex layout is enough.
+  // Mapbox observes its container, so one resize after flex layout is enough.
   requestAnimationFrame(() => map?.resize());
   let resizeFrame = null;
   window.addEventListener('resize', () => {
@@ -2418,7 +2396,7 @@ function selectLocationFromSheet(index) {
   const item = locationSheetResults[index];
   const type = activeLocationSearch;
   if (!item || !type) return;
-  // The sheet overlays the map. On some MapLibre/browser combinations the
+  // The sheet overlays the map. On some Mapbox/browser combinations the
   // same pointer gesture is delivered to the map after the result button,
   // which would apply the old mapMode and undo the selected result.
   ignoreNextCustomerMapClick = true;

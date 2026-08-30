@@ -1073,7 +1073,7 @@ test.describe('live Mongo fare refresh', () => {
     }
   });
 
-  test('loads MapLibre vector maps without Leaflet or raster tile layers', async ({ browser }) => {
+  test('loads Mapbox maps without Leaflet or legacy raster map providers', async ({ browser }) => {
     const baseURL = `http://127.0.0.1:${httpServer.address().port}`;
     const context = await browser.newContext({
       viewport: { width: 430, height: 900 },
@@ -1098,19 +1098,17 @@ test.describe('live Mongo fare refresh', () => {
 
       const mapDetails = await Promise.all([customerPage, driverPage].map(page =>
         page.evaluate(() => ({
-          styleUrl: MAP_STYLE_URL,
-          vectorSources: Object.values(map.getStyle()?.sources || {})
-            .filter(source => source.type === 'vector')
-            .map(source => source.url || source.tiles?.[0] || ''),
-          canvas: Boolean(document.querySelector('#map .maplibregl-canvas')),
-          leafletNodes: document.querySelectorAll('#map [class*="leaflet"]').length
+          hasMapbox: Boolean(window.mapboxgl),
+          styleUrl: map?.getStyle()?.name || '',
+          canvas: Boolean(document.querySelector('#map .mapboxgl-canvas')),
+          legacyMapNodes: document.querySelectorAll('#map [class*="maplibre"], #map [class*="leaflet"]').length
         }))
       ));
       for (const details of mapDetails) {
-        expect(details.styleUrl).toBe('https://tiles.openfreemap.org/styles/liberty');
-        expect(details.vectorSources.length).toBeGreaterThan(0);
+        expect(details.hasMapbox).toBe(true);
+        expect(details.styleUrl).toBeTruthy();
         expect(details.canvas).toBe(true);
-        expect(details.leafletNodes).toBe(0);
+        expect(details.legacyMapNodes).toBe(0);
       }
     } finally {
       await context.close();
