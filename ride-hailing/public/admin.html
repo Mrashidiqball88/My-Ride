@@ -1511,7 +1511,7 @@ const SECTION_PERMISSION = {
   'temp-blocked': 'manageDriverStatus', passengers: 'viewCustomers',
   'blk-pass': 'manageCustomers', 'live-rides': 'viewRides', sos: 'viewSOS',
   ratings: 'viewRatings', support: 'viewSupport', 'audit-logs': 'viewAuditLogs',
-  'ride-settings': 'manageRideSettings', 'fare-settings': 'manageFareSettings', 'long-range-settings': 'manageFareSettings', 'terms-settings': 'manageFareSettings', 'location-aliases': 'manageLocationAliases',
+  'ride-settings': 'manageRideSettings', 'fare-settings': 'manageFareSettings', 'customer-fare-display-settings': 'manageFareSettings', 'long-range-settings': 'manageFareSettings', 'terms-settings': 'manageFareSettings', 'location-aliases': 'manageLocationAliases',
   'pay-settings': 'managePaymentSettings'
 };
 function hasSectionAccess(name) {
@@ -1905,7 +1905,7 @@ const SECTION_TITLES = {
   'live-rides':'Live Rides & History', sos:'SOS Alert Monitor',
   'fee-compliance':'Driver Wallets & Daily Fees',
   'app-settings':'App Settings / Pricing', 'terms-settings':'Terms & Conditions Settings', 'location-aliases':'Customer Location Aliases',
-  'ride-settings':'Ride Settings', 'fare-settings':'Daily Fare Settings', 'long-range-settings':'Long Range Ride Settings', 'pay-settings':'Payment Settings', 'ride-retention':'Rides Data Retention', ratings:'Ratings & Feedback', support:'Support Tickets', 'audit-logs':'Payment & Pass Audit Logs',
+  'ride-settings':'Ride Settings', 'fare-settings':'Daily Fare Settings', 'customer-fare-display-settings':'Customer Fare Display', 'long-range-settings':'Long Range Ride Settings', 'pay-settings':'Payment Settings', 'ride-retention':'Rides Data Retention', ratings:'Ratings & Feedback', support:'Support Tickets', 'audit-logs':'Payment & Pass Audit Logs',
     deletions:'Account Deletion Requests', 'sub-admins':'Sub-Admin User Management'
 };
 const SECTION_SAVE_HANDLERS = {
@@ -2035,7 +2035,7 @@ function showSection(name) {
     'new-requests': loadNewRequests, 'temp-blocked': loadTempBlocked,
     'blk-pass': loadBlockedPass, 'live-rides': () => loadRides(currentRideStatus),
     'ride-retention': loadRideRetention,
-    sos: () => loadSOS(currentSOSFilter), 'ride-settings': loadRideSettings, 'fare-settings': loadFareSettings, 'long-range-settings': loadLongRangeSettings, 'terms-settings': loadTermsSettings, 'location-aliases': loadLocationAliases, 'pay-settings': loadPaymentSettings,
+    sos: () => loadSOS(currentSOSFilter), 'ride-settings': loadRideSettings, 'fare-settings': loadFareSettings, 'customer-fare-display-settings': loadCustomerFareDisplaySettings, 'long-range-settings': loadLongRangeSettings, 'terms-settings': loadTermsSettings, 'location-aliases': loadLocationAliases, 'pay-settings': loadPaymentSettings,
     'fee-compliance': loadFeeCompliance,
     ratings: loadRatings, support: () => loadSupportTickets(currentSupStatus),
     deletions: loadDeletionRequests,
@@ -4127,6 +4127,46 @@ async function savePerKmRates() {
   }
 }
 
+// ── Customer Fare Display Settings ────────────────────────────────────────────
+function renderCustomerFareDisplaySettings(settings = {}) {
+  document.getElementById('customer-show-vehicle-rates').checked = settings.showVehicleRates !== false;
+  document.getElementById('customer-show-fare-breakdown').checked = settings.showFareBreakdown !== false;
+}
+
+async function loadCustomerFareDisplaySettings() {
+  const feedback = document.getElementById('customer-fare-display-settings-feedback');
+  feedback.textContent = 'Loading…'; feedback.style.color = '#64748b';
+  try {
+    const settings = await api('/api/admin/customer-fare-display-settings');
+    renderCustomerFareDisplaySettings(settings);
+    feedback.textContent = '';
+  } catch (e) {
+    feedback.textContent = `⚠ ${e.message}`;
+    feedback.style.color = '#ef4444';
+  }
+}
+
+async function saveCustomerFareDisplaySettings() {
+  const feedback = document.getElementById('customer-fare-display-settings-feedback');
+  feedback.textContent = 'Saving Customer display settings…'; feedback.style.color = '#64748b';
+  try {
+    const result = await api('/api/admin/customer-fare-display-settings', 'PATCH', {
+      displaySettings: {
+        showVehicleRates: document.getElementById('customer-show-vehicle-rates').checked,
+        showFareBreakdown: document.getElementById('customer-show-fare-breakdown').checked
+      }
+    });
+    renderCustomerFareDisplaySettings(result.settings);
+    feedback.textContent = '✓ Customer fare display settings saved and published live.';
+    feedback.style.color = '#22c55e';
+    showToast('Customer fare display updated ✓', 'success');
+  } catch (e) {
+    feedback.textContent = `✕ ${e.message || 'Could not save Customer display settings'}`;
+    feedback.style.color = '#ef4444';
+    showToast(e.message || 'Could not save Customer display settings', 'error');
+  }
+}
+
 function setGatewayStatus(prefix, status = {}) {
   const el = document.getElementById(`${prefix}-gateway-status`);
   if (!el) return;
@@ -4455,6 +4495,7 @@ function applyPermissions() {
   const settingsCardVisibility = {
     'ride-settings-card': 'manageRideSettings',
     'fare-settings-card': 'manageFareSettings',
+    'customer-fare-display-settings-card': 'manageFareSettings',
     'long-range-settings-card': 'manageFareSettings',
     'terms-settings-card': 'manageFareSettings',
     'location-aliases-card': 'manageLocationAliases',

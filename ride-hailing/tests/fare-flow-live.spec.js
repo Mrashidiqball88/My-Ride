@@ -733,6 +733,104 @@ test.describe('live Mongo fare refresh', () => {
     }
   });
 
+  test('persists Customer fare display controls, updates the live Customer UI, and leaves fare totals unchanged', async ({ browser, playwright }) => {
+    const customerToken = token(customer);
+    const adminToken = token({ _id: new mongoose.Types.ObjectId(), role: 'admin', isAdmin: true, name: 'Admin' });
+    const baseURL = `http://127.0.0.1:${httpServer.address().port}`;
+    const request = await playwright.request.newContext({ baseURL });
+    const customerPage = await browser.newPage();
+
+    try {
+      const fareSettings = settingsFor(200, 100);
+      const savedFareSettings = await request.patch('/api/admin/fare-settings', {
+        headers: { authorization: `Bearer ${adminToken}` },
+        data: { dailyFareSettings: fareSettings }
+      });
+      expect(savedFareSettings.ok()).toBeTruthy();
+
+      const enabled = await request.patch('/api/admin/customer-fare-display-settings', {
+        headers: { authorization: `Bearer ${adminToken}` },
+        data: { displaySettings: { showVehicleRates: true, showFareBreakdown: true } }
+      });
+      expect(enabled.ok()).toBeTruthy();
+
+      const quoteBefore = await request.post('/api/fare/calculate', {
+        data: { vehicleType: 'Bike', distanceKm: 7 }
+      });
+      expect(quoteBefore.ok()).toBeTruthy();
+      const fareBefore = (await quoteBefore.json()).totalFare;
+
+      await openAuthenticatedClient(customerPage, baseURL, '/customer', customer, customerToken);
+      await expect.poll(() => customerPage.evaluate(() => customerFareDisplaySettings)).toEqual({
+        showVehicleRates: true,
+        showFareBreakdown: true
+      });
+
+      const visibleState = await customerPage.evaluate(() => {
+        renderCustomerPerKmRates({ Bike: 55 });
+        currentFareQuote = { totalFare: 500, activeRules: [], isLongRange: false };
+        offeredFare = 500;
+        document.getElementById('fare-row').style.display = 'block';
+        document.getElementById('fare-meta').textContent = 'Base Rs 200 + 7 km × Rs 55/km';
+        renderOfferedFare();
+        return {
+          rateHidden: document.querySelector('.vehicle-btn[data-type="Bike"] .v-fare').hidden,
+          breakdownHidden: document.getElementById('fare-meta').hidden,
+          finalFare: document.getElementById('fare-display').textContent
+        };
+      });
+      expect(visibleState).toEqual({ rateHidden: false, breakdownHidden: false, finalFare: 'Rs 500' });
+
+      const disabled = await request.patch('/api/admin/customer-fare-display-settings', {
+        headers: { authorization: `Bearer ${adminToken}` },
+        data: { displaySettings: { showVehicleRates: false, showFareBreakdown: false } }
+      });
+      expect(disabled.ok()).toBeTruthy();
+      expect(await disabled.json()).toMatchObject({
+        settings: { showVehicleRates: false, showFareBreakdown: false }
+      });
+
+      await expect.poll(() => customerPage.evaluate(() => ({
+        settings: customerFareDisplaySettings,
+        rateHidden: document.querySelector('.vehicle-btn[data-type="Bike"] .v-fare').hidden,
+        breakdownHidden: document.getElementById('fare-meta').hidden,
+        distanceHidden: document.getElementById('dist-badge').parentElement.hidden,
+        adminQuoteHidden: document.querySelector('.fare-suggested').hidden,
+        noteHidden: document.getElementById('fare-min-note').hidden,
+        finalFare: document.getElementById('fare-display').textContent
+      }))).toEqual({
+        settings: { showVehicleRates: false, showFareBreakdown: false },
+        rateHidden: true,
+        breakdownHidden: true,
+        distanceHidden: true,
+        adminQuoteHidden: true,
+        noteHidden: true,
+        finalFare: 'Rs 500'
+      });
+
+      const quoteAfter = await request.post('/api/fare/calculate', {
+        data: { vehicleType: 'Bike', distanceKm: 7 }
+      });
+      expect(quoteAfter.ok()).toBeTruthy();
+      expect((await quoteAfter.json()).totalFare).toBe(fareBefore);
+
+      await customerPage.reload();
+      await customerPage.waitForFunction(() => document.getElementById('app')?.style.display !== 'none');
+      await expect.poll(() => customerPage.evaluate(() => ({
+        settings: customerFareDisplaySettings,
+        rateHidden: document.querySelector('.vehicle-btn[data-type="Bike"] .v-fare').hidden,
+        breakdownHidden: document.getElementById('fare-meta').hidden
+      }))).toEqual({
+        settings: { showVehicleRates: false, showFareBreakdown: false },
+        rateHidden: true,
+        breakdownHidden: true
+      });
+    } finally {
+      await customerPage.close();
+      await request.dispose();
+    }
+  });
+
   test('routes each Toyota category from the customer UI to only its matching driver', async ({ browser, playwright }) => {
     const customerToken = token(customer);
     const highroofToken = token(highroofDriver);

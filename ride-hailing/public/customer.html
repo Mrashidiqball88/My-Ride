@@ -747,10 +747,10 @@ body{font-family:'Segoe UI',sans-serif;background:#0a0a0f;color:#fff;height:100d
               <span class="fare-label">Calculated Total</span>
               <span class="fare-badge">Admin Rules</span>
             </div>
-            <div class="fare-meta" id="fare-meta"></div>
-            <div style="margin-top:.25rem"><span class="dist-badge" id="dist-badge" style="display:none">📍 <span id="dist-km-val">0</span> km</span></div>
+            <div class="fare-meta customer-fare-breakdown" id="fare-meta"></div>
+            <div class="customer-fare-breakdown" style="margin-top:.25rem"><span class="dist-badge" id="dist-badge" style="display:none">📍 <span id="dist-km-val">0</span> km</span></div>
           </div>
-          <div class="fare-suggested">
+          <div class="fare-suggested customer-fare-breakdown">
             <div class="fare-suggested-lbl">Admin quote</div>
             <div class="fare-suggested-val" id="fare-suggested-val">—</div>
           </div>
@@ -766,7 +766,7 @@ body{font-family:'Segoe UI',sans-serif;background:#0a0a0f;color:#fff;height:100d
           <button class="fare-quick" type="button" data-fare-adjustment onclick="setOfferedFarePercent(10)">+10%</button>
           <button class="fare-quick" type="button" data-fare-adjustment onclick="setOfferedFarePercent(20)">+20%</button>
         </div>
-        <div class="fare-min-note" id="fare-min-note"></div>
+        <div class="fare-min-note customer-fare-breakdown" id="fare-min-note"></div>
       </div>
 
       <button class="btn-primary" id="book-btn" onclick="bookRide()" style="display:none;margin-top:.75rem">Book Ride 🚗</button>
@@ -1023,6 +1023,7 @@ let currentFareQuote = null;
 let fareQuoteRequest = 0;
 let customerPerKmRates = {};
 let customerLongRangeSettings = null;
+let customerFareDisplaySettings = { showVehicleRates: true, showFareBreakdown: true };
 let liveTripLine = null;
 let lastDriverLocation = null;
 let customerTrackingFollow = true;
@@ -1773,7 +1774,26 @@ function renderCustomerPerKmRates(rates = {}) {
   document.querySelectorAll('.vehicle-btn').forEach(button => {
     const rate = Number(activeRates?.[button.dataset.type]);
     const label = button.querySelector('.v-fare');
-    if (label && Number.isFinite(rate) && rate > 0) label.textContent = `Rs ${rate.toLocaleString()}/km`;
+    if (!label) return;
+    const showRate = customerFareDisplaySettings.showVehicleRates
+      && Number.isFinite(rate) && rate > 0;
+    label.hidden = !customerFareDisplaySettings.showVehicleRates;
+    label.setAttribute('aria-hidden', String(!customerFareDisplaySettings.showVehicleRates));
+    if (showRate) label.textContent = `Rs ${rate.toLocaleString()}/km`;
+  });
+}
+
+function renderCustomerFareDisplaySettings(settings = {}) {
+  customerFareDisplaySettings = {
+    showVehicleRates: settings.showVehicleRates !== false,
+    showFareBreakdown: settings.showFareBreakdown !== false
+  };
+  document.querySelectorAll('.v-fare').forEach(label => {
+    label.hidden = !customerFareDisplaySettings.showVehicleRates;
+    label.setAttribute('aria-hidden', String(!customerFareDisplaySettings.showVehicleRates));
+  });
+  document.querySelectorAll('.customer-fare-breakdown').forEach(element => {
+    element.hidden = !customerFareDisplaySettings.showFareBreakdown;
   });
 }
 
@@ -1781,6 +1801,7 @@ async function loadCustomerPerKmRates() {
   try {
     const config = await apiCall('/api/customer/fare-config');
     customerLongRangeSettings = config.longRangeSettings || null;
+    renderCustomerFareDisplaySettings(config.displaySettings || {});
     renderCustomerPerKmRates(config.perKmRates || {});
   } catch {
     // Quote endpoint still presents the explicit server-side configuration error.
@@ -3473,6 +3494,11 @@ function connectSocket() {
     renderCustomerPerKmRates(customerPerKmRates);
     if (pickup && dropoffs.slice(0, activeStops).some(Boolean)) updateFare();
     showToast('Admin updated Long Range rates. Your quote has been refreshed.', 'info');
+  });
+  socket.on('customer-fare-display-settings:updated', ({ settings }) => {
+    renderCustomerFareDisplaySettings(settings || {});
+    renderCustomerPerKmRates(customerPerKmRates);
+    showToast('Admin updated Customer fare display settings.', 'info');
   });
   socket.on('terms:updated', ({ terms }) => {
     if (typeof terms?.customer === 'string') {
