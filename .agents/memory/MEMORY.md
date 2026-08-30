@@ -22,7 +22,7 @@
 - [Android WebView APK builds](android-webview-apk-build.md) — use standard JDK 17 for Android SDK 35 Gradle builds; GraalVM can fail during jlink system-module transforms.
 - [Ride cancellation events](ride-cancellation-events.md) — fan out a dedicated cancellation event to pending and assigned Drivers; make client cleanup idempotent with the generic status event.
 - [Driver alert recovery race](driver-alert-recovery-race.md) — queue a second rehydration pass when reconnect status refresh overlaps the initial socket recovery read.
-- [Map rendering and GPS follow](map-rendering-and-gps-follow.md) — use a globally covered MapLibre style, keep a raster fallback, and preserve first-fix/manual-pan behavior.
+- [Map rendering and GPS follow](map-rendering-and-gps-follow.md) — use Mapbox Streets; active Driver rides follow and rotate around the blue marker until a deliberate map gesture pauses follow.
 - [Socket room reference normalization](socket-room-reference-normalization.md) — resolve populated MongoDB references before building Socket.io personal-room names.
 - [Strict active-ride tracking](strict-active-ride-tracking.md) — serialize one three-second GPS cycle and restore native availability mode when rides end.
 - [Pickup PIN authority](pickup-pin-authority.md) — release the ride PIN only from persisted server-side pickup proximity, never from client GPS calculations.
