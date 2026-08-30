@@ -3,7 +3,15 @@
  * Serves Customer App (/customer) and Driver App (/driver)
  */
 
-require('dotenv').config({ path: require('path').resolve(__dirname, '..', '.env') });
+const path = require('path');
+const dotenv = require('dotenv');
+// DigitalOcean deployments commonly keep the env file beside the service
+// entrypoint, while the Replit workspace has historically used the repository
+// root. Load both locations without overriding variables exported by the
+// process environment. The app-local file wins when both dotenv files exist.
+for (const envPath of [path.resolve(__dirname, '.env'), path.resolve(__dirname, '..', '.env')]) {
+  dotenv.config({ path: envPath, override: false });
+}
 const { computeBackfillPaidUntil } = require('./lib/backfillPaidUntil');
 
 // ─── Global crash protection ──────────────────────────────────────────────────
@@ -24,7 +32,6 @@ const jwt      = require('jsonwebtoken');
 const cors     = require('cors');
 const http     = require('http');
 const { Server } = require('socket.io');
-const path     = require('path');
 const webpush  = require('web-push');
 const crypto   = require('crypto');
 const Tesseract = require('tesseract.js');
@@ -375,11 +382,37 @@ function getMongoRetryOptions() {
   };
 }
 
+const MONGO_URI_ENV_KEYS = Object.freeze([
+  'MONGO_URI',
+  'MONGODB_URI',
+  'MONGO_URL',
+  'MONGODB_URL'
+]);
+
+function getConfiguredMongoUri() {
+  for (const key of MONGO_URI_ENV_KEYS) {
+    const value = String(process.env[key] || '').trim();
+    if (value) return { uri: value, source: key };
+  }
+
+  // Replit's DATABASE_URL is normally PostgreSQL and must not be passed to
+  // Mongoose. Accept it only when an operator has explicitly put a Mongo URI
+  // in that legacy variable.
+  const databaseUrl = String(process.env.DATABASE_URL || '').trim();
+  if (/^mongodb(?:\+srv)?:\/\//i.test(databaseUrl)) {
+    return { uri: databaseUrl, source: 'DATABASE_URL' };
+  }
+
+  return { uri: '', source: '' };
+}
+
 function getDatabaseStatus() {
   if (dbConnected || mongoose.connection.readyState === 1) return 'connected';
-  if (process.env.MONGO_URI) return 'connecting';
-  if (process.env.NODE_ENV === 'production') return 'unconfigured';
-  return 'testing-mode';
+  if (getConfiguredMongoUri().uri) return 'connecting';
+  if (process.env.DEMO_ACCOUNTS_ENABLED === 'true' && process.env.NODE_ENV !== 'production') {
+    return 'testing-mode';
+  }
+  return 'unconfigured';
 }
 
 // Gateway credentials are encrypted before they are stored in MongoDB and are
@@ -2420,7 +2453,7 @@ function configuredAdminEmail(_persistedEmail = '') {
 
 function adminEnvironmentModeEnabled() {
   return process.env.NODE_ENV === 'production' ||
-    Boolean(process.env.MONGO_URI) ||
+    Boolean(getConfiguredMongoUri().uri) ||
     process.env.DEMO_ACCOUNTS_ENABLED === 'true';
 }
 
@@ -6688,20 +6721,20 @@ function installMongoConnectionHandlers() {
 }
 
 async function connectDatabase() {
-  const rawUri = process.env.MONGO_URI;
-  console.log('MONGO_URI attached:', !!rawUri);
+  const { uri: rawUri, source } = getConfiguredMongoUri();
+  console.log(`MongoDB URI attached: ${Boolean(rawUri)}${source ? ` (source: ${source})` : ''}`);
   if (!rawUri) {
-    if (process.env.DEMO_ACCOUNTS_ENABLED !== 'true' || process.env.NODE_ENV === 'production') {
-      console.warn(
-        process.env.NODE_ENV === 'production'
-          ? '⚠  MONGO_URI not set — production persistence is unconfigured'
-          : '⚠  MONGO_URI not set — running in testing mode (data not persisted)'
+    const demoMode = process.env.DEMO_ACCOUNTS_ENABLED === 'true' && process.env.NODE_ENV !== 'production';
+    if (!demoMode) {
+      console.error(
+        '✖ MongoDB is not configured. Set MONGO_URI (or MONGODB_URI/MONGO_URL) in the service environment; ' +
+        'persistence is disabled until it is provided.'
       );
       return;
     }
     try {
       // Preview-only persistence: this database lives for the workflow process
-      // and is never used when a production MONGO_URI is configured.
+      // and is never used when a configured production Mongo URI is available.
       const { MongoMemoryServer } = require('mongodb-memory-server');
       const demoMongo = await MongoMemoryServer.create();
       await mongoose.connect(demoMongo.getUri(), getMongoConnectionOptions());
@@ -7121,6 +7154,7 @@ module.exports = {
   setEmailTransporterForTests,
   getMongoConnectionOptions,
   getMongoRetryOptions,
+  getConfiguredMongoUri,
   getDatabaseStatus,
   connectDatabase,
   migrateLegacyUserData,

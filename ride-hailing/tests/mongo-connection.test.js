@@ -13,6 +13,10 @@ const ENV_KEYS = [
   'MONGO_INITIAL_RETRY_DELAY_MS',
   'MONGO_MAX_RETRY_DELAY_MS',
   'MONGO_URI',
+  'MONGODB_URI',
+  'MONGO_URL',
+  'MONGODB_URL',
+  'DATABASE_URL',
   'NODE_ENV'
 ];
 
@@ -102,14 +106,56 @@ test('invalid MongoDB tuning values fall back safely and keep heartbeat below se
 });
 
 test('health state reports connecting while a configured database is not ready', () => {
-  withEnvironment({ MONGO_URI: 'mongodb://atlas.example.test/myride' }, () => {
+  withEnvironment({
+    MONGO_URI: 'mongodb://atlas.example.test/myride',
+    MONGODB_URI: undefined,
+    MONGO_URL: undefined,
+    MONGODB_URL: undefined,
+    DATABASE_URL: undefined
+  }, () => {
     assert.notEqual(mongoose.connection.readyState, 1);
     assert.equal(service.getDatabaseStatus(), 'connecting');
   });
 });
 
+test('MongoDB resolver accepts the legacy URI names without exposing credentials', () => {
+  withEnvironment({
+    MONGO_URI: undefined,
+    MONGODB_URI: 'mongodb+srv://legacy.example.test/myride',
+    MONGO_URL: undefined,
+    MONGODB_URL: undefined,
+    DATABASE_URL: undefined
+  }, () => {
+    assert.deepEqual(service.getConfiguredMongoUri(), {
+      uri: 'mongodb+srv://legacy.example.test/myride',
+      source: 'MONGODB_URI'
+    });
+  });
+});
+
+test('MongoDB resolver does not mistake a PostgreSQL DATABASE_URL for Mongo', () => {
+  withEnvironment({
+    MONGO_URI: undefined,
+    MONGODB_URI: undefined,
+    MONGO_URL: undefined,
+    MONGODB_URL: undefined,
+    DATABASE_URL: 'postgresql://example.test/myride',
+    NODE_ENV: 'production'
+  }, () => {
+    assert.deepEqual(service.getConfiguredMongoUri(), { uri: '', source: '' });
+    assert.equal(service.getDatabaseStatus(), 'unconfigured');
+  });
+});
+
 test('health state reports an unconfigured production database without implying demo mode', () => {
-  withEnvironment({ MONGO_URI: undefined, NODE_ENV: 'production' }, () => {
+  withEnvironment({
+    MONGO_URI: undefined,
+    MONGODB_URI: undefined,
+    MONGO_URL: undefined,
+    MONGODB_URL: undefined,
+    DATABASE_URL: undefined,
+    NODE_ENV: 'production'
+  }, () => {
     assert.notEqual(mongoose.connection.readyState, 1);
     assert.equal(service.getDatabaseStatus(), 'unconfigured');
   });
