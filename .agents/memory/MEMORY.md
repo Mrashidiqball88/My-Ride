@@ -41,3 +41,4 @@
 - [Customer readiness permission timeouts](customer-readiness-permission-timeouts.md) — never let a browser capability prompt keep the booking onboarding modal busy indefinitely.
 - [Urdu font shaping](native-urdu-font-shaping.md) — keep Arabic-capable font loading alongside Inter and scope RTL styling to dynamic Arabic-script Driver text.
 - [Migration upsert timestamps](migration-upsert-timestamps.md) — disable automatic Mongoose timestamps when role-partition upserts preserve legacy timestamp fields.
+- [Driver device binding](driver-device-binding.md) — bind Drivers to a hashed app-scoped installation ID; preserve it across logout and invalidate sessions when Admin enables the lock.

@@ -1090,6 +1090,12 @@ const userSchema = new mongoose.Schema({
   suspendReason:   { type: String, default: '' },
   suspendedAt:     { type: Date,   default: null },
   activeSessionToken: { type: String, default: null },   // single-device login enforcement
+  activeSessionDeviceHash: { type: String, default: null, select: false },
+  // Device binding stores only a keyed digest. The client sends an app-scoped
+  // installation identifier; the raw identifier is never persisted or returned.
+  deviceBindingEnabled: { type: Boolean, default: false },
+  deviceBindingHash: { type: String, default: null, select: false },
+  deviceBindingRegisteredAt: { type: Date, default: null, select: false },
   // Daily platform fee tracking
   lastDailyFeePaidAt: { type: Date,   default: null },
   dailyFeeAmount:     { type: Number, default: null },
@@ -1271,6 +1277,20 @@ function normalizeSubAdminPermissions(permissions) {
 
 function hasAdminPermission(admin, permission) {
   return !!admin?.isSuperAdmin || !!admin?.permissions?.[permission];
+}
+
+const MAX_DEVICE_IDENTIFIER_LENGTH = 256;
+function normalizeDeviceIdentifier(value) {
+  if (typeof value !== 'string') return '';
+  const normalized = value.trim();
+  return normalized && normalized.length <= MAX_DEVICE_IDENTIFIER_LENGTH ? normalized : '';
+}
+
+function hashDeviceIdentifier(deviceId) {
+  const normalized = normalizeDeviceIdentifier(deviceId);
+  return normalized
+    ? crypto.createHmac('sha256', JWT_SECRET).update(normalized).digest('hex')
+    : '';
 }
 
 // Sub-Admin schema — granular-permission secondary admin accounts (max 50)
@@ -2935,7 +2955,7 @@ async function getAdminMapLocationForUser(user, now = new Date()) {
 app.post('/api/auth/register', async (req, res) => {
   try {
     const { name, email, password, phone, role, vehicleType, vehicleModel, vehiclePlate, ridePreference,
-             profilePhoto, licensePhoto, cnicFront, cnicBack, cnicNumber, vehicleRegPhoto } = req.body;
+             profilePhoto, licensePhoto, cnicFront, cnicBack, cnicNumber, vehicleRegPhoto, deviceId } = req.body;
     const resolvedRoleEarly = role || 'customer';
     if (!['customer', 'driver'].includes(resolvedRoleEarly)) {
       return res.status(400).json({ error: 'Account type must be Customer or Driver' });
@@ -3018,6 +3038,7 @@ app.post('/api/auth/register', async (req, res) => {
 
     const hash = await bcrypt.hash(password, 12);
     const resolvedRole = role || 'customer';
+    const registrationDeviceHash = resolvedRole === 'driver' ? hashDeviceIdentifier(deviceId) : '';
     let customerFrontFile = '';
     let customerBackFile = '';
     try {
@@ -3049,7 +3070,9 @@ app.post('/api/auth/register', async (req, res) => {
       customerIdFront: customerFrontFile,
       customerIdBack: customerBackFile,
       identityVerifiedAt: resolvedRole === 'customer' ? new Date() : null,
-      identityVerificationStatus: resolvedRole === 'customer' ? (identityVerified ? 'approved' : 'rejected') : null
+      identityVerificationStatus: resolvedRole === 'customer' ? (identityVerified ? 'approved' : 'rejected') : null,
+      deviceBindingHash: registrationDeviceHash || undefined,
+      deviceBindingRegisteredAt: registrationDeviceHash ? new Date() : null
     });
     if (user.role === 'driver') {
       await Wallet.create({ user: user._id, balance: 0, transactions: [] });
@@ -3057,7 +3080,10 @@ app.post('/api/auth/register', async (req, res) => {
 
     // Single-device session token
     const sessionToken = crypto.randomBytes(32).toString('hex');
-    await User.updateOne({ _id: user._id }, { activeSessionToken: sessionToken });
+    await User.updateOne({ _id: user._id }, {
+      activeSessionToken: sessionToken,
+      activeSessionDeviceHash: registrationDeviceHash || null
+    });
 
     const token = jwt.sign(
         { id: user._id, email: user.email || '', role: user.role, name: user.name, accountStatus: user.accountStatus },
@@ -3092,12 +3118,51 @@ app.post('/api/auth/login', async (req, res) => {
       return res.status(400).json({ error: 'Enter a valid mobile number' });
     }
     const user = identifier.includes('@')
-      ? await User.findOne({ email: identifier.toLowerCase() })
-      : await User.findOne({ phone: { $in: phoneLookupValues(identifier) } });
+      ? await User.findOne({ email: identifier.toLowerCase() }).select('+deviceBindingHash')
+      : await User.findOne({ phone: { $in: phoneLookupValues(identifier) } }).select('+deviceBindingHash');
 
     if (!user) return res.status(404).json({ error: 'No account found with this phone number or email' });
     if (!(await bcrypt.compare(password, user.password)))
       return res.status(401).json({ error: 'Incorrect password. Please try again.' });
+
+    if (user.role === 'driver') {
+      const loginDeviceHash = hashDeviceIdentifier(req.body?.deviceId);
+      if (user.deviceBindingEnabled && !loginDeviceHash) {
+        return res.status(403).json({
+          error: 'This Driver account requires its registered device. Please sign in from that device.'
+        });
+      }
+      if (user.deviceBindingEnabled && user.deviceBindingHash && loginDeviceHash !== user.deviceBindingHash) {
+        return res.status(403).json({
+          error: 'This Driver account is locked to its registered device. Please use that device or contact Admin.'
+        });
+      }
+      // Capture the first app/browser installation that signs in. This gives
+      // Admin a safe enrollment path for legacy Drivers with no binding yet,
+      // while OFF still allows an account to move to a new device later.
+      if (loginDeviceHash && !user.deviceBindingHash) {
+        const bindingResult = await User.updateOne(
+          {
+            _id: user._id,
+            role: 'driver',
+            $or: [{ deviceBindingHash: null }, { deviceBindingHash: { $exists: false } }]
+          },
+          { $set: { deviceBindingHash: loginDeviceHash, deviceBindingRegisteredAt: new Date() } }
+        );
+        if (bindingResult?.matchedCount === 0) {
+          const currentBinding = await User.findOne({ _id: user._id, role: 'driver' })
+            .select('+deviceBindingHash').lean();
+          if (currentBinding?.deviceBindingHash && currentBinding.deviceBindingHash !== loginDeviceHash && user.deviceBindingEnabled) {
+            return res.status(403).json({
+              error: 'This Driver account is locked to its registered device. Please use that device or contact Admin.'
+            });
+          }
+        } else {
+          user.deviceBindingHash = loginDeviceHash;
+        }
+      }
+      user._loginDeviceHash = loginDeviceHash;
+    }
     // Back-fill paidUntilDate for drivers who paid under the old system
     // (lastDailyFeePaidAt set, paidUntilDate still null). Run silently so
     // no previously-paid driver is locked out after the daily-fee update.
@@ -3109,7 +3174,10 @@ app.post('/api/auth/login', async (req, res) => {
 
     // Generate a new single-device session token and overwrite any previous one
     const sessionToken = crypto.randomBytes(32).toString('hex');
-    await User.updateOne({ _id: user._id }, { activeSessionToken: sessionToken });
+    await User.updateOne({ _id: user._id }, {
+      activeSessionToken: sessionToken,
+      activeSessionDeviceHash: user._loginDeviceHash || null
+    });
     io.in(`user:${user._id}`).disconnectSockets(true);
 
     const token = jwt.sign(
@@ -5289,6 +5357,36 @@ app.patch('/api/admin/drivers/:id/ride-preference', adminJwt, requirePerm('manag
       : { allowed: true, charged: false };
     io.to(`user:${driver._id}`).emit('ride-preference:updated', { ridePreference, dailyFee });
     res.json({ driver: { id: driver._id, name: driver.name, ridePreference }, dailyFee });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// PATCH /api/admin/drivers/:id/device-binding — enable or disable the
+// per-Driver app/browser installation lock. Raw device identifiers never leave
+// the server and enabling invalidates the current session so an old session
+// cannot bypass the newly enabled restriction.
+app.patch('/api/admin/drivers/:id/device-binding', adminJwt, requirePerm('manageDriverStatus'), async (req, res) => {
+  try {
+    if (typeof req.body?.enabled !== 'boolean') {
+      return res.status(400).json({ error: 'Device Binding must be ON or OFF' });
+    }
+    const driver = await User.findOne({ _id: req.params.id, role: 'driver' })
+      .select('name deviceBindingEnabled').lean();
+    if (!driver) return res.status(404).json({ error: 'Driver not found' });
+
+    const update = { deviceBindingEnabled: req.body.enabled };
+    if (req.body.enabled) {
+      // Force a fresh login on the registered device. If this is a legacy
+      // Driver without a recorded device, the next successful login enrolls it.
+      update.activeSessionToken = null;
+      update.activeSessionDeviceHash = null;
+    }
+    await User.updateOne({ _id: driver._id, role: 'driver' }, { $set: update });
+    if (req.body.enabled) io.in(`user:${driver._id}`).disconnectSockets(true);
+    io.to(`user:${driver._id}`).emit('driver:device-binding-updated', { enabled: req.body.enabled });
+    res.json({
+      driver: { id: driver._id, name: driver.name, deviceBindingEnabled: req.body.enabled },
+      message: `Device Binding turned ${req.body.enabled ? 'ON' : 'OFF'}`
+    });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 

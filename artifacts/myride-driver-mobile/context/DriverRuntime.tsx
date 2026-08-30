@@ -25,6 +25,7 @@ const ONLINE_KEY = 'myride.driver.online';
 const ACTIVE_RIDE_KEY = 'myride.driver.activeRide';
 const LOCK_SCREEN_ACK_KEY = 'myride.driver.lockScreenAlertsConfirmed';
 const PUSH_TOKEN_KEY = 'myride.driver.pushToken';
+const DEVICE_ID_KEY = 'myride.driver.deviceId';
 const API_URL = process.env.EXPO_PUBLIC_RIDE_API_URL ||
   (process.env.EXPO_PUBLIC_DOMAIN ? `https://${process.env.EXPO_PUBLIC_DOMAIN}` : '');
 let sessionRevokedHandler: (() => void) | null = null;
@@ -140,6 +141,14 @@ async function configureNotifications(requestPermission = false) {
       && channel.enableVibrate
     ),
   };
+}
+
+async function getDriverDeviceId() {
+  const existing = await SecureStore.getItemAsync(DEVICE_ID_KEY);
+  if (existing) return existing;
+  const generated = `native-${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}-${Math.random().toString(36).slice(2)}`;
+  await SecureStore.setItemAsync(DEVICE_ID_KEY, generated);
+  return generated;
 }
 
 function normalizeRideRequest(ride: RideRequest & { _id?: string }): RideRequest {
@@ -724,7 +733,8 @@ export function DriverRuntimeProvider({ children }: { children: ReactNode }) {
   }, [activeRideId, isOnline, ready, refreshAlertReadiness, setOnlineState, startLocationService, user]);
 
   const signIn = useCallback(async (identifier: string, password: string) => {
-    const response = await api('/api/auth/login', undefined, undefined, { method: 'POST', body: JSON.stringify({ identifier, password }) });
+    const deviceId = await getDriverDeviceId();
+    const response = await api('/api/auth/login', undefined, undefined, { method: 'POST', body: JSON.stringify({ identifier, password, deviceId }) });
     if (response.user?.role !== 'driver') throw new Error('Use the Customer app for this account.');
     if (response.user?.accountStatus !== 'active') throw new Error('Your Driver profile is pending Admin approval.');
     tokenRef.current = response.token; sessionRef.current = response.sessionToken || null;

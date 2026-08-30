@@ -782,6 +782,15 @@ const DRIVER_ROUTE_IDS = {
 };
 
 // ── State ──────────────────────────────────────────────────────────────────
+const DRIVER_DEVICE_ID_KEY = 'rh_driver_device_id';
+function getDriverDeviceId() {
+  let deviceId = localStorage.getItem(DRIVER_DEVICE_ID_KEY);
+  if (deviceId && deviceId.length <= 256) return deviceId;
+  deviceId = globalThis.crypto?.randomUUID?.()
+    || `web-${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}-${Math.random().toString(36).slice(2)}`;
+  localStorage.setItem(DRIVER_DEVICE_ID_KEY, deviceId);
+  return deviceId;
+}
 let token        = localStorage.getItem('rh_token');
 let sessionToken = localStorage.getItem('rh_session') || null;
 let user         = JSON.parse(localStorage.getItem('rh_user') || 'null');
@@ -1162,7 +1171,7 @@ async function doLogin() {
   if (!identifier) return (errEl.textContent = 'Enter your phone number or email');
   if (!pass) return (errEl.textContent = 'Enter your password');
   try {
-    const res = await apiCall('/api/auth/login', 'POST', { identifier, password: pass });
+    const res = await apiCall('/api/auth/login', 'POST', { identifier, password: pass, deviceId: getDriverDeviceId() });
     if (res.user.role !== 'driver') throw new Error('This account is registered as a customer. Please use the Driver App.');
     saveSession(res);
   } catch (e) { errEl.textContent = e.message; }
@@ -1368,7 +1377,8 @@ async function doRegister() {
   xhr.send(JSON.stringify({
     name, phone, email, password: pass, role: 'driver', vehicleType: vehicle,
     ridePreference: document.getElementById('r-ride-preference').value,
-    vehicleModel, vehiclePlate, profilePhoto, licensePhoto, cnicFront, cnicBack, vehicleRegPhoto
+    vehicleModel, vehiclePlate, profilePhoto, licensePhoto, cnicFront, cnicBack, vehicleRegPhoto,
+    deviceId: getDriverDeviceId()
   }));
 }
 
@@ -1430,7 +1440,9 @@ function doLogout() {
   if (locationWatch) { navigator.geolocation.clearWatch(locationWatch); locationWatch = null; }
 
   // 2. Wipe all auth state from memory and storage
+  const deviceId = getDriverDeviceId();
   localStorage.clear();
+  localStorage.setItem(DRIVER_DEVICE_ID_KEY, deviceId);
   sessionStorage.clear();
   token = null; sessionToken = null; user = null;
 

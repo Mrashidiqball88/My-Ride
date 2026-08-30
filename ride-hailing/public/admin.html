@@ -642,9 +642,9 @@ input[type=date]:focus{border-color:#f5c518}
         <div class="table-wrap"><table class="data-table">
           <thead><tr>
             <th style="width:32px"><input type="checkbox" id="select-all-chk" onchange="toggleSelectAll(this.checked)" style="cursor:pointer"></th>
-            <th>Driver</th><th>Phone</th><th>Vehicle</th><th>Daily Fee</th><th>Rating</th><th>Status</th><th>Joined</th><th>Actions</th>
+            <th>Driver</th><th>Phone</th><th>Vehicle</th><th>Daily Fee</th><th>Rating</th><th>Status</th><th>Device Binding</th><th>Joined</th><th>Actions</th>
           </tr></thead>
-          <tbody id="drivers-tbody"><tr><td colspan="9" class="loading-row">Loading…</td></tr></tbody>
+          <tbody id="drivers-tbody"><tr><td colspan="10" class="loading-row">Loading…</td></tr></tbody>
         </table></div>
       </div>
 
@@ -2203,14 +2203,14 @@ async function loadAuditLogs() {
 async function loadDrivers(status = 'all') {
   currentDriverStatus = status;
   const tbody = document.getElementById('drivers-tbody');
-  tbody.innerHTML = '<tr><td colspan="9" class="loading-row">Loading…</td></tr>';
+  tbody.innerHTML = '<tr><td colspan="10" class="loading-row">Loading…</td></tr>';
   try {
     const [drivers, dailyFees] = await Promise.all([
       api(`/api/admin/drivers?status=${status}`),
       api('/api/admin/daily-fee-settings')
     ]);
     dailyFeeSettingsState = dailyFees;
-    if (!drivers.length) { tbody.innerHTML = '<tr><td colspan="9" class="empty-state"><span class="empty-icon">🚗</span>No drivers found</td></tr>'; return; }
+    if (!drivers.length) { tbody.innerHTML = '<tr><td colspan="10" class="empty-state"><span class="empty-icon">🚗</span>No drivers found</td></tr>'; return; }
     document.getElementById('select-all-chk').checked = false;
     selectedDriverIds.clear(); updateBulkGrantBtn();
     tbody.innerHTML = drivers.map(d => {
@@ -2245,6 +2245,10 @@ async function loadDrivers(status = 'all') {
         <td>${feeCell}</td>
         <td style="${lowRating?'color:#ef4444':''};font-weight:${lowRating?'700':'400'}">⭐ ${(d.rating||5).toFixed(1)}</td>
         <td>${badgeHtml(d.accountStatus||'active')}</td>
+         <td><div style="display:flex;align-items:center;gap:.35rem;flex-wrap:wrap">
+           <span style="font-size:.7rem;font-weight:700;color:${d.deviceBindingEnabled?'#22c55e':'#64748b'}">${d.deviceBindingEnabled?'ON':'OFF'}</span>
+           ${hasPermission('manageDriverStatus') ? `<select aria-label="Device Binding for ${escHtml(d.name)}" class="modal-input" style="width:auto;min-width:58px;padding:.28rem .35rem;font-size:.68rem" onchange="setDriverDeviceBinding('${d._id}', this.value === 'on')"><option value="off" ${d.deviceBindingEnabled?'':'selected'}>OFF</option><option value="on" ${d.deviceBindingEnabled?'selected':''}>ON</option></select>` : ''}
+         </div></td>
         <td style="font-size:.72rem;color:#475569">${fmtDate(d.createdAt)}</td>
         <td><div style="display:flex;gap:.3rem;flex-wrap:wrap">
           <button class="btn btn-blue"   onclick="viewUser('${d._id}','driver')">👁</button>
@@ -2262,7 +2266,7 @@ async function loadDrivers(status = 'all') {
       </tr>`;
     }).join('');
     refreshFeePassTimers();
-  } catch (e) { tbody.innerHTML = `<tr><td colspan="9" style="text-align:center;color:#ef4444;padding:1rem">${e.message}</td></tr>`; }
+  } catch (e) { tbody.innerHTML = `<tr><td colspan="10" style="text-align:center;color:#ef4444;padding:1rem">${e.message}</td></tr>`; }
 }
 
 function refreshFeePassTimers() {
@@ -3260,6 +3264,13 @@ async function viewUser(userId, role) {
         <div class="field-item"><div class="field-label">Joined</div><div class="field-val">${fmtDate(u.createdAt)}</div></div>
         <div class="field-item"><div class="field-label">Online Now</div><div class="field-val">${u.isOnline?'🟢 Yes':'⚫ No'}</div></div>
       </div>
+      ${role==='driver' ? `<div class="field-row">
+        <div class="field-item" style="flex:1"><div class="field-label">Device Binding</div><div class="field-val" style="display:flex;align-items:center;gap:.55rem;flex-wrap:wrap">
+          <span style="color:${u.deviceBindingEnabled?'#22c55e':'#64748b'};font-weight:700">${u.deviceBindingEnabled?'ON':'OFF'}</span>
+          ${hasPermission('manageDriverStatus') ? `<select aria-label="Device Binding for ${escHtml(u.name)}" class="modal-input" style="width:auto;min-width:70px;padding:.35rem .45rem;font-size:.75rem" onchange="setDriverDeviceBinding('${u._id}', this.value === 'on')"><option value="off" ${u.deviceBindingEnabled?'':'selected'}>OFF</option><option value="on" ${u.deviceBindingEnabled?'selected':''}>ON</option></select>` : ''}
+          <small style="color:#64748b;font-size:.68rem">ON locks future sign-ins to the first registered app/device.</small>
+        </div></div>
+      </div>` : ''}
       ${u.suspendReason ? `<div class="field-row"><div class="field-item" style="flex:1"><div class="field-label">Suspend Reason</div><div class="field-val" style="color:#f97316">${u.suspendReason}</div></div></div>` : ''}`;
 
     // Footer action buttons
@@ -4421,6 +4432,20 @@ async function setDriverRidePreference(driverId, ridePreference) {
     loadDrivers(currentDriverStatus);
   } catch (e) {
     showToast(e.message || 'Could not update ride preference', 'error');
+    loadDrivers(currentDriverStatus);
+  }
+}
+
+async function setDriverDeviceBinding(driverId, enabled) {
+  try {
+    const result = await api(`/api/admin/drivers/${driverId}/device-binding`, 'PATCH', { enabled });
+    showToast(result.message || `Device Binding turned ${enabled ? 'ON' : 'OFF'}`, 'success');
+    loadDrivers(currentDriverStatus);
+    if (document.getElementById('user-modal')?.style.display === 'flex') {
+      viewUser(driverId, 'driver');
+    }
+  } catch (e) {
+    showToast(e.message || 'Could not update Device Binding', 'error');
     loadDrivers(currentDriverStatus);
   }
 }

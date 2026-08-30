@@ -16,6 +16,7 @@ const original = {
   userCreate: models.User.create,
   userUpdateOne: models.User.updateOne,
   walletCreate: models.Wallet.create,
+  settingsFindOne: models.Settings.findOne,
   subAdminFindById: models.SubAdmin.findById,
   adminFindById: models.Admin.findById,
   adminFindOneAndUpdate: models.Admin.findOneAndUpdate
@@ -29,6 +30,7 @@ afterEach(() => {
     updateOne: original.userUpdateOne
   });
   Object.assign(models.Wallet, { create: original.walletCreate });
+  Object.assign(models.Settings, { findOne: original.settingsFindOne });
   Object.assign(models.SubAdmin, { findById: original.subAdminFindById });
   Object.assign(models.Admin, {
     findById: original.adminFindById,
@@ -920,6 +922,151 @@ test('Customer and Driver requests require the latest matching session token', a
       assert.equal(current.response.status, 200);
     });
   }
+});
+
+test('Driver device binding enrolls the first device and rejects another device', async () => {
+  const deviceHash = crypto.createHmac('sha256', JWT_SECRET).update('driver-device-a').digest('hex');
+  const driver = {
+    _id: 'bound-driver',
+    name: 'Bound Driver',
+    email: 'bound-driver@example.test',
+    phone: '+923001234567',
+    password: await bcrypt.hash('driver-password', 4),
+    role: 'driver',
+    accountStatus: 'active',
+    vehicleType: 'Bike',
+    deviceBindingEnabled: true,
+    deviceBindingHash: deviceHash,
+    activeSessionToken: null
+  };
+  const updates = [];
+  models.User.findOne = () => query(driver);
+  models.User.updateOne = async (_filter, update) => {
+    updates.push(update);
+    if (update.$set) Object.assign(driver, update.$set);
+    else Object.assign(driver, update);
+    return { acknowledged: true, matchedCount: 1, modifiedCount: 1 };
+  };
+  models.Settings.findOne = () => query({ value: {} });
+
+  await withServer(async server => {
+    const rejected = await request(server, '/api/auth/login', {
+      method: 'POST',
+      body: JSON.stringify({ identifier: driver.email, password: 'driver-password', deviceId: 'driver-device-b' })
+    });
+    assert.equal(rejected.response.status, 403);
+    assert.match(rejected.body.error, /locked to its registered device/i);
+    assert.equal(updates.length, 0);
+
+    const accepted = await request(server, '/api/auth/login', {
+      method: 'POST',
+      body: JSON.stringify({ identifier: driver.email, password: 'driver-password', deviceId: 'driver-device-a' })
+    });
+    assert.equal(accepted.response.status, 200);
+    assert.ok(accepted.body.sessionToken);
+    assert.equal(updates.at(-1).activeSessionDeviceHash, deviceHash);
+  });
+});
+
+test('A legacy Driver with Device Binding ON enrolls the first device-aware login', async () => {
+  const driver = {
+    _id: 'legacy-bound-driver',
+    name: 'Legacy Bound Driver',
+    email: 'legacy-bound-driver@example.test',
+    phone: '+923001234569',
+    password: await bcrypt.hash('driver-password', 4),
+    role: 'driver',
+    accountStatus: 'active',
+    vehicleType: 'Bike',
+    deviceBindingEnabled: true,
+    deviceBindingHash: null,
+    activeSessionToken: null
+  };
+  const updates = [];
+  models.User.findOne = () => query(driver);
+  models.User.updateOne = async (_filter, update) => {
+    updates.push(update);
+    if (update.$set) Object.assign(driver, update.$set);
+    return { acknowledged: true, matchedCount: 1, modifiedCount: 1 };
+  };
+  models.Settings.findOne = () => query({ value: {} });
+
+  await withServer(async server => {
+    const result = await request(server, '/api/auth/login', {
+      method: 'POST',
+      body: JSON.stringify({ identifier: driver.email, password: 'driver-password', deviceId: 'legacy-device-a' })
+    });
+    assert.equal(result.response.status, 200);
+    assert.equal(driver.deviceBindingHash, crypto.createHmac('sha256', JWT_SECRET).update('legacy-device-a').digest('hex'));
+    assert.equal(updates[0].$set.deviceBindingHash, driver.deviceBindingHash);
+  });
+});
+
+test('Device Binding OFF allows a Driver to sign in from another device', async () => {
+  const driver = {
+    _id: 'unlocked-driver',
+    name: 'Unlocked Driver',
+    email: 'unlocked-driver@example.test',
+    phone: '+923001234568',
+    password: await bcrypt.hash('driver-password', 4),
+    role: 'driver',
+    accountStatus: 'active',
+    vehicleType: 'Bike',
+    deviceBindingEnabled: false,
+    deviceBindingHash: crypto.createHmac('sha256', JWT_SECRET).update('driver-device-a').digest('hex'),
+    activeSessionToken: null
+  };
+  models.User.findOne = () => query(driver);
+  models.User.updateOne = async (_filter, update) => {
+    Object.assign(driver, update.$set || update);
+    return { acknowledged: true, matchedCount: 1, modifiedCount: 1 };
+  };
+  models.Settings.findOne = () => query({ value: {} });
+
+  await withServer(async server => {
+    const result = await request(server, '/api/auth/login', {
+      method: 'POST',
+      body: JSON.stringify({ identifier: driver.email, password: 'driver-password', deviceId: 'driver-device-b' })
+    });
+    assert.equal(result.response.status, 200);
+    assert.ok(result.body.token);
+  });
+});
+
+test('Admin can toggle Driver Device Binding without exposing the device hash', async () => {
+  const driver = {
+    _id: 'admin-bound-driver',
+    name: 'Admin Bound Driver',
+    role: 'driver',
+    deviceBindingEnabled: false,
+    deviceBindingHash: 'private-device-hash'
+  };
+  let update;
+  models.Admin.findById = () => query({
+    email: configuredAdminEmail(),
+    passwordHash: '',
+    recoveryKeyHash: '',
+    sessionVersion: 0
+  });
+  models.User.findOne = () => query(driver);
+  models.User.updateOne = async (_filter, next) => {
+    update = next;
+    Object.assign(driver, next.$set || next);
+    return { acknowledged: true, matchedCount: 1, modifiedCount: 1 };
+  };
+
+  await withServer(async server => {
+    const result = await request(server, `/api/admin/drivers/${driver._id}/device-binding`, {
+      method: 'PATCH',
+      headers: { authorization: `Bearer ${adminToken()}` },
+      body: JSON.stringify({ enabled: true })
+    });
+    assert.equal(result.response.status, 200);
+    assert.equal(result.body.driver.deviceBindingEnabled, true);
+    assert.equal(result.body.driver.deviceBindingHash, undefined);
+    assert.equal(update.$set.deviceBindingEnabled, true);
+    assert.equal(update.$set.activeSessionToken, null);
+  });
 });
 
 test('unknown recovery emails return exactly Wrong email without creating an OTP', async () => {
