@@ -4665,8 +4665,12 @@ async function geocodeProviderSearch(query, center = null) {
   url.searchParams.set('language', 'en');
   url.searchParams.set('limit', String(MAPBOX_RESULT_LIMIT));
   url.searchParams.set('types', 'address,poi,neighborhood,locality,place,postcode');
-  if (center && Number.isFinite(Number(center.lat)) && Number.isFinite(Number(center.lng))) {
-    url.searchParams.set('proximity', `${Number(center.lng)},${Number(center.lat)}`);
+  const lat = Number(center?.lat);
+  const lng = Number(center?.lng);
+  if (Number.isFinite(lat) && Number.isFinite(lng)
+    && lat >= -90 && lat <= 90 && lng >= -180 && lng <= 180
+    && !(lat === 0 && lng === 0)) {
+    url.searchParams.set('proximity', `${lng},${lat}`);
   }
   const headers = {
     'Accept-Language': 'en'

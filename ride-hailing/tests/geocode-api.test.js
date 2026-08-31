@@ -160,6 +160,21 @@ test('Customer search adds proximity for current pickup context without narrowin
   });
 });
 
+test('Customer search omits invalid proximity coordinates', async () => {
+  process.env.MAPBOX_PUBLIC_TOKEN = 'test-mapbox-token';
+  let requested;
+  global.fetch = async url => {
+    requested = new URL(url);
+    return { ok: true, json: async () => ({ features: [] }) };
+  };
+
+  await withServer(async server => {
+    const result = await request(server, '/api/geocode?q=airport&lat=91&lng=181');
+    assert.equal(result.response.status, 200);
+    assert.equal(requested.searchParams.get('proximity'), null);
+  });
+});
+
 test('Customer alias matching is bilingual and independent of UI language selection', () => {
   const alias = {
     displayName: 'Jinnah Airport',

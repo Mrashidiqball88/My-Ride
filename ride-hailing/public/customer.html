@@ -2123,17 +2123,18 @@ async function detectCustomerActiveCity(lat, lng, { force = false } = {}) {
 }
 
 function locationSearchCenter() {
-  // The first pickup is the ride's authoritative local context. GPS is only
-  // the fallback before a pickup has been selected.
-  const point = pickup || customerLocation || customerCityLocation;
-  if (point && Number.isFinite(Number(point.lat)) && Number.isFinite(Number(point.lng))) {
-    return { lat: Number(point.lat), lng: Number(point.lng) };
+  // The selected first pickup is the only authoritative search proximity
+  // reference. GPS, reverse-geocoded city state, and the map viewport can be
+  // stale or unrelated to the active ride and must never become an implicit
+  // Mapbox proximity value.
+  const lat = Number(pickup?.lat);
+  const lng = Number(pickup?.lng);
+  if (!Number.isFinite(lat) || !Number.isFinite(lng)
+    || lat < -90 || lat > 90 || lng < -180 || lng > 180
+    || (lat === 0 && lng === 0)) {
+    return null;
   }
-  if (map) {
-    const center = map.getCenter();
-    return { lat: Number(center.lat), lng: Number(center.lng) };
-  }
-  return null;
+  return { lat, lng };
 }
 
 async function searchPlaces(query, _context = {}, { signal } = {}) {
@@ -2496,6 +2497,17 @@ function cancelLocationSearchRequest(type) {
   locSearchTimeout[type] = null;
 }
 
+function invalidateLocationSearchContext() {
+  // A pickup change changes the meaning of "nearby". Cancel every active
+  // request and advance each sequence so a late response cannot render results
+  // ranked against the previous pin.
+  const types = new Set(['pickup', ...Object.keys(locSearchSeq)]);
+  types.forEach(type => {
+    cancelLocationSearchRequest(type);
+    locSearchSeq[type] = (locSearchSeq[type] || 0) + 1;
+  });
+}
+
 function beginLocationSearchRequest(type, requestId) {
   cancelLocationSearchRequest(type);
   const controller = new AbortController();
@@ -2730,6 +2742,7 @@ function setCustomerPickupCityContext(lat, lng) {
 
 async function setPickup(lat, lng, preDisplay = null, { source = 'manual' } = {}) {
   if (source !== 'gps') customerAutoPickupEnabled = false;
+  invalidateLocationSearchContext();
   pickup = { lat, lng };
   setCustomerPickupCityContext(lat, lng);
   if (pickupMarker) pickupMarker.remove();
@@ -2858,6 +2871,7 @@ function clearLocation(type) {
     // Clearing is an intentional manual override; subsequent watchPosition
     // updates must not silently recreate the pickup pin.
     customerAutoPickupEnabled = false;
+    invalidateLocationSearchContext();
     pickup = null;
     resetCustomerCityContext({ detectGpsFallback: true });
     if (pickupMarker) { pickupMarker.remove(); pickupMarker = null; }

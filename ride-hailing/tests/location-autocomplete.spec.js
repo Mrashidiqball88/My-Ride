@@ -229,9 +229,11 @@ test.describe('live nationwide location autocomplete', () => {
     await page.goto('/customer');
     await page.evaluate(() => {
       pickup = null;
-      customerLocation = null;
-      customerCityLocation = null;
-      customerActiveCity = '';
+      // These are intentionally present: only the active pickup pin may
+      // become Mapbox proximity context.
+      customerLocation = { lat: 24.8607, lng: 67.0011 };
+      customerCityLocation = { lat: 33.6844, lng: 73.0479 };
+      customerActiveCity = 'Islamabad';
     });
     await setSearch(page, 'airport');
 
@@ -239,6 +241,38 @@ test.describe('live nationwide location autocomplete', () => {
     expect(requestedUrl.searchParams.get('q')).toBe('airport');
     expect(requestedUrl.searchParams.get('lat')).toBeNull();
     expect(requestedUrl.searchParams.get('lng')).toBeNull();
+  });
+
+  test('sends the active pickup pin and refreshes proximity after the pin changes', async ({ page }) => {
+    const requests = [];
+    await page.route(/\/api\/geocode(?:\?|$)/, async route => {
+      const url = new URL(route.request().url());
+      requests.push(url);
+      return route.fulfill({
+        contentType: 'application/json',
+        body: JSON.stringify([
+          poiResult('Nearby provider result', 'Pakistan', 30, 70, 'place')
+        ])
+      });
+    });
+
+    await page.goto('/customer');
+    await page.evaluate(() => {
+      pickup = { lat: 31.5204, lng: 74.3587 };
+      customerLocation = { lat: 24.8607, lng: 67.0011 };
+    });
+    await setSearch(page, 'first pickup area');
+    await expect.poll(() => requests).toHaveLength(1);
+    expect(requests[0].searchParams.get('lat')).toBe('31.5204');
+    expect(requests[0].searchParams.get('lng')).toBe('74.3587');
+
+    await page.evaluate(() => {
+      pickup = { lat: 24.8607, lng: 67.0011 };
+    });
+    await setSearch(page, 'second pickup area');
+    await expect.poll(() => requests).toHaveLength(2);
+    expect(requests[1].searchParams.get('lat')).toBe('24.8607');
+    expect(requests[1].searchParams.get('lng')).toBe('67.0011');
   });
 
   test('selects live pickup and drop-off results and pins their coordinates', async ({ page }) => {
