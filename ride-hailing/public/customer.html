@@ -17,10 +17,10 @@
 <script src="https://api.mapbox.com/mapbox-gl-js/v3.15.0/mapbox-gl.js"></script>
 <script src="/socket.io/socket.io.js"></script>
 <style>
-@import url('https://fonts.googleapis.com/css2?family=Noto+Naskh+Arabic:wght@400;500;600;700&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Noto+Naskh+Arabic:wght@400;500;600;700&family=Noto+Sans+Arabic:wght@400;500;600;700&display=swap');
 *{margin:0;padding:0;box-sizing:border-box;-webkit-tap-highlight-color:transparent}
 body{font-family:'Segoe UI',sans-serif;background:#0a0a0f;color:#fff;height:100dvh;overflow:hidden;display:flex;flex-direction:column}
-.bidi-text,[dir="auto"]{font-family:'Noto Naskh Arabic','Segoe UI',sans-serif;font-feature-settings:"rlig" 1,"calt" 1,"liga" 1;text-rendering:optimizeLegibility;unicode-bidi:plaintext;direction:auto}
+.bidi-text,[dir="auto"]{font-family:'Noto Naskh Arabic','Noto Sans Arabic','Segoe UI',Arial,sans-serif;font-feature-settings:"ccmp" 1,"locl" 1,"rlig" 1,"calt" 1,"liga" 1;font-kerning:normal;font-variant-ligatures:common-ligatures contextual;font-synthesis:none;text-rendering:optimizeLegibility;unicode-bidi:plaintext}
 
 /* ── Auth ── */
 #auth-screen{position:fixed;inset:0;z-index:1000;background:#0a0a0f;display:flex;flex-direction:column;align-items:center;justify-content:flex-start;overflow-y:auto;overscroll-behavior-y:contain;scroll-padding-bottom:1.5rem;-webkit-overflow-scrolling:touch;padding:max(1.25rem, env(safe-area-inset-top)) 1.5rem max(4.5rem, calc(env(safe-area-inset-bottom) + 2.5rem))}
@@ -309,6 +309,10 @@ body{font-family:'Segoe UI',sans-serif;background:#0a0a0f;color:#fff;height:100d
 .dropoff-marker{background:#cc6622;border:3px solid #fff;width:18px;height:18px;border-radius:50%;box-shadow:0 0 8px rgba(204,102,34,.8)}
 .driver-marker{font-size:24px;line-height:1}
 .customer-location-marker{background:#2d8cff;border:2px solid #fff;width:16px;height:16px;border-radius:50%;box-shadow:0 0 8px rgba(45,140,255,.8)}
+.customer-center-pin{display:none;position:absolute;left:50%;top:50%;z-index:8;width:30px;height:38px;transform:translate(-50%,-100%);pointer-events:none;filter:drop-shadow(0 4px 5px rgba(16,35,55,.3))}
+.customer-center-pin.visible{display:block}
+.customer-center-pin::before{content:'';position:absolute;left:3px;top:0;width:24px;height:24px;border:3px solid #fff;border-radius:50% 50% 50% 0;background:var(--lr-coral);transform:rotate(-45deg)}
+.customer-center-pin::after{content:'';position:absolute;left:13px;top:25px;width:4px;height:13px;border-radius:99px;background:var(--lr-coral)}
 .map-marker-shell{display:flex;align-items:center;justify-content:center;pointer-events:auto}
 .map-marker-shell[aria-hidden="true"]{pointer-events:none}
 /* ── ETA Bar ── */
@@ -521,7 +525,7 @@ body{font-family:'Segoe UI',sans-serif;background:#0a0a0f;color:#fff;height:100d
     <div class="header-logo brand-lockup"><img class="brand-mark" src="/logo-customer.svg" alt="My Ride"><span>My <span>Ride</span></span></div>
     <div class="header-user">
       <div class="avatar" id="avatar-init">?</div>
-      <div class="header-name" id="header-name">Loading…</div>
+      <div class="header-name bidi-text" id="header-name" dir="auto">Loading…</div>
       <div class="dots-menu-wrap">
         <button class="btn-dots" id="dots-btn" onclick="toggleDotsMenu(event)" aria-label="Menu" style="position:relative">⋮
           <span class="dots-unread-dot" id="cust-unread-dot" style="display:none"></span>
@@ -555,7 +559,9 @@ body{font-family:'Segoe UI',sans-serif;background:#0a0a0f;color:#fff;height:100d
     </div>
   </section>
 
-  <div id="map"></div>
+  <div id="map">
+    <div id="customer-center-pin" class="customer-center-pin" aria-hidden="true"></div>
+  </div>
 
   <section id="location-sheet" class="location-sheet" aria-label="Location suggestions" aria-hidden="true">
     <div id="location-sheet-grabber" class="sheet-grabber" aria-label="Drag suggestions"></div>
@@ -596,12 +602,12 @@ body{font-family:'Segoe UI',sans-serif;background:#0a0a0f;color:#fff;height:100d
 
     <!-- ── BOOK TAB ── -->
     <div class="tab-content active" id="tab-book">
-      <div class="map-hint" id="map-hint">Tap map or search a <strong>pickup</strong> location below</div>
+      <div class="map-hint" id="map-hint">Move the map under the fixed pin, or search a <strong>pickup</strong> location below</div>
 
       <!-- Pickup -->
       <div class="loc-wrap" id="pickup-wrap">
         <span class="pin-indicator">📍</span>
-        <input class="location-input" id="pickup-input"
+         <input class="location-input" id="pickup-input" dir="auto"
                placeholder="Search pickup (e.g. Thokar Niaz Baig)"
                autocomplete="off" spellcheck="false"
                oninput="onLocInput('pickup');updateClearBtn('pickup')"
@@ -626,7 +632,7 @@ body{font-family:'Segoe UI',sans-serif;background:#0a0a0f;color:#fff;height:100d
           </div>
           <div class="loc-wrap" style="margin-bottom:0">
             <span class="pin-indicator">🎯</span>
-            <input class="location-input" id="stop-0-input"
+             <input class="location-input" id="stop-0-input" dir="auto"
                    placeholder="Search Drop 1 (e.g. DHA Phase 5)"
                    autocomplete="off" spellcheck="false"
                    oninput="onLocInput('stop-0');updateClearBtn('stop-0')"
@@ -647,7 +653,7 @@ body{font-family:'Segoe UI',sans-serif;background:#0a0a0f;color:#fff;height:100d
           </div>
           <div class="loc-wrap" style="margin-bottom:0">
             <span class="pin-indicator">📌</span>
-            <input class="location-input" id="stop-1-input"
+             <input class="location-input" id="stop-1-input" dir="auto"
                    placeholder="Search Drop 2 (optional)"
                    autocomplete="off" spellcheck="false"
                    oninput="onLocInput('stop-1');updateClearBtn('stop-1')"
@@ -668,7 +674,7 @@ body{font-family:'Segoe UI',sans-serif;background:#0a0a0f;color:#fff;height:100d
           </div>
           <div class="loc-wrap" style="margin-bottom:0">
             <span class="pin-indicator">📌</span>
-            <input class="location-input" id="stop-2-input"
+             <input class="location-input" id="stop-2-input" dir="auto"
                    placeholder="Search Drop 3 (optional)"
                    autocomplete="off" spellcheck="false"
                    oninput="onLocInput('stop-2');updateClearBtn('stop-2')"
@@ -689,7 +695,7 @@ body{font-family:'Segoe UI',sans-serif;background:#0a0a0f;color:#fff;height:100d
           </div>
           <div class="loc-wrap" style="margin-bottom:0">
             <span class="pin-indicator">📌</span>
-            <input class="location-input" id="stop-3-input"
+             <input class="location-input" id="stop-3-input" dir="auto"
                    placeholder="Search Drop 4 (optional)"
                    autocomplete="off" spellcheck="false"
                    oninput="onLocInput('stop-3');updateClearBtn('stop-3')"
@@ -824,7 +830,7 @@ body{font-family:'Segoe UI',sans-serif;background:#0a0a0f;color:#fff;height:100d
   <div id="ar-matched" style="display:none">
     <div class="ride-status-badge" style="background:#1a2a0a;border-color:#4caf50"><span class="ride-status-dot"></span><span id="ar-status-text">Driver on the way!</span></div>
     <div class="live-trip-card" id="ar-live-trip-card" aria-live="polite">
-      <div><div class="live-trip-kicker" id="ar-trip-leg">Live driver tracking</div><div class="live-trip-title" id="ar-trip-destination">Waiting for the driver’s location</div></div>
+      <div><div class="live-trip-kicker" id="ar-trip-leg">Live driver tracking</div><div class="live-trip-title bidi-text" id="ar-trip-destination" dir="auto">Waiting for the driver’s location</div></div>
       <button type="button" class="live-trip-recenter" onclick="focusCustomerTrip()">◎ Map</button>
       <div class="live-trip-metrics"><div class="live-trip-metric"><strong class="live-trip-value" id="ar-live-distance">—</strong><span class="live-trip-label">Remaining</span></div><div class="live-trip-metric"><strong class="live-trip-value" id="ar-live-eta">—</strong><span class="live-trip-label">Live ETA</span></div></div>
       <div class="live-trip-freshness" id="ar-tracking-freshness">Tracking starts when your driver shares GPS.</div>
@@ -839,7 +845,7 @@ body{font-family:'Segoe UI',sans-serif;background:#0a0a0f;color:#fff;height:100d
       <div class="matched-top">
         <div class="matched-avatar" id="ar-avatar">?</div>
         <div class="matched-info">
-          <div class="matched-name" id="ar-driver-name">—</div>
+          <div class="matched-name bidi-text" id="ar-driver-name" dir="auto">—</div>
           <div class="matched-vehicle-row">
             <span id="ar-driver-vehicle">—</span>
             <span class="matched-plate" id="ar-driver-plate">—</span>
@@ -876,7 +882,7 @@ body{font-family:'Segoe UI',sans-serif;background:#0a0a0f;color:#fff;height:100d
   <div class="modal-card" style="text-align:center;max-width:320px">
     <div style="font-size:1.6rem;margin-bottom:.5rem">⭐</div>
     <div style="font-size:1rem;font-weight:800;color:#e2e8f0;margin-bottom:.25rem">Rate Your Ride</div>
-    <div style="font-size:.8rem;color:#64748b;margin-bottom:1.1rem">How was <span id="rating-driver-name">your driver</span>?</div>
+     <div style="font-size:.8rem;color:#64748b;margin-bottom:1.1rem">How was <span class="bidi-text" id="rating-driver-name" dir="auto">your driver</span>?</div>
     <div style="display:flex;justify-content:center;gap:.5rem;margin-bottom:.9rem">
       <button class="star-btn" onclick="selectStar(1)">★</button>
       <button class="star-btn" onclick="selectStar(2)">★</button>
@@ -996,6 +1002,7 @@ let activeLocationSearch = null;
 let locationSheetResults = [];
 let locationSheetDrag = null;
 let ignoreNextCustomerMapClick = false;
+let customerMapSelectionGesture = false;
 let locationSearchOrigin = null;
 let customerActiveCity = '';
 let customerCityLocation = null;
@@ -1820,6 +1827,31 @@ function createCustomerDomMarker(lat, lng, { className = '', html = '', interact
     .addTo(map);
 }
 
+function customerMapSelectionIsActive() {
+  return mapMode === 'pickup' || mapMode.startsWith('stop-');
+}
+
+function syncCustomerCenterPin() {
+  const pin = document.getElementById('customer-center-pin');
+  if (!pin) return;
+  const active = customerMapSelectionIsActive();
+  pin.classList.toggle('visible', active);
+  pin.dataset.mode = active ? mapMode : '';
+  pin.setAttribute('aria-hidden', String(!active));
+}
+
+function selectCustomerMapCenter() {
+  if (!map || !customerMapSelectionGesture || !customerMapSelectionIsActive()) return;
+  customerMapSelectionGesture = false;
+  const center = map.getCenter?.();
+  if (!center || !Number.isFinite(Number(center.lat)) || !Number.isFinite(Number(center.lng))) return;
+  if (mapMode === 'pickup') void setPickup(center.lat, center.lng);
+  else if (mapMode.startsWith('stop-')) {
+    const idx = parseInt(mapMode.split('-')[1], 10);
+    if (Number.isInteger(idx)) void setStop(idx, center.lat, center.lng);
+  }
+}
+
 function setCustomerMapCenter(point, zoom, { animate = false, duration = .45 } = {}) {
   if (!map) return;
   const camera = { center: [Number(point.lng), Number(point.lat)], zoom: Number(zoom) };
@@ -1956,26 +1988,23 @@ function initMap() {
   map.on('dragstart', () => {
     customerMapAutoCenter = false;
     if (activeRide) customerTrackingFollow = false;
+    customerMapSelectionGesture = customerMapSelectionIsActive();
   });
   map.on('zoomstart', () => {
     customerMapAutoCenter = false;
     if (activeRide) customerTrackingFollow = false;
   });
+  map.on('moveend', selectCustomerMapCenter);
 
-  map.on('click', (e) => {
+  map.on('click', () => {
     if (ignoreNextCustomerMapClick) {
       ignoreNextCustomerMapClick = false;
       return;
     }
-    const { lat, lng } = e.lngLat;
-    if (mapMode === 'pickup') {
-      setPickup(lat, lng);
-    } else if (mapMode.startsWith('stop-')) {
-      // Support map-tap for any active stop slot (stop-0 through stop-3)
-      const idx = parseInt(mapMode.split('-')[1], 10);
-      setStop(idx, lat, lng);
-    }
+    // Selection follows the fixed center pin after a map drag. A click alone
+    // must not create a movable pin at the pointer location.
   });
+  syncCustomerCenterPin();
   if (customerReadinessAcknowledged()) startCustomerGpsTracking();
   // Start showing nearby online drivers after map is ready
   setTimeout(startNearbyDrivers, 800);
@@ -2761,6 +2790,7 @@ async function setPickup(lat, lng, preDisplay = null, { source = 'manual' } = {}
   updateBookingSheetSummary();
 
   mapMode = 'stop-0';
+  syncCustomerCenterPin();
   const hint = document.getElementById('map-hint');
   hint.textContent = 'Now search or tap your Drop 1 location';
   hint.className = 'map-hint dropoff-mode';
@@ -2806,6 +2836,7 @@ async function setStop(idx, lat, lng, preDisplay = null) {
   updateBookingSheetSummary();
 
   mapMode = 'idle';
+  syncCustomerCenterPin();
   document.getElementById('map-hint').style.display = 'none';
 
   if (pickup) {
@@ -2878,7 +2909,7 @@ function clearLocation(type) {
     resetCustomerCityContext({ detectGpsFallback: true });
     if (pickupMarker) { pickupMarker.remove(); pickupMarker = null; }
     const hint = document.getElementById('map-hint');
-    if (hint) { hint.textContent = 'Tap map or search a pickup location below'; hint.className = 'map-hint'; hint.style.display = 'block'; }
+    if (hint) { hint.textContent = 'Move the map under the fixed pin, or search a pickup location below'; hint.className = 'map-hint'; hint.style.display = 'block'; }
     mapMode = 'pickup';
   } else {
     const idx = parseInt(type.replace('stop-', ''));
@@ -3089,10 +3120,12 @@ function addStop() {
   const newIdx = activeStops;
   document.getElementById(`stop-wrap-${newIdx}`).style.display = 'block';
   activeStops++;
-  // Point map-tap at this new stop so the user can place it by tapping the map
+  // Point the fixed center pin at this new stop so the user can place it by
+  // dragging the map underneath the pin.
   mapMode = `stop-${newIdx}`;
+  syncCustomerCenterPin();
   const hint = document.getElementById('map-hint');
-  hint.textContent = `Tap map to set Drop ${newIdx + 1}, or search below`;
+  hint.textContent = `Move the map to set Drop ${newIdx + 1}, or search below`;
   hint.className   = 'map-hint dropoff-mode';
   hint.style.display = 'block';
   document.getElementById('add-stop-btn').style.display = activeStops >= 4 ? 'none' : 'flex';
@@ -3435,6 +3468,7 @@ function endRide() {
   dropoffs = [null, null, null, null];
   activeStops = 1;
   mapMode = 'pickup';
+  syncCustomerCenterPin();
   document.getElementById('pickup-input').value = '';
   document.getElementById('pickup-input').classList.remove('has-val');
   // Reset all stop inputs
@@ -3453,7 +3487,7 @@ function endRide() {
   document.getElementById('book-btn').style.display = 'none';
   document.getElementById('map-hint').style.display = 'block';
   document.getElementById('map-hint').className = 'map-hint';
-  document.getElementById('map-hint').textContent = 'Tap map or search a pickup location below';
+  document.getElementById('map-hint').textContent = 'Move the map under the fixed pin, or search a pickup location below';
   loadRideHistory();
   setTimeout(startNearbyDrivers, 500); // restore nearby markers after ride ends
 }

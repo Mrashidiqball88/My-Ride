@@ -17,10 +17,10 @@
 <script src="https://api.mapbox.com/mapbox-gl-js/v3.15.0/mapbox-gl.js"></script>
 <script src="/socket.io/socket.io.js"></script>
 <style>
-@import url('https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Noto+Naskh+Arabic:wght@400;500;600;700&family=Space+Mono:wght@400;700&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Noto+Naskh+Arabic:wght@400;500;600;700&family=Noto+Sans+Arabic:wght@400;500;600;700&family=Space+Mono:wght@400;700&display=swap');
 *{margin:0;padding:0;box-sizing:border-box;-webkit-tap-highlight-color:transparent}
 body{font-family:'Segoe UI',sans-serif;background:#0a0a0f;color:#fff;height:100dvh;overflow:hidden;display:flex;flex-direction:column}
-.bidi-text,[dir="auto"]{font-family:'Noto Naskh Arabic','Segoe UI',sans-serif;font-feature-settings:"rlig" 1,"calt" 1,"liga" 1;text-rendering:optimizeLegibility;unicode-bidi:plaintext;direction:auto}
+.bidi-text,[dir="auto"]{font-family:'Noto Naskh Arabic','Noto Sans Arabic','Segoe UI',Arial,sans-serif;font-feature-settings:"ccmp" 1,"locl" 1,"rlig" 1,"calt" 1,"liga" 1;font-kerning:normal;font-variant-ligatures:common-ligatures contextual;font-synthesis:none;text-rendering:optimizeLegibility;unicode-bidi:plaintext}
 
 /* ── Auth ── */
 #auth-screen{position:fixed;inset:0;z-index:1000;background:#0a0a0f;display:flex;flex-direction:column;align-items:center;justify-content:flex-start;overflow-y:auto;overscroll-behavior-y:contain;scroll-padding-bottom:1.5rem;-webkit-overflow-scrolling:touch;padding:max(1.25rem, env(safe-area-inset-top)) 1.5rem max(4.5rem, calc(env(safe-area-inset-bottom) + 2.5rem))}

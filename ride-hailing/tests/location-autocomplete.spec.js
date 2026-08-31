@@ -303,6 +303,16 @@ test.describe('live nationwide location autocomplete', () => {
       lat: 30.1575,
       lng: 71.5249
     });
+    await expect(page.locator('#customer-center-pin')).toHaveClass(/visible/);
+    expect(await page.locator('#customer-center-pin').evaluate(element => {
+      const mapRect = document.getElementById('map').getBoundingClientRect();
+      const pinRect = element.getBoundingClientRect();
+      return {
+        position: getComputedStyle(element).position,
+        horizontalOffset: Math.abs((pinRect.left + pinRect.width / 2) - (mapRect.left + mapRect.width / 2)),
+        tipOffset: Math.abs(pinRect.bottom - (mapRect.top + mapRect.height / 2))
+      };
+    })).toMatchObject({ position: 'absolute', horizontalOffset: 0, tipOffset: 0 });
 
     await setSearch(page, 'new drop-off', 'stop-0-input');
     await expect(page.locator('#location-sheet-list')).toContainText('New Drop-off Chowk');
@@ -316,6 +326,25 @@ test.describe('live nationwide location autocomplete', () => {
       mode: 'idle',
       input: 'New Drop-off Chowk'
     });
+    await expect(page.locator('#customer-center-pin')).not.toHaveClass(/visible/);
+  });
+
+  test('commits the fixed center pin after a customer map drag', async ({ page }) => {
+    await page.goto('/customer');
+    const selected = await page.evaluate(() => {
+      const previousMap = map;
+      const previousSetPickup = setPickup;
+      let result = null;
+      mapMode = 'pickup';
+      customerMapSelectionGesture = true;
+      map = { getCenter: () => ({ lat: 31.5204, lng: 74.3587 }) };
+      setPickup = (lat, lng) => { result = { lat, lng }; };
+      selectCustomerMapCenter();
+      setPickup = previousSetPickup;
+      map = previousMap;
+      return result;
+    });
+    expect(selected).toEqual({ lat: 31.5204, lng: 74.3587 });
   });
 
   test('shows an actionable provider error and clears stale results', async ({ page }) => {
