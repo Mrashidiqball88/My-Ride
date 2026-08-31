@@ -1,15 +1,180 @@
-import React, { useEffect, useState } from 'react';
-import { ActivityIndicator, Alert, Image, Linking, Platform, Pressable, StyleSheet, Switch, Text, TextInput, View } from 'react-native';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
+import { ActivityIndicator, Alert, Linking, Platform, Pressable, StyleSheet, Switch, Text, TextInput, View } from 'react-native';
+import MapView, { Marker } from 'react-native-maps';
 import { Ionicons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useColors } from '@/hooks/useColors';
-import { useDriverRuntime } from '@/context/DriverRuntime';
-import { mapboxStaticMapUrl } from '@/lib/mapbox';
+import { DriverLocation, RideRequest, useDriverRuntime } from '@/context/DriverRuntime';
 
 const RTL_TEXT_PATTERN = /[\u0590-\u08ff]/;
 
 function isRtlText(value: unknown) {
   return RTL_TEXT_PATTERN.test(String(value ?? ''));
+}
+
+type Coordinate = { latitude: number; longitude: number };
+
+function coordinateFromLocation(location?: { lat: number; lng: number } | null): Coordinate | null {
+  if (!location) return null;
+  const latitude = Number(location.lat);
+  const longitude = Number(location.lng);
+  return Number.isFinite(latitude) && Number.isFinite(longitude)
+    && latitude >= -90 && latitude <= 90 && longitude >= -180 && longitude <= 180
+    ? { latitude, longitude }
+    : null;
+}
+
+function coordinateFromDriver(location: DriverLocation | null): Coordinate | null {
+  if (!location || !Number.isFinite(location.latitude) || !Number.isFinite(location.longitude)) return null;
+  return { latitude: location.latitude, longitude: location.longitude };
+}
+
+function bearingBetween(from: Coordinate, to: Coordinate) {
+  const lat1 = from.latitude * Math.PI / 180;
+  const lat2 = to.latitude * Math.PI / 180;
+  const deltaLongitude = (to.longitude - from.longitude) * Math.PI / 180;
+  const y = Math.sin(deltaLongitude) * Math.cos(lat2);
+  const x = Math.cos(lat1) * Math.sin(lat2)
+    - Math.sin(lat1) * Math.cos(lat2) * Math.cos(deltaLongitude);
+  return (Math.atan2(y, x) * 180 / Math.PI + 360) % 360;
+}
+
+function smoothBearing(previous: number | null, next: number) {
+  if (previous === null) return next;
+  const delta = ((next - previous + 540) % 360) - 180;
+  return (previous + delta * 0.35 + 360) % 360;
+}
+
+function DriverNavigationMap({
+  ride,
+  driverLocation,
+  colors,
+}: {
+  ride: RideRequest | null;
+  driverLocation: DriverLocation | null;
+  colors: ReturnType<typeof useColors>;
+}) {
+  const mapRef = useRef<MapView | null>(null);
+  const previousLocation = useRef<Coordinate | null>(null);
+  const headingRef = useRef<number | null>(null);
+  const [following, setFollowing] = useState(true);
+  const [mapReady, setMapReady] = useState(false);
+  const driverCoordinate = coordinateFromDriver(driverLocation);
+  const pickupCoordinate = coordinateFromLocation(ride?.pickupLocation);
+  const dropoffCoordinate = coordinateFromLocation(ride?.dropoffLocation);
+  const initialCoordinate = driverCoordinate || pickupCoordinate || dropoffCoordinate || {
+    latitude: 30.3753,
+    longitude: 69.3451,
+  };
+  const initialCamera = useMemo(() => ({
+    center: initialCoordinate,
+    pitch: 45,
+    heading: headingRef.current || 0,
+    zoom: 16,
+  }), [initialCoordinate.latitude, initialCoordinate.longitude]);
+
+  useEffect(() => {
+    if (!driverCoordinate) return;
+    let nextHeading = driverLocation?.heading;
+    if (nextHeading === undefined && previousLocation.current) {
+      const movedDistance = Math.abs(driverCoordinate.latitude - previousLocation.current.latitude)
+        + Math.abs(driverCoordinate.longitude - previousLocation.current.longitude);
+      if (movedDistance > 0.00001) nextHeading = bearingBetween(previousLocation.current, driverCoordinate);
+    }
+    previousLocation.current = driverCoordinate;
+    if (nextHeading !== undefined && Number.isFinite(nextHeading)) {
+      headingRef.current = smoothBearing(headingRef.current, nextHeading);
+    }
+    if (following && mapReady) {
+      mapRef.current?.animateCamera({
+        center: driverCoordinate,
+        heading: headingRef.current || 0,
+        pitch: 45,
+        zoom: 16,
+      }, { duration: 650 });
+    }
+  }, [driverCoordinate?.latitude, driverCoordinate?.longitude, driverLocation?.heading, following, mapReady]);
+
+  useEffect(() => {
+    setFollowing(true);
+    if (mapReady) {
+      mapRef.current?.animateCamera({
+        center: driverCoordinate || pickupCoordinate || dropoffCoordinate || initialCoordinate,
+        heading: headingRef.current || 0,
+        pitch: 45,
+        zoom: 16,
+      }, { duration: 500 });
+    }
+  }, [ride?.id, mapReady]);
+
+  const recenter = () => {
+    setFollowing(true);
+    const center = driverCoordinate || pickupCoordinate || dropoffCoordinate || initialCoordinate;
+    mapRef.current?.animateCamera({
+      center,
+      heading: headingRef.current || 0,
+      pitch: 45,
+      zoom: 16,
+    }, { duration: 500 });
+  };
+
+  return <View style={[styles.navigationCard, { borderColor: colors.border, backgroundColor: colors.card, borderRadius: colors.radius + 12 }]}>
+    <View style={styles.navigationHeader}>
+      <View style={styles.statusRow}>
+        <Ionicons name="navigate" size={18} color={colors.primary} />
+        <View>
+          <Text style={[styles.navigationTitle, { color: colors.foreground }]}>Driver navigation</Text>
+          <Text style={[styles.navigationSubtitle, { color: colors.mutedForeground }]}>
+            {following ? 'Following your live position' : 'Map movement paused'}
+          </Text>
+        </View>
+      </View>
+      <Pressable
+        accessibilityLabel="Recenter navigation map"
+        testID="driver-map-recenter"
+        onPress={recenter}
+        style={[styles.recenterButton, { borderColor: following ? colors.primary : colors.border }]}
+      >
+        <Ionicons name="locate-outline" size={19} color={following ? colors.primary : colors.mutedForeground} />
+      </Pressable>
+    </View>
+    <View style={styles.navigationMapFrame}>
+      <MapView
+        ref={mapRef}
+        style={styles.navigationMap}
+        initialCamera={initialCamera}
+        onMapReady={() => setMapReady(true)}
+        onPanDrag={() => setFollowing(false)}
+        onRegionChangeComplete={(_, details) => {
+          if (details?.isGesture) setFollowing(false);
+        }}
+        rotateEnabled
+        pitchEnabled
+        showsCompass
+        showsScale
+        showsBuildings
+        loadingEnabled
+        toolbarEnabled={false}
+        mapType="standard"
+      >
+        {pickupCoordinate && <Marker coordinate={pickupCoordinate} title="Pickup" pinColor="#22c55e" />}
+        {dropoffCoordinate && <Marker coordinate={dropoffCoordinate} title="Drop-off" pinColor="#ef4444" />}
+        {driverCoordinate && !following && <Marker coordinate={driverCoordinate} title="Your location" pinColor={colors.primary} />}
+      </MapView>
+      {following && <View pointerEvents="none" style={styles.fixedDriverMarker}>
+        <View style={[styles.fixedDriverMarkerHalo, { borderColor: colors.primary }]} />
+        <View style={[styles.fixedDriverMarkerDot, { backgroundColor: colors.primary, borderColor: colors.primaryForeground }]} />
+        <View style={[styles.fixedDriverMarkerArrow, { borderBottomColor: colors.primary }]} />
+      </View>}
+      {!driverCoordinate && <View pointerEvents="none" style={[styles.gpsStatus, { backgroundColor: colors.card }]}>
+        <Ionicons name="locate-outline" size={14} color={colors.primary} />
+        <Text style={[styles.gpsStatusText, { color: colors.foreground }]}>Waiting for live GPS</Text>
+      </View>}
+      {!following && <View pointerEvents="none" style={[styles.pausedBadge, { backgroundColor: colors.card }]}>
+        <Text style={[styles.gpsStatusText, { color: colors.foreground }]}>Follow paused</Text>
+      </View>}
+    </View>
+  </View>;
 }
 
 function DriverHome() {
@@ -28,13 +193,6 @@ function DriverHome() {
   const remainingOfferSeconds = runtime.pendingRide
     ? Math.max(0, Math.ceil((new Date(runtime.pendingRide.broadcastExpiresAt || 0).getTime() - Date.now()) / 1000))
     : 0;
-  const pickupMapUrl = runtime.pendingRide?.pickupLocation
-    ? mapboxStaticMapUrl({
-      latitude: Number(runtime.pendingRide.pickupLocation.lat),
-      longitude: Number(runtime.pendingRide.pickupLocation.lng),
-    })
-    : null;
-
   useEffect(() => {
     if (!runtime.pendingRide) return;
     const interval = setInterval(() => setClock(Date.now()), 1000);
@@ -144,10 +302,14 @@ function DriverHome() {
       <View style={styles.statusRow}><Ionicons name="map-outline" size={20} color={colors.primary} /><View style={{ flex: 1 }}><Text style={[styles.longRangeTitle, { color: colors.foreground }]}>Long Range Rides</Text><Text style={[styles.statusCopy, { color: colors.mutedForeground }]}>{runtime.longRange.settings?.enabled ? `Receive trips from ${Number(runtime.longRange.settings.distanceCutoffKm || 0).toLocaleString()} km+ · ${longRangeVehicle} wallet minimum Rs ${longRangeMinimum.toLocaleString()}` : 'Long Range rides are currently disabled by Admin.'}</Text></View><Switch testID="driver-long-range-toggle" value={runtime.longRange.enabled} onValueChange={toggleLongRange} disabled={busy || !runtime.longRange.settings?.enabled} trackColor={{ false: colors.muted, true: colors.primary }} thumbColor={colors.primaryForeground} /></View>
        {runtime.longRange.enabled && <View testID="long-range-responsibility-banner" style={[styles.longRangeReminder, { backgroundColor: colors.secondary, borderColor: colors.border }]}><Ionicons name="warning-outline" size={16} color={colors.primary} /><Text style={[styles.longRangeReminderText, { color: colors.secondaryForeground }]}>Reminder: Tolls, taxes, and challans are driver responsibility.</Text></View>}
     </View>}
+    {!isWeb && (runtime.activeRideId || runtime.pendingRide) && <DriverNavigationMap
+      ride={runtime.activeRide || runtime.pendingRide}
+      driverLocation={runtime.driverLocation}
+      colors={colors}
+    />}
     {runtime.pendingRide ? <View style={[styles.rideCard, { backgroundColor: colors.card, borderColor: colors.primary, borderRadius: colors.radius + 12 }]}>
       <View style={styles.rideHeader}><Text style={[styles.rideLabel, { color: colors.primary }]}>{runtime.pendingRide.isLongRange ? 'LONG RANGE RIDE' : 'NEW RIDE'}</Text><Text style={[styles.fare, { color: colors.foreground }]}>Rs {Number(runtime.pendingRide.fare).toLocaleString()}</Text></View>
       <View style={[styles.offerTimer, { backgroundColor: colors.secondary, borderColor: colors.border }]}><Ionicons name="time-outline" size={15} color={colors.primary} /><Text style={[styles.offerTimerText, { color: colors.secondaryForeground }]}>Reply within {remainingOfferSeconds}s</Text></View>
-       {pickupMapUrl && <View style={[styles.pickupMapCard, { borderColor: colors.border, backgroundColor: colors.secondary }]}><Image source={{ uri: pickupMapUrl }} style={styles.pickupMap} accessibilityLabel="Mapbox pickup preview" /><Text style={[styles.mapCaption, { color: colors.mutedForeground }]}>Mapbox pickup preview</Text></View>}
        <Text style={[styles.location, { color: colors.foreground }, isRtlText(runtime.pendingRide.pickupLocation?.address) && styles.rtlText]} numberOfLines={1}>{runtime.pendingRide.pickupLocation?.address || 'Pickup location shared'}</Text>
        <Text style={[styles.route, { color: colors.mutedForeground }, isRtlText(runtime.pendingRide.dropoffLocation?.address) && styles.rtlText]} numberOfLines={1}>To {runtime.pendingRide.dropoffLocation?.address || 'Drop-off location'} · {runtime.pendingRide.distance?.toFixed(1) || '—'} km</Text>
       <View style={styles.rideActions}><Pressable onPress={runtime.dismissRide} style={[styles.secondaryButton, { borderColor: colors.border, borderRadius: colors.radius }]}><Text style={{ color: colors.mutedForeground }}>Dismiss</Text></Pressable><Pressable testID="driver-accept-ride" onPress={() => void runtime.acceptRide()} style={[styles.acceptButton, { backgroundColor: colors.primary, borderRadius: colors.radius }]}><Text style={[styles.buttonText, { color: colors.primaryForeground }]}>Accept</Text></Pressable></View>
@@ -172,7 +334,8 @@ const styles = StyleSheet.create({
   longRangeCard: { borderWidth: 1, padding: 16, marginTop: 12 }, longRangeTitle: { fontFamily: 'Inter_700Bold', fontSize: 15 }, longRangeReminder: { flexDirection: 'row', alignItems: 'flex-start', gap: 7, borderWidth: 1, padding: 10, marginTop: 14, borderRadius: 10 }, longRangeReminderText: { flex: 1, fontFamily: 'Inter_600SemiBold', fontSize: 12, lineHeight: 17 },
   serviceLine: { borderTopWidth: 1, flexDirection: 'row', gap: 8, alignItems: 'center', marginTop: 15, paddingTop: 14 }, serviceText: { fontFamily: 'Inter_500Medium', fontSize: 12 },
   vehicleCard: { marginTop: 12, borderWidth: 1, flexDirection: 'row', alignItems: 'center', gap: 10, padding: 13 }, vehicleLabel: { fontFamily: 'Inter_700Bold', fontSize: 10, letterSpacing: .8 }, vehicleName: { fontFamily: 'Inter_600SemiBold', fontSize: 14, marginTop: 2 },
-  rideCard: { marginTop: 18, borderWidth: 1, padding: 18 }, rideHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'baseline' }, rideLabel: { fontFamily: 'Inter_700Bold', letterSpacing: 1.1, fontSize: 12 }, fare: { fontFamily: 'Inter_700Bold', fontSize: 23 }, pickupMapCard: { marginTop: 14, borderWidth: 1, overflow: 'hidden' }, pickupMap: { width: '100%', height: 150 }, mapCaption: { fontFamily: 'Inter_500Medium', fontSize: 11, paddingHorizontal: 10, paddingVertical: 7 },
+  navigationCard: { marginTop: 18, borderWidth: 1, padding: 12, overflow: 'hidden' }, navigationHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 3, paddingBottom: 10 }, navigationTitle: { fontFamily: 'Inter_700Bold', fontSize: 15 }, navigationSubtitle: { fontFamily: 'Inter_400Regular', fontSize: 11, marginTop: 2 }, recenterButton: { width: 38, height: 38, borderWidth: 1, borderRadius: 19, alignItems: 'center', justifyContent: 'center' }, navigationMapFrame: { height: 310, overflow: 'hidden', borderRadius: 10, position: 'relative' }, navigationMap: { flex: 1 }, fixedDriverMarker: { position: 'absolute', top: '50%', left: '50%', width: 44, height: 54, marginLeft: -22, marginTop: -27, alignItems: 'center', justifyContent: 'center' }, fixedDriverMarkerHalo: { position: 'absolute', width: 38, height: 38, borderRadius: 19, borderWidth: 2, opacity: .28 }, fixedDriverMarkerDot: { width: 18, height: 18, borderRadius: 9, borderWidth: 3, zIndex: 2 }, fixedDriverMarkerArrow: { position: 'absolute', bottom: 3, width: 0, height: 0, borderLeftWidth: 6, borderRightWidth: 6, borderBottomWidth: 11, borderLeftColor: 'transparent', borderRightColor: 'transparent', zIndex: 1 }, gpsStatus: { position: 'absolute', left: 12, bottom: 12, flexDirection: 'row', alignItems: 'center', gap: 5, paddingHorizontal: 9, paddingVertical: 7, borderRadius: 15, opacity: .95 }, gpsStatusText: { fontFamily: 'Inter_600SemiBold', fontSize: 11 }, pausedBadge: { position: 'absolute', top: 12, left: 12, paddingHorizontal: 9, paddingVertical: 7, borderRadius: 15, opacity: .95 },
+  rideCard: { marginTop: 18, borderWidth: 1, padding: 18 }, rideHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'baseline' }, rideLabel: { fontFamily: 'Inter_700Bold', letterSpacing: 1.1, fontSize: 12 }, fare: { fontFamily: 'Inter_700Bold', fontSize: 23 },
   offerTimer: { flexDirection: 'row', alignItems: 'center', gap: 6, alignSelf: 'flex-start', borderWidth: 1, borderRadius: 9, paddingHorizontal: 9, paddingVertical: 6, marginTop: 11 }, offerTimerText: { fontFamily: 'Inter_700Bold', fontSize: 12 },
   location: { fontFamily: 'Inter_600SemiBold', fontSize: 16, marginTop: 15 }, route: { fontFamily: 'Inter_400Regular', fontSize: 13, marginTop: 6 }, rideActions: { flexDirection: 'row', gap: 10, marginTop: 18 }, secondaryButton: { flex: 1, height: 46, borderWidth: 1, alignItems: 'center', justifyContent: 'center' }, acceptButton: { flex: 1, height: 46, alignItems: 'center', justifyContent: 'center' },
   waiting: { marginTop: 18, borderWidth: 1, borderStyle: 'dashed', padding: 30, alignItems: 'center' }, waitingTitle: { fontFamily: 'Inter_700Bold', fontSize: 18, marginTop: 12 }, waitingCopy: { fontFamily: 'Inter_400Regular', textAlign: 'center', fontSize: 13, lineHeight: 20, marginTop: 7 },

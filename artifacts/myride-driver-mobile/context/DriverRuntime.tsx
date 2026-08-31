@@ -54,6 +54,13 @@ export type RideRequest = {
   pickupLocation?: { address?: string; lat: number; lng: number };
   dropoffLocation?: { address?: string; lat: number; lng: number };
 };
+export type DriverLocation = {
+  latitude: number;
+  longitude: number;
+  heading?: number;
+  speed?: number;
+  timestamp: number;
+};
 export type LongRangeState = {
   enabled: boolean; walletBalance: number; vehicleType?: string; ridePreference?: string;
   settings: { enabled?: boolean; distanceCutoffKm?: number; minimumWalletBalances?: Record<string, number> };
@@ -74,7 +81,8 @@ export type AlertReadiness = {
 
 type RuntimeContext = {
   ready: boolean; user: DriverUser | null; isOnline: boolean; connection: 'connected' | 'connecting' | 'offline';
-  pendingRide: RideRequest | null; activeRideId: string | null; error: string | null;
+  pendingRide: RideRequest | null; activeRide: RideRequest | null; activeRideId: string | null;
+  driverLocation: DriverLocation | null; error: string | null;
   longRange: LongRangeState | null;
   alertReadiness: AlertReadiness;
   signIn(identifier: string, password: string): Promise<void>;
@@ -166,7 +174,9 @@ export function DriverRuntimeProvider({ children }: { children: ReactNode }) {
   const [isOnline, setIsOnline] = useState(false);
   const [connection, setConnection] = useState<RuntimeContext['connection']>('offline');
   const [pendingRide, setPendingRide] = useState<RideRequest | null>(null);
+  const [activeRide, setActiveRide] = useState<RideRequest | null>(null);
   const [activeRideId, setActiveRideId] = useState<string | null>(null);
+  const [driverLocation, setDriverLocation] = useState<DriverLocation | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [longRange, setLongRangeState] = useState<LongRangeState | null>(null);
   const [alertReadiness, setAlertReadiness] = useState<AlertReadiness>({
@@ -307,7 +317,10 @@ export function DriverRuntimeProvider({ children }: { children: ReactNode }) {
     });
     nextSocket.on('ride:accepted', ({ rideId }: { rideId: string }) => {
       clearRideAlert(rideId);
-      setPendingRide(current => current?.id === rideId ? null : current);
+      setPendingRide(current => {
+        if (current?.id === rideId) setActiveRide(current);
+        return current?.id === rideId ? null : current;
+      });
       setActiveRideId(rideId);
       void SecureStore.setItemAsync(ACTIVE_RIDE_KEY, rideId);
     });
@@ -316,6 +329,7 @@ export function DriverRuntimeProvider({ children }: { children: ReactNode }) {
         setActiveRideId(current => {
           if (current === rideId) {
             void SecureStore.deleteItemAsync(ACTIVE_RIDE_KEY);
+            setActiveRide(null);
             return null;
           }
           return current;
@@ -347,9 +361,17 @@ export function DriverRuntimeProvider({ children }: { children: ReactNode }) {
 
   const sendCurrentLocation = useCallback(async (location: Location.LocationObject) => {
     if (!tokenRef.current || !isOnlineRef.current) return;
+    const { latitude, longitude, heading, speed } = location.coords;
+    setDriverLocation({
+      latitude,
+      longitude,
+      heading: Number.isFinite(heading) && Number(heading) >= 0 ? Number(heading) : undefined,
+      speed: Number.isFinite(speed) && Number(speed) >= 0 ? Number(speed) : undefined,
+      timestamp: location.timestamp || Date.now(),
+    });
     await api('/api/driver/location', tokenRef.current, sessionRef.current || undefined, {
       method: 'POST', body: JSON.stringify({
-        lat: location.coords.latitude, lng: location.coords.longitude, rideId: activeRideIdRef.current || undefined,
+        lat: latitude, lng: longitude, rideId: activeRideIdRef.current || undefined,
       }),
     });
   }, []);
@@ -417,7 +439,9 @@ export function DriverRuntimeProvider({ children }: { children: ReactNode }) {
     setUser(null);
     setIsOnline(false);
     setPendingRide(null);
+    setActiveRide(null);
     setActiveRideId(null);
+    setDriverLocation(null);
     setLongRangeState(null);
     setConnection('offline');
     setAlertReadiness(current => ({ ...current, ready: false, lockScreenConfirmed: false, foregroundServiceReady: false }));
@@ -583,6 +607,7 @@ export function DriverRuntimeProvider({ children }: { children: ReactNode }) {
       if (!next) {
         isOnlineRef.current = false;
         setPendingRide(null);
+      setActiveRide(null);
         clearAllRideAlerts();
         await stopLocationService();
       }
@@ -751,7 +776,7 @@ export function DriverRuntimeProvider({ children }: { children: ReactNode }) {
     socket.current?.disconnect(); socket.current = null;
     tokenRef.current = null; sessionRef.current = null;
     await Promise.all([TOKEN_KEY, SESSION_KEY, USER_KEY, ONLINE_KEY, ACTIVE_RIDE_KEY, LOCK_SCREEN_ACK_KEY, PUSH_TOKEN_KEY].map(key => SecureStore.deleteItemAsync(key)));
-    setUser(null); setPendingRide(null); setActiveRideId(null); setConnection('offline');
+    setUser(null); setPendingRide(null); setActiveRide(null); setActiveRideId(null); setDriverLocation(null); setConnection('offline');
     setAlertReadiness(current => ({ ...current, ready: false, lockScreenConfirmed: false, foregroundServiceReady: false }));
   }, [setOnlineState]);
 
@@ -766,6 +791,9 @@ export function DriverRuntimeProvider({ children }: { children: ReactNode }) {
     });
     socket.current?.emit('ride:join', pendingRide.id);
     clearRideAlert(pendingRide.id);
+    setActiveRide(pendingRide);
+    setActiveRideId(pendingRide.id);
+    await SecureStore.setItemAsync(ACTIVE_RIDE_KEY, pendingRide.id);
     setPendingRide(null);
   }, [clearRideAlert, pendingRide]);
 
@@ -779,10 +807,10 @@ export function DriverRuntimeProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const value = useMemo<RuntimeContext>(() => ({
-    ready, user, isOnline, connection, pendingRide, activeRideId, error, longRange, alertReadiness,
+    ready, user, isOnline, connection, pendingRide, activeRide, activeRideId, driverLocation, error, longRange, alertReadiness,
     signIn, signOut, setOnline: setOnlineState, prepareAlertReadiness, confirmLockScreenAlerts, setLongRange, acceptRide,
     dismissRide: () => setPendingRide(null), clearError: () => setError(null),
-  }), [acceptRide, activeRideId, alertReadiness, confirmLockScreenAlerts, error, isOnline, pendingRide, prepareAlertReadiness, ready, setOnlineState, setLongRange, signIn, signOut, user, connection, longRange]);
+  }), [acceptRide, activeRide, activeRideId, alertReadiness, confirmLockScreenAlerts, driverLocation, error, isOnline, pendingRide, prepareAlertReadiness, ready, setOnlineState, setLongRange, signIn, signOut, user, connection, longRange]);
   return <DriverContext.Provider value={value}>{children}</DriverContext.Provider>;
 }
 
