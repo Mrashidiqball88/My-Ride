@@ -245,6 +245,27 @@ export function DriverRuntimeProvider({ children }: { children: ReactNode }) {
     }
   }, []);
 
+  const hydrateActiveRide = useCallback(async () => {
+    if (!tokenRef.current) return false;
+    try {
+      const response = await api('/api/driver/active-ride', tokenRef.current, sessionRef.current || undefined);
+      const ride = response?.ride
+        ? normalizeRideRequest(response.ride as RideRequest & { _id?: string })
+        : null;
+      setActiveRide(ride);
+      setActiveRideId(ride?.id || null);
+      if (ride?.id) {
+        await SecureStore.setItemAsync(ACTIVE_RIDE_KEY, ride.id);
+      } else {
+        await SecureStore.deleteItemAsync(ACTIVE_RIDE_KEY);
+      }
+      return Boolean(ride);
+    } catch {
+      // Socket reconnect and the next foreground refresh remain available.
+      return false;
+    }
+  }, []);
+
   const handleRideOffer = useCallback((ride: RideRequest, { fromPush = false } = {}) => {
     const nextRide = normalizeRideRequest(ride);
     if (!isOnlineRef.current || activeRideIdRef.current || !isRideOfferLive(nextRide)) return;
@@ -297,6 +318,9 @@ export function DriverRuntimeProvider({ children }: { children: ReactNode }) {
         nextSocket.emit('driver:status', { isOnline: true });
       }
       if (activeRideIdRef.current) nextSocket.emit('ride:join', activeRideIdRef.current);
+      void hydrateActiveRide().then(rideIsActive => {
+        if (rideIsActive && activeRideIdRef.current) nextSocket.emit('ride:join', activeRideIdRef.current);
+      });
       void hydrateAvailableRides();
     });
     nextSocket.on('disconnect', () => {
@@ -357,7 +381,7 @@ export function DriverRuntimeProvider({ children }: { children: ReactNode }) {
     });
   // setOnlineState is stable through declaration below at execution time.
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [clearRideAlert, handleRideOffer, hydrateAvailableRides]);
+  }, [clearRideAlert, handleRideOffer, hydrateActiveRide, hydrateAvailableRides]);
 
   const sendCurrentLocation = useCallback(async (location: Location.LocationObject) => {
     if (!tokenRef.current || !isOnlineRef.current) return;
@@ -641,6 +665,11 @@ export function DriverRuntimeProvider({ children }: { children: ReactNode }) {
       void refreshAlertReadiness();
     }
   }, [ready, refreshAlertReadiness, user]);
+
+  useEffect(() => {
+    if (!ready || !user || !tokenRef.current) return;
+    void hydrateActiveRide();
+  }, [hydrateActiveRide, ready, user]);
 
   useEffect(() => {
     if (!ready || !user || !isOnline || Platform.OS === 'web') return;

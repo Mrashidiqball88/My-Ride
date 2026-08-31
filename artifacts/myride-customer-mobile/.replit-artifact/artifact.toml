@@ -1,0 +1,24 @@
+kind = "mobile"
+previewPath = "/myride-customer-mobile/"
+title = "My Ride Customer"
+description = "A native Expo Customer companion for My Ride that hosts the production Customer booking experience with safe-area handling, native back navigation, external-link protection, and synchronized web search, maps, realtime rides, and Urdu support."
+version = "1.0.0"
+id = "artifacts/myride-customer-mobile"
+router = "expo-domain"
+
+[[services]]
+name = "expo"
+ensurePreviewReachable = "/status"
+paths = [ "/myride-customer-mobile/" ]
+localPort = 24682
+
+[services.development]
+run = "pnpm --filter @workspace/myride-customer-mobile run dev"
+
+[services.production]
+build = [ "pnpm", "--filter", "@workspace/myride-customer-mobile", "run", "build" ]
+run = [ "pnpm", "--filter", "@workspace/myride-customer-mobile", "run", "serve" ]
+
+[services.env]
+PORT = "24682"
+BASE_PATH = "/myride-customer-mobile/"
