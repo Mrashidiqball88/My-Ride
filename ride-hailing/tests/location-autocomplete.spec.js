@@ -213,7 +213,7 @@ test.describe('live nationwide location autocomplete', () => {
     expect(requests[0].searchParams.get('type')).toBeNull();
   });
 
-  test('searches nationwide without a pickup or GPS context', async ({ page }) => {
+  test('uses the live customer pin before pickup and omits proximity without either pin', async ({ page }) => {
     let requestedUrl;
     await page.route(/\/api\/geocode(?:\?|$)/, async route => {
       requestedUrl = new URL(route.request().url());
@@ -229,8 +229,6 @@ test.describe('live nationwide location autocomplete', () => {
     await page.goto('/customer');
     await page.evaluate(() => {
       pickup = null;
-      // These are intentionally present: only the active pickup pin may
-      // become Mapbox proximity context.
       customerLocation = { lat: 24.8607, lng: 67.0011 };
       customerCityLocation = { lat: 33.6844, lng: 73.0479 };
       customerActiveCity = 'Islamabad';
@@ -239,8 +237,15 @@ test.describe('live nationwide location autocomplete', () => {
 
     await expect.poll(() => visibleLocationNames(page)).toHaveLength(2);
     expect(requestedUrl.searchParams.get('q')).toBe('airport');
-    expect(requestedUrl.searchParams.get('lat')).toBeNull();
-    expect(requestedUrl.searchParams.get('lng')).toBeNull();
+    expect(requestedUrl.searchParams.get('proximity')).toBe('67.0011,24.8607');
+
+    await page.evaluate(() => {
+      pickup = null;
+      customerLocation = null;
+    });
+    await setSearch(page, 'airport without pin');
+    await expect.poll(() => requestedUrl.searchParams.get('q')).toBe('airport without pin');
+    expect(requestedUrl.searchParams.get('proximity')).toBeNull();
   });
 
   test('sends the active pickup pin and refreshes proximity after the pin changes', async ({ page }) => {
@@ -263,16 +268,14 @@ test.describe('live nationwide location autocomplete', () => {
     });
     await setSearch(page, 'first pickup area');
     await expect.poll(() => requests).toHaveLength(1);
-    expect(requests[0].searchParams.get('lat')).toBe('31.5204');
-    expect(requests[0].searchParams.get('lng')).toBe('74.3587');
+    expect(requests[0].searchParams.get('proximity')).toBe('74.3587,31.5204');
 
     await page.evaluate(() => {
       pickup = { lat: 24.8607, lng: 67.0011 };
     });
     await setSearch(page, 'second pickup area');
     await expect.poll(() => requests).toHaveLength(2);
-    expect(requests[1].searchParams.get('lat')).toBe('24.8607');
-    expect(requests[1].searchParams.get('lng')).toBe('67.0011');
+    expect(requests[1].searchParams.get('proximity')).toBe('67.0011,24.8607');
   });
 
   test('selects live pickup and drop-off results and pins their coordinates', async ({ page }) => {

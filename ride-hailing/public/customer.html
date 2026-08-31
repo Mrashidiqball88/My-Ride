@@ -2124,11 +2124,12 @@ async function detectCustomerActiveCity(lat, lng, { force = false } = {}) {
 
 function locationSearchCenter() {
   // The selected first pickup is the only authoritative search proximity
-  // reference. GPS, reverse-geocoded city state, and the map viewport can be
-  // stale or unrelated to the active ride and must never become an implicit
-  // Mapbox proximity value.
-  const lat = Number(pickup?.lat);
-  const lng = Number(pickup?.lng);
+  // reference. Before pickup selection, the live blue customer pin is the
+  // current local context. Reverse-geocoded city state and the map viewport
+  // can be stale or unrelated and must never become an implicit reference.
+  const point = pickup || customerLocation;
+  const lat = Number(point?.lat);
+  const lng = Number(point?.lng);
   if (!Number.isFinite(lat) || !Number.isFinite(lng)
     || lat < -90 || lat > 90 || lng < -180 || lng > 180
     || (lat === 0 && lng === 0)) {
@@ -2142,8 +2143,9 @@ async function searchPlaces(query, _context = {}, { signal } = {}) {
     const params = new URLSearchParams({ q: query });
     const center = locationSearchCenter();
     if (center) {
-      params.set('lat', String(center.lat));
-      params.set('lng', String(center.lng));
+      // Keep the client/backend contract aligned with Mapbox: proximity is
+      // always longitude,latitude, not latitude,longitude.
+      params.set('proximity', `${center.lng},${center.lat}`);
     }
     const r = await fetch(`/api/geocode?${params.toString()}`, { signal });
     if (!r.ok) throw new Error(`Location provider returned ${r.status}`);

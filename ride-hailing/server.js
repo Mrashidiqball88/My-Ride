@@ -4688,6 +4688,30 @@ async function geocodeProviderSearch(query, center = null) {
   }));
 }
 
+function isValidGeocodeCenter(center) {
+  const lat = Number(center?.lat);
+  const lng = Number(center?.lng);
+  return Number.isFinite(lat) && Number.isFinite(lng)
+    && lat >= -90 && lat <= 90
+    && lng >= -180 && lng <= 180
+    && !(lat === 0 && lng === 0);
+}
+
+function parseGeocodeCenter(query) {
+  const rawProximity = String(query?.proximity || '').trim();
+  if (rawProximity) {
+    const [rawLng, rawLat] = rawProximity.split(',');
+    const proximityCenter = { lat: Number(rawLat), lng: Number(rawLng) };
+    if (isValidGeocodeCenter(proximityCenter)) return proximityCenter;
+  }
+
+  const legacyCenter = {
+    lat: Number(query?.lat),
+    lng: Number(query?.lng)
+  };
+  return isValidGeocodeCenter(legacyCenter) ? legacyCenter : null;
+}
+
 function mergeGeocodeResults(rawResults, aliasResults) {
   const seen = new Set();
   return [...rawResults, ...aliasResults].filter(result => {
@@ -4706,10 +4730,7 @@ app.get('/api/geocode', async (req, res) => {
   // is only for matching configured aliases, never for the provider query.
   const q = String(req.query.q || '');
   if (!q.trim()) return res.json([]);
-  const center = {
-    lat: Number(req.query.lat),
-    lng: Number(req.query.lng)
-  };
+  const center = parseGeocodeCenter(req.query);
 
   try {
     const aliases = await getCustomerLocationAliases();

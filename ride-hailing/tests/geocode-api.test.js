@@ -142,7 +142,7 @@ test('Mapbox access token takes precedence over the public-token fallback', asyn
   });
 });
 
-test('Customer search adds proximity for current pickup context without narrowing nationwide results', async () => {
+test('Customer search passes Mapbox proximity in longitude,latitude order without narrowing nationwide results', async () => {
   process.env.MAPBOX_PUBLIC_TOKEN = 'test-mapbox-token';
   let requested;
   global.fetch = async url => {
@@ -151,7 +151,7 @@ test('Customer search adds proximity for current pickup context without narrowin
   };
 
   await withServer(async server => {
-    const result = await request(server, '/api/geocode?q=Lahore&lat=31.5204&lng=74.3587');
+    const result = await request(server, '/api/geocode?q=Lahore&proximity=74.3587,31.5204');
     assert.equal(result.response.status, 200);
     assert.equal(requested.searchParams.get('proximity'), '74.3587,31.5204');
     assert.equal(requested.searchParams.get('country'), 'pk');
@@ -169,7 +169,7 @@ test('Customer search omits invalid proximity coordinates', async () => {
   };
 
   await withServer(async server => {
-    const result = await request(server, '/api/geocode?q=airport&lat=91&lng=181');
+    const result = await request(server, '/api/geocode?q=airport&proximity=181,91');
     assert.equal(result.response.status, 200);
     assert.equal(requested.searchParams.get('proximity'), null);
   });
