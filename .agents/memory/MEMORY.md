@@ -42,3 +42,4 @@
 - [Urdu font shaping](native-urdu-font-shaping.md) — keep Arabic-capable font loading alongside Inter and scope RTL styling to dynamic Arabic-script Driver text.
 - [Migration upsert timestamps](migration-upsert-timestamps.md) — disable automatic Mongoose timestamps when role-partition upserts preserve legacy timestamp fields.
 - [Driver device binding](driver-device-binding.md) — bind Drivers to a hashed app-scoped installation ID; preserve it across logout and invalidate sessions when Admin enables the lock.
+- [External production drift](external-production-drift.md) — local GitHub parity does not prove the public host is current; compare served HTML, commit, process, and restart state.
