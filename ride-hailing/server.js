@@ -4104,7 +4104,8 @@ app.patch('/api/rides/:id/update-fare', authMiddleware, async (req, res) => {
       ride.vehicleType,
       ride.distance,
       new Date(),
-      normalizePerKmRates(ratesDoc?.value)
+      normalizePerKmRates(ratesDoc?.value),
+      ride.durationMinutes
     );
     if (fareQuote.error) return res.status(422).json({ error: fareQuote.error });
     ride.fare = fareQuote.totalFare;
