@@ -1,7 +1,9 @@
 import * as Notifications from 'expo-notifications';
 import { Platform } from 'react-native';
 
-export const RIDE_ALERT_CHANNEL_ID = 'ride-alerts-critical';
+// Channel settings are immutable after Android creates a channel. Versioning
+// this ID is required so a previously demoted channel cannot stay silent.
+export const RIDE_ALERT_CHANNEL_ID = 'ride-alerts-critical-v2';
 export const RIDE_ALERT_CATEGORY_ID = 'ride-request';
 
 export type NativeRideAlert = {
@@ -54,7 +56,9 @@ export function nativeRideAlertContent(ride: NativeRideAlert) {
     priority: Notifications.AndroidNotificationPriority.MAX,
     channelId: RIDE_ALERT_CHANNEL_ID,
     categoryIdentifier: RIDE_ALERT_CATEGORY_ID,
-    autoDismiss: true,
+    sticky: true,
+    autoDismiss: false,
+    interruptionLevel: 'timeSensitive' as const,
     data: {
       type: 'ride:new',
       ride,

@@ -17,6 +17,11 @@ import {
   RIDE_ALERT_CATEGORY_ID,
   RIDE_ALERT_CHANNEL_ID,
 } from '@/lib/ride-alerts';
+import {
+  AndroidAlertSetting,
+  getAndroidAlertCapabilities,
+  openAndroidAlertSetting,
+} from '@/lib/android-alert-capabilities';
 
 const TOKEN_KEY = 'myride.driver.token';
 const SESSION_KEY = 'myride.driver.session';
@@ -76,6 +81,9 @@ export type AlertReadiness = {
   pushTokenRegistered: boolean;
   lockScreenConfirmed: boolean;
   foregroundServiceReady: boolean;
+  overlayPermissionGranted: boolean;
+  batteryOptimizationExempt: boolean;
+  fullScreenIntentAllowed: boolean;
   message: string | null;
 };
 
@@ -90,6 +98,7 @@ type RuntimeContext = {
   setOnline(next: boolean): Promise<void>;
   prepareAlertReadiness(): Promise<void>;
   confirmLockScreenAlerts(): Promise<void>;
+  openAlertSetting(setting: AndroidAlertSetting): Promise<void>;
   setLongRange(next: boolean): Promise<string>;
   acceptRide(): Promise<void>;
   dismissRide(): void;
@@ -189,6 +198,9 @@ export function DriverRuntimeProvider({ children }: { children: ReactNode }) {
     pushTokenRegistered: Platform.OS === 'web',
     lockScreenConfirmed: Platform.OS === 'web',
     foregroundServiceReady: Platform.OS === 'web',
+    overlayPermissionGranted: Platform.OS === 'web',
+    batteryOptimizationExempt: Platform.OS === 'web',
+    fullScreenIntentAllowed: Platform.OS === 'web',
     message: Platform.OS === 'web' ? null : 'Complete alert setup before going online.',
   });
   const socket = useRef<Socket | null>(null);
@@ -203,6 +215,7 @@ export function DriverRuntimeProvider({ children }: { children: ReactNode }) {
   const lastHeartbeatAckAt = useRef(0);
   const locationServiceMode = useRef<'stopped' | 'availability' | 'active-ride'>('stopped');
   const locationServiceTransition = useRef<Promise<void>>(Promise.resolve());
+  const specialSettingPrompted = useRef<AndroidAlertSetting | null>(null);
 
   useEffect(() => { isOnlineRef.current = isOnline; }, [isOnline]);
   useEffect(() => { activeRideIdRef.current = activeRideId; }, [activeRideId]);
@@ -412,6 +425,15 @@ export function DriverRuntimeProvider({ children }: { children: ReactNode }) {
     if (!notificationState.notificationsGranted || !notificationState.alertChannelReady) {
       throw new Error('Ride notifications and lock-screen visibility must be enabled before going online.');
     }
+    const androidCapabilities = await getAndroidAlertCapabilities();
+    if (
+      !androidCapabilities.nativeBridgeAvailable
+      || !androidCapabilities.overlayPermissionGranted
+      || !androidCapabilities.batteryOptimizationExempt
+      || !androidCapabilities.fullScreenIntentAllowed
+    ) {
+      throw new Error('Enable overlay, battery protection exemption, and full-screen ride alerts before going online.');
+    }
     const desiredMode = activeRideTracking ? 'active-ride' : 'availability';
     const transition = locationServiceTransition.current
       .catch(() => undefined)
@@ -500,11 +522,15 @@ export function DriverRuntimeProvider({ children }: { children: ReactNode }) {
     }
   }, []);
 
-  const refreshAlertReadiness = useCallback(async ({ requestPermissions = false } = {}) => {
+  const refreshAlertReadiness = useCallback(async ({
+    requestPermissions = false,
+    openSpecialSettings = false,
+  } = {}) => {
     if (Platform.OS === 'web') return true;
     setAlertReadiness(current => ({ ...current, checking: true, message: null }));
     try {
       const notificationState = await configureNotifications(requestPermissions);
+      const androidCapabilities = await getAndroidAlertCapabilities();
       let foregroundLocation = await Location.getForegroundPermissionsAsync();
       if (requestPermissions && !foregroundLocation.granted) {
         foregroundLocation = await Location.requestForegroundPermissionsAsync();
@@ -546,10 +572,37 @@ export function DriverRuntimeProvider({ children }: { children: ReactNode }) {
         && pushTokenRegistered
         && lockScreenConfirmed
         && foregroundServiceReady
+        && androidCapabilities.nativeBridgeAvailable
+        && androidCapabilities.overlayPermissionGranted
+        && androidCapabilities.batteryOptimizationExempt
+        && androidCapabilities.fullScreenIntentAllowed
       );
+      const missingSpecialSetting: AndroidAlertSetting | null = !androidCapabilities.nativeBridgeAvailable
+        ? null
+        : !androidCapabilities.overlayPermissionGranted
+          ? 'overlay'
+          : !androidCapabilities.batteryOptimizationExempt
+            ? 'battery'
+            : !androidCapabilities.fullScreenIntentAllowed
+              ? 'full-screen'
+              : null;
+      if (!missingSpecialSetting) specialSettingPrompted.current = null;
+      if (openSpecialSettings && requestPermissions && missingSpecialSetting
+        && specialSettingPrompted.current !== missingSpecialSetting) {
+        specialSettingPrompted.current = missingSpecialSetting;
+        await openAndroidAlertSetting(missingSpecialSetting);
+      }
       const message = ready
         ? null
-        : !notificationState.notificationsGranted
+        : !androidCapabilities.nativeBridgeAvailable
+          ? 'Install the native Driver build to enable Android lock-screen capability checks.'
+          : !androidCapabilities.overlayPermissionGranted
+            ? 'Allow My Ride to display over other apps so an urgent ride can wake the screen.'
+            : !androidCapabilities.batteryOptimizationExempt
+              ? 'Allow My Ride to run without battery optimization so Android does not suspend ride alerts.'
+              : !androidCapabilities.fullScreenIntentAllowed
+                ? 'Allow full-screen ride alerts for My Ride in Android notification settings.'
+                : !notificationState.notificationsGranted
           ? 'Allow notifications so ride requests can reach the locked screen.'
           : !notificationState.alertChannelReady
             ? 'Enable the Ride requests notification channel and lock-screen visibility in system settings.'
@@ -559,7 +612,7 @@ export function DriverRuntimeProvider({ children }: { children: ReactNode }) {
                 ? 'Push registration did not complete. Check your network and retry.'
                 : !lockScreenConfirmed
                   ? 'Confirm that My Ride ride alerts are enabled on your lock screen.'
-                  : 'The native foreground service could not be verified. Check system settings and retry.';
+                   : 'The native foreground service could not be verified. Check system settings and retry.';
       setAlertReadiness(current => ({
         checking: false,
         ready,
@@ -570,6 +623,9 @@ export function DriverRuntimeProvider({ children }: { children: ReactNode }) {
         pushTokenRegistered,
         lockScreenConfirmed,
         foregroundServiceReady,
+        overlayPermissionGranted: androidCapabilities.overlayPermissionGranted,
+        batteryOptimizationExempt: androidCapabilities.batteryOptimizationExempt,
+        fullScreenIntentAllowed: androidCapabilities.fullScreenIntentAllowed,
         message,
       }));
       return ready;
@@ -581,13 +637,17 @@ export function DriverRuntimeProvider({ children }: { children: ReactNode }) {
   }, [registerExpoToken, startLocationService, stopLocationService]);
 
   const prepareAlertReadiness = useCallback(async () => {
-    await refreshAlertReadiness({ requestPermissions: true });
+    await refreshAlertReadiness({ requestPermissions: true, openSpecialSettings: true });
   }, [refreshAlertReadiness]);
 
   const confirmLockScreenAlerts = useCallback(async () => {
     await SecureStore.setItemAsync(LOCK_SCREEN_ACK_KEY, 'true');
     await refreshAlertReadiness({ requestPermissions: true });
   }, [refreshAlertReadiness]);
+
+  const openAlertSetting = useCallback(async (setting: AndroidAlertSetting) => {
+    await openAndroidAlertSetting(setting);
+  }, []);
 
   const recoverNotificationRide = useCallback((response: Notifications.NotificationResponse | null) => {
     const data = response?.notification.request.content.data as {
@@ -662,9 +722,23 @@ export function DriverRuntimeProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     if (ready && user && tokenRef.current && Platform.OS !== 'web') {
-      void refreshAlertReadiness();
+      void refreshAlertReadiness({ requestPermissions: true, openSpecialSettings: true });
     }
   }, [ready, refreshAlertReadiness, user]);
+
+  useEffect(() => {
+    if (!ready || !user || Platform.OS === 'web') return;
+    const handleAppState = (state: string) => {
+      if (state !== 'active') return;
+      void refreshAlertReadiness({ requestPermissions: true, openSpecialSettings: true }).then(isReady => {
+        if (!isReady && isOnlineRef.current) {
+          void setOnlineState(false).catch(() => undefined);
+        }
+      });
+    };
+    const subscription = AppState.addEventListener('change', handleAppState);
+    return () => subscription.remove();
+  }, [ready, refreshAlertReadiness, setOnlineState, user]);
 
   useEffect(() => {
     if (!ready || !user || !tokenRef.current) return;
@@ -748,7 +822,7 @@ export function DriverRuntimeProvider({ children }: { children: ReactNode }) {
         void registerExpoToken();
         void hydrateAvailableRides();
         if (Platform.OS !== 'web') {
-          void refreshAlertReadiness().then(isReady => {
+           void refreshAlertReadiness().then(isReady => {
             if (!isReady && isOnlineRef.current) void setOnlineState(false).catch(() => undefined);
           });
         }
@@ -837,9 +911,9 @@ export function DriverRuntimeProvider({ children }: { children: ReactNode }) {
 
   const value = useMemo<RuntimeContext>(() => ({
     ready, user, isOnline, connection, pendingRide, activeRide, activeRideId, driverLocation, error, longRange, alertReadiness,
-    signIn, signOut, setOnline: setOnlineState, prepareAlertReadiness, confirmLockScreenAlerts, setLongRange, acceptRide,
+    signIn, signOut, setOnline: setOnlineState, prepareAlertReadiness, confirmLockScreenAlerts, openAlertSetting, setLongRange, acceptRide,
     dismissRide: () => setPendingRide(null), clearError: () => setError(null),
-  }), [acceptRide, activeRide, activeRideId, alertReadiness, confirmLockScreenAlerts, driverLocation, error, isOnline, pendingRide, prepareAlertReadiness, ready, setOnlineState, setLongRange, signIn, signOut, user, connection, longRange]);
+  }), [acceptRide, activeRide, activeRideId, alertReadiness, confirmLockScreenAlerts, driverLocation, error, isOnline, openAlertSetting, pendingRide, prepareAlertReadiness, ready, setOnlineState, setLongRange, signIn, signOut, user, connection, longRange]);
   return <DriverContext.Provider value={value}>{children}</DriverContext.Provider>;
 }
 

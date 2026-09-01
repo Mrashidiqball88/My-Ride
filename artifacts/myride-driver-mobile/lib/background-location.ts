@@ -76,20 +76,17 @@ function isLiveRide(ride: { id?: string; _id?: string; broadcastExpiresAt?: stri
 }
 
 async function syncBackgroundRideAlerts() {
-  const [token, session, online, activeRide, storedAlerts, pushToken] = await Promise.all([
+  const [token, session, online, activeRide, storedAlerts] = await Promise.all([
     SecureStore.getItemAsync(TOKEN_KEY),
     SecureStore.getItemAsync(SESSION_KEY),
     SecureStore.getItemAsync(ONLINE_KEY),
     SecureStore.getItemAsync(ACTIVE_RIDE_KEY),
     SecureStore.getItemAsync(BACKGROUND_ALERTS_KEY),
-    SecureStore.getItemAsync('myride.driver.pushToken'),
   ]);
   if (!token || online !== 'true' || activeRide || !DOMAIN) return;
-  // A registered Expo token gets the platform-managed locked-screen alert.
-  // Polling is a last-resort wake path for builds that have not registered one.
-  if (pushToken) return;
-  // The foreground Socket.io listener and notification listener own visible
-  // alerts while the app is open. This fallback is only for suspended JS.
+  // Polling remains a recovery path even after push registration. Expo token
+  // registration proves only that the token was accepted by our API; it does
+  // not prove that this device or its OEM battery policy delivered the push.
   if (AppState.currentState === 'active') return;
 
   let knownAlerts: Record<string, string> = {};

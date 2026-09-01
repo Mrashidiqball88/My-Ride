@@ -8,8 +8,20 @@ const mapboxPublicToken = String(
 
 module.exports = {
   ...baseConfig,
+  ios: {
+    ...(baseConfig.ios || {}),
+    bundleIdentifier: baseConfig.ios?.bundleIdentifier || 'com.myride.driver',
+  },
+  android: {
+    ...(baseConfig.android || {}),
+    package: baseConfig.android?.package || 'com.myride.driver',
+  },
   extra: {
     ...(baseConfig.extra || {}),
     mapboxPublicToken,
   },
+  plugins: [
+    ...(baseConfig.plugins || []),
+    './plugins/withDriverAlertCapabilities',
+  ],
 };

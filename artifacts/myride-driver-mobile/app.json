@@ -15,6 +15,7 @@
     },
     "ios": {
       "supportsTablet": false,
+      "bundleIdentifier": "com.myride.driver",
       "infoPlist": {
         "NSLocationWhenInUseUsageDescription": "My Ride uses your location to match you with nearby rides while you are online.",
         "NSLocationAlwaysAndWhenInUseUsageDescription": "My Ride keeps your location updated while you are online so riders can receive reliable driver tracking."
@@ -28,8 +29,11 @@
         "FOREGROUND_SERVICE",
         "FOREGROUND_SERVICE_LOCATION",
         "POST_NOTIFICATIONS",
+        "SYSTEM_ALERT_WINDOW",
+        "REQUEST_IGNORE_BATTERY_OPTIMIZATIONS",
         "USE_FULL_SCREEN_INTENT"
-      ]
+      ],
+      "package": "com.myride.driver"
     },
     "web": {
       "favicon": "./assets/images/myride-driver-icon.png"

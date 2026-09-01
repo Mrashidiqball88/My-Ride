@@ -1987,7 +1987,7 @@ const DEFAULT_RIDE_BROADCAST_REQUEST_DURATION_SECONDS = 60;
 const MIN_RIDE_BROADCAST_REQUEST_DURATION_SECONDS = 30;
 const MAX_RIDE_BROADCAST_REQUEST_DURATION_SECONDS = 120;
 const PICKUP_PIN_REVEAL_DISTANCE_KM = 0.1;
-const NATIVE_RIDE_ALERT_CHANNEL_ID = 'ride-alerts-critical';
+const NATIVE_RIDE_ALERT_CHANNEL_ID = 'ride-alerts-critical-v2';
 
 async function sendExpoPush(tokens, message) {
   const recipients = [...new Set(tokens.filter(token => /^ExponentPushToken\[.+\]$|^ExpoPushToken\[.+\]$/.test(String(token || ''))))];
@@ -2005,12 +2005,12 @@ async function sendExpoPush(tokens, message) {
           method: 'POST',
           headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
            body: JSON.stringify(batch.map(to => ({
+             ...message,
              to,
              sound: 'default',
              priority: 'high',
-             ttl: 60,
+             ttl: Math.min(120, Math.max(1, Number(message.ttl) || 60)),
              channelId: NATIVE_RIDE_ALERT_CHANNEL_ID,
-             ...message
            })))
         });
         responseBody = await response.json().catch(() => ({}));
@@ -3830,8 +3830,8 @@ app.post('/api/rides', authMiddleware, customerOnly, customerCanBook, async (req
         body: `${ride.pickupLocation?.address || 'Nearby pickup'} · Rs ${(ride.fare || 0).toLocaleString()}`,
         data: { type: 'ride:new', ride: ridePayload, rideId: String(ride._id) },
         categoryId: 'ride-request',
-        channelId: 'ride-alerts',
-        interruptionLevel: 'timeSensitive'
+        interruptionLevel: 'timeSensitive',
+        ttl: Math.max(1, Math.ceil((new Date(ridePayload.broadcastExpiresAt).getTime() - Date.now()) / 1000))
       });
     }
 
