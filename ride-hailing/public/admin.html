@@ -837,6 +837,14 @@ input[type=date]:focus{border-color:#f5c518}
           <div class="field-row">
             <div class="field-item"><div class="field-label">Toyota Saloon Coaster Daily Fee (PKR)</div><input class="modal-input daily-fee-input" data-category="Toyota Saloon Coaster" type="number" min="0.01" step="0.01" placeholder="Enter fee"></div>
           </div>
+           <div class="field-row">
+             <div class="field-item"><div class="field-label">Old Cars Daily Fee (PKR)</div><input class="modal-input daily-fee-input" data-category="Old Cars" type="number" min="0.01" step="0.01" placeholder="Enter fee"></div>
+             <div class="field-item"><div class="field-label">Off-Road Dalla (Pickup) Daily Fee (PKR)</div><input class="modal-input daily-fee-input" data-category="Off-Road Dalla (Pickup)" type="number" min="0.01" step="0.01" placeholder="Enter fee"></div>
+           </div>
+           <div class="field-row">
+             <div class="field-item"><div class="field-label">Toyota Land Cruiser V8 Daily Fee (PKR)</div><input class="modal-input daily-fee-input" data-category="Toyota Land Cruiser V8" type="number" min="0.01" step="0.01" placeholder="Enter fee"></div>
+             <div class="field-item"><div class="field-label">Electric Scooty Daily Fee (PKR)</div><input class="modal-input daily-fee-input" data-category="Electric Scooty" type="number" min="0.01" step="0.01" placeholder="Enter fee"></div>
+           </div>
           <button class="btn btn-primary" type="button" style="padding:.65rem 1.25rem;font-size:.82rem" onclick="saveDailyFeeSettings()">💾 Update Fees</button>
           <div id="daily-fee-feedback" style="margin-top:.65rem;font-size:.78rem;min-height:1.1rem"></div>
         </div>
@@ -870,6 +878,14 @@ input[type=date]:focus{border-color:#f5c518}
           <div class="field-row">
             <div class="field-item"><div class="field-label">Toyota Saloon Coaster (PKR /km)</div><input class="modal-input per-km-input" data-category="Toyota Saloon Coaster" type="number" min="0.01" step="0.01"></div>
           </div>
+           <div class="field-row">
+             <div class="field-item"><div class="field-label">Old Cars (PKR /km)</div><input class="modal-input per-km-input" data-category="Old Cars" type="number" min="0.01" step="0.01"></div>
+             <div class="field-item"><div class="field-label">Off-Road Dalla (Pickup) (PKR /km)</div><input class="modal-input per-km-input" data-category="Off-Road Dalla (Pickup)" type="number" min="0.01" step="0.01"></div>
+           </div>
+           <div class="field-row">
+             <div class="field-item"><div class="field-label">Toyota Land Cruiser V8 (PKR /km)</div><input class="modal-input per-km-input" data-category="Toyota Land Cruiser V8" type="number" min="0.01" step="0.01"></div>
+             <div class="field-item"><div class="field-label">Electric Scooty (PKR /km)</div><input class="modal-input per-km-input" data-category="Electric Scooty" type="number" min="0.01" step="0.01"></div>
+           </div>
           <button class="btn btn-primary" type="button" style="padding:.65rem 1.25rem;font-size:.82rem;background:#0ea5e9" onclick="savePerKmRates()">💾 Save /km Rates</button>
           <div id="per-km-feedback" style="margin-top:.65rem;font-size:.78rem;min-height:1.1rem"></div>
         </div>
@@ -1079,6 +1095,14 @@ input[type=date]:focus{border-color:#f5c518}
           Set a clear base fare, distance rates, and time-based adjustments for each vehicle category.
         </p>
         <div id="fare-settings-feedback" style="min-height:1.25rem;font-size:.8rem;margin-bottom:.8rem"></div>
+         <div id="vehicle-settings-card" style="background:#0f0f1e;border:1px solid #a78bfa;border-radius:14px;padding:1rem;margin-bottom:1rem">
+           <div style="display:flex;align-items:center;gap:.5rem;margin-bottom:.35rem">
+             <span style="font-size:1.2rem">🚘</span><strong style="color:#c4b5fd">Vehicle Settings</strong>
+           </div>
+           <p style="font-size:.74rem;color:#94a3b8;line-height:1.45;margin:0 0 .8rem">Activate only the categories that Customers should see and Drivers should be able to receive. Changes publish immediately to open Customer sessions.</p>
+           <div id="vehicle-settings-list"></div>
+           <div id="vehicle-settings-feedback" style="min-height:1.1rem;font-size:.76rem;margin-top:.65rem" aria-live="polite"></div>
+         </div>
         <div id="fare-settings-list"></div>
         <button class="btn btn-primary" style="padding:.75rem 2rem;font-size:.9rem" onclick="saveFareSettings()">💾 Save All Daily Fare Settings</button>
       </div>
@@ -4074,7 +4098,7 @@ async function loadPaymentSettings() {
 }
 
 // ── Dynamic Daily Fee Settings ─────────────────────────────────────────────────
-const DAILY_FEE_CATEGORIES = ['Car Sedan', 'Car Mini AC', 'Car Mini Non-AC', 'Riksha', 'Bike', 'Car SUV', 'Van Seven Seats', 'Cary Dibba', 'Toyota Highroof', 'Toyota Saloon Coaster'];
+const DAILY_FEE_CATEGORIES = ['Car Sedan', 'Car Mini AC', 'Car Mini Non-AC', 'Riksha', 'Bike', 'Car SUV', 'Van Seven Seats', 'Cary Dibba', 'Toyota Highroof', 'Toyota Saloon Coaster', 'Old Cars', 'Off-Road Dalla (Pickup)', 'Toyota Land Cruiser V8', 'Electric Scooty'];
 let dailyFeeSettingsState = {};
 
 function dailyFeeForVehicle(vehicleType) {
@@ -4244,8 +4268,9 @@ async function savePaymentSettings() {
 }
 
 // ── Daily Fare Settings ───────────────────────────────────────────────────────
-const FARE_CATEGORIES = ['Car Sedan', 'Car Mini AC', 'Car Mini Non-AC', 'Riksha', 'Bike', 'Car SUV', 'Van Seven Seats', 'Cary Dibba', 'Toyota Highroof', 'Toyota Saloon Coaster'];
+const FARE_CATEGORIES = ['Car Sedan', 'Car Mini AC', 'Car Mini Non-AC', 'Riksha', 'Bike', 'Car SUV', 'Van Seven Seats', 'Cary Dibba', 'Toyota Highroof', 'Toyota Saloon Coaster', 'Old Cars', 'Off-Road Dalla (Pickup)', 'Toyota Land Cruiser V8', 'Electric Scooty'];
 let fareSettingsState = {};
+let vehicleSettingsState = {};
 
 function fareCategoryCard(category, config = {}) {
   const slabs = Array.isArray(config.distanceSlabs) ? config.distanceSlabs : [];
@@ -4255,8 +4280,12 @@ function fareCategoryCard(category, config = {}) {
       <strong style="color:#e2e8f0">${category}</strong>
       <span style="font-size:.7rem;color:#64748b">All values are required before this category can be booked.</span>
     </div>
-    <div class="field-row"><div class="field-item" style="max-width:280px"><div class="field-label">Base Fare (Flat PKR)</div>
-      <input class="modal-input fare-base" type="number" min="0" step="0.01" placeholder="Enter starting fare" value="${config.baseFare ?? ''}"></div></div>
+     <div class="field-row">
+       <div class="field-item" style="max-width:280px"><div class="field-label">Base Fare (Flat PKR)</div>
+         <input class="modal-input fare-base" type="number" min="0" step="0.01" placeholder="Enter starting fare" value="${config.baseFare ?? ''}"></div>
+       <div class="field-item" style="max-width:280px"><div class="field-label">Per-Minute Rate (PKR /min)</div>
+         <input class="modal-input fare-minute" type="number" min="0" step="0.01" placeholder="0 = no time charge" value="${config.perMinuteRate ?? 0}"></div>
+     </div>
     <div style="font-size:.78rem;font-weight:700;color:#cbd5e1;margin:.8rem 0 .45rem">Distance Slabs</div>
     <div style="font-size:.69rem;color:#64748b;margin-bottom:.45rem">Set continuous ranges. The final slab must have a blank “To km” to cover all longer trips.</div>
     <div class="fare-slabs">${slabs.map(s => fareSlabRow(s)).join('')}</div>
@@ -4311,6 +4340,7 @@ function readFareSettings() {
 function readFareCategory(card) {
   return {
     baseFare: card.querySelector('.fare-base').value,
+    perMinuteRate: card.querySelector('.fare-minute').value,
     distanceSlabs: [...card.querySelectorAll('.fare-slab')].map(row => ({
       minKm: row.querySelector('.slab-min').value,
       maxKm: row.querySelector('.slab-max').value,
@@ -4331,11 +4361,53 @@ function renderFareSettings(settings = {}) {
     .map(category => fareCategoryCard(category, settings[category] || {})).join('');
 }
 
+function vehicleSettingsRow(category, config = {}) {
+  const active = config.active !== false;
+  const safeId = `vehicle-active-${FARE_CATEGORIES.indexOf(category)}`;
+  return `<label style="display:flex;align-items:center;justify-content:space-between;gap:.8rem;padding:.62rem .7rem;border:1px solid ${active ? '#243044' : '#4a2525'};border-radius:10px;margin:.4rem 0;background:${active ? '#0b1220' : '#180d12'};cursor:pointer">
+    <span style="min-width:0"><strong style="display:block;color:${active ? '#e2e8f0' : '#fca5a5'};font-size:.78rem">${escHtml(category)}</strong><span style="display:block;color:#64748b;font-size:.68rem;margin-top:.16rem">${active ? 'Visible to Customers · Drivers can receive requests' : 'Hidden from Customers · Matching disabled'}</span></span>
+    <span style="display:flex;align-items:center;gap:.45rem;flex-shrink:0;color:${active ? '#22c55e' : '#f87171'};font-size:.7rem;font-weight:800">
+      <span>${active ? 'Active' : 'Inactive'}</span>
+      <input id="${safeId}" type="checkbox" ${active ? 'checked' : ''} aria-label="${escHtml(category)} active" onchange="toggleVehicleCategory('${escHtml(category)}', this.checked)" style="width:18px;height:18px;accent-color:#22c55e">
+    </span>
+  </label>`;
+}
+
+function renderVehicleSettings(settings = {}) {
+  vehicleSettingsState = settings;
+  const list = document.getElementById('vehicle-settings-list');
+  if (!list) return;
+  list.innerHTML = FARE_CATEGORIES.map(category => vehicleSettingsRow(category, settings[category])).join('');
+}
+
+async function toggleVehicleCategory(category, active) {
+  const feedback = document.getElementById('vehicle-settings-feedback');
+  feedback.textContent = `Saving ${category}…`;
+  feedback.style.color = '#94a3b8';
+  try {
+    const result = await api('/api/admin/vehicle-settings', 'PATCH', { category, active });
+    renderVehicleSettings(result.settings);
+    feedback.textContent = `✓ ${category} is now ${active ? 'Active' : 'Inactive'} and Customer availability was updated.`;
+    feedback.style.color = '#22c55e';
+    showToast(`${category} ${active ? 'activated' : 'deactivated'} ✓`, 'success');
+  } catch (error) {
+    renderVehicleSettings(vehicleSettingsState);
+    feedback.textContent = `✕ ${error.message || 'Could not update vehicle status'}`;
+    feedback.style.color = '#ef4444';
+    showToast(error.message || 'Could not update vehicle status', 'error');
+  }
+}
+
 async function loadFareSettings() {
   const feedback = document.getElementById('fare-settings-feedback');
   feedback.textContent = 'Loading…'; feedback.style.color = '#64748b';
   try {
-    renderFareSettings(await api('/api/admin/fare-settings'));
+    const [fareSettings, vehicleSettings] = await Promise.all([
+      api('/api/admin/fare-settings'),
+      api('/api/admin/vehicle-settings').catch(() => ({ settings: {} }))
+    ]);
+    renderFareSettings(fareSettings);
+    renderVehicleSettings(vehicleSettings.settings || {});
     feedback.textContent = '';
   } catch (e) {
     feedback.textContent = `⚠ ${e.message}`;
@@ -4387,7 +4459,7 @@ async function saveFareCategory(category) {
   }
 }
 
-const LONG_RANGE_CATEGORIES = ['Car Sedan', 'Car Mini AC', 'Car Mini Non-AC', 'Riksha', 'Bike', 'Car SUV', 'Van Seven Seats', 'Cary Dibba', 'Toyota Highroof', 'Toyota Saloon Coaster'];
+const LONG_RANGE_CATEGORIES = ['Car Sedan', 'Car Mini AC', 'Car Mini Non-AC', 'Riksha', 'Bike', 'Car SUV', 'Van Seven Seats', 'Cary Dibba', 'Toyota Highroof', 'Toyota Saloon Coaster', 'Old Cars', 'Off-Road Dalla (Pickup)', 'Toyota Land Cruiser V8', 'Electric Scooty'];
 function renderLongRangeRates(rates = {}, minimumWalletBalances = {}) {
   document.getElementById('lr-rates').innerHTML = LONG_RANGE_CATEGORIES.map(category =>
     `<div class="field-item" style="min-width:220px"><div class="field-label">${category} (Rs /km)</div><input class="modal-input lr-rate" data-category="${category}" type="number" min=".01" step=".01" value="${rates[category] ?? ''}"><div class="field-label" style="margin-top:.45rem">Minimum Wallet Balance (Rs)</div><input class="modal-input lr-min-wallet" data-category="${category}" type="number" min="0" step="1" value="${minimumWalletBalances[category] ?? 500}"></div>`

@@ -743,6 +743,18 @@ body{font-family:'Segoe UI',sans-serif;background:#0a0a0f;color:#fff;height:100d
         <button class="vehicle-btn" data-type="Toyota Saloon Coaster" onclick="selectVehicle(this)">
           <div class="v-icon">🚌</div><div class="v-name">Toyota Saloon Coaster</div><div class="v-fare">Admin-set fare</div>
         </button>
+        <button class="vehicle-btn" data-type="Old Cars" onclick="selectVehicle(this)">
+          <div class="v-icon">🚙</div><div class="v-name">Old Cars</div><div class="v-fare">Admin-set fare</div>
+        </button>
+        <button class="vehicle-btn" data-type="Off-Road Dalla (Pickup)" onclick="selectVehicle(this)">
+          <div class="v-icon">🛻</div><div class="v-name">Off-Road Dalla</div><div class="v-fare">Admin-set fare</div>
+        </button>
+        <button class="vehicle-btn" data-type="Toyota Land Cruiser V8" onclick="selectVehicle(this)">
+          <div class="v-icon">🚘</div><div class="v-name">Land Cruiser V8</div><div class="v-fare">Admin-set fare</div>
+        </button>
+        <button class="vehicle-btn" data-type="Electric Scooty" onclick="selectVehicle(this)">
+          <div class="v-icon">🛵</div><div class="v-name">Electric Scooty</div><div class="v-fare">Admin-set fare</div>
+        </button>
       </div>
 
       <!-- ── Fare Negotiation Card ── -->
@@ -991,6 +1003,7 @@ let activeStops = 1;                        // how many stop rows are visible (1
 let mapMode = 'pickup';
 let selectedVehicle = 'Bike';
 let routeDistanceKm = null;
+let routeDurationMinutes = null;
 let offeredFare = 0;
 let customerFareOffset = 0;
 let activeRide = null;
@@ -1036,6 +1049,7 @@ let currentFareQuote = null;
 let fareQuoteRequest = 0;
 let customerPerKmRates = {};
 let customerLongRangeSettings = null;
+let customerVehicleCategories = [];
 let customerFareDisplaySettings = { showVehicleRates: true, showFareBreakdown: true };
 let liveTripLine = null;
 let lastDriverLocation = null;
@@ -1796,6 +1810,48 @@ function renderCustomerPerKmRates(rates = {}) {
   });
 }
 
+const CUSTOMER_VEHICLE_ICONS = {
+  Bike: '🛵',
+  Riksha: '🛺',
+  'Car Mini AC': '🚙',
+  'Car Mini Non-AC': '🚙',
+  'Car Sedan': '🚗',
+  'Car SUV': '🚘',
+  'Van Seven Seats': '🚐',
+  'Cary Dibba': '🛻',
+  'Toyota Highroof': '🚐',
+  'Toyota Saloon Coaster': '🚌',
+  'Old Cars': '🚙',
+  'Off-Road Dalla (Pickup)': '🛻',
+  'Toyota Land Cruiser V8': '🚘',
+  'Electric Scooty': '🛵'
+};
+
+function renderCustomerVehicleCategories(categories = []) {
+  const grid = document.querySelector('.vehicle-grid');
+  if (!grid || !Array.isArray(categories) || !categories.length) return;
+  customerVehicleCategories = categories;
+  const activeCategories = categories.filter(item => item?.active !== false);
+  grid.innerHTML = activeCategories.map(item => {
+    const category = String(item.category || '');
+    const icon = CUSTOMER_VEHICLE_ICONS[category] || '🚗';
+    const label = category === 'Off-Road Dalla (Pickup)' ? 'Off-Road Dalla' :
+      category === 'Toyota Land Cruiser V8' ? 'Land Cruiser V8' : category;
+    return `<button class="vehicle-btn${category === selectedVehicle ? ' active' : ''}" data-type="${escapeLocationText(category)}" onclick="selectVehicle(this)">
+      <div class="v-icon">${icon}</div><div class="v-name">${escapeLocationText(label)}</div><div class="v-fare">Admin-set fare</div>
+    </button>`;
+  }).join('');
+  if (!activeCategories.some(item => item.category === selectedVehicle)) {
+    selectedVehicle = activeCategories[0]?.category || '';
+    const selected = grid.querySelector('.vehicle-btn');
+    selected?.classList.add('active');
+    currentFareQuote = null;
+    offeredFare = 0;
+    customerFareOffset = 0;
+    if (pickup && dropoffs[0]) updateFare();
+  }
+}
+
 function renderCustomerFareDisplaySettings(settings = {}) {
   customerFareDisplaySettings = {
     showVehicleRates: settings.showVehicleRates !== false,
@@ -1815,6 +1871,7 @@ async function loadCustomerPerKmRates() {
     const config = await apiCall('/api/customer/fare-config');
     customerLongRangeSettings = config.longRangeSettings || null;
     renderCustomerFareDisplaySettings(config.displaySettings || {});
+    renderCustomerVehicleCategories(config.vehicleCategories || []);
     renderCustomerPerKmRates(config.perKmRates || {});
   } catch {
     // Quote endpoint still presents the explicit server-side configuration error.
@@ -2929,6 +2986,7 @@ function clearLocation(type) {
   // Clear route and reset fare whenever any location is removed
   removeCustomerRouteLine();
   routeDistanceKm = null;
+  routeDurationMinutes = null;
   document.getElementById('fare-row').style.display  = 'none';
   document.getElementById('book-btn').style.display  = 'none';
   document.getElementById('dist-badge').style.display = 'none';
@@ -2953,12 +3011,17 @@ async function drawRoute() {
     });
     routeLine = { coords: route.coords };
     fitCustomerMapToCoords(route.coords, 50);
+    routeDurationMinutes = Number(route.durationSeconds) > 0
+      ? route.durationSeconds / 60
+      : Math.max(1, route.distanceMeters / 1000 / 28 * 60);
     return route.distanceMeters / 1000;
   } catch (error) {
     // Never draw an air route when road geometry is unavailable.
     console.warn('Road route unavailable:', error.message);
-    return waypoints.slice(0, -1).reduce((sum, point, index) =>
+    const fallbackDistance = waypoints.slice(0, -1).reduce((sum, point, index) =>
       sum + haversine(point.lat, point.lng, waypoints[index + 1].lat, waypoints[index + 1].lng), 0);
+    routeDurationMinutes = Math.max(1, fallbackDistance / 28 * 60);
+    return fallbackDistance;
   }
 }
 
@@ -3000,7 +3063,8 @@ async function updateFare() {
   try {
     const quote = await apiCall('/api/fare/calculate', 'POST', {
       vehicleType: selectedVehicle,
-      distanceKm: +dist.toFixed(2)
+      distanceKm: +dist.toFixed(2),
+      durationMinutes: Number(routeDurationMinutes || 0).toFixed(2)
     });
     if (requestId !== fareQuoteRequest) return;
     currentFareQuote = quote;
@@ -3014,6 +3078,9 @@ async function updateFare() {
     document.getElementById('fare-meta').textContent = quote.isLongRange
       ? `🛣️ Long Range Ride · ${quote.distanceKm} km × Rs ${quote.longRangeRatePerKm.toLocaleString()}/km`
       : `Base Rs ${quote.baseFare.toLocaleString()} + ${quote.distanceKm} km × Rs ${quote.perKmRate.toLocaleString()}/km${adjustment}`;
+    if (Number(quote.timeFare) > 0) {
+      document.getElementById('fare-meta').textContent += ` + ${quote.durationMinutes} min × Rs ${quote.perMinuteRate.toLocaleString()}/min`;
+    }
     document.getElementById('fare-suggested-val').textContent = `Rs ${quote.totalFare.toLocaleString()}`;
     document.getElementById('dist-km-val').textContent = dist.toFixed(1);
     document.getElementById('dist-badge').style.display = 'inline-flex';
@@ -3167,6 +3234,7 @@ function removeStop(idx) {
     drawRoute().then(dist => { routeDistanceKm = dist; updateFare(); });
   } else {
     routeDistanceKm = null;
+    routeDurationMinutes = null;
     removeCustomerRouteLine();
     document.getElementById('fare-row').style.display = 'none';
     document.getElementById('book-btn').style.display = 'none';
@@ -3195,6 +3263,7 @@ async function bookRide() {
       dropoffLocation:  { ...activeDropoffsList[0] },             // primary stop
       dropoffLocations: activeDropoffsList.map(d => ({ ...d })), // full list
       distance:         +dist.toFixed(2),
+      durationMinutes:  Number(routeDurationMinutes || 0).toFixed(2),
       vehicleType:      selectedVehicle,
       paymentMethod:    'cash',
       customerFareOffset,
@@ -3457,7 +3526,7 @@ async function cancelRide() {
 }
 
 function endRide() {
-  activeRide = null; routeDistanceKm = null; offeredFare = 0; customerFareOffset = 0;
+  activeRide = null; routeDistanceKm = null; routeDurationMinutes = null; offeredFare = 0; customerFareOffset = 0;
   activeLiveFare = 0; driverOffers = []; activeDriverInfo = null; pendingVerificationPin = null;
   clearLiveTripTracking();
   // Hide PIN card and reset it for the next ride
@@ -3557,6 +3626,14 @@ function connectSocket() {
     renderCustomerFareDisplaySettings(settings || {});
     renderCustomerPerKmRates(customerPerKmRates);
     showToast('Admin updated Customer fare display settings.', 'info');
+  });
+  socket.on('vehicle-settings:updated', ({ settings }) => {
+    const categories = Object.entries(settings || {}).map(([category, config]) => ({
+      category,
+      active: config?.active !== false
+    }));
+    if (categories.length) renderCustomerVehicleCategories(categories);
+    showToast('Admin updated vehicle availability.', 'info');
   });
   socket.on('terms:updated', ({ terms }) => {
     if (typeof terms?.customer === 'string') {

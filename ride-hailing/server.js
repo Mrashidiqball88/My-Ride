@@ -467,7 +467,11 @@ const FARE_VEHICLE_CATEGORIES = [
   'Van Seven Seats',
   'Cary Dibba',
   'Toyota Highroof',
-  'Toyota Saloon Coaster'
+  'Toyota Saloon Coaster',
+  'Old Cars',
+  'Off-Road Dalla (Pickup)',
+  'Toyota Land Cruiser V8',
+  'Electric Scooty'
 ];
 const FARE_VEHICLE_ALIASES = {
   Sedan: 'Car Sedan',
@@ -728,8 +732,37 @@ const DEFAULT_PER_KM_RATES = {
   'Car SUV': 100,
   'Van Seven Seats': 100,
   'Toyota Highroof': 120,
-  'Toyota Saloon Coaster': 140
+  'Toyota Saloon Coaster': 140,
+  'Old Cars': 70,
+  'Off-Road Dalla (Pickup)': 110,
+  'Toyota Land Cruiser V8': 180,
+  'Electric Scooty': 25
 };
+
+const VEHICLE_CATEGORY_SETTINGS_KEY = 'vehicle_category_settings';
+const DEFAULT_VEHICLE_CATEGORY_SETTINGS = Object.freeze(
+  Object.fromEntries(FARE_VEHICLE_CATEGORIES.map(category => [category, { active: true }]))
+);
+
+function normalizeVehicleCategorySettings(value = {}) {
+  return Object.fromEntries(FARE_VEHICLE_CATEGORIES.map(category => {
+    const source = value?.[category];
+    const active = typeof source === 'boolean' ? source : source?.active !== false;
+    return [category, { active }];
+  }));
+}
+
+function isVehicleCategoryActive(settings, vehicleType) {
+  const category = normalizeFareVehicle(vehicleType);
+  return FARE_VEHICLE_CATEGORIES.includes(category)
+    && normalizeVehicleCategorySettings(settings)[category].active;
+}
+
+async function getVehicleCategorySettings() {
+  if (!dbConnected) return normalizeVehicleCategorySettings(DEFAULT_VEHICLE_CATEGORY_SETTINGS);
+  const doc = await Settings.findOne({ key: VEHICLE_CATEGORY_SETTINGS_KEY }).lean();
+  return normalizeVehicleCategorySettings(doc?.value);
+}
 
 function normalizePerKmRates(value = {}) {
   return Object.fromEntries(FARE_VEHICLE_CATEGORIES.map(category => {
@@ -770,7 +803,7 @@ function normalizeFareSettings(input) {
   if (!input || typeof input !== 'object') return output;
   for (const category of FARE_VEHICLE_CATEGORIES) {
     const source = input[category] || legacyCarMiniSetting(input, category) || {};
-    output[category] = {
+    const normalized = {
       baseFare: Number.isFinite(Number(source.baseFare)) && Number(source.baseFare) >= 0
         ? Number(source.baseFare) : null,
       distanceSlabs: Array.isArray(source.distanceSlabs) ? source.distanceSlabs.map(slab => ({
@@ -799,6 +832,11 @@ function normalizeFareSettings(input) {
         (rule.adjustmentType === 'up' || rule.percentage <= 100)
       ) : []
     };
+    if (source.perMinuteRate !== undefined) {
+      normalized.perMinuteRate = Number.isFinite(Number(source.perMinuteRate)) && Number(source.perMinuteRate) >= 0
+        ? Number(source.perMinuteRate) : 0;
+    }
+    output[category] = normalized;
   }
   return output;
 }
@@ -934,23 +972,29 @@ function getLongRangeMinimumWalletBalance(settings, vehicleType) {
   return Number(settings?.minimumWalletBalances?.[category] ?? DEFAULT_LONG_RANGE_MINIMUM_WALLET_BALANCES[category] ?? 0);
 }
 
-function calculateRideFare(fareSettings, longRangeSettings, vehicleType, distanceKm, at, perKmRates) {
+function calculateRideFare(fareSettings, longRangeSettings, vehicleType, distanceKm, at, perKmRates, durationMinutes = 0) {
   if (!isLongRangeDistance(distanceKm, longRangeSettings)) {
-    return calculateFareFromSettings(fareSettings, vehicleType, distanceKm, at, perKmRates);
+    return calculateFareFromSettings(fareSettings, vehicleType, distanceKm, at, perKmRates, durationMinutes);
   }
   const category = normalizeFareVehicle(vehicleType);
   const distance = Number(distanceKm);
+  const duration = Number(durationMinutes);
   const rate = Number(longRangeSettings.perKmRates[category]);
   if (!Number.isFinite(distance) || distance < 0 || !Number.isFinite(rate) || rate <= 0) {
     return { error: `Long Range fare settings are not configured for ${category}` };
   }
-  const totalFare = Math.round(distance * rate);
+  const perMinuteRate = Number(fareSettings?.[category]?.perMinuteRate || 0);
+  const timeFare = Number.isFinite(duration) && duration > 0 ? duration * perMinuteRate : 0;
+  const totalFare = Math.round(distance * rate + timeFare);
   return {
     vehicleType: category,
     distanceKm: Number(distance.toFixed(2)),
     isLongRange: true,
     longRangeRatePerKm: rate,
-    subtotal: totalFare,
+    durationMinutes: Number.isFinite(duration) && duration > 0 ? Number(duration.toFixed(2)) : 0,
+    perMinuteRate,
+    timeFare: Number(timeFare.toFixed(2)),
+    subtotal: distance * rate + timeFare,
     totalFare,
     calculatedAt: at
   };
@@ -964,7 +1008,7 @@ function timeMatchesRule(rule, date = new Date()) {
   return start <= end ? current >= start && current <= end : current >= start || current <= end;
 }
 
-function calculateFareFromSettings(settings, vehicleType, distanceKm, at = new Date(), perKmRates = DEFAULT_PER_KM_RATES) {
+function calculateFareFromSettings(settings, vehicleType, distanceKm, at = new Date(), perKmRates = DEFAULT_PER_KM_RATES, durationMinutes = 0) {
   const category = normalizeFareVehicle(vehicleType);
   const rule = settings[category];
   const distance = Number(distanceKm);
@@ -994,7 +1038,11 @@ function calculateFareFromSettings(settings, vehicleType, distanceKm, at = new D
     return { error: `/km rate is not configured for ${category}` };
   }
   const distanceFare = distance * perKmRate;
-  const subtotal = rule.baseFare + distanceFare;
+  const duration = Number(durationMinutes);
+  const normalizedDuration = Number.isFinite(duration) && duration > 0 ? duration : 0;
+  const perMinuteRate = Number(rule.perMinuteRate || 0);
+  const timeFare = normalizedDuration * perMinuteRate;
+  const subtotal = rule.baseFare + distanceFare + timeFare;
   const total = Math.max(0, Math.round(subtotal * (1 + adjustmentPercent / 100)));
   return {
     vehicleType: category,
@@ -1002,6 +1050,9 @@ function calculateFareFromSettings(settings, vehicleType, distanceKm, at = new D
     baseFare: rule.baseFare,
     perKmRate,
     distanceFare: Number(distanceFare.toFixed(2)),
+    durationMinutes: Number(normalizedDuration.toFixed(2)),
+    perMinuteRate,
+    timeFare: Number(timeFare.toFixed(2)),
     slab: { ...slab },
     activeRules,
     adjustmentPercent,
@@ -1016,7 +1067,15 @@ async function refreshPendingRideFares(settings, perKmRates = null) {
   const longRangeSettings = await getLongRangeSettings();
   const pendingRides = await Ride.find({ status: 'requested' });
   for (const ride of pendingRides) {
-    const fareQuote = calculateRideFare(settings, longRangeSettings, ride.vehicleType, ride.distance, new Date(), currentPerKmRates);
+    const fareQuote = calculateRideFare(
+      settings,
+      longRangeSettings,
+      ride.vehicleType,
+      ride.distance,
+      new Date(),
+      currentPerKmRates,
+      ride.durationMinutes
+    );
     if (fareQuote.error || ride.fare === fareQuote.totalFare) continue;
     ride.fare = fareQuote.totalFare;
     ride.fareQuote = fareQuote;
@@ -1162,6 +1221,9 @@ const rideSchema = new mongoose.Schema({
     vehicleType: String,
     distanceKm: Number,
     baseFare: Number,
+    durationMinutes: Number,
+    perMinuteRate: Number,
+    timeFare: Number,
     slab: { minKm: Number, maxKm: Number, rate: Number },
     activeRules: [{ start: String, end: String, adjustmentPercent: Number }],
     adjustmentPercent: Number,
@@ -1173,6 +1235,7 @@ const rideSchema = new mongoose.Schema({
   longRangeCommissionAmount: { type: Number, default: 0 },
   longRangeCommissionChargedAt: { type: Date, default: null },
   distance:    { type: Number, default: 0 },
+  durationMinutes: { type: Number, default: 0 },
   status: {
     type: String,
     enum: ['requested', 'accepted', 'arrived', 'in-progress', 'completed', 'cancelled'],
@@ -2004,6 +2067,7 @@ async function findRideBroadcastDrivers(pickupLocation, vehicleType, settings = 
   const rideSettings = settings || await getRideBroadcastSettings();
   const radiusKm = rideSettings.maximumRideBroadcastRadiusKm;
   if (!hasValidCoordinates(pickupLocation)) return { drivers: [], radiusKm };
+  if (!isVehicleCategoryActive(await getVehicleCategorySettings(), vehicleType)) return { drivers: [], radiusKm };
 
   const candidates = await User.find({
     role: 'driver',
@@ -2041,6 +2105,7 @@ async function findRideBroadcastDrivers(pickupLocation, vehicleType, settings = 
 async function findLongRangeBroadcastDrivers(pickupLocation, vehicleType, longRangeSettings) {
   const radiusKm = longRangeSettings.broadcastRadiusKm;
   if (!hasValidCoordinates(pickupLocation)) return { drivers: [], radiusKm };
+  if (!isVehicleCategoryActive(await getVehicleCategorySettings(), vehicleType)) return { drivers: [], radiusKm };
   const candidates = await User.find({
     role: 'driver', isOnline: true, longRangeEnabled: true, accountStatus: 'active',
     ridePreference: { $ne: 'Short Range Only' },
@@ -2114,7 +2179,7 @@ function driverRidePayload(ride) {
     dropoffLocations: ride.dropoffLocations,
     fare: ride.fare,
     distance: ride.distance,
-    duration: ride.duration,
+    duration: ride.duration || (ride.durationMinutes ? ride.durationMinutes * 60 : 0),
     paymentMethod: ride.paymentMethod,
     vehicleType: normalizeFareVehicle(ride.vehicleType),
     isLongRange: !!ride.isLongRange,
@@ -2126,6 +2191,7 @@ function driverRidePayload(ride) {
 
 async function getAvailableRidesForDriver(driver) {
   if (!driver || driver.accountStatus !== 'active' || !driver.isOnline) return [];
+  if (!isVehicleCategoryActive(await getVehicleCategorySettings(), driver.vehicleType)) return [];
   const hasFreshHeartbeat = driver.lastOnlineHeartbeat &&
     new Date(driver.lastOnlineHeartbeat).getTime() >= Date.now() - DRIVER_HEARTBEAT_MAX_AGE_MS;
   if (!hasFreshHeartbeat || !hasValidCoordinates(driver.currentLocation)) return [];
@@ -3311,18 +3377,24 @@ app.get('/api/auth/me', authMiddleware, async (req, res) => {
 // calculated from the current Admin Settings document.
 app.post('/api/fare/calculate', async (req, res) => {
   try {
-    const [settingsDoc, ratesDoc, longRangeDoc] = await Promise.all([
+    const [settingsDoc, ratesDoc, longRangeDoc, vehicleCategoryDoc] = await Promise.all([
       Settings.findOne({ key: 'daily_fare_settings' }).lean(),
       Settings.findOne({ key: 'per_km_rates' }).lean(),
-      Settings.findOne({ key: LONG_RANGE_SETTINGS_KEY }).lean()
+      Settings.findOne({ key: LONG_RANGE_SETTINGS_KEY }).lean(),
+      Settings.findOne({ key: VEHICLE_CATEGORY_SETTINGS_KEY }).lean()
     ]);
+    const vehicleType = normalizeFareVehicle(req.body?.vehicleType);
+    if (!isVehicleCategoryActive(vehicleCategoryDoc?.value, vehicleType)) {
+      return res.status(422).json({ error: 'This vehicle category is currently unavailable' });
+    }
     const result = calculateRideFare(
       normalizeFareSettings(settingsDoc?.value),
       normalizeLongRangeSettings(longRangeDoc?.value),
-      req.body?.vehicleType,
+      vehicleType,
       req.body?.distanceKm,
       new Date(),
-      normalizePerKmRates(ratesDoc?.value)
+      normalizePerKmRates(ratesDoc?.value),
+      req.body?.durationMinutes
     );
     if (result.error) return res.status(422).json({ error: result.error });
     res.json(result);
@@ -3333,6 +3405,27 @@ app.get('/api/fare-settings', async (req, res) => {
   try {
     const settingsDoc = await Settings.findOne({ key: 'daily_fare_settings' }).lean();
     res.json(normalizeFareSettings(settingsDoc?.value));
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.get('/api/customer/vehicle-config', async (req, res) => {
+  try {
+    const [vehicleCategorySettings, fareDoc, ratesDoc] = await Promise.all([
+      getVehicleCategorySettings(),
+      Settings.findOne({ key: 'daily_fare_settings' }).lean(),
+      Settings.findOne({ key: 'per_km_rates' }).lean()
+    ]);
+    const fareSettings = normalizeFareSettings(fareDoc?.value);
+    const perKmRates = normalizePerKmRates(ratesDoc?.value);
+    res.json({
+      categories: FARE_VEHICLE_CATEGORIES.map(category => ({
+        category,
+        active: vehicleCategorySettings[category].active,
+        baseFare: fareSettings[category].baseFare,
+        perKmRate: perKmRates[category],
+        perMinuteRate: fareSettings[category].perMinuteRate
+      }))
+    });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
@@ -3354,21 +3447,27 @@ app.post('/api/rides', authMiddleware, customerOnly, customerCanBook, async (req
     if (!hasValidCoordinates(pickupLocation) || stops.some(stop => !hasValidCoordinates(stop))) {
       return res.status(422).json({ error: 'Invalid coordinates', code: 'INVALID_COORDINATES' });
     }
-    const [settingsDoc, ratesDoc, longRangeDoc, rideBroadcastDoc] = await Promise.all([
+    const [settingsDoc, ratesDoc, longRangeDoc, rideBroadcastDoc, vehicleCategoryDoc] = await Promise.all([
       Settings.findOne({ key: 'daily_fare_settings' }).lean(),
       Settings.findOne({ key: 'per_km_rates' }).lean(),
       Settings.findOne({ key: LONG_RANGE_SETTINGS_KEY }).lean(),
-      Settings.findOne({ key: 'ride_broadcast_settings' }).lean()
+      Settings.findOne({ key: 'ride_broadcast_settings' }).lean(),
+      Settings.findOne({ key: VEHICLE_CATEGORY_SETTINGS_KEY }).lean()
     ]);
+    const normalizedVehicleType = normalizeFareVehicle(vehicleType);
+    if (!isVehicleCategoryActive(vehicleCategoryDoc?.value, normalizedVehicleType)) {
+      return res.status(422).json({ error: 'This vehicle category is currently unavailable' });
+    }
     const longRangeSettings = normalizeLongRangeSettings(longRangeDoc?.value);
     const rideBroadcastSettings = normalizeRideBroadcastSettings(rideBroadcastDoc?.value);
     const fareQuote = calculateRideFare(
       normalizeFareSettings(settingsDoc?.value),
       longRangeSettings,
-      vehicleType,
+      normalizedVehicleType,
       distance,
       new Date(),
-      normalizePerKmRates(ratesDoc?.value)
+      normalizePerKmRates(ratesDoc?.value),
+      req.body?.durationMinutes
     );
     if (fareQuote.error) return res.status(422).json({ error: fareQuote.error });
     const offerResult = resolveCustomerFareOffer(customerOffer, fareQuote.totalFare, customerFareOffset);
@@ -3387,6 +3486,7 @@ app.post('/api/rides', authMiddleware, customerOnly, customerCanBook, async (req
       fareQuote,
       isLongRange:       !!fareQuote.isLongRange,
       distance:      fareQuote.distanceKm,
+      durationMinutes: fareQuote.durationMinutes || 0,
       vehicleType:   fareQuote.vehicleType,
       notes:         notes         || '',
       paymentMethod: paymentMethod || 'cash',
@@ -3513,6 +3613,9 @@ app.post('/api/driver/availability', authMiddleware, async (req, res) => {
       return res.status(403).json({ error: 'Your driver account is not approved for online availability' });
     }
     if (isOnline) {
+      if (!isVehicleCategoryActive(await getVehicleCategorySettings(), driver.vehicleType)) {
+        return res.status(403).json({ error: 'This vehicle category is currently inactive. Contact Admin before going online.' });
+      }
       const feeResult = await chargeDailyFeeForOnlineDriver(req.user.id, driver);
       if (!feeResult.allowed) {
         return res.status(403).json({
@@ -6431,6 +6534,37 @@ app.get('/api/admin/fare-settings', adminJwt, requirePerm('manageFareSettings'),
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
+app.get('/api/admin/vehicle-settings', adminJwt, requirePerm('manageFareSettings'), async (req, res) => {
+  try {
+    res.json({ settings: await getVehicleCategorySettings() });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.patch('/api/admin/vehicle-settings', adminJwt, requirePerm('manageFareSettings'), async (req, res) => {
+  try {
+    const category = String(req.body?.category || '').trim();
+    if (!FARE_VEHICLE_CATEGORIES.includes(category)) {
+      return res.status(422).json({ error: 'A valid vehicle category is required' });
+    }
+    if (typeof req.body?.active !== 'boolean') {
+      return res.status(422).json({ error: 'Active status must be true or false' });
+    }
+    const existing = await getVehicleCategorySettings();
+    const settings = normalizeVehicleCategorySettings({
+      ...existing,
+      [category]: { active: req.body.active }
+    });
+    await Settings.findOneAndUpdate(
+      { key: VEHICLE_CATEGORY_SETTINGS_KEY },
+      { key: VEHICLE_CATEGORY_SETTINGS_KEY, value: settings },
+      { upsert: true, new: true, setDefaultsOnInsert: true }
+    );
+    const payload = { settings, updatedAt: new Date().toISOString(), category };
+    io.emit('vehicle-settings:updated', payload);
+    res.json({ success: true, ...payload });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
 app.get('/api/per-km-rates', async (req, res) => {
   try {
     const doc = await Settings.findOne({ key: 'per_km_rates' }).lean();
@@ -6443,15 +6577,20 @@ app.get('/api/per-km-rates', async (req, res) => {
 // and older clients, while giving the Customer app one coherent payload.
 app.get('/api/customer/fare-config', async (req, res) => {
   try {
-    const [ratesDoc, longRangeDoc, displayDoc] = await Promise.all([
+    const [ratesDoc, longRangeDoc, displayDoc, vehicleCategoryDoc] = await Promise.all([
       Settings.findOne({ key: 'per_km_rates' }).lean(),
       Settings.findOne({ key: LONG_RANGE_SETTINGS_KEY }).lean(),
-      Settings.findOne({ key: CUSTOMER_FARE_DISPLAY_SETTINGS_KEY }).lean()
+      Settings.findOne({ key: CUSTOMER_FARE_DISPLAY_SETTINGS_KEY }).lean(),
+      Settings.findOne({ key: VEHICLE_CATEGORY_SETTINGS_KEY }).lean()
     ]);
     res.json({
       perKmRates: normalizePerKmRates(ratesDoc?.value),
       longRangeSettings: normalizeLongRangeSettings(longRangeDoc?.value),
-      displaySettings: normalizeCustomerFareDisplaySettings(displayDoc?.value)
+      displaySettings: normalizeCustomerFareDisplaySettings(displayDoc?.value),
+      vehicleCategories: FARE_VEHICLE_CATEGORIES.map(category => ({
+        category,
+        active: normalizeVehicleCategorySettings(vehicleCategoryDoc?.value)[category].active
+      }))
     });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
@@ -6956,6 +7095,11 @@ io.on('connection', async (socket) => {
         socket.emit('account:suspended', { reason: 'Your account has been suspended. Please contact Admin.' });
         return;
       }
+      if (!isVehicleCategoryActive(await getVehicleCategorySettings(), driver?.vehicleType)) {
+        await User.updateOne({ _id: id }, { isOnline: false }).catch(() => {});
+        socket.emit('account:suspended', { reason: 'This vehicle category is currently inactive. Contact Admin before going online.' });
+        return;
+      }
       const feeResult = await chargeDailyFeeForOnlineDriver(id, driver);
       if (!feeResult.allowed) {
         await User.updateOne({ _id: id }, { isOnline: false }).catch(() => {});
@@ -7205,6 +7349,7 @@ const DEMO_ACCOUNTS = Object.freeze({
 const PREVIEW_DEMO_FARE_SETTINGS = Object.freeze(
   Object.fromEntries(FARE_VEHICLE_CATEGORIES.map(category => [category, {
     baseFare: 100,
+    perMinuteRate: 2,
     distanceSlabs: [{ minKm: 0, maxKm: null, rate: DEFAULT_PER_KM_RATES[category] }],
     peakRules: []
   }]))
@@ -7234,6 +7379,11 @@ async function seedDemoAccounts() {
   await Settings.findOneAndUpdate(
     { key: 'daily_fare_settings' },
     { $setOnInsert: { key: 'daily_fare_settings', value: PREVIEW_DEMO_FARE_SETTINGS } },
+    { upsert: true, new: true, setDefaultsOnInsert: true }
+  );
+  await Settings.findOneAndUpdate(
+    { key: VEHICLE_CATEGORY_SETTINGS_KEY },
+    { $setOnInsert: { key: VEHICLE_CATEGORY_SETTINGS_KEY, value: DEFAULT_VEHICLE_CATEGORY_SETTINGS } },
     { upsert: true, new: true, setDefaultsOnInsert: true }
   );
   const customerPassword = await bcrypt.hash(DEMO_ACCOUNTS.customer.password, 12);
@@ -7511,9 +7661,13 @@ module.exports = {
   io,
   FARE_VEHICLE_CATEGORIES,
   DEFAULT_PER_KM_RATES,
+  DEFAULT_VEHICLE_CATEGORY_SETTINGS,
   DEFAULT_RIDE_BROADCAST_RADIUS_KM,
   DEFAULT_RIDE_BROADCAST_REQUEST_DURATION_SECONDS,
   normalizeFareSettings,
+  normalizeVehicleCategorySettings,
+  isVehicleCategoryActive,
+  getVehicleCategorySettings,
   validateFareSettings,
   calculateFareFromSettings,
   normalizeCustomerFareDisplaySettings,

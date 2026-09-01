@@ -1,0 +1,23 @@
+​Goal: Update the ride-hailing application (Admin Panel and Customer App) to add four new vehicle categories and implement a dynamic Vehicle Settings management box in the Admin Panel, while strictly preserving all existing functionality.
+​Part 1: New Vehicle Categories Addition
+​Add four new vehicle categories to the backend database schema and admin system:
+​Old Cars
+​Off-Road Dalla (Pickup)
+​Toyota Land Cruiser V8
+​Electric Scooty
+​Ensure each new category supports individual fare rules (base fare, per-km rate, per-minute rate) configurable through the Admin Dashboard.
+​Part 2: Admin Panel - "Vehicle Settings" Management Box
+​Create a dedicated "Vehicle Settings" card or box inside the Admin Panel's settings section.
+​Display a complete list of all vehicle categories (existing ones plus the 4 new ones) inside this Vehicle Settings box.
+​Provide an Active/Inactive Toggle Switch (On/Off) for each individual category row.
+​Visibility Control Logic: The status set in this Admin Panel box must directly control the visibility of categories in the Customer App in real-time:
+​When a category is toggled ON, it must be visible as a selectable option in the customer app.
+​When a category is toggled OFF, it must immediately stop showing up in the customer app's vehicle selection grid.
+​Part 3: Customer App UI/UX Integration
+​Update the customer app's booking screen vehicle selection grid to accommodate the expanded list of categories.
+​Ensure the customer app dynamically fetches and renders only those categories that are currently turned ON in the Admin Panel's Vehicle Settings.
+​Maintain the clean grid layout, proper icons, text labels, and accurate real-time fare calculation ("Calculated Total") for whichever category the customer selects.
+​CRITICAL WARNING (Strict Instruction):
+​Do NOT break, alter, or disrupt any existing code, APIs, database structures, or UI components that are already working.
+​All previous features, vehicle categories, and functions must remain 100% intact, stable, and fully operational.
+​This is a strict requirement: adding these new features must not cause any regression or damage to the current working system.

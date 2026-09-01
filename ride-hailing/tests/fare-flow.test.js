@@ -10,7 +10,8 @@ const {
   DEFAULT_RIDE_BROADCAST_RADIUS_KM, DEFAULT_RIDE_BROADCAST_REQUEST_DURATION_SECONDS, normalizeRideBroadcastSettings,
   validateRideBroadcastSettings, rideOfferIsStillOpenQuery, findRideBroadcastDrivers, findLongRangeBroadcastDrivers, emitRideRequestToDrivers, emitRideLifecycle, chargeLongRangeCommission,
   normalizeLongRangeSettings, validateLongRangeSettings, calculateRideFare
-   , normalizeTerms, normalizeFareVehicle, normalizeFareSettings, storedVehicleTypesForFareCategory
+   , normalizeTerms, normalizeFareVehicle, normalizeFareSettings, storedVehicleTypesForFareCategory,
+  normalizeVehicleCategorySettings, isVehicleCategoryActive
 } = fare;
 
 const JWT_SECRET = 'ride-hailing-secret-fallback';
@@ -299,11 +300,62 @@ test('Toyota Highroof and Toyota Saloon Coaster are canonical categories with in
   assert.equal(coaster.totalFare, 50 * 220);
 });
 
+test('new vehicle categories support independent per-kilometer and per-minute fare components', () => {
+  for (const category of ['Old Cars', 'Off-Road Dalla (Pickup)', 'Toyota Land Cruiser V8', 'Electric Scooty']) {
+    assert.ok(FARE_VEHICLE_CATEGORIES.includes(category));
+    assert.ok(DEFAULT_PER_KM_RATES[category] > 0);
+  }
+  const settings = settingsFor(200, 100);
+  for (const category of FARE_VEHICLE_CATEGORIES) settings[category].perMinuteRate = 3;
+  const quote = calculateRideFare(settings, normalizeLongRangeSettings(), 'Toyota Land Cruiser V8', 12.5, new Date(), DEFAULT_PER_KM_RATES, 20);
+  assert.equal(quote.vehicleType, 'Toyota Land Cruiser V8');
+  assert.equal(quote.distanceFare, 2250);
+  assert.equal(quote.timeFare, 60);
+  assert.equal(quote.totalFare, 2510);
+  assert.equal(quote.durationMinutes, 20);
+});
+
+test('vehicle category availability defaults active and normalizes explicit inactive settings', () => {
+  const settings = normalizeVehicleCategorySettings({
+    'Old Cars': { active: false },
+    'Electric Scooty': false
+  });
+  assert.equal(settings['Toyota Land Cruiser V8'].active, true);
+  assert.equal(settings['Old Cars'].active, false);
+  assert.equal(settings['Electric Scooty'].active, false);
+  assert.equal(isVehicleCategoryActive(settings, 'Old Cars'), false);
+  assert.equal(isVehicleCategoryActive(settings, 'Toyota Land Cruiser V8'), true);
+});
+
+test('inactive vehicle categories are rejected by the public fare quote endpoint', async () => {
+  const settings = settingsFor(200, 100);
+  models.Settings.findOne = ({ key }) => ({
+    lean: async () => ({
+      value: key === 'daily_fare_settings' ? settings :
+        key === 'per_km_rates' ? DEFAULT_PER_KM_RATES :
+          key === 'vehicle_category_settings' ? { 'Old Cars': { active: false } } : null
+    })
+  });
+  const server = app.listen(0);
+  try {
+    const blocked = await request(server, '/api/fare/calculate', {
+      method: 'POST',
+      body: JSON.stringify({ vehicleType: 'Old Cars', distanceKm: 10, durationMinutes: 15 })
+    });
+    assert.equal(blocked.response.status, 422);
+    assert.match(blocked.body.error, /currently unavailable/);
+  } finally {
+    await new Promise(resolve => server.close(resolve));
+  }
+});
+
 test('Customer fare quote uses active Long Range rates without daily fare slabs', async () => {
   const expectedRates = {
     Bike: 25, Riksha: 40, 'Car Mini AC': 90, 'Car Mini Non-AC': 80, 'Car Sedan': 100,
     'Cary Dibba': 90, 'Car SUV': 120, 'Van Seven Seats': 150,
-    'Toyota Highroof': 175, 'Toyota Saloon Coaster': 225
+    'Toyota Highroof': 175, 'Toyota Saloon Coaster': 225,
+    'Old Cars': 160, 'Off-Road Dalla (Pickup)': 210,
+    'Toyota Land Cruiser V8': 320, 'Electric Scooty': 35
   };
   const longRangeSettings = {
     enabled: true,
