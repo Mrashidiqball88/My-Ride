@@ -13,6 +13,7 @@ const originalFetch = global.fetch;
 const httpFetch = global.fetch;
 const originalMapboxAccessToken = process.env.MAPBOX_ACCESS_TOKEN;
 const originalMapboxPublicToken = process.env.MAPBOX_PUBLIC_TOKEN;
+const originalNominatimMinInterval = process.env.NOMINATIM_MIN_INTERVAL_MS;
 
 afterEach(() => {
   global.fetch = originalFetch;
@@ -20,6 +21,8 @@ afterEach(() => {
   else process.env.MAPBOX_ACCESS_TOKEN = originalMapboxAccessToken;
   if (originalMapboxPublicToken === undefined) delete process.env.MAPBOX_PUBLIC_TOKEN;
   else process.env.MAPBOX_PUBLIC_TOKEN = originalMapboxPublicToken;
+  if (originalNominatimMinInterval === undefined) delete process.env.NOMINATIM_MIN_INTERVAL_MS;
+  else process.env.NOMINATIM_MIN_INTERVAL_MS = originalNominatimMinInterval;
 });
 
 async function request(server, path) {
@@ -72,7 +75,9 @@ function assertMapboxQuery(url, query) {
 
 test('Mapbox search maps valid Pakistan features and preserves POI metadata', async () => {
   process.env.MAPBOX_PUBLIC_TOKEN = 'test-mapbox-token';
-  let requested;
+  process.env.NOMINATIM_MIN_INTERVAL_MS = '0';
+  let mapboxRequested;
+  let nominatimRequested;
   const features = [
     mapboxFeature('جناح بین الاقوامی ہوائی اڈہ', 'کراچی', 'poi', 'airport', 24.9058, 67.1614),
     mapboxFeature('Shifa International Hospital', 'Islamabad', 'poi', 'hospital', 33.7069, 73.0498),
@@ -86,8 +91,15 @@ test('Mapbox search maps valid Pakistan features and preserves POI metadata', as
     { type: 'Feature', geometry: { type: 'LineString', coordinates: [] }, context: [] }
   ];
   global.fetch = async (url, options) => {
-    requested = { url: new URL(url), options };
-    return { ok: true, json: async () => ({ type: 'FeatureCollection', features }) };
+    const request = { url: new URL(url), options };
+    if (request.url.origin === 'https://api.mapbox.com') mapboxRequested = request;
+    if (request.url.origin === 'https://nominatim.openstreetmap.org') nominatimRequested = request;
+    return {
+      ok: true,
+      json: async () => request.url.origin === 'https://api.mapbox.com'
+        ? { type: 'FeatureCollection', features }
+        : []
+    };
   };
 
   await withServer(async server => {
@@ -101,18 +113,23 @@ test('Mapbox search maps valid Pakistan features and preserves POI metadata', as
     assert.equal(result.body[0].address.road, 'New Terminal Road');
     assert.equal(result.body[0].display_name, 'جناح بین الاقوامی ہوائی اڈہ, کراچی, Pakistan');
     assert.equal(result.body[1].address.category, 'hospital');
-    assert.equal(requested.options.headers['Accept-Language'], 'en');
-    assert.equal(requested.url.origin, 'https://api.mapbox.com');
-    assert.match(requested.url.pathname, /\/geocoding\/v5\/mapbox\.places\//);
-    assertMapboxQuery(requested.url, query);
+    assert.equal(mapboxRequested.options.headers['Accept-Language'], 'en');
+    assert.equal(mapboxRequested.url.origin, 'https://api.mapbox.com');
+    assert.match(mapboxRequested.url.pathname, /\/geocoding\/v5\/mapbox\.places\//);
+    assertMapboxQuery(mapboxRequested.url, query);
+    assert.equal(nominatimRequested.url.searchParams.get('countrycodes'), 'pk');
+    assert.equal(nominatimRequested.url.searchParams.get('accept-language'), 'ur,en');
+    assert.equal(nominatimRequested.options.headers['User-Agent'], 'MyRide/1.0 (Pakistan ride-hailing location search)');
   });
 });
 
 test('Mapbox preserves mixed-language queries and returns a clear upstream failure', async () => {
   process.env.MAPBOX_PUBLIC_TOKEN = 'test-mapbox-token';
-  let requested;
+  process.env.NOMINATIM_MIN_INTERVAL_MS = '0';
+  let mapboxRequested;
   global.fetch = async (url, options) => {
-    requested = { url: new URL(url), options };
+    const request = { url: new URL(url), options };
+    if (request.url.origin === 'https://api.mapbox.com') mapboxRequested = request;
     return { ok: false, status: 429, json: async () => ({}) };
   };
 
@@ -121,57 +138,126 @@ test('Mapbox preserves mixed-language queries and returns a clear upstream failu
     const result = await request(server, `/api/geocode?q=${encodeURIComponent(query)}`);
     assert.equal(result.response.status, 502);
     assert.equal(result.body.error, 'Internal server error');
-    assertMapboxQuery(requested.url, query);
+    assertMapboxQuery(mapboxRequested.url, query);
   });
 });
 
 test('Mapbox access token takes precedence over the public-token fallback', async () => {
   process.env.MAPBOX_ACCESS_TOKEN = 'access-token';
   process.env.MAPBOX_PUBLIC_TOKEN = 'public-token';
-  let requested;
+  process.env.NOMINATIM_MIN_INTERVAL_MS = '0';
+  let mapboxRequested;
   global.fetch = async url => {
-    requested = new URL(url);
+    const requested = new URL(url);
+    if (requested.origin === 'https://api.mapbox.com') mapboxRequested = requested;
     return { ok: true, json: async () => ({ features: [] }) };
   };
 
   await withServer(async server => {
     const result = await request(server, '/api/geocode?q=Karachi');
     assert.equal(result.response.status, 200);
-    assert.equal(requested.searchParams.get('access_token'), 'access-token');
-    assert.equal(requested.searchParams.get('language'), 'en');
+    assert.equal(mapboxRequested.searchParams.get('access_token'), 'access-token');
+    assert.equal(mapboxRequested.searchParams.get('language'), 'en');
   });
 });
 
 test('Customer search passes Mapbox proximity in longitude,latitude order without narrowing nationwide results', async () => {
   process.env.MAPBOX_PUBLIC_TOKEN = 'test-mapbox-token';
-  let requested;
+  process.env.NOMINATIM_MIN_INTERVAL_MS = '0';
+  let mapboxRequested;
   global.fetch = async url => {
-    requested = new URL(url);
+    const requested = new URL(url);
+    if (requested.origin === 'https://api.mapbox.com') mapboxRequested = requested;
     return { ok: true, json: async () => ({ features: [] }) };
   };
 
   await withServer(async server => {
     const result = await request(server, '/api/geocode?q=Lahore&proximity=74.3587,31.5204');
     assert.equal(result.response.status, 200);
-    assert.equal(requested.searchParams.get('proximity'), '74.3587,31.5204');
-    assert.equal(requested.searchParams.get('country'), 'pk');
-    assert.equal(requested.searchParams.get('city'), null);
-    assert.equal(requested.searchParams.get('radius'), null);
+    assert.equal(mapboxRequested.searchParams.get('proximity'), '74.3587,31.5204');
+    assert.equal(mapboxRequested.searchParams.get('country'), 'pk');
+    assert.equal(mapboxRequested.searchParams.get('city'), null);
+    assert.equal(mapboxRequested.searchParams.get('radius'), null);
   });
 });
 
 test('Customer search omits invalid proximity coordinates', async () => {
   process.env.MAPBOX_PUBLIC_TOKEN = 'test-mapbox-token';
-  let requested;
+  process.env.NOMINATIM_MIN_INTERVAL_MS = '0';
+  let mapboxRequested;
   global.fetch = async url => {
-    requested = new URL(url);
+    const requested = new URL(url);
+    if (requested.origin === 'https://api.mapbox.com') mapboxRequested = requested;
     return { ok: true, json: async () => ({ features: [] }) };
   };
 
   await withServer(async server => {
     const result = await request(server, '/api/geocode?q=airport&proximity=181,91');
     assert.equal(result.response.status, 200);
-    assert.equal(requested.searchParams.get('proximity'), null);
+    assert.equal(mapboxRequested.searchParams.get('proximity'), null);
+  });
+});
+
+test('Nominatim normalization filters non-Pakistan and invalid-coordinate results while merging with Mapbox', async () => {
+  process.env.MAPBOX_PUBLIC_TOKEN = 'test-mapbox-token';
+  process.env.NOMINATIM_MIN_INTERVAL_MS = '0';
+  process.env.NOMINATIM_USER_AGENT = 'MyRide test suite';
+  const nominatimResults = [
+    {
+      place_id: 101,
+      osm_type: 'node',
+      osm_id: 202,
+      lat: '31.5204',
+      lon: '74.3587',
+      name: 'Mall Road',
+      display_name: 'Mall Road, Lahore, Punjab, Pakistan',
+      type: 'road',
+      address: {
+        road: 'Mall Road',
+        city: 'Lahore',
+        state: 'Punjab',
+        country: 'Pakistan',
+        country_code: 'pk'
+      }
+    },
+    {
+      place_id: 102,
+      lat: '28.6139',
+      lon: '77.2090',
+      display_name: 'Delhi, India',
+      type: 'city',
+      address: { city: 'Delhi', country: 'India', country_code: 'in' }
+    },
+    {
+      place_id: 103,
+      lat: '0',
+      lon: '0',
+      display_name: 'Invalid, Pakistan',
+      type: 'place',
+      address: { country: 'Pakistan', country_code: 'pk' }
+    }
+  ];
+  const requests = [];
+  global.fetch = async url => {
+    const parsed = new URL(url);
+    requests.push(parsed);
+    return {
+      ok: true,
+      json: async () => parsed.origin === 'https://api.mapbox.com'
+        ? { features: [] }
+        : nominatimResults
+    };
+  };
+
+  await withServer(async server => {
+    const result = await request(server, '/api/geocode?q=Mall%20Road');
+    assert.equal(result.response.status, 200);
+    assert.equal(result.body.length, 1);
+    assert.equal(result.body[0].provider, 'nominatim');
+    assert.equal(result.body[0].address.city, 'Lahore');
+    assert.equal(result.body[0].address.road, 'Mall Road');
+    assert.equal(requests.filter(url => url.origin === 'https://nominatim.openstreetmap.org').length, 1);
+    assert.equal(requests.find(url => url.origin === 'https://nominatim.openstreetmap.org').searchParams.get('limit'), '20');
   });
 });
 
