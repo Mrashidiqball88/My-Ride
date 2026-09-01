@@ -46,6 +46,18 @@ const crypto   = require('crypto');
 const Tesseract = require('tesseract.js');
 const sharp    = require('sharp');
 const nodemailer = require('nodemailer');
+const {
+  startRedisAcceleration,
+  isRedisReady,
+  redisStatus,
+  redisGetJson,
+  redisSetJson,
+  redisDelete,
+  upsertDriverPresence,
+  removeDriverPresence,
+  searchDriverIds,
+  rebuildDriverGeoIndex
+} = require('./lib/redisAcceleration');
 
 // ── 2. APP & SERVER INITIALIZATION ───────────────────────────────────────
 const app    = express();
@@ -140,6 +152,7 @@ if (require.main === module) {
     console.log(`   Driver App   : /driver`);
     console.log(`   DB Status    : Connecting…\n`);
   });
+  void startRedisAcceleration().then(() => rebuildRedisDriverIndex());
 }
 
 // ── 5. MIDDLEWARES & STATIC FILES ─────────────────────────────────────────
@@ -743,6 +756,52 @@ const VEHICLE_CATEGORY_SETTINGS_KEY = 'vehicle_category_settings';
 const DEFAULT_VEHICLE_CATEGORY_SETTINGS = Object.freeze(
   Object.fromEntries(FARE_VEHICLE_CATEGORIES.map(category => [category, { active: true }]))
 );
+const SETTINGS_MEMORY_CACHE_TTL_MS = 5_000;
+const settingsMemoryCache = new Map();
+const settingsCacheEnabled = () => Boolean(String(process.env.REDIS_URL || '').trim());
+
+async function getCachedAdminSetting({
+  key,
+  fallback,
+  normalize,
+  load
+}) {
+  const cachingEnabled = settingsCacheEnabled();
+  const now = Date.now();
+  const memoryEntry = settingsMemoryCache.get(key);
+  if (cachingEnabled && memoryEntry && now - memoryEntry.cachedAt < SETTINGS_MEMORY_CACHE_TTL_MS) {
+    return memoryEntry.value;
+  }
+
+  if (cachingEnabled) {
+    const redisValue = await redisGetJson(key);
+    if (redisValue !== null) {
+      const value = normalize(redisValue);
+      settingsMemoryCache.set(key, { value, cachedAt: now });
+      return value;
+    }
+  }
+
+  const databaseReady = dbConnected || mongoose.connection.readyState === 1;
+  const rawValue = databaseReady ? await load() : fallback;
+  const value = normalize(rawValue);
+  if (cachingEnabled) {
+    settingsMemoryCache.set(key, { value, cachedAt: now });
+    void redisSetJson(key, value);
+  }
+  return value;
+}
+
+function primeCachedAdminSetting(key, value) {
+  if (!settingsCacheEnabled()) return;
+  settingsMemoryCache.set(key, { value, cachedAt: Date.now() });
+  void redisSetJson(key, value);
+}
+
+function invalidateCachedAdminSetting(key) {
+  settingsMemoryCache.delete(key);
+  void redisDelete(key);
+}
 
 function normalizeVehicleCategorySettings(value = {}) {
   return Object.fromEntries(FARE_VEHICLE_CATEGORIES.map(category => {
@@ -759,9 +818,12 @@ function isVehicleCategoryActive(settings, vehicleType) {
 }
 
 async function getVehicleCategorySettings() {
-  if (!dbConnected) return normalizeVehicleCategorySettings(DEFAULT_VEHICLE_CATEGORY_SETTINGS);
-  const doc = await Settings.findOne({ key: VEHICLE_CATEGORY_SETTINGS_KEY }).lean();
-  return normalizeVehicleCategorySettings(doc?.value);
+  return getCachedAdminSetting({
+    key: VEHICLE_CATEGORY_SETTINGS_KEY,
+    fallback: DEFAULT_VEHICLE_CATEGORY_SETTINGS,
+    normalize: normalizeVehicleCategorySettings,
+    load: async () => (await Settings.findOne({ key: VEHICLE_CATEGORY_SETTINGS_KEY }).lean())?.value
+  });
 }
 
 const WAITING_RATE_SETTINGS_KEY = 'waiting_rate_settings';
@@ -1037,8 +1099,12 @@ function validateLongRangeSettings(input) {
 }
 
 async function getLongRangeSettings() {
-  const doc = await Settings.findOne({ key: LONG_RANGE_SETTINGS_KEY }).lean();
-  return normalizeLongRangeSettings(doc?.value);
+  return getCachedAdminSetting({
+    key: LONG_RANGE_SETTINGS_KEY,
+    fallback: DEFAULT_LONG_RANGE_SETTINGS,
+    normalize: normalizeLongRangeSettings,
+    load: async () => (await Settings.findOne({ key: LONG_RANGE_SETTINGS_KEY }).lean())?.value
+  });
 }
 
 const CUSTOMER_FARE_DISPLAY_SETTINGS_KEY = 'customer_fare_display_settings';
@@ -2151,8 +2217,12 @@ function rideOfferIsStillOpenQuery(now = new Date()) {
 }
 
 async function getRideBroadcastSettings() {
-  const doc = await Settings.findOne({ key: 'ride_broadcast_settings' }).lean();
-  return normalizeRideBroadcastSettings(doc?.value);
+  return getCachedAdminSetting({
+    key: 'ride_broadcast_settings',
+    fallback: {},
+    normalize: normalizeRideBroadcastSettings,
+    load: async () => (await Settings.findOne({ key: 'ride_broadcast_settings' }).lean())?.value
+  });
 }
 
 function hasValidCoordinates(location) {
@@ -2252,6 +2322,44 @@ function resolveCustomerFareOffer(value, authoritativeFare, offsetValue = undefi
   return { value: proposed, offset };
 }
 
+async function syncRedisDriverPresence(driverId) {
+  if (!isRedisReady()) return false;
+  const driver = await User.findOne({ _id: driverId, role: 'driver' })
+    .select('_id vehicleType ridePreference longRangeEnabled isOnline accountStatus lastOnlineHeartbeat currentLocation')
+    .lean()
+    .catch(() => null);
+  const heartbeatIsFresh = driver?.lastOnlineHeartbeat
+    && Date.now() - new Date(driver.lastOnlineHeartbeat).getTime() <= DRIVER_HEARTBEAT_MAX_AGE_MS;
+  if (!driver || !driver.isOnline || driver.accountStatus !== 'active' || !heartbeatIsFresh
+      || !hasValidCoordinates(driver.currentLocation)) {
+    return removeDriverPresence(driverId);
+  }
+  return upsertDriverPresence({
+    driverId: driver._id,
+    lat: driver.currentLocation.lat,
+    lng: driver.currentLocation.lng,
+    vehicleType: driver.vehicleType,
+    ridePreference: driver.ridePreference,
+    longRangeEnabled: driver.longRangeEnabled
+  });
+}
+
+async function rebuildRedisDriverIndex() {
+  if (!isRedisReady() || !(dbConnected || mongoose.connection.readyState === 1)) return false;
+  const drivers = await User.find({
+    role: 'driver',
+    isOnline: true,
+    accountStatus: 'active',
+    lastOnlineHeartbeat: { $gte: new Date(Date.now() - DRIVER_HEARTBEAT_MAX_AGE_MS) },
+    'currentLocation.lat': { $ne: 0 },
+    'currentLocation.lng': { $ne: 0 }
+  }).select('_id vehicleType ridePreference longRangeEnabled currentLocation').lean().catch(() => null);
+  if (!drivers) return false;
+  const rebuilt = await rebuildDriverGeoIndex(drivers);
+  if (rebuilt) console.log(`[redis] rebuilt Driver GEO index (${drivers.length} fresh online driver(s))`);
+  return rebuilt;
+}
+
 async function findRideBroadcastDrivers(pickupLocation, vehicleType, settings = null, vehicleCategorySettings = null) {
   const rideSettings = settings || await getRideBroadcastSettings();
   const radiusKm = rideSettings.maximumRideBroadcastRadiusKm;
@@ -2261,6 +2369,14 @@ async function findRideBroadcastDrivers(pickupLocation, vehicleType, settings = 
     vehicleType
   )) return { drivers: [], radiusKm };
 
+  const redisCandidateIds = await searchDriverIds({
+    lat: pickupLocation.lat,
+    lng: pickupLocation.lng,
+    radiusKm
+  });
+  const locationFilter = redisCandidateIds?.length
+    ? { _id: { $in: redisCandidateIds } }
+    : coordinateBoundsQuery('currentLocation', pickupLocation, radiusKm);
   const candidates = await User.find({
     role: 'driver',
     isOnline: true,
@@ -2270,7 +2386,7 @@ async function findRideBroadcastDrivers(pickupLocation, vehicleType, settings = 
     lastOnlineHeartbeat: { $gte: new Date(Date.now() - DRIVER_HEARTBEAT_MAX_AGE_MS) },
     'currentLocation.lat': { $ne: 0 },
     'currentLocation.lng': { $ne: 0 },
-    ...coordinateBoundsQuery('currentLocation', pickupLocation, radiusKm)
+    ...locationFilter
   }).select('_id currentLocation expoPushToken').lean();
 
   if (!candidates.length) return { drivers: [], radiusKm };
@@ -2302,13 +2418,21 @@ async function findLongRangeBroadcastDrivers(pickupLocation, vehicleType, longRa
     vehicleCategorySettings || await getVehicleCategorySettings(),
     vehicleType
   )) return { drivers: [], radiusKm };
+  const redisCandidateIds = await searchDriverIds({
+    lat: pickupLocation.lat,
+    lng: pickupLocation.lng,
+    radiusKm
+  });
+  const locationFilter = redisCandidateIds?.length
+    ? { _id: { $in: redisCandidateIds } }
+    : coordinateBoundsQuery('currentLocation', pickupLocation, radiusKm);
   const candidates = await User.find({
     role: 'driver', isOnline: true, longRangeEnabled: true, accountStatus: 'active',
     ridePreference: { $ne: 'Short Range Only' },
     vehicleType: { $in: storedVehicleTypesForFareCategory(vehicleType) },
     lastOnlineHeartbeat: { $gte: new Date(Date.now() - DRIVER_HEARTBEAT_MAX_AGE_MS) },
     'currentLocation.lat': { $ne: 0 }, 'currentLocation.lng': { $ne: 0 },
-    ...coordinateBoundsQuery('currentLocation', pickupLocation, radiusKm)
+    ...locationFilter
   }).select('_id currentLocation expoPushToken longRangeEnabled').lean();
   const eligibleWallets = await Wallet.find({
     user: { $in: candidates.map(driver => driver._id) },
@@ -4004,6 +4128,7 @@ app.post('/api/driver/heartbeat', authMiddleware, driverOnly, async (req, res) =
       return res.status(403).json({ error: 'Driver availability is no longer active' });
     }
     await User.updateOne({ _id: req.user.id }, { lastOnlineHeartbeat: new Date() });
+    void syncRedisDriverPresence(req.user.id);
     res.json({ ok: true, serverTime: new Date().toISOString() });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -4024,6 +4149,7 @@ app.post('/api/driver/location', authMiddleware, driverOnly, async (req, res) =>
     }
     const updates = { 'currentLocation.lat': lat, 'currentLocation.lng': lng, lastOnlineHeartbeat: new Date() };
     await User.updateOne({ _id: req.user.id }, updates);
+    void syncRedisDriverPresence(req.user.id);
     if (rideId) {
       const ride = await Ride.findOne({
         _id: rideId,
@@ -6879,6 +7005,7 @@ app.patch('/api/admin/ride-settings', adminJwt, requirePerm('manageRideSettings'
       { key: 'ride_broadcast_settings', value: validated.settings },
       { upsert: true, new: true, setDefaultsOnInsert: true }
     );
+    primeCachedAdminSetting('ride_broadcast_settings', validated.settings);
     const payload = { settings: validated.settings, updatedAt: new Date().toISOString() };
     io.emit('ride:broadcast-radius-updated', payload);
     res.json({ success: true, ...payload });
@@ -6917,6 +7044,7 @@ app.patch('/api/admin/vehicle-settings', adminJwt, requirePerm('manageFareSettin
       { key: VEHICLE_CATEGORY_SETTINGS_KEY, value: settings },
       { upsert: true, new: true, setDefaultsOnInsert: true }
     );
+    primeCachedAdminSetting(VEHICLE_CATEGORY_SETTINGS_KEY, settings);
     const payload = { settings, updatedAt: new Date().toISOString(), category };
     io.emit('vehicle-settings:updated', payload);
     res.json({ success: true, ...payload });
@@ -7052,6 +7180,7 @@ app.patch('/api/admin/long-range-settings', adminJwt, requirePerm('manageFareSet
     const validated = validateLongRangeSettings(req.body?.longRangeSettings);
     if (validated.errors.length) return res.status(422).json({ error: 'Invalid Long Range settings', errors: validated.errors });
     await Settings.findOneAndUpdate({ key: LONG_RANGE_SETTINGS_KEY }, { key: LONG_RANGE_SETTINGS_KEY, value: validated.settings }, { upsert: true, new: true, setDefaultsOnInsert: true });
+    primeCachedAdminSetting(LONG_RANGE_SETTINGS_KEY, validated.settings);
     io.emit('long-range:settings-updated', { settings: validated.settings, updatedAt: new Date().toISOString() });
     res.json({ success: true, settings: validated.settings });
   } catch (err) { res.status(500).json({ error: err.message }); }
@@ -7509,6 +7638,7 @@ io.on('connection', async (socket) => {
       'currentLocation.lng': lng,
       lastOnlineHeartbeat: new Date()
     }).catch(() => {});
+    void syncRedisDriverPresence(id);
   });
 
   // Driver toggles online/offline
@@ -7552,6 +7682,7 @@ io.on('connection', async (socket) => {
     if (isOnline) { socket.join('drivers-online'); socket.join(vRoom); }
     else          { socket.leave('drivers-online'); socket.leave(vRoom); }
     if (isOnline) await rehydrateDriverSocket(socket, id, { replayOffers: true }).catch(() => {});
+    void syncRedisDriverPresence(id);
     socket.emit('driver:status:ack', { isOnline, vehicleType: socket.vehicleType || null });
   }));
 
@@ -7566,6 +7697,7 @@ io.on('connection', async (socket) => {
       return;
     }
     await User.updateOne({ _id: id }, { lastOnlineHeartbeat: new Date() }).catch(() => {});
+    void syncRedisDriverPresence(id);
     socket.emit('driver:heartbeat:ack', {
       serverTime: new Date().toISOString(),
       clientSentAt: typeof client.clientSentAt === 'string' ? client.clientSentAt : null
@@ -7726,6 +7858,7 @@ async function connectDatabase() {
       await seedDemoAccounts();
       console.log('✓ Preview demo database connected and demo accounts seeded');
       await initVapidKeys();
+      await rebuildRedisDriverIndex();
     } catch (err) {
       console.warn('⚠  Demo database unavailable, running without persistence:', err.message);
     }
@@ -7759,6 +7892,7 @@ async function connectDatabase() {
   }
 
   await initVapidKeys();
+  await rebuildRedisDriverIndex();
 }
 
 const DEMO_ACCOUNTS = Object.freeze({

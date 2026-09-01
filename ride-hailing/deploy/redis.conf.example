@@ -1,0 +1,30 @@
+# My Ride local Redis acceleration layer.
+# Copy this file to /etc/redis/myride.conf on the DigitalOcean Droplet.
+#
+# Redis contains only rebuildable Driver GEO/index data and short-lived
+# settings cache entries. MongoDB remains the source of truth.
+
+bind 127.0.0.1 ::1
+protected-mode yes
+port 6379
+tcp-keepalive 60
+timeout 0
+
+# Keep failed cache writes visible instead of evicting live index entries.
+# The application falls back to MongoDB if Redis reaches this limit.
+maxmemory-policy noeviction
+
+# Durable Redis recovery. This does not replace MongoDB backups.
+appendonly yes
+appendfsync everysec
+appendfilename "appendonly.aof"
+dir /var/lib/redis/myride
+dbfilename "dump.rdb"
+save 900 1
+save 300 10
+save 60 10000
+stop-writes-on-bgsave-error yes
+
+# Keep the local service quiet and bounded.
+loglevel notice
+databases 1
