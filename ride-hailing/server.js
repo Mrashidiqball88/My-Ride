@@ -1322,6 +1322,11 @@ customerSchema.remove('isAdmin');
 const driverSchema = userSchema.clone();
 driverSchema.path('role').default('driver');
 driverSchema.remove('isAdmin');
+// Dispatch and recovery both filter by live availability and pickup distance.
+// Keep those reads indexable even though the final Haversine check remains in
+// application code for exact-radius correctness.
+driverSchema.index({ isOnline: 1, accountStatus: 1, vehicleType: 1, lastOnlineHeartbeat: 1 });
+driverSchema.index({ 'currentLocation.lat': 1, 'currentLocation.lng': 1 });
 
 // Super Admin credentials are deliberately independent from both the generic
 // settings store and all Customer/Driver identity records. The stable id keeps
@@ -1436,6 +1441,9 @@ const rideSchema = new mongoose.Schema({
   broadcastDurationSeconds: { type: Number, default: null },
   broadcastExpiresAt: { type: Date, default: null }
 }, { timestamps: true });
+
+rideSchema.index({ status: 1, vehicleType: 1, createdAt: -1 });
+rideSchema.index({ 'pickupLocation.lat': 1, 'pickupLocation.lng': 1 });
 
 const walletSchema = new mongoose.Schema({
   user:           { type: mongoose.Schema.Types.ObjectId, ref: 'Driver', unique: true },
@@ -2155,6 +2163,35 @@ function hasValidCoordinates(location) {
     && !(lat === 0 && lng === 0);
 }
 
+function coordinateBoundsQuery(path, center, radiusKm) {
+  const lat = Number(center?.lat);
+  const lng = Number(center?.lng);
+  const radius = Number(radiusKm);
+  if (!Number.isFinite(lat) || !Number.isFinite(lng) || !Number.isFinite(radius) || radius <= 0) return {};
+
+  // A latitude degree is nearly constant. Longitude degrees narrow toward the
+  // poles, so use a conservative longitude window and keep the exact
+  // Haversine check below as the final authority.
+  const latDelta = radius / 110.574;
+  const cosLatitude = Math.max(Math.abs(Math.cos(lat * Math.PI / 180)), 0.01);
+  const lngDelta = radius / (111.320 * cosLatitude);
+  const bounds = {
+    [`${path}.lat`]: {
+      $gte: Math.max(-90, lat - latDelta),
+      $lte: Math.min(90, lat + latDelta)
+    }
+  };
+  // A window crossing the international date line needs a more complex $or.
+  // Skip only that optional prefilter; exact Haversine filtering still applies.
+  if (lngDelta < 180) {
+    bounds[`${path}.lng`] = {
+      $gte: Math.max(-180, lng - lngDelta),
+      $lte: Math.min(180, lng + lngDelta)
+    };
+  }
+  return bounds;
+}
+
 function isAtRidePickup(ride, location) {
   if (!ride?.pickupLocation || !hasValidCoordinates(location) || !hasValidCoordinates(ride.pickupLocation)) {
     return false;
@@ -2215,11 +2252,14 @@ function resolveCustomerFareOffer(value, authoritativeFare, offsetValue = undefi
   return { value: proposed, offset };
 }
 
-async function findRideBroadcastDrivers(pickupLocation, vehicleType, settings = null) {
+async function findRideBroadcastDrivers(pickupLocation, vehicleType, settings = null, vehicleCategorySettings = null) {
   const rideSettings = settings || await getRideBroadcastSettings();
   const radiusKm = rideSettings.maximumRideBroadcastRadiusKm;
   if (!hasValidCoordinates(pickupLocation)) return { drivers: [], radiusKm };
-  if (!isVehicleCategoryActive(await getVehicleCategorySettings(), vehicleType)) return { drivers: [], radiusKm };
+  if (!isVehicleCategoryActive(
+    vehicleCategorySettings || await getVehicleCategorySettings(),
+    vehicleType
+  )) return { drivers: [], radiusKm };
 
   const candidates = await User.find({
     role: 'driver',
@@ -2229,7 +2269,8 @@ async function findRideBroadcastDrivers(pickupLocation, vehicleType, settings = 
     vehicleType: { $in: storedVehicleTypesForFareCategory(vehicleType) },
     lastOnlineHeartbeat: { $gte: new Date(Date.now() - DRIVER_HEARTBEAT_MAX_AGE_MS) },
     'currentLocation.lat': { $ne: 0 },
-    'currentLocation.lng': { $ne: 0 }
+    'currentLocation.lng': { $ne: 0 },
+    ...coordinateBoundsQuery('currentLocation', pickupLocation, radiusKm)
   }).select('_id currentLocation expoPushToken').lean();
 
   if (!candidates.length) return { drivers: [], radiusKm };
@@ -2254,16 +2295,20 @@ async function findRideBroadcastDrivers(pickupLocation, vehicleType, settings = 
   return { drivers, radiusKm };
 }
 
-async function findLongRangeBroadcastDrivers(pickupLocation, vehicleType, longRangeSettings) {
+async function findLongRangeBroadcastDrivers(pickupLocation, vehicleType, longRangeSettings, vehicleCategorySettings = null) {
   const radiusKm = longRangeSettings.broadcastRadiusKm;
   if (!hasValidCoordinates(pickupLocation)) return { drivers: [], radiusKm };
-  if (!isVehicleCategoryActive(await getVehicleCategorySettings(), vehicleType)) return { drivers: [], radiusKm };
+  if (!isVehicleCategoryActive(
+    vehicleCategorySettings || await getVehicleCategorySettings(),
+    vehicleType
+  )) return { drivers: [], radiusKm };
   const candidates = await User.find({
     role: 'driver', isOnline: true, longRangeEnabled: true, accountStatus: 'active',
     ridePreference: { $ne: 'Short Range Only' },
     vehicleType: { $in: storedVehicleTypesForFareCategory(vehicleType) },
     lastOnlineHeartbeat: { $gte: new Date(Date.now() - DRIVER_HEARTBEAT_MAX_AGE_MS) },
-    'currentLocation.lat': { $ne: 0 }, 'currentLocation.lng': { $ne: 0 }
+    'currentLocation.lat': { $ne: 0 }, 'currentLocation.lng': { $ne: 0 },
+    ...coordinateBoundsQuery('currentLocation', pickupLocation, radiusKm)
   }).select('_id currentLocation expoPushToken longRangeEnabled').lean();
   const eligibleWallets = await Wallet.find({
     user: { $in: candidates.map(driver => driver._id) },
@@ -2352,10 +2397,12 @@ async function getAvailableRidesForDriver(driver) {
     getRideBroadcastSettings(),
     getLongRangeSettings()
   ]);
+  const recoveryRadiusKm = Math.max(radiusKm, longRangeSettings.broadcastRadiusKm);
   const rides = await Ride.find({
     status: 'requested',
     vehicleType: { $in: storedVehicleTypesForFareCategory(driver.vehicleType) },
-    ...rideOfferIsStillOpenQuery()
+    ...rideOfferIsStillOpenQuery(),
+    ...coordinateBoundsQuery('pickupLocation', driver.currentLocation, recoveryRadiusKm)
   })
     .populate('passenger', 'name phone rating')
     .sort({ createdAt: -1 });
@@ -2475,6 +2522,28 @@ function emitRideAccepted(ride, verificationPin, driver) {
     notifyVehicleDrivers: true,
     notifyDriverIds: ride.notifiedDriverIds || []
   });
+}
+
+function emitRideOffers(ride) {
+  const referenceId = value => value?._id || value?.id || value;
+  const passengerId = referenceId(ride?.passenger);
+  const rooms = [`ride:${ride._id}`];
+  if (passengerId) rooms.push(`user:${passengerId}`);
+  const offers = (ride.counterOffers || []).map(o => ({
+    driverId:     String(o.driver?._id || o.driver),
+    driverName:   o.driverName,
+    vehicleModel: o.vehicleModel,
+    vehiclePlate: o.vehiclePlate,
+    rating:       o.rating,
+    price:        o.price,
+    type:         o.type,
+    timestamp:    o.timestamp
+  }));
+  // The ride room is the normal path. The passenger room closes the brief
+  // race between POST /api/rides returning and the Customer's ride:join being
+  // processed, while the union keeps the existing event contract unchanged.
+  io.to([...new Set(rooms)]).emit('ride:offers', offers);
+  return offers;
 }
 
 function emitRidePickupReached(ride) {
@@ -3777,8 +3846,8 @@ app.post('/api/rides', authMiddleware, customerOnly, customerCanBook, async (req
     const databaseReady = dbConnected || mongoose.connection.readyState === 1;
     const broadcast = databaseReady
       ? (ride.isLongRange
-        ? await findLongRangeBroadcastDrivers(ride.pickupLocation, ride.vehicleType, longRangeSettings)
-        : await findRideBroadcastDrivers(ride.pickupLocation, ride.vehicleType, rideBroadcastSettings))
+        ? await findLongRangeBroadcastDrivers(ride.pickupLocation, ride.vehicleType, longRangeSettings, vehicleCategoryDoc?.value)
+        : await findRideBroadcastDrivers(ride.pickupLocation, ride.vehicleType, rideBroadcastSettings, vehicleCategoryDoc?.value))
       : { drivers: [], radiusKm: DEFAULT_RIDE_BROADCAST_RADIUS_KM };
     ridePayload.broadcastRadiusKm = broadcast.radiusKm;
     ride.notifiedDriverIds = broadcast.drivers.map(driver => driver._id);
@@ -3806,19 +3875,22 @@ app.post('/api/rides', authMiddleware, customerOnly, customerCanBook, async (req
           { action: 'open',   title: '📱 Go to App'  }
         ]
       };
-      const subscriptions = await PushSub.find({
+      // Push delivery is a fallback and must never hold the booking response
+      // open. Socket.io has already delivered the live event above.
+      void PushSub.find({
         user: { $in: broadcast.drivers.map(driver => driver._id) }
-      }).lean().catch(() => []);
-      subscriptions.forEach(sub => {
+      }).lean().then(subscriptions => Promise.all(subscriptions.map(sub =>
         webpush.sendNotification(
           { endpoint: sub.endpoint, keys: sub.keys },
           JSON.stringify(pushData),
           { urgency: 'high', TTL: 60 }
         ).catch(err => {
           // 410 Gone = subscription expired — clean it up
-          if (err.statusCode === 410) PushSub.deleteOne({ _id: sub._id }).catch(() => {});
-        });
-      });
+          if (err.statusCode === 410) return PushSub.deleteOne({ _id: sub._id }).catch(() => {});
+          console.warn(`[web-push] ride alert failed: ${err.message}`);
+          return undefined;
+        })
+      ))).catch(err => console.warn(`[web-push] subscription lookup failed: ${err.message}`));
     }
 
     // Native Driver installs do not rely on a browser tab or service worker.
@@ -4232,7 +4304,13 @@ app.patch('/api/rides/:id/counter', authMiddleware, driverOnly, async (req, res)
 
     // Prevent duplicate offers from same driver
     const already = ride.counterOffers.some(o => String(o.driver) === String(req.user.id));
-    if (already) return res.status(409).json({ error: 'You already sent an offer for this ride' });
+    if (already) {
+      // Make retries safe when a mobile network times out after MongoDB has
+      // committed the first offer. Re-emitting the current list also repairs
+      // a missed Customer event without creating a duplicate offer.
+      emitRideOffers(ride);
+      return res.json({ ok: true, alreadySent: true });
+    }
 
     const driver = await User.findById(req.user.id).select('name vehicleModel vehiclePlate rating');
     const offer = {
@@ -4248,17 +4326,10 @@ app.patch('/api/rides/:id/counter', authMiddleware, driverOnly, async (req, res)
     ride.counterOffers.push(offer);
     await ride.save();
 
-    // Emit updated offers list to the customer
-    io.to(`ride:${ride._id}`).emit('ride:offers', ride.counterOffers.map(o => ({
-      driverId:     String(o.driver),
-      driverName:   o.driverName,
-      vehicleModel: o.vehicleModel,
-      vehiclePlate: o.vehiclePlate,
-      rating:       o.rating,
-      price:        o.price,
-      type:         o.type,
-      timestamp:    o.timestamp
-    })));
+    // Emit updated offers list to both the ride and passenger rooms. The
+    // passenger-room path prevents a fast Driver response from being lost
+    // before the Customer finishes joining the newly-created ride room.
+    emitRideOffers(ride);
 
     res.json({ ok: true });
   } catch (err) {
@@ -4301,7 +4372,9 @@ app.patch('/api/rides/:id/accept-driver', authMiddleware, customerOnly, customer
       },
       { $set: { driver: driverId, status: 'accepted' } },
       { new: true }
-    ).populate('passenger', 'name phone');
+     )
+       .populate('passenger', 'name phone')
+       .populate('driver', 'name phone vehicleType vehicleModel vehiclePlate rating profilePhoto');
     if (!ride) return res.status(409).json({ error: 'Ride no longer available' });
 
     // Find the agreed price from the offer
@@ -8064,9 +8137,11 @@ module.exports = {
   syncAdminSecurity,
   rideOfferIsStillOpenQuery,
   haversineKm,
+  coordinateBoundsQuery,
   findRideBroadcastDrivers,
   findLongRangeBroadcastDrivers,
   emitRideRequestToDrivers,
+  emitRideOffers,
   sendExpoPush,
   getAvailableRidesForDriver,
   driverRidePayload,

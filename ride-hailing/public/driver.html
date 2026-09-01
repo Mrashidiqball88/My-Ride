@@ -822,6 +822,7 @@ let map, pickupMarker, dropoffMarker, routeLine, myMarker, dropoffMarkers = [];
 let isOnline      = false;
 let pendingRide   = null;   // current popup ride
 let sentOffer     = null;   // { rideId } after driver sends an offer, before customer chooses
+let acceptRideInFlight = false;
 let activeRide    = null;   // accepted ride
 let requestTimer  = null;
 let locationWatch = null;
@@ -1166,15 +1167,24 @@ function switchTab(t) {
   document.getElementById('auth-error').textContent = '';
 }
 
-async function apiCall(path, method = 'GET', body = null) {
+async function apiCall(path, method = 'GET', body = null, timeoutMs = 0) {
   const headers = { 'Content-Type': 'application/json' };
   if (token)        headers['Authorization']   = `Bearer ${token}`;
   if (sessionToken) headers['X-Session-Token'] = sessionToken;
   const opts = { method, headers };
   if (body) opts.body = JSON.stringify(body);
+  const controller = timeoutMs > 0 ? new AbortController() : null;
+  const timeout = controller ? setTimeout(() => controller.abort(), timeoutMs) : null;
+  if (controller) opts.signal = controller.signal;
   let r;
   try { r = await fetch(path, opts); }
-  catch (e) { throw new Error('Network error — check your connection'); }
+  catch (e) {
+    if (e?.name === 'AbortError') throw new Error('The Driver response timed out. Checking ride status…');
+    throw new Error('Network error — check your connection');
+  }
+  finally {
+    if (timeout) clearTimeout(timeout);
+  }
   const d = await r.json().catch(() => ({}));
   if (!r.ok) {
     if (r.status === 401 && d.error === 'LOGGED_IN_ELSEWHERE') {
@@ -2772,11 +2782,17 @@ function rejectRide() {
 // Send an accept-type offer at the customer's listed fare.
 // The customer sees it in their offers list and confirms the booking by choosing us.
 async function acceptRide() {
-  if (!pendingRide) return;
+  if (!pendingRide || acceptRideInFlight) return;
+  acceptRideInFlight = true;
   const rideId  = pendingRide.id;
   const offeredFare = pendingRide.fare;
+  const acceptBtn = document.querySelector('.btn-accept');
+  if (acceptBtn) {
+    acceptBtn.disabled = true;
+    acceptBtn.textContent = 'Sending…';
+  }
   try {
-    await apiCall(`/api/rides/${rideId}/counter`, 'PATCH', { price: offeredFare, type: 'accept' });
+    await apiCall(`/api/rides/${rideId}/counter`, 'PATCH', { price: offeredFare, type: 'accept' }, 12_000);
     socket.emit('ride:join', rideId);
     sentOffer = { rideId };
     pendingRide = null;
@@ -2791,7 +2807,16 @@ async function acceptRide() {
     document.getElementById('rr-counter-input').value = '';
     showToast('Offer sent! Waiting for customer to choose.', 'success');
   } catch (e) {
+    // A timeout may happen after the server has committed the offer. Refresh
+    // the authoritative available-ride state and leave retrying idempotent.
+    await reconcileRideRequestsAfterReconnect().catch(() => {});
     showToast(e.message || 'Could not send offer — try again', 'error');
+  } finally {
+    acceptRideInFlight = false;
+    if (pendingRide && acceptBtn) {
+      acceptBtn.disabled = false;
+      acceptBtn.textContent = '✓ Accept';
+    }
   }
 }
 

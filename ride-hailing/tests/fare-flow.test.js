@@ -8,7 +8,7 @@ const fare = require('../server');
 const {
   app, io, models, FARE_VEHICLE_CATEGORIES, DEFAULT_PER_KM_RATES,
   DEFAULT_RIDE_BROADCAST_RADIUS_KM, DEFAULT_RIDE_BROADCAST_REQUEST_DURATION_SECONDS, normalizeRideBroadcastSettings,
-  validateRideBroadcastSettings, rideOfferIsStillOpenQuery, findRideBroadcastDrivers, findLongRangeBroadcastDrivers, emitRideRequestToDrivers, emitRideLifecycle, chargeLongRangeCommission,
+  validateRideBroadcastSettings, rideOfferIsStillOpenQuery, coordinateBoundsQuery, findRideBroadcastDrivers, findLongRangeBroadcastDrivers, emitRideRequestToDrivers, emitRideOffers, emitRideLifecycle, chargeLongRangeCommission,
   normalizeLongRangeSettings, validateLongRangeSettings, calculateRideFare
    , normalizeTerms, normalizeFareVehicle, normalizeFareSettings, storedVehicleTypesForFareCategory,
   normalizeVehicleCategorySettings, isVehicleCategoryActive, normalizeWaitingRateSettings,
@@ -757,6 +757,52 @@ test('shared broadcast matcher only selects fresh, wallet-eligible drivers insid
     room: 'user:near-driver',
     event: 'ride:new',
     payload: { id: 'ride-nearby-only' }
+  }]);
+});
+
+test('broadcast prefilter bounds distant drivers before exact radius validation', () => {
+  const bounds = coordinateBoundsQuery(
+    'currentLocation',
+    { lat: 31.5204, lng: 74.3587 },
+    5
+  );
+  assert.ok(bounds['currentLocation.lat'].$gte < 31.5204);
+  assert.ok(bounds['currentLocation.lat'].$lte > 31.5204);
+  assert.ok(bounds['currentLocation.lng'].$gte < 74.3587);
+  assert.ok(bounds['currentLocation.lng'].$lte > 74.3587);
+  assert.ok(bounds['currentLocation.lat'].$lte - bounds['currentLocation.lat'].$gte < 0.2);
+});
+
+test('offer delivery reaches the Customer personal room when the ride room is not joined yet', () => {
+  const emissions = [];
+  io.to = rooms => ({ emit: (event, payload) => emissions.push({ rooms, event, payload }) });
+  emitRideOffers({
+    _id: 'ride-room-race',
+    passenger: 'customer-room-race',
+    counterOffers: [{
+      driver: 'driver-room-race',
+      driverName: 'Fast Driver',
+      vehicleModel: 'Sedan',
+      vehiclePlate: 'ABC-123',
+      rating: 4.9,
+      price: 700,
+      type: 'accept',
+      timestamp: new Date('2026-08-24T06:00:00.000Z')
+    }]
+  });
+  assert.deepEqual(emissions, [{
+    rooms: ['ride:ride-room-race', 'user:customer-room-race'],
+    event: 'ride:offers',
+    payload: [{
+      driverId: 'driver-room-race',
+      driverName: 'Fast Driver',
+      vehicleModel: 'Sedan',
+      vehiclePlate: 'ABC-123',
+      rating: 4.9,
+      price: 700,
+      type: 'accept',
+      timestamp: new Date('2026-08-24T06:00:00.000Z')
+    }]
   }]);
 });
 

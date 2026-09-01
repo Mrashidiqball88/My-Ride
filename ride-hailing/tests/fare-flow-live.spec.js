@@ -611,10 +611,11 @@ test.describe('live Mongo fare refresh', () => {
       const driverLifecycle = await driverPage.evaluate(() => {
         activeRide = { _id: 'finished-driver-ride', passenger: { name: 'Passenger Test' } };
         document.getElementById('active-panel').style.display = 'block';
-        const originalCheckTickets = checkUnreadDriverTickets;
-        checkUnreadDriverTickets = () => Promise.resolve();
+        const originalCheckTickets = globalThis.checkUnreadDriverTickets;
+        globalThis.checkUnreadDriverTickets = () => Promise.resolve();
         endActiveRide();
-        checkUnreadDriverTickets = originalCheckTickets;
+        if (originalCheckTickets) globalThis.checkUnreadDriverTickets = originalCheckTickets;
+        else delete globalThis.checkUnreadDriverTickets;
         showDriverRatingModal({ _id: 'finished-driver-ride', passenger: { name: 'Passenger Test' } });
         return {
           activeRideCleared: activeRide === null,

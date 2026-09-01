@@ -3590,6 +3590,60 @@ function endRide() {
 }
 
 // ── Socket.io ─────────────────────────────────────────────────────────────
+function customerOffersFromRide(ride) {
+  return (Array.isArray(ride?.counterOffers) ? ride.counterOffers : []).map(offer => ({
+    driverId: String(offer.driver?._id || offer.driver || ''),
+    driverName: offer.driverName || 'Driver',
+    vehicleModel: offer.vehicleModel || '',
+    vehiclePlate: offer.vehiclePlate || '',
+    rating: offer.rating,
+    price: offer.price,
+    type: offer.type,
+    timestamp: offer.timestamp
+  }));
+}
+
+function applyCustomerRideSnapshot(ride) {
+  if (!ride || !activeRide || String(ride._id) !== String(activeRide._id)) return false;
+  const previousRide = activeRide;
+  // Preserve locally-rendered profile data when a test/degraded response
+  // omits an optional populated reference, while taking status, offers, fare,
+  // and GPS from the server snapshot.
+  const mergedDriver = ride.driver && typeof ride.driver === 'object'
+    ? { ...(previousRide.driver || {}), ...ride.driver }
+    : (ride.driver || previousRide.driver);
+  if (previousRide.driver && mergedDriver) {
+    ['name', 'phone', 'vehicleType', 'vehicleModel', 'vehiclePlate', 'rating', 'profilePhoto']
+      .forEach(field => {
+        if (!mergedDriver[field] && previousRide.driver[field]) mergedDriver[field] = previousRide.driver[field];
+      });
+  }
+  activeRide = {
+    ...previousRide,
+    ...ride,
+    driver: mergedDriver
+  };
+  activeLiveFare = ride.fare ?? previousRide.fare;
+  if (ride.status === 'requested') {
+    driverOffers = customerOffersFromRide(ride);
+    renderOffers(driverOffers);
+  } else if (ride.status === 'accepted' && activeRide.driver && typeof activeRide.driver === 'object') {
+    activeDriverInfo = activeRide.driver;
+    showMatchedPanel(activeRide.driver, activeRide.fare);
+  }
+  updateCustomerCancellationControl(ride.status);
+  return true;
+}
+
+async function syncCustomerRideState(rideId) {
+  try {
+    const ride = await apiCall(`/api/rides/${rideId}`);
+    applyCustomerRideSnapshot(ride);
+  } catch (error) {
+    console.warn('Customer ride state reconciliation failed:', error.message);
+  }
+}
+
 function connectSocket() {
   if (socket) return;
   socket = io({ auth: { token, sessionToken } });
@@ -3603,19 +3657,16 @@ function connectSocket() {
     if (!activeRide) return;
     socket.emit('ride:join', activeRide._id);
     // Rehydrate current status and persisted Driver GPS after every reconnect.
-    apiCall(`/api/rides/${activeRide._id}`).then(ride => {
-      if (!ride || !activeRide || String(ride._id) !== String(activeRide._id)) return;
-      activeRide = ride;
-      pendingVerificationPin = ride.pickupReachedAt ? (ride.verificationPin || pendingVerificationPin) : null;
-      if (ride.driver && typeof ride.driver === 'object') {
-        activeDriverInfo = ride.driver;
-        showMatchedPanel(ride.driver, ride.fare);
-      }
-      updateCustomerCancellationControl(ride.status);
-      if (ride.pickupReachedAt) revealRidePinIfAtPickup();
-      const loc = ride?.driverLocation;
+    const rideId = activeRide._id;
+    syncCustomerRideState(rideId).then(() => {
+      if (!activeRide || String(activeRide._id) !== String(rideId)) return;
+      pendingVerificationPin = activeRide.pickupReachedAt
+        ? (activeRide.verificationPin || pendingVerificationPin)
+        : null;
+      if (activeRide.pickupReachedAt) revealRidePinIfAtPickup();
+      const loc = activeRide.driverLocation;
       if (loc?.lat && loc?.lng) updateLiveTripTracking(loc, { recenter: false });
-    }).catch(() => {});
+    });
   });
 
   socket.on('fare:updated', () => {
@@ -3664,9 +3715,15 @@ function connectSocket() {
 function connectToRideRoom(rideId) {
   if (!socket) return;
   socket.emit('ride:join', rideId);
+  // The initial room join and a very fast Driver response can race. Read the
+  // authoritative ride snapshot immediately so an offer emitted before the
+  // room was joined still appears in the Customer UI.
+  void syncCustomerRideState(rideId);
 
   // Driver offers / counter-offers arriving in real time
   socket.on('ride:offers', (offers) => {
+    if (!Array.isArray(offers)) return;
+    driverOffers = offers;
     renderOffers(offers);
     if (offers.length === 1) showToast(`A driver responded to your offer!`, 'info');
     else if (offers.length > 1) showToast(`${offers.length} drivers have responded!`, 'info');
@@ -3701,6 +3758,7 @@ function connectToRideRoom(rideId) {
   socket.on('ride:pickup-reached', ({ rideId, pickupReachedAt, verificationPin }) => {
     if (!activeRide || String(activeRide._id) !== String(rideId) || !verificationPin) return;
     activeRide.pickupReachedAt = pickupReachedAt || new Date().toISOString();
+    activeRide.status = 'arrived';
     pendingVerificationPin = verificationPin;
     // The PIN is a required handoff action, so make the authorized release
     // visible even if the Customer had collapsed the active-ride sheet.

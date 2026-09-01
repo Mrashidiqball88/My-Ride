@@ -89,7 +89,7 @@ export type AlertReadiness = {
 
 type RuntimeContext = {
   ready: boolean; user: DriverUser | null; isOnline: boolean; connection: 'connected' | 'connecting' | 'offline';
-  pendingRide: RideRequest | null; activeRide: RideRequest | null; activeRideId: string | null;
+  pendingRide: RideRequest | null; sentOffer: RideRequest | null; activeRide: RideRequest | null; activeRideId: string | null;
   driverLocation: DriverLocation | null; error: string | null;
   longRange: LongRangeState | null;
   alertReadiness: AlertReadiness;
@@ -101,6 +101,7 @@ type RuntimeContext = {
   openAlertSetting(setting: AndroidAlertSetting): Promise<void>;
   setLongRange(next: boolean): Promise<string>;
   acceptRide(): Promise<void>;
+  acceptingRide: boolean;
   dismissRide(): void;
   clearError(): void;
 };
@@ -131,6 +132,21 @@ function api(path: string, token?: string, session?: string, init: RequestInit =
     if (!response.ok) throw new Error(data.error || `Network request failed (${response.status})`);
     return data;
   });
+}
+
+async function apiWithTimeout(path: string, token: string, session: string | undefined, init: RequestInit = {}, timeoutMs = 12_000) {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    return await api(path, token, session, { ...init, signal: controller.signal });
+  } catch (error) {
+    if ((error as { name?: string })?.name === 'AbortError') {
+      throw new Error('The Driver response timed out. We are checking the ride status.');
+    }
+    throw error;
+  } finally {
+    clearTimeout(timeout);
+  }
 }
 
 async function configureNotifications(requestPermission = false) {
@@ -183,6 +199,8 @@ export function DriverRuntimeProvider({ children }: { children: ReactNode }) {
   const [isOnline, setIsOnline] = useState(false);
   const [connection, setConnection] = useState<RuntimeContext['connection']>('offline');
   const [pendingRide, setPendingRide] = useState<RideRequest | null>(null);
+  const [sentOffer, setSentOffer] = useState<RideRequest | null>(null);
+  const [acceptingRide, setAcceptingRide] = useState(false);
   const [activeRide, setActiveRide] = useState<RideRequest | null>(null);
   const [activeRideId, setActiveRideId] = useState<string | null>(null);
   const [driverLocation, setDriverLocation] = useState<DriverLocation | null>(null);
@@ -208,6 +226,7 @@ export function DriverRuntimeProvider({ children }: { children: ReactNode }) {
   const sessionRef = useRef<string | null>(null);
   const isOnlineRef = useRef(false);
   const activeRideIdRef = useRef<string | null>(null);
+  const sentOfferRef = useRef<RideRequest | null>(null);
   const alertedRideIds = useRef(new Set<string>());
   const localRideNotificationIds = useRef(new Map<string, string>());
   const receivedRideEvents = useRef(new Map<string, number>());
@@ -218,6 +237,7 @@ export function DriverRuntimeProvider({ children }: { children: ReactNode }) {
   const specialSettingPrompted = useRef<AndroidAlertSetting | null>(null);
 
   useEffect(() => { isOnlineRef.current = isOnline; }, [isOnline]);
+  useEffect(() => { sentOfferRef.current = sentOffer; }, [sentOffer]);
   useEffect(() => { activeRideIdRef.current = activeRideId; }, [activeRideId]);
 
   const clearRideAlert = useCallback((rideId: string) => {
@@ -247,9 +267,10 @@ export function DriverRuntimeProvider({ children }: { children: ReactNode }) {
       const liveRides = Array.isArray(rides)
         ? rides.map(ride => normalizeRideRequest(ride as RideRequest & { _id?: string })).filter(isRideOfferLive)
         : [];
+      const sentOfferId = sentOfferRef.current?.id;
       const nextRide = requestedRideId
-        ? liveRides.find(ride => ride.id === requestedRideId)
-        : liveRides[0];
+        ? liveRides.find(ride => ride.id === requestedRideId && ride.id !== sentOfferId)
+        : liveRides.find(ride => ride.id !== sentOfferId);
       setPendingRide(current => nextRide || (isRideOfferLive(current) ? current : null));
       return Boolean(nextRide);
     } catch {
@@ -281,7 +302,8 @@ export function DriverRuntimeProvider({ children }: { children: ReactNode }) {
 
   const handleRideOffer = useCallback((ride: RideRequest, { fromPush = false } = {}) => {
     const nextRide = normalizeRideRequest(ride);
-    if (!isOnlineRef.current || activeRideIdRef.current || !isRideOfferLive(nextRide)) return;
+    if (!isOnlineRef.current || activeRideIdRef.current || !isRideOfferLive(nextRide)
+      || sentOfferRef.current?.id === nextRide.id) return;
     const previousEventAt = receivedRideEvents.current.get(nextRide.id) || 0;
     if (Date.now() - previousEventAt < 120_000) return;
     const receivedAt = Date.now();
@@ -351,15 +373,19 @@ export function DriverRuntimeProvider({ children }: { children: ReactNode }) {
     nextSocket.on('ride:taken', ({ rideId }: { rideId: string }) => {
       clearRideAlert(rideId);
       setPendingRide(current => current?.id === rideId ? null : current);
+      setSentOffer(current => current?.id === rideId ? null : current);
+      if (sentOfferRef.current?.id === rideId) sentOfferRef.current = null;
     });
     nextSocket.on('ride:accepted', ({ rideId }: { rideId: string }) => {
+      if (sentOfferRef.current?.id !== rideId) return;
       clearRideAlert(rideId);
-      setPendingRide(current => {
-        if (current?.id === rideId) setActiveRide(current);
-        return current?.id === rideId ? null : current;
-      });
-      setActiveRideId(rideId);
-      void SecureStore.setItemAsync(ACTIVE_RIDE_KEY, rideId);
+      setSentOffer(null);
+      sentOfferRef.current = null;
+      setPendingRide(current => current?.id === rideId ? null : current);
+      // Do not promote the stale requested snapshot into an active ride. The
+      // server's accepted snapshot contains the assigned Driver and latest
+      // status, so recover it before showing navigation.
+      void hydrateActiveRide();
     });
     nextSocket.on('ride:status', ({ rideId, status }: { rideId: string; status: string }) => {
       if (['completed', 'cancelled'].includes(status)) {
@@ -375,6 +401,8 @@ export function DriverRuntimeProvider({ children }: { children: ReactNode }) {
       if (status === 'cancelled') {
         clearRideAlert(rideId);
         setPendingRide(current => current?.id === rideId ? null : current);
+        setSentOffer(current => current?.id === rideId ? null : current);
+        if (sentOfferRef.current?.id === rideId) sentOfferRef.current = null;
       }
     });
     nextSocket.on('account:suspended', ({ reason }: { reason?: string }) => {
@@ -485,6 +513,8 @@ export function DriverRuntimeProvider({ children }: { children: ReactNode }) {
     setUser(null);
     setIsOnline(false);
     setPendingRide(null);
+    setSentOffer(null);
+    sentOfferRef.current = null;
     setActiveRide(null);
     setActiveRideId(null);
     setDriverLocation(null);
@@ -879,26 +909,37 @@ export function DriverRuntimeProvider({ children }: { children: ReactNode }) {
     socket.current?.disconnect(); socket.current = null;
     tokenRef.current = null; sessionRef.current = null;
     await Promise.all([TOKEN_KEY, SESSION_KEY, USER_KEY, ONLINE_KEY, ACTIVE_RIDE_KEY, LOCK_SCREEN_ACK_KEY, PUSH_TOKEN_KEY].map(key => SecureStore.deleteItemAsync(key)));
-    setUser(null); setPendingRide(null); setActiveRide(null); setActiveRideId(null); setDriverLocation(null); setConnection('offline');
+    setUser(null); setPendingRide(null); setSentOffer(null); sentOfferRef.current = null; setActiveRide(null); setActiveRideId(null); setDriverLocation(null); setConnection('offline');
     setAlertReadiness(current => ({ ...current, ready: false, lockScreenConfirmed: false, foregroundServiceReady: false }));
   }, [setOnlineState]);
 
   const acceptRide = useCallback(async () => {
-    if (!pendingRide || !tokenRef.current) return;
-    if (!isRideOfferLive(pendingRide)) {
+    if (!pendingRide || !tokenRef.current || acceptingRide) return;
+    const offer = pendingRide;
+    if (!isRideOfferLive(offer)) {
       setPendingRide(null);
       throw new Error('This ride request has expired.');
     }
-    await api(`/api/rides/${pendingRide.id}/counter`, tokenRef.current, sessionRef.current || undefined, {
-      method: 'PATCH', body: JSON.stringify({ price: pendingRide.fare, type: 'accept' }),
-    });
-    socket.current?.emit('ride:join', pendingRide.id);
-    clearRideAlert(pendingRide.id);
-    setActiveRide(pendingRide);
-    setActiveRideId(pendingRide.id);
-    await SecureStore.setItemAsync(ACTIVE_RIDE_KEY, pendingRide.id);
-    setPendingRide(null);
-  }, [clearRideAlert, pendingRide]);
+    setAcceptingRide(true);
+    try {
+      await apiWithTimeout(`/api/rides/${offer.id}/counter`, tokenRef.current, sessionRef.current || undefined, {
+        method: 'PATCH', body: JSON.stringify({ price: offer.fare, type: 'accept' }),
+      });
+      socket.current?.emit('ride:join', offer.id);
+      clearRideAlert(offer.id);
+      sentOfferRef.current = offer;
+      setSentOffer(offer);
+      setPendingRide(null);
+    } catch (error) {
+      // A timeout does not tell us whether the server committed the offer.
+      // Re-read available rides instead of leaving the button in a limbo
+      // state or blindly retrying and creating duplicate offers.
+      await hydrateAvailableRides().catch(() => undefined);
+      throw error;
+    } finally {
+      setAcceptingRide(false);
+    }
+  }, [acceptingRide, clearRideAlert, hydrateAvailableRides, pendingRide]);
 
   const setLongRange = useCallback(async (enabled: boolean) => {
     if (!tokenRef.current) throw new Error('Sign in is required.');
@@ -910,10 +951,10 @@ export function DriverRuntimeProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const value = useMemo<RuntimeContext>(() => ({
-    ready, user, isOnline, connection, pendingRide, activeRide, activeRideId, driverLocation, error, longRange, alertReadiness,
-    signIn, signOut, setOnline: setOnlineState, prepareAlertReadiness, confirmLockScreenAlerts, openAlertSetting, setLongRange, acceptRide,
+    ready, user, isOnline, connection, pendingRide, sentOffer, activeRide, activeRideId, driverLocation, error, longRange, alertReadiness,
+    acceptingRide, signIn, signOut, setOnline: setOnlineState, prepareAlertReadiness, confirmLockScreenAlerts, openAlertSetting, setLongRange, acceptRide,
     dismissRide: () => setPendingRide(null), clearError: () => setError(null),
-  }), [acceptRide, activeRide, activeRideId, alertReadiness, confirmLockScreenAlerts, driverLocation, error, isOnline, openAlertSetting, pendingRide, prepareAlertReadiness, ready, setOnlineState, setLongRange, signIn, signOut, user, connection, longRange]);
+  }), [acceptRide, acceptingRide, activeRide, activeRideId, alertReadiness, confirmLockScreenAlerts, driverLocation, error, isOnline, openAlertSetting, pendingRide, prepareAlertReadiness, ready, sentOffer, setOnlineState, setLongRange, signIn, signOut, user, connection, longRange]);
   return <DriverContext.Provider value={value}>{children}</DriverContext.Provider>;
 }
 
