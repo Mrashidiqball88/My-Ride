@@ -1024,6 +1024,12 @@ input[type=date]:focus{border-color:#f5c518}
             <p>Manage base fares, distance slabs, and time-based rules for each vehicle type.</p>
             <button class="btn btn-primary" onclick="showSection('fare-settings')">Manage fare rates</button>
           </article>
+          <article class="settings-card" id="waiting-rate-settings-card">
+            <div class="settings-icon">⏱️</div>
+            <h3>Waiting / Stop Rates</h3>
+            <p>Set a separate grace period and per-minute waiting charge for every vehicle category.</p>
+            <button class="btn btn-primary" onclick="showSection('waiting-rate-settings')">Manage waiting rates</button>
+          </article>
           <article class="settings-card" id="customer-fare-display-settings-card">
             <div class="settings-icon">👁️</div>
             <h3>Customer Fare Display</h3>
@@ -1105,6 +1111,18 @@ input[type=date]:focus{border-color:#f5c518}
          </div>
         <div id="fare-settings-list"></div>
         <button class="btn btn-primary" style="padding:.75rem 2rem;font-size:.9rem" onclick="saveFareSettings()">💾 Save All Daily Fare Settings</button>
+      </div>
+      <div class="section-panel" id="sec-waiting-rate-settings">
+        <div class="sec-hdr">
+          <h2>⏱️ Per-Minute Waiting / Stop Rates</h2>
+          <div class="sec-hdr-actions"><button class="btn-refresh" onclick="loadWaitingRateSettings()">↻ Reload</button></div>
+        </div>
+        <p style="font-size:.8rem;color:#475569;margin-bottom:1.1rem">
+          Waiting is tracked from the Driver’s active-ride GPS. Each stopped segment receives its own grace period; route travel time remains separate. Disabled and zero-rate categories do not add waiting charges.
+        </p>
+        <div id="waiting-rate-settings-feedback" style="min-height:1.25rem;font-size:.8rem;margin-bottom:.8rem"></div>
+        <div id="waiting-rate-settings-list"></div>
+        <button class="btn btn-primary" style="padding:.75rem 2rem;font-size:.9rem" onclick="saveWaitingRateSettings()">💾 Save Waiting / Stop Rates</button>
       </div>
       <div class="section-panel" id="sec-customer-fare-display-settings">
         <div class="sec-hdr">
@@ -1541,7 +1559,7 @@ const SECTION_PERMISSION = {
   'temp-blocked': 'manageDriverStatus', passengers: 'viewCustomers',
   'blk-pass': 'manageCustomers', 'live-rides': 'viewRides', sos: 'viewSOS',
   ratings: 'viewRatings', support: 'viewSupport', 'audit-logs': 'viewAuditLogs',
-  'ride-settings': 'manageRideSettings', 'fare-settings': 'manageFareSettings', 'customer-fare-display-settings': 'manageFareSettings', 'long-range-settings': 'manageFareSettings', 'terms-settings': 'manageFareSettings', 'location-aliases': 'manageLocationAliases',
+  'ride-settings': 'manageRideSettings', 'fare-settings': 'manageFareSettings', 'waiting-rate-settings': 'manageFareSettings', 'customer-fare-display-settings': 'manageFareSettings', 'long-range-settings': 'manageFareSettings', 'terms-settings': 'manageFareSettings', 'location-aliases': 'manageLocationAliases',
   'pay-settings': 'managePaymentSettings'
 };
 function hasSectionAccess(name) {
@@ -1935,13 +1953,13 @@ const SECTION_TITLES = {
   'live-rides':'Live Rides & History', sos:'SOS Alert Monitor',
   'fee-compliance':'Driver Wallets & Daily Fees',
   'app-settings':'App Settings / Pricing', 'terms-settings':'Terms & Conditions Settings', 'location-aliases':'Customer Location Aliases',
-  'ride-settings':'Ride Settings', 'fare-settings':'Daily Fare Settings', 'customer-fare-display-settings':'Customer Fare Display', 'long-range-settings':'Long Range Ride Settings', 'pay-settings':'Payment Settings', 'ride-retention':'Rides Data Retention', ratings:'Ratings & Feedback', support:'Support Tickets', 'audit-logs':'Payment & Pass Audit Logs',
+  'ride-settings':'Ride Settings', 'fare-settings':'Daily Fare Settings', 'waiting-rate-settings':'Per-Minute Waiting / Stop Rates', 'customer-fare-display-settings':'Customer Fare Display', 'long-range-settings':'Long Range Ride Settings', 'pay-settings':'Payment Settings', 'ride-retention':'Rides Data Retention', ratings:'Ratings & Feedback', support:'Support Tickets', 'audit-logs':'Payment & Pass Audit Logs',
     deletions:'Account Deletion Requests', 'sub-admins':'Sub-Admin User Management'
 };
 const SECTION_SAVE_HANDLERS = {
   'pay-settings': 'savePaymentSettings',
   'ride-settings': 'saveRideSettings',
-  'fare-settings': 'saveFareSettings',
+  'fare-settings': 'saveFareSettings', 'waiting-rate-settings': 'saveWaitingRateSettings',
   'long-range-settings': 'saveLongRangeSettings',
   'terms-settings': 'saveActiveTerms',
   'ride-retention': 'saveRideRetention'
@@ -2066,7 +2084,7 @@ function showSection(name) {
     'blk-pass': loadBlockedPass, 'live-rides': () => loadRides(currentRideStatus),
     'ride-retention': loadRideRetention,
     sos: () => loadSOS(currentSOSFilter), 'ride-settings': loadRideSettings, 'fare-settings': loadFareSettings, 'customer-fare-display-settings': loadCustomerFareDisplaySettings, 'long-range-settings': loadLongRangeSettings, 'terms-settings': loadTermsSettings, 'location-aliases': loadLocationAliases, 'pay-settings': loadPaymentSettings,
-    'fee-compliance': loadFeeCompliance,
+    'fee-compliance': loadFeeCompliance, 'waiting-rate-settings': loadWaitingRateSettings,
     ratings: loadRatings, support: () => loadSupportTickets(currentSupStatus),
     deletions: loadDeletionRequests,
     'sub-admins': loadSubAdmins, 'audit-logs': loadAuditLogs
@@ -4456,6 +4474,82 @@ async function saveFareCategory(category) {
     feedback.textContent = `✕ ${e.message || `Could not save ${category} fare`}${details}`;
     feedback.style.color = '#ef4444';
     showToast(e.message || `Could not save ${category} fare`, 'error');
+  }
+}
+
+let waitingRateSettingsState = {};
+
+function waitingRateCard(category, config = {}) {
+  const enabled = config.enabled === true;
+  const rate = Number.isFinite(Number(config.ratePerMinute)) ? Number(config.ratePerMinute) : 0;
+  const grace = Number.isFinite(Number(config.graceMinutes)) ? Number(config.graceMinutes) : 5;
+  return `<div class="fare-category-card waiting-rate-card" data-category="${escHtml(category)}" style="background:#0f0f1e;border:1px solid ${enabled ? '#22c55e' : '#1e1e2e'};border-radius:14px;padding:1rem;margin-bottom:1rem">
+    <div style="display:flex;justify-content:space-between;align-items:center;gap:.75rem;margin-bottom:.8rem">
+      <strong style="color:#e2e8f0">${escHtml(category)}</strong>
+      <label style="display:flex;align-items:center;gap:.45rem;color:${enabled ? '#22c55e' : '#94a3b8'};font-size:.74rem;font-weight:800;cursor:pointer">
+        <span>${enabled ? 'Waiting charges ON' : 'Waiting charges OFF'}</span>
+        <input class="waiting-enabled" type="checkbox" ${enabled ? 'checked' : ''} style="width:18px;height:18px;accent-color:#22c55e">
+      </label>
+    </div>
+    <div class="field-row">
+      <div class="field-item" style="max-width:280px"><div class="field-label">Waiting Rate (PKR /min)</div>
+        <input class="modal-input waiting-rate" type="number" min="0" step="0.01" value="${rate}" placeholder="0 = no charge"></div>
+      <div class="field-item" style="max-width:280px"><div class="field-label">Grace Period (minutes)</div>
+        <input class="modal-input waiting-grace" type="number" min="0" max="1440" step="0.01" value="${grace}" placeholder="5"></div>
+    </div>
+    <div style="font-size:.7rem;color:#64748b;line-height:1.45;margin-top:.55rem">After the grace period, the server bills stationary GPS time in minute fractions. Route travel-time pricing is not changed.</div>
+  </div>`;
+}
+
+function renderWaitingRateSettings(settings = {}) {
+  waitingRateSettingsState = settings;
+  const list = document.getElementById('waiting-rate-settings-list');
+  if (!list) return;
+  list.innerHTML = FARE_CATEGORIES.map(category => waitingRateCard(category, settings[category])).join('');
+}
+
+function readWaitingRateSettings() {
+  const data = {};
+  document.querySelectorAll('.waiting-rate-card').forEach(card => {
+    data[card.dataset.category] = {
+      enabled: card.querySelector('.waiting-enabled').checked,
+      ratePerMinute: card.querySelector('.waiting-rate').value,
+      graceMinutes: card.querySelector('.waiting-grace').value
+    };
+  });
+  return data;
+}
+
+async function loadWaitingRateSettings() {
+  const feedback = document.getElementById('waiting-rate-settings-feedback');
+  if (!feedback) return;
+  feedback.textContent = 'Loading…'; feedback.style.color = '#64748b';
+  try {
+    const result = await api('/api/admin/waiting-rate-settings');
+    renderWaitingRateSettings(result.settings || {});
+    feedback.textContent = '';
+  } catch (error) {
+    feedback.textContent = `⚠ ${error.message || 'Could not load waiting rates'}`;
+    feedback.style.color = '#ef4444';
+  }
+}
+
+async function saveWaitingRateSettings() {
+  const feedback = document.getElementById('waiting-rate-settings-feedback');
+  feedback.textContent = 'Saving waiting / stop rates…'; feedback.style.color = '#64748b';
+  try {
+    const result = await api('/api/admin/waiting-rate-settings', 'PATCH', {
+      waitingRateSettings: readWaitingRateSettings()
+    });
+    renderWaitingRateSettings(result.settings || {});
+    feedback.textContent = '✓ Waiting / Stop Rates saved and applied to active rides.';
+    feedback.style.color = '#22c55e';
+    showToast('Waiting / Stop Rates saved ✓', 'success');
+  } catch (error) {
+    const details = Array.isArray(error?.errors) ? `: ${error.errors.join('; ')}` : '';
+    feedback.textContent = `✕ ${error.message || 'Could not save waiting rates'}${details}`;
+    feedback.style.color = '#ef4444';
+    showToast(error.message || 'Could not save waiting rates', 'error');
   }
 }
 

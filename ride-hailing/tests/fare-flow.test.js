@@ -11,7 +11,8 @@ const {
   validateRideBroadcastSettings, rideOfferIsStillOpenQuery, findRideBroadcastDrivers, findLongRangeBroadcastDrivers, emitRideRequestToDrivers, emitRideLifecycle, chargeLongRangeCommission,
   normalizeLongRangeSettings, validateLongRangeSettings, calculateRideFare
    , normalizeTerms, normalizeFareVehicle, normalizeFareSettings, storedVehicleTypesForFareCategory,
-  normalizeVehicleCategorySettings, isVehicleCategoryActive
+  normalizeVehicleCategorySettings, isVehicleCategoryActive, normalizeWaitingRateSettings,
+  validateWaitingRateSettings, calculateWaitingFare, observeRideWaiting
 } = fare;
 
 const JWT_SECRET = 'ride-hailing-secret-fallback';
@@ -225,6 +226,57 @@ test('Long Range fares begin at the configured cutoff and use vehicle-specific r
   assert.equal(long.totalFare, 10500);
   const invalid = validateLongRangeSettings({ enabled: true, perKmRates: {} });
   assert.equal(invalid.errors.length, FARE_VEHICLE_CATEGORIES.length);
+});
+
+test('Waiting rates stay independent from travel-time rates and honor disabled, zero-rate, and grace settings', () => {
+  const waiting = normalizeWaitingRateSettings({
+    Bike: { enabled: true, ratePerMinute: 10, graceMinutes: 5 },
+    'Car Sedan': { enabled: false, ratePerMinute: 20, graceMinutes: 2 },
+    'Car SUV': { enabled: true, ratePerMinute: 0, graceMinutes: 0 }
+  });
+  assert.equal(validateWaitingRateSettings(waiting).errors.length, 0);
+  assert.deepEqual(calculateWaitingFare(waiting, 'Bike', 300), {
+    waitingEnabled: true,
+    waitingSeconds: 300,
+    waitingMinutes: 5,
+    waitingRatePerMinute: 10,
+    waitingGraceMinutes: 5,
+    waitingFare: 50
+  });
+  assert.equal(calculateWaitingFare(waiting, 'Car Sedan', 900).waitingFare, 0);
+  assert.equal(calculateWaitingFare(waiting, 'Car SUV', 900).waitingFare, 0);
+});
+
+test('Waiting observation applies grace separately to stopped segments', () => {
+  const waiting = normalizeWaitingRateSettings({
+    Bike: { enabled: true, ratePerMinute: 12, graceMinutes: 1 }
+  });
+  const baseRide = {
+    status: 'in-progress',
+    vehicleType: 'Bike',
+    driverLocation: { lat: 31.5204, lng: 74.3587 },
+    waitingSeconds: 0,
+    waitingAccumulatedSeconds: 0,
+    waitingStartedAt: null
+  };
+  const start = new Date('2026-09-01T10:00:00.000Z');
+  const first = observeRideWaiting(baseRide, baseRide.driverLocation, waiting, start);
+  assert.equal(first.waitingSeconds, 0);
+  const afterGrace = observeRideWaiting(
+    { ...baseRide, ...first, driverLocation: baseRide.driverLocation },
+    baseRide.driverLocation,
+    waiting,
+    new Date('2026-09-01T10:02:00.000Z')
+  );
+  assert.equal(afterGrace.waitingSeconds, 60);
+  const moving = observeRideWaiting(
+    { ...baseRide, ...afterGrace, driverLocation: baseRide.driverLocation },
+    { lat: 31.5214, lng: 74.3587 },
+    waiting,
+    new Date('2026-09-01T10:02:30.000Z')
+  );
+  assert.equal(moving.waitingSeconds, 90);
+  assert.equal(moving.waitingStartedAt, null);
 });
 
 test('Long Range settings keep independent minimum wallet balances by vehicle category', () => {

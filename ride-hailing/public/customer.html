@@ -766,6 +766,7 @@ body{font-family:'Segoe UI',sans-serif;background:#0a0a0f;color:#fff;height:100d
               <span class="fare-badge">Admin Rules</span>
             </div>
             <div class="fare-meta customer-fare-breakdown" id="fare-meta"></div>
+            <div id="fare-waiting-line" style="display:none;margin-top:.35rem;color:#9a641d;font-size:.74rem;line-height:1.4"></div>
             <div class="customer-fare-breakdown" style="margin-top:.25rem"><span class="dist-badge" id="dist-badge" style="display:none">📍 <span id="dist-km-val">0</span> km</span></div>
           </div>
           <div class="fare-suggested customer-fare-breakdown">
@@ -822,6 +823,7 @@ body{font-family:'Segoe UI',sans-serif;background:#0a0a0f;color:#fff;height:100d
         <span class="ar-fare-big" id="ar-live-fare">Rs 0</span>
       </div>
     </div>
+    <div id="ar-waiting-estimate" style="display:none;margin:.55rem 0;color:#9a641d;font-size:.74rem;line-height:1.4"></div>
 
     <!-- Driver offers list -->
     <div class="offers-hdr">
@@ -870,6 +872,10 @@ body{font-family:'Segoe UI',sans-serif;background:#0a0a0f;color:#fff;height:100d
         <span class="matched-fare-val" id="ar-fare">—</span>
       </div>
       <div class="matched-pay-row" id="ar-payment">—</div>
+      <div id="ar-waiting-fare-row" style="display:none;justify-content:space-between;gap:.75rem;padding-top:.55rem;margin-top:.55rem;border-top:1px solid #ded5ca;font-size:.76rem">
+        <span>Waiting / stop charges</span>
+        <strong id="ar-waiting-fare">—</strong>
+      </div>
     </div>
 
     <!-- Ride Verification PIN (shown only when driver reaches pickup) -->
@@ -3070,6 +3076,7 @@ async function updateFare() {
     currentFareQuote = quote;
     customerFareOffset = 0;
     offeredFare = quote.totalFare + customerFareOffset;
+    renderWaitingFareLine(quote);
     const stopCount = dropoffs.slice(0, activeStops).filter(d => d).length;
     const distLabel = stopCount > 1 ? `📍 ${dist.toFixed(1)} km total · ${stopCount} stops` : `📍 ${dist.toFixed(1)} km`;
     const adjustment = quote.adjustmentPercent
@@ -3126,6 +3133,37 @@ function renderOfferedFare() {
     button.disabled = !bounds;
     button.setAttribute('aria-disabled', String(!bounds));
   });
+}
+
+function renderWaitingFareLine(quote, targetId = 'fare-waiting-line') {
+  const line = document.getElementById(targetId);
+  if (!line) return;
+  const enabled = quote?.waitingEnabled === true && Number(quote?.waitingRatePerMinute) > 0;
+  if (!enabled) {
+    line.style.display = 'none';
+    line.textContent = '';
+    return;
+  }
+  const grace = Number(quote.waitingGraceMinutes || 0);
+  const rate = Number(quote.waitingRatePerMinute || 0);
+  const fare = Number(quote.waitingFare || 0);
+  line.style.display = 'block';
+  line.textContent = fare > 0
+    ? `⏱️ Waiting / stop: Rs ${fare.toLocaleString()} (${Number(quote.waitingMinutes || 0).toFixed(2)} min billed)`
+    : `⏱️ Waiting / stop estimate: after ${grace} min grace · Rs ${rate.toLocaleString()}/min`;
+}
+
+function renderActiveWaitingFare(quote = activeRide?.fareQuote) {
+  const row = document.getElementById('ar-waiting-fare-row');
+  const value = document.getElementById('ar-waiting-fare');
+  if (!row || !value) return;
+  const enabled = quote?.waitingEnabled === true && Number(quote?.waitingRatePerMinute) > 0;
+  row.style.display = enabled ? 'flex' : 'none';
+  if (!enabled) return;
+  const fare = Number(quote.waitingFare || 0);
+  value.textContent = fare > 0
+    ? `Rs ${fare.toLocaleString()}`
+    : `After ${Number(quote.waitingGraceMinutes || 0)} min grace`;
 }
 
 function customerOfferBounds() {
@@ -3291,6 +3329,7 @@ function showWaitingPanel(ride) {
   document.getElementById('ar-contact-btns').style.display = 'none';
   updateCustomerCancellationControl(ride.status || 'requested');
   document.getElementById('ar-live-fare').textContent = `Rs ${(activeLiveFare || ride.fare || 0).toLocaleString()}`;
+  renderWaitingFareLine(ride.fareQuote, 'ar-waiting-estimate');
   document.getElementById('ride-status-text').textContent = 'Broadcasting your offer…';
   document.getElementById('offers-list').innerHTML = '<div class="no-offers-msg">🔍 Waiting for nearby drivers to respond…</div>';
   document.getElementById('offers-count').textContent = '';
@@ -3324,6 +3363,7 @@ function showMatchedPanel(driver, agreedFare) {
   document.getElementById('ar-driver-rating').textContent = `⭐ ${(driver.rating || 5.0).toFixed(1)}`;
   document.getElementById('ar-fare').textContent = `Rs ${(agreedFare || 0).toLocaleString()}`;
   document.getElementById('ar-payment').textContent = '💵 Cash (direct)';
+  renderActiveWaitingFare(activeRide?.fareQuote);
 
   // Dual call buttons — Phone + WhatsApp
   const digits = driver.phone ? driver.phone.replace(/\D/g, '') : '';
@@ -3660,13 +3700,17 @@ function connectToRideRoom(rideId) {
     else if (offers.length > 1) showToast(`${offers.length} drivers have responded!`, 'info');
   });
 
-  socket.on('ride:fare-updated', ({ id, fare, fareQuote }) => {
+  socket.on('ride:fare-updated', ({ id, fare, fareQuote, reason }) => {
     if (!activeRide || String(activeRide._id) !== String(id)) return;
     activeRide.fare = fare;
     activeRide.fareQuote = fareQuote;
     activeLiveFare = fare;
     document.getElementById('ar-live-fare').textContent = `Rs ${Number(fare || 0).toLocaleString()}`;
-    showToast(`🧮 Fare updated to Rs ${Number(fare || 0).toLocaleString()} from the latest Admin rules.`, 'info');
+    renderActiveWaitingFare(fareQuote);
+    renderWaitingFareLine(fareQuote);
+    if (reason !== 'waiting') {
+      showToast(`🧮 Fare updated to Rs ${Number(fare || 0).toLocaleString()} from the latest Admin rules.`, 'info');
+    }
   });
 
   // Customer selected a driver — full driver profile arrives here
@@ -3695,8 +3739,14 @@ function connectToRideRoom(rideId) {
     showToast('Your driver has reached the pickup point. Share the PIN to start.', 'success');
   });
 
-  socket.on('ride:status', ({ rideId, status }) => {
+  socket.on('ride:status', ({ rideId, status, fare, fareQuote }) => {
     if (!activeRide || String(activeRide._id) !== String(rideId)) return;
+    if (status === 'completed' && fareQuote) {
+      activeRide.fare = fare;
+      activeRide.fareQuote = fareQuote;
+      activeLiveFare = fare;
+      renderActiveWaitingFare(fareQuote);
+    }
     activeRide.status = status;
     if (status === 'completed') {
       const completedRideId = activeRide._id;
@@ -3953,6 +4003,10 @@ async function loadRideHistory() {
     el.innerHTML = rides.map(r => {
       const status = ['requested', 'accepted', 'arrived', 'in-progress', 'completed', 'cancelled'].includes(r.status) ? r.status : 'requested';
       const fare = Number.isFinite(Number(r.fare)) ? Number(r.fare).toLocaleString() : '0';
+      const waitingQuote = r.fareQuote;
+      const waitingHtml = waitingQuote?.waitingEnabled === true && Number(waitingQuote.waitingRatePerMinute) > 0
+        ? `<div style="margin-top:.35rem;color:#9a641d;font-size:.72rem">⏱️ Waiting / stop charges: Rs ${Number(waitingQuote.waitingFare || 0).toLocaleString()}${Number(waitingQuote.waitingFare || 0) ? ` · ${Number(waitingQuote.waitingMinutes || 0).toFixed(2)} min billed` : ` · after ${Number(waitingQuote.waitingGraceMinutes || 0)} min grace`}</div>`
+        : '';
       return `<div class="ride-history-item ${status}">
         <div class="rh-route">${escapeLocationText(r.pickupLocation?.address || 'Pickup')} <span>→</span> ${escapeLocationText(r.dropoffLocation?.address || 'Dropoff')}</div>
         <div class="rh-meta">
@@ -3960,6 +4014,7 @@ async function loadRideHistory() {
           <span class="rh-fare">Rs ${fare} 💵</span>
           <span>${new Date(r.createdAt).toLocaleDateString()}</span>
         </div>
+        ${waitingHtml}
       </div>`;
     }).join('');
   } catch {}

@@ -1110,6 +1110,129 @@ test.describe('live Mongo fare refresh', () => {
     }
   });
 
+  test('tracks server-authoritative waiting time, updates the Customer fare, and charges it on completion', async ({ browser, playwright }) => {
+    const baseURL = `http://127.0.0.1:${httpServer.address().port}`;
+    const request = await playwright.request.newContext({ baseURL });
+    const adminJwt = token({ _id: new mongoose.Types.ObjectId(), role: 'admin', isAdmin: true, name: 'Admin' });
+    const customerPage = await browser.newPage();
+    const driverPage = await browser.newPage();
+    const pickup = { lat: 31.5204, lng: 74.3587, address: 'Waiting pickup' };
+    const dropoff = { lat: 31.5304, lng: 74.3687, address: 'Waiting drop-off' };
+    const waitingSettings = Object.fromEntries(FARE_VEHICLE_CATEGORIES.map(category => [
+      category,
+      { enabled: category === 'Car Mini Non-AC', ratePerMinute: category === 'Car Mini Non-AC' ? 60 : 0, graceMinutes: 0 }
+    ]));
+    const disabledWaitingSettings = Object.fromEntries(FARE_VEHICLE_CATEGORIES.map(category => [
+      category,
+      { enabled: false, ratePerMinute: 0, graceMinutes: 5 }
+    ]));
+
+    try {
+      const fareSettings = await request.patch('/api/admin/fare-settings', {
+        headers: { authorization: `Bearer ${adminJwt}` },
+        data: { dailyFareSettings: settingsFor(200, 100) }
+      });
+      expect(fareSettings.ok()).toBeTruthy();
+      const waitingSaved = await request.patch('/api/admin/waiting-rate-settings', {
+        headers: { authorization: `Bearer ${adminJwt}` },
+        data: { waitingRateSettings: waitingSettings }
+      });
+      expect(waitingSaved.ok()).toBeTruthy();
+
+      await Promise.all([
+        openAuthenticatedClient(customerPage, baseURL, '/customer', customer, token(customer)),
+        openAuthenticatedClient(driverPage, baseURL, '/driver', matchingDriver, token(matchingDriver))
+      ]);
+      await driverPage.evaluate(() => toggleOnline(true));
+      await expect.poll(async () => (await models.User.findById(matchingDriver._id).lean()).isOnline).toBe(true);
+      await expect.poll(() => io.sockets.adapter.rooms.get('drivers:Car Mini Non-AC')?.size || 0).toBeGreaterThan(0);
+
+      const createdResponse = await request.post('/api/rides', {
+        headers: authHeaders(customer),
+        data: {
+          pickupLocation: pickup,
+          dropoffLocation: dropoff,
+          distance: 7,
+          vehicleType: 'Car Mini',
+          fare: 1
+        }
+      });
+      expect(createdResponse.status()).toBe(201);
+      const ride = await createdResponse.json();
+      await customerPage.evaluate(({ createdRide }) => {
+        activeRide = createdRide;
+        activeLiveFare = createdRide.fare;
+        showWaitingPanel(createdRide);
+        connectToRideRoom(createdRide._id);
+      }, { createdRide: ride });
+      await expect(driverPage.locator('#ride-request')).toBeVisible();
+
+      const acceptedResponse = await request.patch(`/api/rides/${ride._id}/accept`, {
+        headers: authHeaders(matchingDriver)
+      });
+      expect(acceptedResponse.status()).toBe(200);
+      await expect(customerPage.locator('#ar-matched')).toBeVisible();
+
+      await driverPage.evaluate(({ rideId, pickupLocation }) => {
+        socket.emit('driver:location', {
+          rideId,
+          lat: pickupLocation.lat,
+          lng: pickupLocation.lng
+        });
+      }, { rideId: ride._id, pickupLocation: pickup });
+      await expect.poll(async () => Boolean((await models.Ride.findById(ride._id).lean()).pickupReachedAt)).toBe(true);
+
+      const arrived = await request.patch(`/api/rides/${ride._id}/status`, {
+        headers: authHeaders(matchingDriver),
+        data: { status: 'arrived' }
+      });
+      expect(arrived.status()).toBe(200);
+      const withPin = await models.Ride.findById(ride._id).lean();
+      const started = await request.patch(`/api/rides/${ride._id}/status`, {
+        headers: authHeaders(matchingDriver),
+        data: { status: 'in-progress', pin: withPin.verificationPin }
+      });
+      expect(started.status()).toBe(200);
+
+      const emitStationaryLocation = () => driverPage.evaluate(({ rideId, pickupLocation }) => {
+        socket.emit('driver:location', {
+          rideId,
+          lat: pickupLocation.lat,
+          lng: pickupLocation.lng
+        });
+      }, { rideId: ride._id, pickupLocation: pickup });
+      await emitStationaryLocation();
+      await expect.poll(async () => Boolean((await models.Ride.findById(ride._id).lean()).waitingStartedAt)).toBe(true);
+      await new Promise(resolve => setTimeout(resolve, 1300));
+      await emitStationaryLocation();
+      await expect.poll(async () => {
+        const current = await models.Ride.findById(ride._id).lean();
+        return { waitingSeconds: current.waitingSeconds, waitingFare: current.waitingFare };
+      }).toMatchObject({ waitingSeconds: expect.any(Number), waitingFare: expect.any(Number) });
+      const waitingRide = await models.Ride.findById(ride._id).lean();
+      expect(waitingRide.waitingSeconds).toBeGreaterThan(0);
+      expect(waitingRide.waitingFare).toBeGreaterThan(0);
+      await expect(customerPage.locator('#ar-waiting-fare-row')).toBeVisible();
+      await expect(customerPage.locator('#ar-waiting-fare')).toContainText('Rs');
+
+      const completed = await request.patch(`/api/rides/${ride._id}/status`, {
+        headers: authHeaders(matchingDriver),
+        data: { status: 'completed' }
+      });
+      expect(completed.status()).toBe(200);
+      const finalRide = await models.Ride.findById(ride._id).lean();
+      expect(finalRide.waitingFare).toBeGreaterThan(0);
+      expect(finalRide.fare).toBeCloseTo(finalRide.agreedFareBeforeWaiting + finalRide.waitingFare, 2);
+    } finally {
+      await request.patch('/api/admin/waiting-rate-settings', {
+        headers: { authorization: `Bearer ${adminJwt}` },
+        data: { waitingRateSettings: disabledWaitingSettings }
+      }).catch(() => {});
+      await Promise.all([customerPage.close(), driverPage.close()]);
+      await request.dispose();
+    }
+  });
+
   test('removes a cancelled request and activates the winning Driver without a refresh', async ({ browser, playwright }) => {
     const customerToken = token(customer);
     const matchingToken = token(matchingDriver);

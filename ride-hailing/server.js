@@ -764,6 +764,103 @@ async function getVehicleCategorySettings() {
   return normalizeVehicleCategorySettings(doc?.value);
 }
 
+const WAITING_RATE_SETTINGS_KEY = 'waiting_rate_settings';
+const DEFAULT_WAITING_GRACE_MINUTES = 5;
+const WAITING_STOP_DISTANCE_KM = 0.03;
+const DEFAULT_WAITING_RATE_SETTINGS = Object.freeze(
+  Object.fromEntries(FARE_VEHICLE_CATEGORIES.map(category => [category, {
+    enabled: false,
+    ratePerMinute: 0,
+    graceMinutes: DEFAULT_WAITING_GRACE_MINUTES
+  }]))
+);
+let waitingRateSettingsCache = null;
+let waitingRateSettingsCacheAt = 0;
+const WAITING_RATE_CACHE_TTL_MS = 5000;
+
+function normalizeWaitingRateSettings(value = {}) {
+  return Object.fromEntries(FARE_VEHICLE_CATEGORIES.map(category => {
+    const source = value?.[category];
+    const ratePerMinute = Number(source?.ratePerMinute ?? source?.perMinuteRate ?? 0);
+    const graceMinutes = Number(source?.graceMinutes ?? DEFAULT_WAITING_GRACE_MINUTES);
+    return [category, {
+      enabled: source?.enabled === true,
+      ratePerMinute: Number.isFinite(ratePerMinute) && ratePerMinute >= 0 ? ratePerMinute : 0,
+      graceMinutes: Number.isFinite(graceMinutes) && graceMinutes >= 0 ? graceMinutes : DEFAULT_WAITING_GRACE_MINUTES
+    }];
+  }));
+}
+
+function validateWaitingRateSettings(value) {
+  const settings = normalizeWaitingRateSettings(value);
+  const errors = [];
+  for (const category of FARE_VEHICLE_CATEGORIES) {
+    const source = value?.[category] || {};
+    const setting = settings[category];
+    const rawRate = source.ratePerMinute ?? source.perMinuteRate;
+    const rawGrace = source.graceMinutes;
+    if (rawRate !== undefined && rawRate !== '' && (!Number.isFinite(Number(rawRate)) || Number(rawRate) < 0)) {
+      errors.push(`${category}: Waiting rate must be zero or greater`);
+    }
+    if (rawGrace !== undefined && rawGrace !== '' && (!Number.isFinite(Number(rawGrace)) || Number(rawGrace) < 0 || Number(rawGrace) > 1440)) {
+      errors.push(`${category}: Grace period must be between 0 and 1440 minutes`);
+    }
+    if (rawRate !== undefined && rawRate !== '' && Math.round(Number(rawRate) * 100) !== Number(rawRate) * 100) {
+      errors.push(`${category}: Waiting rate can have at most two decimal places`);
+    }
+    if (rawGrace !== undefined && rawGrace !== '' && Math.round(Number(rawGrace) * 100) !== Number(rawGrace) * 100) {
+      errors.push(`${category}: Grace period can have at most two decimal places`);
+    }
+    if (source.enabled !== undefined && typeof source.enabled !== 'boolean') {
+      errors.push(`${category}: Waiting toggle must be true or false`);
+    }
+  }
+  return { settings, errors };
+}
+
+async function getWaitingRateSettings({ force = false } = {}) {
+  if (!force && waitingRateSettingsCache && Date.now() - waitingRateSettingsCacheAt < WAITING_RATE_CACHE_TTL_MS) {
+    return waitingRateSettingsCache;
+  }
+  const databaseReady = dbConnected || mongoose.connection.readyState === 1;
+  if (!databaseReady) {
+    waitingRateSettingsCache = normalizeWaitingRateSettings(DEFAULT_WAITING_RATE_SETTINGS);
+    waitingRateSettingsCacheAt = Date.now();
+    return waitingRateSettingsCache;
+  }
+  const doc = await Settings.findOne({ key: WAITING_RATE_SETTINGS_KEY }).lean();
+  waitingRateSettingsCache = normalizeWaitingRateSettings(doc?.value);
+  waitingRateSettingsCacheAt = Date.now();
+  return waitingRateSettingsCache;
+}
+
+function clearWaitingRateSettingsCache() {
+  waitingRateSettingsCache = null;
+  waitingRateSettingsCacheAt = 0;
+}
+
+function calculateWaitingFare(settings, vehicleType, waitingSeconds = 0) {
+  const category = normalizeFareVehicle(vehicleType);
+  const config = normalizeWaitingRateSettings(settings)[category] || {
+    enabled: false,
+    ratePerMinute: 0,
+    graceMinutes: DEFAULT_WAITING_GRACE_MINUTES
+  };
+  const seconds = Number(waitingSeconds);
+  const normalizedSeconds = Number.isFinite(seconds) && seconds > 0 ? seconds : 0;
+  const enabled = config.enabled && config.ratePerMinute > 0;
+  const waitingMinutes = enabled ? normalizedSeconds / 60 : 0;
+  const waitingFare = waitingMinutes * config.ratePerMinute;
+  return {
+    waitingEnabled: enabled,
+    waitingSeconds: Number(normalizedSeconds.toFixed(2)),
+    waitingMinutes: Number(waitingMinutes.toFixed(2)),
+    waitingRatePerMinute: config.ratePerMinute,
+    waitingGraceMinutes: config.graceMinutes,
+    waitingFare: Number(waitingFare.toFixed(2))
+  };
+}
+
 function normalizePerKmRates(value = {}) {
   return Object.fromEntries(FARE_VEHICLE_CATEGORIES.map(category => {
     const aliases = Object.keys(FARE_VEHICLE_ALIASES).filter(alias => FARE_VEHICLE_ALIASES[alias] === category);
@@ -972,9 +1069,28 @@ function getLongRangeMinimumWalletBalance(settings, vehicleType) {
   return Number(settings?.minimumWalletBalances?.[category] ?? DEFAULT_LONG_RANGE_MINIMUM_WALLET_BALANCES[category] ?? 0);
 }
 
-function calculateRideFare(fareSettings, longRangeSettings, vehicleType, distanceKm, at, perKmRates, durationMinutes = 0) {
+function calculateRideFare(
+  fareSettings,
+  longRangeSettings,
+  vehicleType,
+  distanceKm,
+  at,
+  perKmRates,
+  durationMinutes = 0,
+  waitingRateSettings = DEFAULT_WAITING_RATE_SETTINGS,
+  waitingSeconds = 0
+) {
   if (!isLongRangeDistance(distanceKm, longRangeSettings)) {
-    return calculateFareFromSettings(fareSettings, vehicleType, distanceKm, at, perKmRates, durationMinutes);
+    return calculateFareFromSettings(
+      fareSettings,
+      vehicleType,
+      distanceKm,
+      at,
+      perKmRates,
+      durationMinutes,
+      waitingRateSettings,
+      waitingSeconds
+    );
   }
   const category = normalizeFareVehicle(vehicleType);
   const distance = Number(distanceKm);
@@ -985,7 +1101,9 @@ function calculateRideFare(fareSettings, longRangeSettings, vehicleType, distanc
   }
   const perMinuteRate = Number(fareSettings?.[category]?.perMinuteRate || 0);
   const timeFare = Number.isFinite(duration) && duration > 0 ? duration * perMinuteRate : 0;
-  const totalFare = Math.round(distance * rate + timeFare);
+  const waiting = calculateWaitingFare(waitingRateSettings, category, waitingSeconds);
+  const subtotal = distance * rate + timeFare + waiting.waitingFare;
+  const totalFare = Math.round(subtotal);
   return {
     vehicleType: category,
     distanceKm: Number(distance.toFixed(2)),
@@ -994,7 +1112,8 @@ function calculateRideFare(fareSettings, longRangeSettings, vehicleType, distanc
     durationMinutes: Number.isFinite(duration) && duration > 0 ? Number(duration.toFixed(2)) : 0,
     perMinuteRate,
     timeFare: Number(timeFare.toFixed(2)),
-    subtotal: distance * rate + timeFare,
+    ...waiting,
+    subtotal,
     totalFare,
     calculatedAt: at
   };
@@ -1008,7 +1127,16 @@ function timeMatchesRule(rule, date = new Date()) {
   return start <= end ? current >= start && current <= end : current >= start || current <= end;
 }
 
-function calculateFareFromSettings(settings, vehicleType, distanceKm, at = new Date(), perKmRates = DEFAULT_PER_KM_RATES, durationMinutes = 0) {
+function calculateFareFromSettings(
+  settings,
+  vehicleType,
+  distanceKm,
+  at = new Date(),
+  perKmRates = DEFAULT_PER_KM_RATES,
+  durationMinutes = 0,
+  waitingRateSettings = DEFAULT_WAITING_RATE_SETTINGS,
+  waitingSeconds = 0
+) {
   const category = normalizeFareVehicle(vehicleType);
   const rule = settings[category];
   const distance = Number(distanceKm);
@@ -1042,7 +1170,8 @@ function calculateFareFromSettings(settings, vehicleType, distanceKm, at = new D
   const normalizedDuration = Number.isFinite(duration) && duration > 0 ? duration : 0;
   const perMinuteRate = Number(rule.perMinuteRate || 0);
   const timeFare = normalizedDuration * perMinuteRate;
-  const subtotal = rule.baseFare + distanceFare + timeFare;
+  const waiting = calculateWaitingFare(waitingRateSettings, category, waitingSeconds);
+  const subtotal = rule.baseFare + distanceFare + timeFare + waiting.waitingFare;
   const total = Math.max(0, Math.round(subtotal * (1 + adjustmentPercent / 100)));
   return {
     vehicleType: category,
@@ -1053,6 +1182,7 @@ function calculateFareFromSettings(settings, vehicleType, distanceKm, at = new D
     durationMinutes: Number(normalizedDuration.toFixed(2)),
     perMinuteRate,
     timeFare: Number(timeFare.toFixed(2)),
+    ...waiting,
     slab: { ...slab },
     activeRules,
     adjustmentPercent,
@@ -1065,6 +1195,7 @@ function calculateFareFromSettings(settings, vehicleType, distanceKm, at = new D
 async function refreshPendingRideFares(settings, perKmRates = null) {
   const currentPerKmRates = perKmRates || await getPerKmRates();
   const longRangeSettings = await getLongRangeSettings();
+  const waitingRateSettings = await getWaitingRateSettings();
   const pendingRides = await Ride.find({ status: 'requested' });
   for (const ride of pendingRides) {
     const fareQuote = calculateRideFare(
@@ -1074,11 +1205,19 @@ async function refreshPendingRideFares(settings, perKmRates = null) {
       ride.distance,
       new Date(),
       currentPerKmRates,
-      ride.durationMinutes
+      ride.durationMinutes,
+      waitingRateSettings,
+      ride.waitingSeconds
     );
-    if (fareQuote.error || ride.fare === fareQuote.totalFare) continue;
+    if (fareQuote.error || (
+      ride.fare === fareQuote.totalFare
+      && ride.fareQuote?.waitingEnabled === fareQuote.waitingEnabled
+      && ride.fareQuote?.waitingRatePerMinute === fareQuote.waitingRatePerMinute
+    )) continue;
     ride.fare = fareQuote.totalFare;
     ride.fareQuote = fareQuote;
+    ride.waitingMinutes = fareQuote.waitingMinutes;
+    ride.waitingFare = fareQuote.waitingFare;
     await ride.save();
     const payload = { id: ride._id, fare: ride.fare, fareQuote: ride.fareQuote };
     io.to(`drivers:${normalizeFareVehicle(ride.vehicleType || 'Car Mini Non-AC')}`).emit('ride:fare-updated', payload);
@@ -1224,6 +1363,11 @@ const rideSchema = new mongoose.Schema({
     durationMinutes: Number,
     perMinuteRate: Number,
     timeFare: Number,
+    waitingEnabled: Boolean,
+    waitingMinutes: Number,
+    waitingRatePerMinute: Number,
+    waitingGraceMinutes: Number,
+    waitingFare: Number,
     slab: { minKm: Number, maxKm: Number, rate: Number },
     activeRules: [{ start: String, end: String, adjustmentPercent: Number }],
     adjustmentPercent: Number,
@@ -1236,6 +1380,14 @@ const rideSchema = new mongoose.Schema({
   longRangeCommissionChargedAt: { type: Date, default: null },
   distance:    { type: Number, default: 0 },
   durationMinutes: { type: Number, default: 0 },
+  // Once a Driver accepts, this keeps the agreed fare immutable while
+  // server-side waiting charges are added on top.
+  agreedFareBeforeWaiting: { type: Number, default: null },
+  waitingSeconds: { type: Number, default: 0, min: 0 },
+  waitingAccumulatedSeconds: { type: Number, default: 0, min: 0 },
+  waitingStartedAt: { type: Date, default: null },
+  waitingMinutes: { type: Number, default: 0, min: 0 },
+  waitingFare: { type: Number, default: 0, min: 0 },
   status: {
     type: String,
     enum: ['requested', 'accepted', 'arrived', 'in-progress', 'completed', 'cancelled'],
@@ -2367,6 +2519,104 @@ async function releaseRidePinAtPickup(ride, location) {
   return true;
 }
 
+function observeRideWaiting(ride, location, waitingSettings, at = new Date()) {
+  const category = normalizeFareVehicle(ride?.vehicleType);
+  const config = normalizeWaitingRateSettings(waitingSettings)[category];
+  const now = new Date(at);
+  let accumulatedSeconds = Math.max(0, Number(ride?.waitingAccumulatedSeconds || 0));
+  let waitingStartedAt = ride?.waitingStartedAt ? new Date(ride.waitingStartedAt) : null;
+  const previousLocation = ride?.driverLocation;
+  const isEnabled = ride?.status === 'in-progress' && config?.enabled && config.ratePerMinute > 0;
+
+  if (!isEnabled) {
+    return {
+      waitingSeconds: Math.max(0, Number(ride?.waitingSeconds || accumulatedSeconds)),
+      waitingAccumulatedSeconds: accumulatedSeconds,
+      waitingStartedAt: null
+    };
+  }
+
+  const remainedStopped = hasValidCoordinates(previousLocation)
+    && haversineKm(
+      Number(previousLocation.lat),
+      Number(previousLocation.lng),
+      Number(location.lat),
+      Number(location.lng)
+    ) <= WAITING_STOP_DISTANCE_KM;
+
+  if (!remainedStopped) {
+    if (waitingStartedAt) {
+      accumulatedSeconds += Math.max(
+        0,
+        (now.getTime() - waitingStartedAt.getTime()) / 1000 - config.graceMinutes * 60
+      );
+    }
+    waitingStartedAt = null;
+  } else if (!waitingStartedAt) {
+    waitingStartedAt = now;
+  }
+
+  const currentStopSeconds = waitingStartedAt
+    ? Math.max(0, (now.getTime() - waitingStartedAt.getTime()) / 1000 - config.graceMinutes * 60)
+    : 0;
+  return {
+    waitingSeconds: Number((accumulatedSeconds + currentStopSeconds).toFixed(2)),
+    waitingAccumulatedSeconds: Number(accumulatedSeconds.toFixed(2)),
+    waitingStartedAt
+  };
+}
+
+function applyWaitingStateToRide(ride, waitingState) {
+  ride.waitingSeconds = waitingState.waitingSeconds;
+  ride.waitingAccumulatedSeconds = waitingState.waitingAccumulatedSeconds;
+  ride.waitingStartedAt = waitingState.waitingStartedAt;
+}
+
+async function refreshRideFareFromCurrentSettings(ride, waitingRateSettings = null, at = new Date()) {
+  const [settingsDoc, ratesDoc, longRangeDoc] = await Promise.all([
+    Settings.findOne({ key: 'daily_fare_settings' }).lean(),
+    Settings.findOne({ key: 'per_km_rates' }).lean(),
+    Settings.findOne({ key: LONG_RANGE_SETTINGS_KEY }).lean()
+  ]);
+  const fareQuote = calculateRideFare(
+    normalizeFareSettings(settingsDoc?.value),
+    normalizeLongRangeSettings(longRangeDoc?.value),
+    ride.vehicleType,
+    ride.distance,
+    at,
+    normalizePerKmRates(ratesDoc?.value),
+    ride.durationMinutes,
+    waitingRateSettings || await getWaitingRateSettings(),
+    ride.waitingSeconds
+  );
+  if (fareQuote.error) return fareQuote;
+  const isActiveRide = ['accepted', 'arrived', 'in-progress'].includes(ride.status);
+  if (isActiveRide && !Number.isFinite(Number(ride.agreedFareBeforeWaiting))) {
+    ride.agreedFareBeforeWaiting = Math.max(0, Number(ride.fare || 0) - Number(ride.waitingFare || 0));
+  }
+  ride.fareQuote = fareQuote;
+  ride.fare = isActiveRide
+    ? Math.max(0, Number(ride.agreedFareBeforeWaiting || 0) + Number(fareQuote.waitingFare || 0))
+    : fareQuote.totalFare + Number(ride.customerFareOffset || 0);
+  ride.waitingMinutes = fareQuote.waitingMinutes;
+  ride.waitingFare = fareQuote.waitingFare;
+  return fareQuote;
+}
+
+async function refreshActiveRideWaitingFares(waitingRateSettings) {
+  const activeRides = await Ride.find({ status: 'in-progress' });
+  for (const ride of activeRides) {
+    const fareQuote = await refreshRideFareFromCurrentSettings(ride, waitingRateSettings);
+    if (fareQuote.error) continue;
+    await ride.save();
+    io.to(`ride:${ride._id}`).emit('ride:fare-updated', {
+      id: ride._id,
+      fare: ride.fare,
+      fareQuote: ride.fareQuote
+    });
+  }
+}
+
 const ADMIN_RECOVERY_ATTEMPTS = new Map();
 const ADMIN_RECOVERY_WINDOW_MS = 15 * 60 * 1000;
 const ADMIN_RECOVERY_MAX_ATTEMPTS = 5;
@@ -3377,11 +3627,12 @@ app.get('/api/auth/me', authMiddleware, async (req, res) => {
 // calculated from the current Admin Settings document.
 app.post('/api/fare/calculate', async (req, res) => {
   try {
-    const [settingsDoc, ratesDoc, longRangeDoc, vehicleCategoryDoc] = await Promise.all([
+    const [settingsDoc, ratesDoc, longRangeDoc, vehicleCategoryDoc, waitingRateDoc] = await Promise.all([
       Settings.findOne({ key: 'daily_fare_settings' }).lean(),
       Settings.findOne({ key: 'per_km_rates' }).lean(),
       Settings.findOne({ key: LONG_RANGE_SETTINGS_KEY }).lean(),
-      Settings.findOne({ key: VEHICLE_CATEGORY_SETTINGS_KEY }).lean()
+      Settings.findOne({ key: VEHICLE_CATEGORY_SETTINGS_KEY }).lean(),
+      Settings.findOne({ key: WAITING_RATE_SETTINGS_KEY }).lean()
     ]);
     const vehicleType = normalizeFareVehicle(req.body?.vehicleType);
     if (!isVehicleCategoryActive(vehicleCategoryDoc?.value, vehicleType)) {
@@ -3394,7 +3645,9 @@ app.post('/api/fare/calculate', async (req, res) => {
       req.body?.distanceKm,
       new Date(),
       normalizePerKmRates(ratesDoc?.value),
-      req.body?.durationMinutes
+      req.body?.durationMinutes,
+      normalizeWaitingRateSettings(waitingRateDoc?.value),
+      req.body?.waitingSeconds
     );
     if (result.error) return res.status(422).json({ error: result.error });
     res.json(result);
@@ -3447,12 +3700,13 @@ app.post('/api/rides', authMiddleware, customerOnly, customerCanBook, async (req
     if (!hasValidCoordinates(pickupLocation) || stops.some(stop => !hasValidCoordinates(stop))) {
       return res.status(422).json({ error: 'Invalid coordinates', code: 'INVALID_COORDINATES' });
     }
-    const [settingsDoc, ratesDoc, longRangeDoc, rideBroadcastDoc, vehicleCategoryDoc] = await Promise.all([
+    const [settingsDoc, ratesDoc, longRangeDoc, rideBroadcastDoc, vehicleCategoryDoc, waitingRateDoc] = await Promise.all([
       Settings.findOne({ key: 'daily_fare_settings' }).lean(),
       Settings.findOne({ key: 'per_km_rates' }).lean(),
       Settings.findOne({ key: LONG_RANGE_SETTINGS_KEY }).lean(),
       Settings.findOne({ key: 'ride_broadcast_settings' }).lean(),
-      Settings.findOne({ key: VEHICLE_CATEGORY_SETTINGS_KEY }).lean()
+      Settings.findOne({ key: VEHICLE_CATEGORY_SETTINGS_KEY }).lean(),
+      Settings.findOne({ key: WAITING_RATE_SETTINGS_KEY }).lean()
     ]);
     const normalizedVehicleType = normalizeFareVehicle(vehicleType);
     if (!isVehicleCategoryActive(vehicleCategoryDoc?.value, normalizedVehicleType)) {
@@ -3467,7 +3721,8 @@ app.post('/api/rides', authMiddleware, customerOnly, customerCanBook, async (req
       distance,
       new Date(),
       normalizePerKmRates(ratesDoc?.value),
-      req.body?.durationMinutes
+      req.body?.durationMinutes,
+      normalizeWaitingRateSettings(waitingRateDoc?.value)
     );
     if (fareQuote.error) return res.status(422).json({ error: fareQuote.error });
     const offerResult = resolveCustomerFareOffer(customerOffer, fareQuote.totalFare, customerFareOffset);
@@ -3487,6 +3742,8 @@ app.post('/api/rides', authMiddleware, customerOnly, customerCanBook, async (req
       isLongRange:       !!fareQuote.isLongRange,
       distance:      fareQuote.distanceKm,
       durationMinutes: fareQuote.durationMinutes || 0,
+      waitingMinutes: fareQuote.waitingMinutes || 0,
+      waitingFare: fareQuote.waitingFare || 0,
       vehicleType:   fareQuote.vehicleType,
       notes:         notes         || '',
       paymentMethod: paymentMethod || 'cash',
@@ -3785,6 +4042,7 @@ app.patch('/api/rides/:id/accept', authMiddleware, async (req, res) => {
       .populate('driver', 'name phone vehicleType vehicleModel vehiclePlate rating profilePhoto');
 
     if (!ride) return res.status(409).json({ error: 'Ride no longer available' });
+    ride.agreedFareBeforeWaiting = ride.fare;
     if (ride.isLongRange) {
       const settings = await getLongRangeSettings();
       if (!await validateLongRangeDriverEligibility(req.user.id, settings)) {
@@ -3865,13 +4123,27 @@ app.patch('/api/rides/:id/status', authMiddleware, driverOnly, async (req, res) 
     }
 
     if (status === 'completed') {
+      const waitingRateSettings = await getWaitingRateSettings({ force: true });
+      applyWaitingStateToRide(
+        ride,
+        observeRideWaiting(ride, ride.driverLocation, waitingRateSettings, new Date())
+      );
+      await refreshRideFareFromCurrentSettings(ride, waitingRateSettings).catch(() => null);
       const commission = await chargeLongRangeCommission(ride, req.user.id, 'completed', await getLongRangeSettings());
       if (!commission.ok) return res.status(403).json({ error: commission.error });
     }
     ride.status = status;
     await ride.save();
 
-    emitRideLifecycle(ride, 'ride:status', { status });
+    emitRideLifecycle(ride, 'ride:status', {
+      status,
+      ...(status === 'completed' ? {
+        fare: ride.fare,
+        fareQuote: ride.fareQuote,
+        waitingMinutes: ride.waitingMinutes,
+        waitingFare: ride.waitingFare
+      } : {})
+    });
 
     if (status === 'completed') {
       await Wallet.updateOne(
@@ -4038,6 +4310,7 @@ app.patch('/api/rides/:id/accept-driver', authMiddleware, customerOnly, customer
     if (offer.price && offer.price !== ride.fare) {
       ride.fare = offer.price;
     }
+    ride.agreedFareBeforeWaiting = ride.fare;
 
     // Generate 4-digit verification PIN for ride start
     const verificationPin = String(Math.floor(1000 + Math.random() * 9000));
@@ -4093,10 +4366,11 @@ app.patch('/api/rides/:id/update-fare', authMiddleware, async (req, res) => {
   try {
     const ride = await Ride.findOne({ _id: req.params.id, passenger: req.user.id, status: 'requested' });
     if (!ride) return res.status(404).json({ error: 'Ride not found or already accepted' });
-    const [settingsDoc, ratesDoc, longRangeDoc] = await Promise.all([
+    const [settingsDoc, ratesDoc, longRangeDoc, waitingRateDoc] = await Promise.all([
       Settings.findOne({ key: 'daily_fare_settings' }).lean(),
       Settings.findOne({ key: 'per_km_rates' }).lean(),
-      Settings.findOne({ key: LONG_RANGE_SETTINGS_KEY }).lean()
+      Settings.findOne({ key: LONG_RANGE_SETTINGS_KEY }).lean(),
+      Settings.findOne({ key: WAITING_RATE_SETTINGS_KEY }).lean()
     ]);
     const fareQuote = calculateRideFare(
       normalizeFareSettings(settingsDoc?.value),
@@ -4105,7 +4379,9 @@ app.patch('/api/rides/:id/update-fare', authMiddleware, async (req, res) => {
       ride.distance,
       new Date(),
       normalizePerKmRates(ratesDoc?.value),
-      ride.durationMinutes
+      ride.durationMinutes,
+      normalizeWaitingRateSettings(waitingRateDoc?.value),
+      ride.waitingSeconds
     );
     if (fareQuote.error) return res.status(422).json({ error: fareQuote.error });
     ride.fare = fareQuote.totalFare;
@@ -6566,6 +6842,33 @@ app.patch('/api/admin/vehicle-settings', adminJwt, requirePerm('manageFareSettin
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
+app.get('/api/admin/waiting-rate-settings', adminJwt, requirePerm('manageFareSettings'), async (req, res) => {
+  try {
+    res.json({ settings: await getWaitingRateSettings({ force: true }) });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.patch('/api/admin/waiting-rate-settings', adminJwt, requirePerm('manageFareSettings'), async (req, res) => {
+  try {
+    const input = req.body?.waitingRateSettings ?? req.body?.settings;
+    const validated = validateWaitingRateSettings(input);
+    if (validated.errors.length) {
+      return res.status(422).json({ error: 'Invalid Waiting / Stop Rate Settings', errors: validated.errors });
+    }
+    await Settings.findOneAndUpdate(
+      { key: WAITING_RATE_SETTINGS_KEY },
+      { key: WAITING_RATE_SETTINGS_KEY, value: validated.settings },
+      { upsert: true, new: true, setDefaultsOnInsert: true }
+    );
+    clearWaitingRateSettingsCache();
+    const settings = await getWaitingRateSettings({ force: true });
+    await refreshActiveRideWaitingFares(settings);
+    const payload = { settings, updatedAt: new Date().toISOString() };
+    io.emit('waiting-rate-settings:updated', payload);
+    res.json({ success: true, ...payload });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
 app.get('/api/per-km-rates', async (req, res) => {
   try {
     const doc = await Settings.findOne({ key: 'per_km_rates' }).lean();
@@ -6578,11 +6881,12 @@ app.get('/api/per-km-rates', async (req, res) => {
 // and older clients, while giving the Customer app one coherent payload.
 app.get('/api/customer/fare-config', async (req, res) => {
   try {
-    const [ratesDoc, longRangeDoc, displayDoc, vehicleCategoryDoc] = await Promise.all([
+    const [ratesDoc, longRangeDoc, displayDoc, vehicleCategoryDoc, waitingRateDoc] = await Promise.all([
       Settings.findOne({ key: 'per_km_rates' }).lean(),
       Settings.findOne({ key: LONG_RANGE_SETTINGS_KEY }).lean(),
       Settings.findOne({ key: CUSTOMER_FARE_DISPLAY_SETTINGS_KEY }).lean(),
-      Settings.findOne({ key: VEHICLE_CATEGORY_SETTINGS_KEY }).lean()
+      Settings.findOne({ key: VEHICLE_CATEGORY_SETTINGS_KEY }).lean(),
+      Settings.findOne({ key: WAITING_RATE_SETTINGS_KEY }).lean()
     ]);
     res.json({
       perKmRates: normalizePerKmRates(ratesDoc?.value),
@@ -6591,7 +6895,8 @@ app.get('/api/customer/fare-config', async (req, res) => {
       vehicleCategories: FARE_VEHICLE_CATEGORIES.map(category => ({
         category,
         active: normalizeVehicleCategorySettings(vehicleCategoryDoc?.value)[category].active
-      }))
+      })),
+      waitingRateSettings: normalizeWaitingRateSettings(waitingRateDoc?.value)
     });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
@@ -7066,11 +7371,57 @@ io.on('connection', async (socket) => {
     if (rideId) {
       const activeRide = await Ride.findOne({
         _id: rideId, driver: id, status: { $in: ['accepted', 'arrived', 'in-progress'] }
-      }).select('_id driver passenger pickupLocation status pickupReachedAt verificationPin driverLocation').lean().catch(() => null);
+      }).select('_id driver passenger pickupLocation status pickupReachedAt verificationPin driverLocation vehicleType distance durationMinutes fare fareQuote customerFareOffset agreedFareBeforeWaiting waitingSeconds waitingAccumulatedSeconds waitingStartedAt waitingMinutes waitingFare').lean().catch(() => null);
       if (!activeRide) return;
-      await Ride.updateOne({ _id: rideId }, { 'driverLocation.lat': lat, 'driverLocation.lng': lng }).catch(() => {});
+      const waitingRateSettings = await getWaitingRateSettings().catch(() => DEFAULT_WAITING_RATE_SETTINGS);
+      const waitingState = observeRideWaiting(activeRide, { lat, lng }, waitingRateSettings, new Date());
+      const category = normalizeFareVehicle(activeRide.vehicleType);
+      const waitingConfig = normalizeWaitingRateSettings(waitingRateSettings)[category];
+      const shouldRefreshWaitingFare = activeRide.status === 'in-progress'
+        && (waitingConfig?.enabled && waitingConfig.ratePerMinute > 0
+          || activeRide.fareQuote?.waitingEnabled && !waitingConfig?.enabled);
+      let fareQuote = null;
+      let rideForFare = null;
+      if (shouldRefreshWaitingFare) {
+        rideForFare = {
+          ...activeRide,
+          driverLocation: { lat, lng },
+          waitingSeconds: waitingState.waitingSeconds
+        };
+        fareQuote = await refreshRideFareFromCurrentSettings(rideForFare, waitingRateSettings).catch(() => null);
+        if (fareQuote?.error) fareQuote = null;
+      }
+      const waitingChanged = activeRide.waitingSeconds !== waitingState.waitingSeconds
+        || String(activeRide.waitingStartedAt || '') !== String(waitingState.waitingStartedAt || '');
+      const fareChanged = fareQuote && (
+        Number(activeRide.fare) !== Number(rideForFare?.fare)
+        || Number(activeRide.fareQuote?.waitingFare || 0) !== Number(fareQuote.waitingFare || 0)
+        || activeRide.fareQuote?.waitingEnabled !== fareQuote.waitingEnabled
+      );
+      const waitingUpdate = {
+        'driverLocation.lat': lat,
+        'driverLocation.lng': lng,
+        waitingSeconds: waitingState.waitingSeconds,
+        waitingAccumulatedSeconds: waitingState.waitingAccumulatedSeconds,
+        waitingStartedAt: waitingState.waitingStartedAt,
+        ...(fareQuote && !fareQuote.error ? {
+          fare: rideForFare.fare,
+          fareQuote,
+          waitingMinutes: fareQuote.waitingMinutes,
+          waitingFare: fareQuote.waitingFare
+        } : {})
+      };
+      await Ride.updateOne({ _id: rideId }, { $set: waitingUpdate }).catch(() => {});
       await releaseRidePinAtPickup(activeRide, { lat, lng }).catch(() => {});
       io.to(`ride:${rideId}`).emit('driver:location', { lat, lng });
+      if (waitingChanged || fareChanged) {
+        io.to(`ride:${rideId}`).emit('ride:fare-updated', {
+          id: rideId,
+          fare: fareQuote ? rideForFare.fare : activeRide.fare,
+          fareQuote: fareQuote || activeRide.fareQuote,
+          reason: 'waiting'
+        });
+      }
     }
     await User.updateOne({ _id: id }, {
       'currentLocation.lat': lat,
@@ -7669,6 +8020,11 @@ module.exports = {
   normalizeVehicleCategorySettings,
   isVehicleCategoryActive,
   getVehicleCategorySettings,
+  DEFAULT_WAITING_RATE_SETTINGS,
+  normalizeWaitingRateSettings,
+  validateWaitingRateSettings,
+  calculateWaitingFare,
+  observeRideWaiting,
   validateFareSettings,
   calculateFareFromSettings,
   normalizeCustomerFareDisplaySettings,
