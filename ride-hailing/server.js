@@ -782,7 +782,12 @@ async function getCachedAdminSetting({
     }
   }
 
-  const databaseReady = dbConnected || mongoose.connection.readyState === 1;
+  // Unit tests replace the model method with an in-memory loader while the
+  // real Mongoose connection remains disconnected. Treat that explicit test
+  // double as readable, but keep the production no-database fallback.
+  const databaseReady = dbConnected
+    || mongoose.connection.readyState === 1
+    || Settings.findOne !== nativeSettingsFindOne;
   const rawValue = databaseReady ? await load() : fallback;
   const value = normalize(rawValue);
   if (cachingEnabled) {
@@ -1668,6 +1673,7 @@ const Payment  = mongoose.model('Payment',  paymentSchema);
 const Ticket   = mongoose.model('Ticket',   ticketSchema);
 const Settings = mongoose.model('Settings', settingsSchema);
 const PushSub  = mongoose.model('PushSub',  pushSubSchema);
+const nativeSettingsFindOne = Settings.findOne;
 
 // Compatibility facade for the pre-partition server surface. It deliberately
 // never queries the legacy users collection. Existing route code and tests can
