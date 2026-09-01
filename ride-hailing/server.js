@@ -6396,9 +6396,17 @@ app.post('/api/support/ticket', authMiddleware, async (req, res) => {
   try {
     const { subject, message } = req.body;
     if (!subject?.trim() || !message?.trim()) return res.status(400).json({ error: 'Subject and message required' });
+    const role = req.user.role === 'driver' ? 'driver' : 'customer';
     const ticket = await Ticket.create({
-      user: req.user.id, role: req.user.role || 'customer',
+      user: req.user.id,
+      role,
+      userModel: role === 'driver' ? 'Driver' : 'Customer',
       subject: subject.trim(), message: message.trim()
+    });
+    io.to('admin-room').emit('support:new', {
+      ticketId: String(ticket._id),
+      role: ticket.role,
+      subject: ticket.subject
     });
     res.status(201).json(ticket);
   } catch (err) { res.status(500).json({ error: err.message }); }

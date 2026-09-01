@@ -1920,6 +1920,13 @@ function connectSocket() {
   });
 
   socket.on('ride:new', () => { loadStats(); });
+  socket.on('support:new', ({ role, subject }) => {
+    loadStats();
+    if (document.getElementById('sec-support')?.classList.contains('active')) {
+      loadSupportTickets(currentSupStatus);
+    }
+    showToast(`New ${role === 'driver' ? 'Driver' : 'Customer'} support request: ${subject || 'Support ticket'}`, 'info');
+  });
   socket.on('payment:approved', (payment) => {
     showToast(`✓ ${payment.paymentType || 'Gateway'} payment verified: Rs ${Number(payment.amount || 0).toLocaleString()}`, 'success');
     loadStats();

@@ -152,7 +152,6 @@ body{font-family:'Segoe UI',sans-serif;background:#0a0a0f;color:#fff;height:100d
 .dots-item:hover{background:#252535}
 .dots-item.danger{color:#ff5555}
 .dots-item.danger:hover{background:rgba(255,60,60,.1)}
-.ticket-badge{background:#ef4444;color:#fff;border-radius:100px;font-size:.6rem;font-weight:800;padding:.1rem .4rem;min-width:16px;text-align:center;margin-left:auto}
 
 /* ── Payments Panel ── */
 #payments-panel{display:none;background:#0d1117;flex:1;overflow-y:auto;padding:1rem;flex-shrink:0;max-height:45vh}
@@ -557,11 +556,9 @@ textarea.support-input{resize:vertical;min-height:85px}
       <div class="earnings-badge">💰 Rs <span id="earnings-val">0</span></div>
       <div class="dots-menu-wrap">
         <button class="btn-dots" id="driver-dots-btn" onclick="toggleDriverMenu(event)" aria-label="Menu">⋮
-          <span class="dots-unread-dot" id="driver-unread-dot" style="display:none"></span>
         </button>
         <div class="dots-dropdown" id="driver-dots-dropdown" style="display:none">
           <div class="dots-item" onclick="openSupportModal();closeDriverMenu()">🎫 Contact Support</div>
-          <div class="dots-item" onclick="openMyTickets();closeDriverMenu()">📋 My Tickets <span id="driver-ticket-badge" class="ticket-badge" style="display:none">0</span></div>
           <div class="dots-item" onclick="openTermsModal();closeDriverMenu()">📜 Terms &amp; Conditions</div>
           <div class="dots-item" onclick="openChangePhoneModal();closeDriverMenu()">📱 Change Phone Number</div>
           <div class="dots-item" onclick="openChangePasswordModal();closeDriverMenu()">🔑 Change Password</div>
@@ -1513,7 +1510,6 @@ function bootApp() {
     });
   }
   loadStats();
-  checkUnreadDriverTickets();
   if (typeof checkDailyFee === 'function') checkDailyFee();
   if (typeof loadDailyFeeSettings === 'function') loadDailyFeeSettings();
   else window.addEventListener('load', () => loadDailyFeeSettings(), { once: true });
@@ -2268,15 +2264,6 @@ function connectSocket() {
     }
   });
 
-  // Admin replied to a support ticket
-  socket.on('support:replied', ({ subject, reply }) => {
-    showToast(`📋 Admin replied to: "${subject}"`, 'info');
-    document.getElementById('driver-unread-dot').style.display   = 'inline-block';
-    const badge = document.getElementById('driver-ticket-badge');
-    badge.style.display = 'inline';
-    badge.textContent   = String((parseInt(badge.textContent) || 0) + 1);
-  });
-
   // Account approved by Admin (was pending)
   socket.on('account:activated', () => {
     user.accountStatus = 'active';
@@ -2949,8 +2936,6 @@ function endActiveRide() {
   // One layout-synchronized repaint avoids the old staggered redraw loop.
   requestAnimationFrame(() => map?.resize());
 
-  // Re-check support-ticket badge so the bell reflects the real unread count
-  checkUnreadDriverTickets();
 }
 
 async function reconcileActiveRideAfterReconnect() {
@@ -3235,62 +3220,6 @@ document.addEventListener('click', (e) => {
   if (!e.target.closest('#driver-dots-btn')) closeDriverMenu();
 });
 
-// ── My Tickets ────────────────────────────────────────────────────────────────
-function openMyTickets() {
-  document.getElementById('my-tickets-overlay').classList.add('open');
-  loadMyTickets();
-  // Mark all as read
-  apiCall('/api/support/my/read', 'PATCH').catch(() => {});
-  document.getElementById('driver-unread-dot').style.display   = 'none';
-  document.getElementById('driver-ticket-badge').style.display = 'none';
-}
-function closeMyTickets() { document.getElementById('my-tickets-overlay').classList.remove('open'); }
-
-async function loadMyTickets() {
-  const el = document.getElementById('my-tickets-list');
-  el.innerHTML = '<div style="color:#475569;text-align:center;padding:1rem">Loading…</div>';
-  try {
-    const tickets = await apiCall('/api/support/my');
-    if (!tickets.length) {
-      el.innerHTML = '<div style="color:#475569;text-align:center;padding:1rem;font-size:.83rem">No tickets yet.</div>';
-      return;
-    }
-    el.innerHTML = tickets.map(t => {
-      const isOpen   = t.status === 'open';
-      const hasReply = t.adminReply?.trim().length > 0;
-      const isUnread = hasReply && !t.readByUser;
-      const d = new Date(t.createdAt).toLocaleDateString('en-PK', { day:'numeric', month:'short', year:'numeric' });
-      return `<div style="background:#06060e;border:1px solid ${isUnread ? '#f5c518' : '#1a1a2a'};border-radius:10px;padding:.75rem;margin-bottom:.55rem">
-        <div style="display:flex;align-items:center;gap:.4rem;flex-wrap:wrap;margin-bottom:.3rem">
-          <span style="font-size:.82rem;font-weight:700;color:#e2e8f0;flex:1">${t.subject}</span>
-          <span style="font-size:.62rem;padding:.12rem .35rem;border-radius:4px;background:${isOpen?'#1a1a0a':'#0a1a0a'};color:${isOpen?'#f5c518':'#22c55e'};border:1px solid ${isOpen?'#2a2a10':'#0a3018'}">${isOpen?'Open':'Resolved'}</span>
-          ${isUnread ? '<span style="font-size:.6rem;background:#f5c518;color:#06060e;border-radius:4px;padding:.1rem .3rem;font-weight:800">NEW REPLY</span>' : ''}
-        </div>
-        <div style="font-size:.75rem;color:#475569">${escapeDriverText(t.message)}</div>
-        ${hasReply ? `<div style="background:#0a1a0a;border:1px solid #1a3a1a;border-radius:8px;padding:.5rem .6rem;margin-top:.4rem">
-          <div style="font-size:.63rem;color:#4caf50;font-weight:700;margin-bottom:.2rem">✉ Admin Reply</div>
-          <div style="font-size:.78rem;color:#a3a3a3">${escapeDriverText(t.adminReply)}</div>
-        </div>` : ''}
-        <div style="font-size:.63rem;color:#334155;margin-top:.3rem">${d}</div>
-      </div>`;
-    }).join('');
-  } catch (e) {
-    el.innerHTML = `<div style="color:#ef4444;text-align:center;padding:1rem;font-size:.83rem">${escapeDriverText(e.message)}</div>`;
-  }
-}
-
-async function checkUnreadDriverTickets() {
-  try {
-    const tickets = await apiCall('/api/support/my');
-    const unread = tickets.filter(t => t.adminReply?.trim() && !t.readByUser).length;
-    if (unread > 0) {
-      document.getElementById('driver-unread-dot').style.display   = 'inline-block';
-      document.getElementById('driver-ticket-badge').style.display = 'inline';
-      document.getElementById('driver-ticket-badge').textContent   = unread;
-    }
-  } catch {}
-}
-
 async function loadPaymentHistory() {
   const el = document.getElementById('payment-history-list');
   try {
@@ -3574,20 +3503,6 @@ if (token && user && user.role === 'driver') {
     <div class="support-modal-btns">
       <button class="btn-sup-cancel" onclick="closeSupportModal()">Cancel</button>
       <button class="btn-sup-submit" id="sup-submit-btn" onclick="submitSupportTicket()">Send Ticket</button>
-    </div>
-  </div>
-</div>
-
-<!-- ── My Tickets Modal ── -->
-<div class="support-overlay" id="my-tickets-overlay" onclick="if(event.target===this)closeMyTickets()">
-  <div class="support-modal" style="max-width:400px;max-height:80vh;display:flex;flex-direction:column">
-    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:.85rem;flex-shrink:0">
-      <h3 style="margin:0;font-size:.95rem">📋 My Support Tickets</h3>
-      <button onclick="closeMyTickets()" style="background:none;border:none;color:#555;cursor:pointer;font-size:1.1rem;padding:.2rem">✕</button>
-    </div>
-    <div id="my-tickets-list" style="overflow-y:auto;flex:1"></div>
-    <div style="flex-shrink:0;margin-top:.65rem">
-      <button class="btn-sup-submit" onclick="closeMyTickets();openSupportModal()" style="width:100%;padding:.55rem;font-size:.83rem">+ New Ticket</button>
     </div>
   </div>
 </div>
@@ -3969,7 +3884,6 @@ const DRIVER_SURFACE_CLOSE = {
   'pin-entry-modal': 'closePinModal',
   'driver-rating-modal': 'skipDriverRating',
   'support-overlay': 'closeSupportModal',
-  'my-tickets-overlay': 'closeMyTickets',
   'change-phone-modal': 'closeChangePhoneModal',
   'change-password-modal': 'closeChangePasswordModal',
   'change-vehicle-modal': 'closeChangeVehicleModal',

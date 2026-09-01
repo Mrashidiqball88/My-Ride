@@ -44,3 +44,4 @@
 - [Driver device binding](driver-device-binding.md) — bind Drivers to a hashed app-scoped installation ID; preserve it across logout and invalidate sessions when Admin enables the lock.
 - [External production drift](external-production-drift.md) — local GitHub parity does not prove the public host is current; compare served HTML, commit, process, and restart state.
 - [Android Driver alert capabilities](android-driver-alert-capabilities.md) — Expo permission APIs cannot inspect special Android alert settings; use a generated native bridge and fail closed until prebuild capabilities pass.
+- [Polymorphic support references](polymorphic-support-references.md) — Mongoose refPath documents must persist their concrete model discriminator at creation time or validation/population fails.
