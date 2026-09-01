@@ -7,4 +7,4 @@ When a test connects Mongoose after importing the server, startup-time database 
 
 **Why:** Browser tests import the app before creating MongoMemoryServer, while production initializes the database during startup.
 
-**How to apply:** For request-time database-dependent behavior, prefer the current Mongoose connection readiness alongside any startup health flag.
+**How to apply:** For request-time database-dependent behavior, including cached waiting-rate configuration, prefer the current Mongoose connection readiness alongside any startup health flag.

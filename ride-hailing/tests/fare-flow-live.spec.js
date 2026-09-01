@@ -1205,10 +1205,8 @@ test.describe('live Mongo fare refresh', () => {
       await expect.poll(async () => Boolean((await models.Ride.findById(ride._id).lean()).waitingStartedAt)).toBe(true);
       await new Promise(resolve => setTimeout(resolve, 1300));
       await emitStationaryLocation();
-      await expect.poll(async () => {
-        const current = await models.Ride.findById(ride._id).lean();
-        return { waitingSeconds: current.waitingSeconds, waitingFare: current.waitingFare };
-      }).toMatchObject({ waitingSeconds: expect.any(Number), waitingFare: expect.any(Number) });
+      await expect.poll(async () => Number((await models.Ride.findById(ride._id).lean()).waitingSeconds))
+        .toBeGreaterThan(0);
       const waitingRide = await models.Ride.findById(ride._id).lean();
       expect(waitingRide.waitingSeconds).toBeGreaterThan(0);
       expect(waitingRide.waitingFare).toBeGreaterThan(0);
