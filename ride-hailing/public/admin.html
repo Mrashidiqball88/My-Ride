@@ -1445,6 +1445,12 @@ input[type=date]:focus{border-color:#f5c518}
 const API = '';
 const MAPBOX_PUBLIC_TOKEN = String(window.__MYRIDE_MAPBOX_PUBLIC_TOKEN__ || '').trim();
 if (MAPBOX_PUBLIC_TOKEN && window.mapboxgl) mapboxgl.accessToken = MAPBOX_PUBLIC_TOKEN;
+const MAPBOX_RTL_TEXT_PLUGIN_URL = 'https://api.mapbox.com/mapbox-gl-js/plugins/mapbox-gl-rtl-text/v0.3.0/mapbox-gl-rtl-text.js';
+if (window.mapboxgl?.setRTLTextPlugin) {
+  mapboxgl.setRTLTextPlugin(MAPBOX_RTL_TEXT_PLUGIN_URL, error => {
+    if (error) console.warn('Mapbox RTL text plugin could not load:', error);
+  }, true);
+}
 let adminToken = localStorage.getItem('admin_token');
 let adminEmail = localStorage.getItem('admin_email') || '';
 let socket = null;
@@ -2829,6 +2835,7 @@ function initAdminLiveMap() {
     zoom: 2,
     maxZoom: 20,
     attributionControl: true,
+    localIdeographFontFamily: 'sans-serif',
     dragRotate: false,
     touchPitch: false
   });
@@ -3039,6 +3046,7 @@ function renderLiveLocation(location) {
       zoom: 16,
       maxZoom: 20,
       attributionControl: true,
+      localIdeographFontFamily: 'sans-serif',
       dragRotate: false,
       touchPitch: false
     });

@@ -1,10 +1,10 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { ActivityIndicator, Alert, Linking, Platform, Pressable, StyleSheet, Switch, Text, TextInput, View } from 'react-native';
-import MapView, { Marker } from 'react-native-maps';
 import { Ionicons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useColors } from '@/hooks/useColors';
 import { DriverLocation, RideRequest, useDriverRuntime } from '@/context/DriverRuntime';
+import { DriverMapboxWebView } from '@/components/DriverMapboxWebView';
 
 const RTL_TEXT_PATTERN = /[\u0590-\u08ff]/;
 
@@ -45,136 +45,12 @@ function smoothBearing(previous: number | null, next: number) {
   return (previous + delta * 0.35 + 360) % 360;
 }
 
-function DriverNavigationMap({
-  ride,
-  driverLocation,
-  colors,
-}: {
+function DriverNavigationMap({ ride, driverLocation, colors }: {
   ride: RideRequest | null;
   driverLocation: DriverLocation | null;
   colors: ReturnType<typeof useColors>;
 }) {
-  const mapRef = useRef<MapView | null>(null);
-  const previousLocation = useRef<Coordinate | null>(null);
-  const headingRef = useRef<number | null>(null);
-  const [following, setFollowing] = useState(true);
-  const [mapReady, setMapReady] = useState(false);
-  const driverCoordinate = coordinateFromDriver(driverLocation);
-  const pickupCoordinate = coordinateFromLocation(ride?.pickupLocation);
-  const dropoffCoordinate = coordinateFromLocation(ride?.dropoffLocation);
-  const initialCoordinate = driverCoordinate || pickupCoordinate || dropoffCoordinate || {
-    latitude: 30.3753,
-    longitude: 69.3451,
-  };
-  const initialCamera = useMemo(() => ({
-    center: initialCoordinate,
-    pitch: 45,
-    heading: headingRef.current || 0,
-    zoom: 16,
-  }), [initialCoordinate.latitude, initialCoordinate.longitude]);
-
-  useEffect(() => {
-    if (!driverCoordinate) return;
-    let nextHeading = driverLocation?.heading;
-    if (nextHeading === undefined && previousLocation.current) {
-      const movedDistance = Math.abs(driverCoordinate.latitude - previousLocation.current.latitude)
-        + Math.abs(driverCoordinate.longitude - previousLocation.current.longitude);
-      if (movedDistance > 0.00001) nextHeading = bearingBetween(previousLocation.current, driverCoordinate);
-    }
-    previousLocation.current = driverCoordinate;
-    if (nextHeading !== undefined && Number.isFinite(nextHeading)) {
-      headingRef.current = smoothBearing(headingRef.current, nextHeading);
-    }
-    if (following && mapReady) {
-      mapRef.current?.animateCamera({
-        center: driverCoordinate,
-        heading: headingRef.current || 0,
-        pitch: 45,
-        zoom: 16,
-      }, { duration: 650 });
-    }
-  }, [driverCoordinate?.latitude, driverCoordinate?.longitude, driverLocation?.heading, following, mapReady]);
-
-  useEffect(() => {
-    setFollowing(true);
-    if (mapReady) {
-      mapRef.current?.animateCamera({
-        center: driverCoordinate || pickupCoordinate || dropoffCoordinate || initialCoordinate,
-        heading: headingRef.current || 0,
-        pitch: 45,
-        zoom: 16,
-      }, { duration: 500 });
-    }
-  }, [ride?.id, mapReady]);
-
-  const recenter = () => {
-    setFollowing(true);
-    const center = driverCoordinate || pickupCoordinate || dropoffCoordinate || initialCoordinate;
-    mapRef.current?.animateCamera({
-      center,
-      heading: headingRef.current || 0,
-      pitch: 45,
-      zoom: 16,
-    }, { duration: 500 });
-  };
-
-  return <View style={[styles.navigationCard, { borderColor: colors.border, backgroundColor: colors.card, borderRadius: colors.radius + 12 }]}>
-    <View style={styles.navigationHeader}>
-      <View style={styles.statusRow}>
-        <Ionicons name="navigate" size={18} color={colors.primary} />
-        <View>
-          <Text style={[styles.navigationTitle, { color: colors.foreground }]}>Driver navigation</Text>
-          <Text style={[styles.navigationSubtitle, { color: colors.mutedForeground }]}>
-            {following ? 'Following your live position' : 'Map movement paused'}
-          </Text>
-        </View>
-      </View>
-      <Pressable
-        accessibilityLabel="Recenter navigation map"
-        testID="driver-map-recenter"
-        onPress={recenter}
-        style={[styles.recenterButton, { borderColor: following ? colors.primary : colors.border }]}
-      >
-        <Ionicons name="locate-outline" size={19} color={following ? colors.primary : colors.mutedForeground} />
-      </Pressable>
-    </View>
-    <View style={styles.navigationMapFrame}>
-      <MapView
-        ref={mapRef}
-        style={styles.navigationMap}
-        initialCamera={initialCamera}
-        onMapReady={() => setMapReady(true)}
-        onPanDrag={() => setFollowing(false)}
-        onRegionChangeComplete={(_, details) => {
-          if (details?.isGesture) setFollowing(false);
-        }}
-        rotateEnabled
-        pitchEnabled
-        showsCompass
-        showsScale
-        showsBuildings
-        loadingEnabled
-        toolbarEnabled={false}
-        mapType="standard"
-      >
-        {pickupCoordinate && <Marker coordinate={pickupCoordinate} title="Pickup" pinColor="#22c55e" />}
-        {dropoffCoordinate && <Marker coordinate={dropoffCoordinate} title="Drop-off" pinColor="#ef4444" />}
-        {driverCoordinate && !following && <Marker coordinate={driverCoordinate} title="Your location" pinColor={colors.primary} />}
-      </MapView>
-      {following && <View pointerEvents="none" style={styles.fixedDriverMarker}>
-        <View style={[styles.fixedDriverMarkerHalo, { borderColor: colors.primary }]} />
-        <View style={[styles.fixedDriverMarkerDot, { backgroundColor: colors.primary, borderColor: colors.primaryForeground }]} />
-        <View style={[styles.fixedDriverMarkerArrow, { borderBottomColor: colors.primary }]} />
-      </View>}
-      {!driverCoordinate && <View pointerEvents="none" style={[styles.gpsStatus, { backgroundColor: colors.card }]}>
-        <Ionicons name="locate-outline" size={14} color={colors.primary} />
-        <Text style={[styles.gpsStatusText, { color: colors.foreground }]}>Waiting for live GPS</Text>
-      </View>}
-      {!following && <View pointerEvents="none" style={[styles.pausedBadge, { backgroundColor: colors.card }]}>
-        <Text style={[styles.gpsStatusText, { color: colors.foreground }]}>Follow paused</Text>
-      </View>}
-    </View>
-  </View>;
+  return <DriverMapboxWebView ride={ride} driverLocation={driverLocation} colors={colors} />;
 }
 
 function DriverHome() {

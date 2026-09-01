@@ -16,8 +16,10 @@ test('Customer and web Driver use Mapbox maps with Urdu-capable document text', 
   assert.match(driverHtml, /api\.mapbox\.com\/mapbox-gl-js\/v3\.15\.0\/mapbox-gl\.js/);
   assert.match(customerHtml, /mapbox:\/\/styles\/mapbox\/streets-v12/);
   assert.match(driverHtml, /mapbox:\/\/styles\/mapbox\/streets-v12/);
-  assert.doesNotMatch(customerHtml, /maplibre|openfreemap|openstreetmap/i);
-  assert.doesNotMatch(driverHtml, /maplibre|openfreemap|openstreetmap/i);
+  assert.match(customerHtml, /mapbox-gl-rtl-text\/v0\.3\.0\/mapbox-gl-rtl-text\.js/);
+  assert.match(driverHtml, /mapbox-gl-rtl-text\/v0\.3\.0\/mapbox-gl-rtl-text\.js/);
+  assert.match(customerHtml, /localIdeographFontFamily:\s*'sans-serif'/);
+  assert.match(driverHtml, /localIdeographFontFamily:\s*'sans-serif'/);
 });
 
 test('web Driver location surfaces opt into an Urdu-capable font and bidi direction', () => {
@@ -35,4 +37,15 @@ test('native Driver loads Noto Naskh Arabic and applies RTL layout to dynamic la
   assert.match(nativeHome, /const RTL_TEXT_PATTERN/);
   assert.match(nativeHome, /fontFamily: 'NotoNaskhArabic_400Regular'/);
   assert.match(nativeHome, /writingDirection: 'rtl'/);
+});
+
+test('native Driver navigation uses the same Mapbox GL JS renderer and RTL plugin', () => {
+  const nativeMap = read('../artifacts/myride-driver-mobile/components/DriverMapboxWebView.tsx');
+  assert.doesNotMatch(nativeHome, /react-native-maps/);
+  assert.match(nativeMap, /react-native-webview/);
+  assert.match(nativeMap, /mapbox-gl-js\/v3\.15\.0\/mapbox-gl\.js/);
+  assert.match(nativeMap, /mapbox-gl-rtl-text\/v0\.3\.0\/mapbox-gl-rtl-text\.js/);
+  assert.match(nativeMap, /localIdeographFontFamily:'sans-serif'/);
+  assert.match(nativeMap, /type === 'user-gesture'/);
+  assert.match(nativeMap, /type: 'recenter'/);
 });

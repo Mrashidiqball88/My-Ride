@@ -4472,15 +4472,22 @@ app.post('/api/sos', authMiddleware, async (req, res) => {
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Geocode Proxy — forwards Customer autocomplete to Mapbox
-// Mapbox's Geocoding API provides autocomplete, POI, street, neighborhood, and
-// place results while the server keeps the access token out of request URLs
-// visible to browsers. The lookup remains nationwide within Pakistan; proximity
-// only ranks nearby results and never filters another city out.
+// Geocode Proxy — merges Mapbox and Nominatim for Customer autocomplete
+// Mapbox provides strong POI and autocomplete coverage while Nominatim adds
+// open address, street, locality, and Urdu/Roman Urdu coverage. Both providers
+// are filtered to Pakistan on the server; proximity only ranks nearby results
+// and never filters another city out.
 // ─────────────────────────────────────────────────────────────────────────────
 
 const MAPBOX_GEOCODE_URL = 'https://api.mapbox.com/geocoding/v5/mapbox.places/';
 const MAPBOX_RESULT_LIMIT = 10;
+const NOMINATIM_GEOCODE_URL = 'https://nominatim.openstreetmap.org/search';
+const NOMINATIM_RESULT_LIMIT = 20;
+const NOMINATIM_MAX_RESPONSE_BYTES = 1_048_576;
+const NOMINATIM_DEFAULT_USER_AGENT = 'MyRide/1.0 (Pakistan ride-hailing location search)';
+const GEOCODE_CACHE_TTL_MS = 60 * 1000;
+const GEOCODE_CACHE_MAX_ENTRIES = 250;
+const GEOCODE_MAX_RESULTS = 50;
 const MAPBOX_MAX_RESPONSE_BYTES = 1_048_576;
 const PAKISTAN_GEOCODE_BOUNDS = {
   minLat: 23,
@@ -4598,7 +4605,79 @@ function normalizeMapboxFeature(feature) {
     category: providerType,
     providerType,
     address,
-    mapbox_id: feature?.id || ''
+    mapbox_id: feature?.id || '',
+    provider: 'mapbox'
+  };
+}
+
+function isNominatimEnabled() {
+  return String(process.env.NOMINATIM_ENABLED || 'true').trim().toLocaleLowerCase() !== 'false';
+}
+
+function nominatimUserAgent() {
+  return String(process.env.NOMINATIM_USER_AGENT || NOMINATIM_DEFAULT_USER_AGENT).trim()
+    || NOMINATIM_DEFAULT_USER_AGENT;
+}
+
+function nominatimAddress(result) {
+  const source = result?.address && typeof result.address === 'object' ? result.address : {};
+  const address = {};
+  const set = (key, value) => {
+    const text = String(value || '').trim();
+    if (text) address[key] = text;
+  };
+  set('name', result?.name);
+  set('house_number', source.house_number);
+  set('road', source.road || source.pedestrian || source.footway || source.cycleway);
+  set('suburb', source.suburb || source.neighbourhood || source.quarter);
+  set('district', source.city_district || source.district || source.county || source.state_district);
+  set('city', source.city || source.town || source.village || source.municipality);
+  set('state', source.state || source.province);
+  set('postcode', source.postcode);
+  set('country', source.country);
+  set('country_code', source.country_code);
+  set('category', result?.type || result?.class);
+  return address;
+}
+
+function isPakistanNominatimResult(result, lat, lng) {
+  const address = result?.address && typeof result.address === 'object' ? result.address : {};
+  const countryCode = String(address.country_code || '').trim().toLocaleLowerCase();
+  const country = String(address.country || '').trim().toLocaleLowerCase();
+  const hasPakistanCountry = countryCode === 'pk'
+    || country.includes('pakistan')
+    || country.includes('پاکستان')
+    || country.includes('پاكستان');
+  return hasPakistanCountry
+    && Number.isFinite(Number(lat))
+    && Number.isFinite(Number(lng))
+    && Number(lat) >= PAKISTAN_GEOCODE_BOUNDS.minLat
+    && Number(lat) <= PAKISTAN_GEOCODE_BOUNDS.maxLat
+    && Number(lng) >= PAKISTAN_GEOCODE_BOUNDS.minLng
+    && Number(lng) <= PAKISTAN_GEOCODE_BOUNDS.maxLng;
+}
+
+function normalizeNominatimResult(result) {
+  const lat = Number(result?.lat);
+  const lng = Number(result?.lon);
+  if (!isPakistanNominatimResult(result, lat, lng)
+    || !hasValidCoordinates({ lat, lng })) return null;
+
+  const address = nominatimAddress(result);
+  const providerType = String(result?.type || result?.class || 'place').trim();
+  const displayName = String(result?.display_name || '').trim();
+  const name = String(result?.name || displayName.split(',')[0] || 'Pakistan location').trim();
+  return {
+    display_name: displayName || `${name}, Pakistan`,
+    name,
+    lat: String(lat),
+    lon: String(lng),
+    type: providerType,
+    category: providerType,
+    providerType,
+    address,
+    nominatim_id: result?.place_id || `${result?.osm_type || 'place'}:${result?.osm_id || ''}`,
+    provider: 'nominatim'
   };
 }
 
@@ -4688,6 +4767,68 @@ async function geocodeProviderSearch(query, center = null) {
   }));
 }
 
+let nominatimRequestChain = Promise.resolve();
+let nominatimLastRequestAt = 0;
+
+function nominatimMinIntervalMs() {
+  const configured = Number(process.env.NOMINATIM_MIN_INTERVAL_MS);
+  return Number.isFinite(configured) && configured >= 0 ? configured : 1100;
+}
+
+function queueNominatimRequest(task) {
+  const request = nominatimRequestChain.then(async () => {
+    const waitMs = Math.max(0, nominatimLastRequestAt + nominatimMinIntervalMs() - Date.now());
+    if (waitMs) await new Promise(resolve => setTimeout(resolve, waitMs));
+    nominatimLastRequestAt = Date.now();
+    return task();
+  });
+  nominatimRequestChain = request.catch(() => undefined);
+  return request;
+}
+
+async function geocodeNominatimSearch(query, center = null) {
+  if (!isNominatimEnabled()) return [];
+  return queueNominatimRequest(async () => {
+    const url = new URL(NOMINATIM_GEOCODE_URL);
+    url.searchParams.set('q', query);
+    url.searchParams.set('format', 'jsonv2');
+    url.searchParams.set('addressdetails', '1');
+    url.searchParams.set('namedetails', '1');
+    url.searchParams.set('limit', String(NOMINATIM_RESULT_LIMIT));
+    url.searchParams.set('countrycodes', 'pk');
+    url.searchParams.set('accept-language', 'ur,en');
+
+    const lat = Number(center?.lat);
+    const lng = Number(center?.lng);
+    if (Number.isFinite(lat) && Number.isFinite(lng)
+      && lat >= -90 && lat <= 90 && lng >= -180 && lng <= 180
+      && !(lat === 0 && lng === 0)) {
+      const delta = 1.5;
+      url.searchParams.set('viewbox', `${lng - delta},${lat + delta},${lng + delta},${lat - delta}`);
+      // A viewbox is a ranking hint, not a city boundary.
+      url.searchParams.set('bounded', '0');
+    }
+
+    const headers = {
+      'Accept': 'application/json',
+      'Accept-Language': 'ur,en',
+      'User-Agent': nominatimUserAgent()
+    };
+    const referrer = String(process.env.NOMINATIM_REFERRER || '').trim();
+    if (referrer) headers.Referer = referrer;
+    const upstream = await fetch(url, {
+      headers,
+      signal: AbortSignal.timeout(6000)
+    });
+    if (!upstream.ok) {
+      throw new Error(`Nominatim upstream ${upstream.status}`);
+    }
+    const data = await readJsonResponseWithLimit(upstream, NOMINATIM_MAX_RESPONSE_BYTES);
+    if (!Array.isArray(data)) return [];
+    return data.map(normalizeNominatimResult).filter(Boolean);
+  });
+}
+
 function isValidGeocodeCenter(center) {
   const lat = Number(center?.lat);
   const lng = Number(center?.lng);
@@ -4722,7 +4863,59 @@ function mergeGeocodeResults(rawResults, aliasResults) {
     if (seen.has(key)) return false;
     seen.add(key);
     return true;
+  }).slice(0, GEOCODE_MAX_RESULTS);
+}
+
+const geocodeCache = new Map();
+
+function geocodeCacheKey(query, center) {
+  const normalizedQuery = String(query || '').trim().toLocaleLowerCase();
+  const lat = Number(center?.lat);
+  const lng = Number(center?.lng);
+  return `${normalizedQuery}|${Number.isFinite(lat) ? lat.toFixed(4) : ''}|${Number.isFinite(lng) ? lng.toFixed(4) : ''}`;
+}
+
+function readGeocodeCache(key) {
+  const cached = geocodeCache.get(key);
+  if (!cached) return null;
+  if (cached.expiresAt <= Date.now()) {
+    geocodeCache.delete(key);
+    return null;
+  }
+  return cached.results.map(result => ({ ...result }));
+}
+
+function writeGeocodeCache(key, results) {
+  if (geocodeCache.size >= GEOCODE_CACHE_MAX_ENTRIES) {
+    const oldestKey = geocodeCache.keys().next().value;
+    if (oldestKey) geocodeCache.delete(oldestKey);
+  }
+  geocodeCache.set(key, {
+    expiresAt: Date.now() + GEOCODE_CACHE_TTL_MS,
+    results: results.map(result => ({ ...result }))
   });
+}
+
+async function geocodeAllProviders(query, center) {
+  const cacheKey = geocodeCacheKey(query, center);
+  const cached = readGeocodeCache(cacheKey);
+  if (cached) return cached;
+
+  const outcomes = await Promise.allSettled([
+    geocodeProviderSearch(query, center),
+    geocodeNominatimSearch(query, center)
+  ]);
+  const successfulResults = outcomes
+    .filter(outcome => outcome.status === 'fulfilled')
+    .flatMap(outcome => outcome.value || []);
+  if (!successfulResults.length
+    && outcomes.every(outcome => outcome.status === 'rejected')) {
+    throw outcomes.find(outcome => outcome.status === 'rejected')?.reason
+      || new Error('All geocoding providers failed');
+  }
+  const results = mergeGeocodeResults(successfulResults, []);
+  writeGeocodeCache(cacheKey, results);
+  return results;
 }
 
 app.get('/api/geocode', async (req, res) => {
@@ -4759,14 +4952,14 @@ app.get('/api/geocode', async (req, res) => {
         aliasConfidence: match.alias.confidence
       }));
     const providerResults = await Promise.all([
-      geocodeProviderSearch(q, center).catch(error => {
+      geocodeAllProviders(q, center).catch(error => {
         if (directResults.length) {
           console.warn('[location-aliases] raw lookup failed; returning vetted direct alias:', error.message);
           return [];
         }
         throw error;
       }),
-      ...canonicalQueries.map(query => geocodeProviderSearch(query, center).catch(error => {
+      ...canonicalQueries.map(query => geocodeAllProviders(query, center).catch(error => {
         console.warn(`[location-aliases] canonical lookup failed for "${query}":`, error.message);
         return [];
       }))
@@ -4782,7 +4975,7 @@ app.get('/api/geocode', async (req, res) => {
         aliasConfidence: match?.alias.confidence || 0
       }));
     });
-    res.json(mergeGeocodeResults(rawResults, [...aliasResults, ...directResults]));
+     res.json(mergeGeocodeResults(rawResults, [...aliasResults, ...directResults]));
   } catch (err) {
     console.error('Geocode error:', err.message);
     res.status(502).json({ error: 'Geocoding is temporarily unavailable' });
