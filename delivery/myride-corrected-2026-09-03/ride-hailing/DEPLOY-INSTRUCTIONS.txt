@@ -1,0 +1,22 @@
+My Ride corrected deployment bundle
+
+Source revision: 4678bc4
+
+Production files in this bundle:
+- server.js
+- public/customer.html
+- public/driver.html
+- public/sw.js
+
+The tests/location-autocomplete.spec.js file is optional and is included only as the regression reference.
+No secrets, .env files, node_modules, uploads, databases, or generated build output are included.
+
+Safe deployment from the parent directory:
+  cd /root/Node-Server/Node-Server
+  cp -a ride-hailing ride-hailing.backup.$(date +%Y%m%d-%H%M%S)
+  unzip -o /path/to/myride-corrected-2026-09-03.zip
+  cd ride-hailing
+  # restart the existing process using your normal PM2/systemd command
+
+If the running app preloads HTML at startup, restart it after extraction.
+Do not overwrite .env or any server-side secret configuration.

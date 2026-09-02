@@ -28,3 +28,17 @@ mtime_ms = 1787713149555
 storage_uri = "gcs://replit-rams-assets-pike/rams/assets/repl:4ac5798f-1f7b-4ed9-bb06-0857d254da4b/dd4bf0f1-2812-43d1-87e4-b05b59421c36/d0163012-724c-4fa6-9108-17b32c5c3671"
 storage_version_token = "1787713169040945"
 content_type = "application/octet-stream"
+
+[[outputs]]
+id = "IobYlGo1w1nHkOOUxREzB"
+uri = "file://delivery/myride-corrected-2026-09-03.zip"
+type = "unspecified"
+title = "My Ride corrected deployment ZIP (final layout)"
+description = "Direct-overlay deployment bundle for /root/Node-Server/Node-Server. Includes corrected Customer reverse-geocoding display and payload files, Driver acceptance files, service-worker update, regression test, and deployment instructions. SHA-256: 81240933573f051b883a671bfebd7d43940bdb05c0af37cb99c32926362391c5"
+logical_id = "43b9fa3b-9b6c-485f-88aa-0bf9574979db"
+content_hash = "sha256:81240933573f051b883a671bfebd7d43940bdb05c0af37cb99c32926362391c5"
+size = 212127
+mtime_ms = 1788389168686
+storage_uri = "gcs://replit-rams-assets-pike/rams/assets/repl:4ac5798f-1f7b-4ed9-bb06-0857d254da4b/43b9fa3b-9b6c-485f-88aa-0bf9574979db/af747995-b121-4cae-ad23-0df87557aa61"
+storage_version_token = "1788389175080044"
+content_type = "application/octet-stream"
