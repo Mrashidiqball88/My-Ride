@@ -465,6 +465,7 @@ input[type=date]:focus{border-color:#f5c518}
       <div class="sb-item"        onclick="showSection('temp-blocked')" data-sec="temp-blocked"><span class="sb-icon">⏸️</span> Driver Status</div>
       <div class="sb-group-label">Customer Management</div>
       <div class="sb-item"        onclick="showSection('passengers')"   data-sec="passengers">  <span class="sb-icon">👥</span> Customer Accounts & IDs</div>
+      <div class="sb-item"        onclick="showSection('student-approvals')" data-sec="student-approvals"><span class="sb-icon">🎓</span> Student Approvals</div>
       <div class="sb-item"        onclick="showSection('blk-pass')"     data-sec="blk-pass">    <span class="sb-icon">🚫</span> Blocked Customers</div>
       <div class="sb-group-label">System & Pricing</div>
       <div class="sb-item"        onclick="showSection('app-settings')" data-sec="app-settings"><span class="sb-icon">⚙️</span> App Settings / Pricing</div>
@@ -683,6 +684,27 @@ input[type=date]:focus{border-color:#f5c518}
         <div class="table-wrap"><table class="data-table">
           <thead><tr><th>Driver</th><th>Phone</th><th>Vehicle</th><th>Joined</th><th>Documents</th><th>Actions</th></tr></thead>
           <tbody id="req-tbody"><tr><td colspan="6" class="loading-row">Loading…</td></tr></tbody>
+        </table></div>
+      </div>
+
+      <!-- ════ 6. STUDENT APPROVALS ════ -->
+      <div class="section-panel" id="sec-student-approvals">
+        <div class="sec-hdr">
+          <h2>🎓 Student Approvals</h2>
+          <div class="sec-hdr-actions">
+            <button class="btn-refresh" onclick="loadStudentApprovals(currentStudentStatus)">↻ Refresh</button>
+          </div>
+        </div>
+        <p style="font-size:.8rem;color:#64748b;margin-bottom:1rem">Review the Customer's CNIC and Student ID before activating the global student discount.</p>
+        <div class="filter-tabs" style="margin-bottom:1rem">
+          <div class="ftab active" onclick="loadStudentApprovals('pending');setFTab(this)">Pending</div>
+          <div class="ftab" onclick="loadStudentApprovals('approved');setFTab(this)">Approved</div>
+          <div class="ftab" onclick="loadStudentApprovals('rejected');setFTab(this)">Rejected</div>
+          <div class="ftab" onclick="loadStudentApprovals('all');setFTab(this)">All</div>
+        </div>
+        <div class="table-wrap"><table class="data-table">
+          <thead><tr><th>Student</th><th>CNIC</th><th>Student ID</th><th>Institution</th><th>Status</th><th>Documents</th><th>Actions</th></tr></thead>
+          <tbody id="student-approvals-tbody"><tr><td colspan="7" class="loading-row">Loading…</td></tr></tbody>
         </table></div>
       </div>
 
@@ -1038,6 +1060,12 @@ input[type=date]:focus{border-color:#f5c518}
             <p>Choose whether Customers see vehicle /km rates and the detailed fare calculation.</p>
             <button class="btn btn-primary" onclick="showSection('customer-fare-display-settings')">Control Customer display</button>
           </article>
+          <article class="settings-card" id="student-discount-settings-card">
+            <div class="settings-icon">🎓</div>
+            <h3>Student Discount</h3>
+            <p>Enable or disable Student registration and set the percentage for approved student Customers.</p>
+            <button class="btn btn-primary" onclick="showSection('student-discount-settings')">Manage student discount</button>
+          </article>
           <article class="settings-card" id="long-range-settings-card">
             <div class="settings-icon">🛣️</div>
             <h3>Long Range Rides</h3>
@@ -1063,6 +1091,27 @@ input[type=date]:focus{border-color:#f5c518}
             <button class="btn btn-primary" onclick="showSection('location-aliases')">Manage aliases</button>
           </article>
         </div>
+      </div>
+
+      <div class="section-panel" id="sec-student-discount-settings">
+        <div class="sec-hdr">
+          <h2>🎓 Student Discount Settings</h2>
+          <button class="btn-refresh" onclick="loadStudentDiscountSettings()">↻ Reload</button>
+        </div>
+        <p style="font-size:.8rem;color:#475569;margin-bottom:1rem">This master switch controls both the Student signup option and discounts. Discounts are still calculated on the server and require Admin Student Approval.</p>
+        <div style="background:#0f0f1e;border:1px solid #1e1e2e;border-radius:14px;padding:1rem;max-width:520px">
+          <label style="display:flex;align-items:center;gap:.55rem;color:#e2e8f0;font-weight:700;margin-bottom:.9rem">
+            <input id="student-discount-enabled" type="checkbox">
+            <span>Enable Student registration and discounts</span>
+          </label>
+          <label class="field-label" for="student-discount-percent">Global student discount percentage</label>
+          <div style="display:flex;align-items:center;gap:.5rem;margin-top:.45rem">
+            <input class="modal-input" id="student-discount-percent" type="number" min="0" max="100" step=".01" style="max-width:180px">
+            <strong style="color:#e2e8f0">%</strong>
+          </div>
+        </div>
+        <div id="student-discount-settings-feedback" style="min-height:1.25rem;font-size:.8rem;margin:.8rem 0"></div>
+        <button class="btn btn-primary" onclick="saveStudentDiscountSettings()">💾 Save Student Feature Settings</button>
       </div>
 
       <!-- ════ 12. RIDE SETTINGS ════ -->
@@ -1502,6 +1551,7 @@ let pendingAction = null; // { userId, action, onConfirm }
 let currentPayStatus    = 'pending';
 let currentDriverStatus = 'all';
 let currentPassStatus   = 'all';
+let currentStudentStatus = 'pending';
 let currentRideStatus   = 'active';
 let currentSOSFilter    = 'false';
 let currentSupStatus    = 'open';
@@ -1561,10 +1611,10 @@ const SENSITIVE_PERMISSION_KEYS = new Set(['viewPaymentProofs', 'approveWalletTo
 const SECTION_PERMISSION = {
   overview: 'viewOverview', payments: 'viewPayments', drivers: 'viewDrivers',
   'new-requests': 'manageDriverApprovals', 'fee-compliance': 'viewDriverPasses',
-  'temp-blocked': 'manageDriverStatus', passengers: 'viewCustomers',
+  'temp-blocked': 'manageDriverStatus', passengers: 'viewCustomers', 'student-approvals': 'manageCustomers',
   'blk-pass': 'manageCustomers', 'live-rides': 'viewRides', sos: 'viewSOS',
   ratings: 'viewRatings', support: 'viewSupport', 'audit-logs': 'viewAuditLogs',
-  'ride-settings': 'manageRideSettings', 'fare-settings': 'manageFareSettings', 'waiting-rate-settings': 'manageFareSettings', 'customer-fare-display-settings': 'manageFareSettings', 'long-range-settings': 'manageFareSettings', 'terms-settings': 'manageFareSettings', 'location-aliases': 'manageLocationAliases',
+  'ride-settings': 'manageRideSettings', 'fare-settings': 'manageFareSettings', 'waiting-rate-settings': 'manageFareSettings', 'customer-fare-display-settings': 'manageFareSettings', 'student-discount-settings': 'manageFareSettings', 'long-range-settings': 'manageFareSettings', 'terms-settings': 'manageFareSettings', 'location-aliases': 'manageLocationAliases',
   'pay-settings': 'managePaymentSettings'
 };
 function hasSectionAccess(name) {
@@ -1960,12 +2010,12 @@ function showToast(msg, type = 'info') {
 // ── Section Navigation ────────────────────────────────────────────────────────
 const SECTION_TITLES = {
   overview:'Overview Dashboard', payments:'Payments Management', drivers:'Driver Management',
-  passengers:'Customer Management', 'new-requests':'Driver Approvals & Documents',
+  passengers:'Customer Management', 'student-approvals':'Student Approvals', 'new-requests':'Driver Approvals & Documents',
   'temp-blocked':'Driver Status', 'blk-pass':'Blocked Customers',
   'live-rides':'Live Rides & History', sos:'SOS Alert Monitor',
   'fee-compliance':'Driver Wallets & Daily Fees',
   'app-settings':'App Settings / Pricing', 'terms-settings':'Terms & Conditions Settings', 'location-aliases':'Customer Location Aliases',
-  'ride-settings':'Ride Settings', 'fare-settings':'Daily Fare Settings', 'waiting-rate-settings':'Per-Minute Waiting / Stop Rates', 'customer-fare-display-settings':'Customer Fare Display', 'long-range-settings':'Long Range Ride Settings', 'pay-settings':'Payment Settings', 'ride-retention':'Rides Data Retention', ratings:'Ratings & Feedback', support:'Support Tickets', 'audit-logs':'Payment & Pass Audit Logs',
+  'ride-settings':'Ride Settings', 'fare-settings':'Daily Fare Settings', 'waiting-rate-settings':'Per-Minute Waiting / Stop Rates', 'customer-fare-display-settings':'Customer Fare Display', 'student-discount-settings':'Student Discount', 'long-range-settings':'Long Range Ride Settings', 'pay-settings':'Payment Settings', 'ride-retention':'Rides Data Retention', ratings:'Ratings & Feedback', support:'Support Tickets', 'audit-logs':'Payment & Pass Audit Logs',
     deletions:'Account Deletion Requests', 'sub-admins':'Sub-Admin User Management'
 };
 const SECTION_SAVE_HANDLERS = {
@@ -2092,10 +2142,10 @@ function showSection(name) {
   const loaders = {
     overview: loadOverview, payments: () => loadPayments(currentPayStatus),
     drivers: () => loadDrivers(currentDriverStatus), passengers: () => loadPassengers(currentPassStatus),
-    'new-requests': loadNewRequests, 'temp-blocked': loadTempBlocked,
+    'new-requests': loadNewRequests, 'student-approvals': () => loadStudentApprovals(currentStudentStatus), 'temp-blocked': loadTempBlocked,
     'blk-pass': loadBlockedPass, 'live-rides': () => loadRides(currentRideStatus),
     'ride-retention': loadRideRetention,
-    sos: () => loadSOS(currentSOSFilter), 'ride-settings': loadRideSettings, 'fare-settings': loadFareSettings, 'customer-fare-display-settings': loadCustomerFareDisplaySettings, 'long-range-settings': loadLongRangeSettings, 'terms-settings': loadTermsSettings, 'location-aliases': loadLocationAliases, 'pay-settings': loadPaymentSettings,
+    sos: () => loadSOS(currentSOSFilter), 'ride-settings': loadRideSettings, 'fare-settings': loadFareSettings, 'customer-fare-display-settings': loadCustomerFareDisplaySettings, 'student-discount-settings': loadStudentDiscountSettings, 'long-range-settings': loadLongRangeSettings, 'terms-settings': loadTermsSettings, 'location-aliases': loadLocationAliases, 'pay-settings': loadPaymentSettings,
     'fee-compliance': loadFeeCompliance, 'waiting-rate-settings': loadWaitingRateSettings,
     ratings: loadRatings, support: () => loadSupportTickets(currentSupStatus),
     deletions: loadDeletionRequests,
@@ -2369,8 +2419,12 @@ async function loadPassengers(status = 'all') {
       <td style="font-size:.72rem;color:#475569">${fmtDate(p.createdAt)}</td>
       <td><div style="display:flex;gap:.3rem">
         <button class="btn btn-blue" onclick="viewUser('${p._id}','customer')">👁</button>
-        ${p.accountStatus==='pending' && hasPermission('manageCustomers') ? `<button class="btn btn-green" onclick="userAction('${p._id}','approve','customer')">✓ Approve</button><button class="btn btn-red" onclick="userAction('${p._id}','reject','customer')">✕ Reject</button>` : ''}
-        ${hasPermission('manageCustomers') ? ((p.accountStatus==='blocked')
+        ${p.isStudent && p.studentVerificationStatus !== 'approved'
+          ? `<span class="badge badge-pending" title="Use Student Approvals for document review">🎓 Student review</span>`
+          : p.accountStatus==='pending' && hasPermission('manageCustomers')
+            ? `<button class="btn btn-green" onclick="userAction('${p._id}','approve','customer')">✓ Approve</button><button class="btn btn-red" onclick="userAction('${p._id}','reject','customer')">✕ Reject</button>`
+            : ''}
+        ${hasPermission('manageCustomers') && !(p.isStudent && p.studentVerificationStatus !== 'approved') ? ((p.accountStatus==='blocked')
           ? `<button class="btn btn-green" onclick="userAction('${p._id}','unblock','customer')">▶ Unblock</button>`
           : `<button class="btn btn-red"   onclick="userAction('${p._id}','block','customer')">⛔ Block</button>`) : ''}
         ${isSuperAdmin ? `<button class="btn btn-red" onclick="openDeleteModal('${p._id}','${p.name.replace(/'/g,"\\'")}','customer')" title="Delete Account">🗑</button>` : ''}
@@ -2398,6 +2452,81 @@ async function loadNewRequests() {
       </div></td>
     </tr>`).join('');
   } catch (e) { tbody.innerHTML = `<tr><td colspan="6" style="text-align:center;color:#ef4444;padding:1rem">${e.message}</td></tr>`; }
+}
+
+async function loadStudentApprovals(status = 'pending') {
+  currentStudentStatus = status;
+  const tbody = document.getElementById('student-approvals-tbody');
+  if (!tbody) return;
+  tbody.innerHTML = '<tr><td colspan="7" class="loading-row">Loading…</td></tr>';
+  try {
+    const students = await api(`/api/admin/student-approvals?status=${encodeURIComponent(status)}`);
+    if (!students.length) {
+      tbody.innerHTML = '<tr><td colspan="7"><div class="empty-state"><span class="empty-icon">🎓</span>No student applications found</div></td></tr>';
+      return;
+    }
+    tbody.innerHTML = students.map(student => `<tr>
+      <td><div style="font-weight:700;color:#e2e8f0">${escHtml(student.name || '—')}</div><div style="font-size:.7rem;color:#64748b">${escHtml(student.phone || student.email || '')}</div></td>
+      <td style="font-family:monospace">${escHtml(student.cnicNumber || (student.nationalIdLast4 ? `••••${student.nationalIdLast4}` : '—'))}</td>
+      <td>${escHtml(student.studentIdNumber || '—')}</td>
+      <td>${escHtml(student.studentInstitution || '—')}</td>
+      <td>${badgeHtml(student.studentVerificationStatus || 'pending')}</td>
+      <td><button class="btn btn-blue" onclick="viewStudentDocs('${student._id}')">📄 Review IDs</button></td>
+      <td><div style="display:flex;gap:.3rem">
+        ${student.studentVerificationStatus !== 'approved' && hasPermission('manageCustomers') ? `<button class="btn btn-green" onclick="setStudentApproval('${student._id}','approved')">✓ Approve</button>` : ''}
+        ${student.studentVerificationStatus !== 'rejected' && hasPermission('manageCustomers') ? `<button class="btn btn-red" onclick="setStudentApproval('${student._id}','rejected')">✕ Reject</button>` : ''}
+      </div></td>
+    </tr>`).join('');
+  } catch (e) {
+    tbody.innerHTML = `<tr><td colspan="7" style="text-align:center;color:#ef4444;padding:1rem">${escHtml(e.message)}</td></tr>`;
+  }
+}
+
+async function setStudentApproval(userId, status) {
+  const action = status === 'approved' ? 'approve' : 'reject';
+  if (!window.confirm(`${status === 'approved' ? 'Approve' : 'Reject'} this Student application?`)) return;
+  try {
+    await api(`/api/admin/student-approvals/${encodeURIComponent(userId)}`, 'PATCH', { status });
+    showToast(`Student application ${action}d`, 'success');
+    await loadStudentApprovals(currentStudentStatus);
+  } catch (e) { showToast(e.message, 'error'); }
+}
+
+async function viewStudentDocs(userId) {
+  openModal('doc-modal');
+  const grid = document.getElementById('doc-grid');
+  const info = document.getElementById('doc-driver-info');
+  const footer = document.getElementById('doc-footer');
+  info.innerHTML = '<strong>Student verification documents</strong><div style="font-size:.72rem;color:#64748b;margin-top:.25rem">Private files — available only during this authenticated review.</div>';
+  grid.innerHTML = '<div class="loading-row">Loading protected documents…</div>';
+  footer.innerHTML = '<button class="btn btn-gray" onclick="closeModal(\'doc-modal\')">Close</button>';
+  try {
+    const students = await api('/api/admin/student-approvals?status=all');
+    const student = students.find(item => String(item._id) === String(userId));
+    if (!student) throw new Error('Student application not found');
+    info.innerHTML = `<div class="field-row">
+      <div class="field-item"><div class="field-label">Name</div><div class="field-val">${escHtml(student.name || '—')}</div></div>
+      <div class="field-item"><div class="field-label">CNIC</div><div class="field-val">${escHtml(student.cnicNumber || '—')}</div></div>
+      <div class="field-item"><div class="field-label">Student ID / Institution</div><div class="field-val">${escHtml(student.studentIdNumber || '—')} · ${escHtml(student.studentInstitution || '—')}</div></div>
+    </div>`;
+    releaseDocumentBlobUrls();
+    const definitions = [
+      { key: 'cnicFront', label: 'CNIC Front', available: student.hasCnicFront },
+      { key: 'cnicBack', label: 'CNIC Back', available: student.hasCnicBack },
+      { key: 'studentIdImage', label: 'Student ID Card', available: student.hasStudentIdImage }
+    ];
+    const docs = await Promise.all(definitions.map(async doc => ({
+      ...doc,
+      url: doc.available ? await fetchProtectedDocument(`/api/admin/student-documents/${encodeURIComponent(userId)}/${doc.key}`) : ''
+    })));
+    grid.innerHTML = docs.map(renderDocumentCard).join('');
+    bindDocumentActions(grid);
+    if (student.studentVerificationStatus === 'pending' && hasPermission('manageCustomers')) {
+      footer.innerHTML = `<button class="btn btn-gray" onclick="closeModal('doc-modal')">Close</button>
+        <button class="btn btn-green" onclick="closeModal('doc-modal');setStudentApproval('${userId}','approved')">✓ Approve Student</button>
+        <button class="btn btn-red" onclick="closeModal('doc-modal');setStudentApproval('${userId}','rejected')">✕ Reject Student</button>`;
+    }
+  } catch (e) { grid.innerHTML = `<div class="empty-state" style="color:#ef4444">${escHtml(e.message)}</div>`; }
 }
 
 // ── 6. TEMP BLOCKED ───────────────────────────────────────────────────────────
@@ -4300,6 +4429,41 @@ async function saveCustomerFareDisplaySettings() {
   }
 }
 
+async function loadStudentDiscountSettings() {
+  const feedback = document.getElementById('student-discount-settings-feedback');
+  try {
+    feedback.textContent = 'Loading…'; feedback.style.color = '#64748b';
+    const settings = await api('/api/admin/student-discount-settings');
+    document.getElementById('student-discount-enabled').checked = settings.enabled !== false;
+    document.getElementById('student-discount-percent').value = settings.discountPercent;
+    feedback.textContent = '';
+  } catch (e) {
+    feedback.textContent = `⚠ ${e.message}`; feedback.style.color = '#ef4444';
+  }
+}
+
+async function saveStudentDiscountSettings() {
+  const feedback = document.getElementById('student-discount-settings-feedback');
+  const value = Number(document.getElementById('student-discount-percent').value);
+  if (!Number.isFinite(value) || value < 0 || value > 100) {
+    feedback.textContent = 'Enter a percentage from 0 to 100.'; feedback.style.color = '#ef4444'; return;
+  }
+  try {
+    feedback.textContent = 'Saving…'; feedback.style.color = '#64748b';
+    const result = await api('/api/admin/student-discount-settings', 'PATCH', {
+      enabled: document.getElementById('student-discount-enabled').checked,
+      discountPercent: value
+    });
+    document.getElementById('student-discount-enabled').checked = result.settings.enabled !== false;
+    document.getElementById('student-discount-percent').value = result.settings.discountPercent;
+    feedback.textContent = '✓ Student discount saved and published live.'; feedback.style.color = '#22c55e';
+    showToast('Student discount updated ✓', 'success');
+  } catch (e) {
+    feedback.textContent = `✕ ${e.message}`; feedback.style.color = '#ef4444';
+    showToast(e.message, 'error');
+  }
+}
+
 function setGatewayStatus(prefix, status = {}) {
   const el = document.getElementById(`${prefix}-gateway-status`);
   if (!el) return;
@@ -4767,6 +4931,7 @@ function applyPermissions() {
     'ride-settings-card': 'manageRideSettings',
     'fare-settings-card': 'manageFareSettings',
     'customer-fare-display-settings-card': 'manageFareSettings',
+    'student-discount-settings-card': 'manageFareSettings',
     'long-range-settings-card': 'manageFareSettings',
     'terms-settings-card': 'manageFareSettings',
     'location-aliases-card': 'manageLocationAliases',

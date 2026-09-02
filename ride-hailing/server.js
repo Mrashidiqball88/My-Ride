@@ -1118,6 +1118,59 @@ const DEFAULT_CUSTOMER_FARE_DISPLAY_SETTINGS = Object.freeze({
   showFareBreakdown: true
 });
 
+const STUDENT_DISCOUNT_SETTINGS_KEY = 'student_discount_settings';
+const DEFAULT_STUDENT_DISCOUNT_SETTINGS = Object.freeze({ enabled: true, discountPercent: 10 });
+
+function customerRegistrationAccountStatus(isStudent, identityVerified) {
+  return isStudent ? 'pending' : (identityVerified ? 'active' : 'pending');
+}
+
+function normalizeStudentDiscountSettings(input = {}) {
+  const value = Number(input?.discountPercent);
+  return {
+    enabled: input?.enabled !== false,
+    discountPercent: Number.isFinite(value)
+      ? Number(Math.min(100, Math.max(0, value)).toFixed(2))
+      : DEFAULT_STUDENT_DISCOUNT_SETTINGS.discountPercent
+  };
+}
+
+async function getStudentDiscountSettings() {
+  const doc = await Settings.findOne({ key: STUDENT_DISCOUNT_SETTINGS_KEY }).lean();
+  return normalizeStudentDiscountSettings(doc?.value);
+}
+
+async function getVerifiedStudentDiscountPercent(userId) {
+  if (!userId) return 0;
+  const user = await User.findById(userId)
+    .select('role isStudent studentVerificationStatus')
+    .lean()
+    .catch(() => null);
+  if (!user || user.role !== 'customer' || user.isStudent !== true || user.studentVerificationStatus !== 'approved') {
+    return 0;
+  }
+  const settings = await getStudentDiscountSettings();
+  return settings.enabled ? settings.discountPercent : 0;
+}
+
+function applyStudentDiscountToFareQuote(fareQuote, discountPercent = 0) {
+  if (!fareQuote || fareQuote.error) return fareQuote;
+  const totalBeforeDiscount = Number(fareQuote.totalFare || 0);
+  const percent = Number.isFinite(Number(discountPercent))
+    ? Math.min(100, Math.max(0, Number(discountPercent)))
+    : 0;
+  const studentDiscountAmount = Math.round(totalBeforeDiscount * percent / 100);
+  const payableFare = Math.max(0, totalBeforeDiscount - studentDiscountAmount);
+  return {
+    ...fareQuote,
+    totalBeforeDiscount,
+    studentDiscountPercent: Number(percent.toFixed(2)),
+    studentDiscountAmount,
+    payableFare,
+    totalFare: payableFare
+  };
+}
+
 function normalizeCustomerFareDisplaySettings(input = {}) {
   const source = input && typeof input === 'object' ? input : {};
   return {
@@ -1269,7 +1322,7 @@ async function refreshPendingRideFares(settings, perKmRates = null) {
   const waitingRateSettings = await getWaitingRateSettings();
   const pendingRides = await Ride.find({ status: 'requested' });
   for (const ride of pendingRides) {
-    const fareQuote = calculateRideFare(
+    let fareQuote = calculateRideFare(
       settings,
       longRangeSettings,
       ride.vehicleType,
@@ -1279,6 +1332,12 @@ async function refreshPendingRideFares(settings, perKmRates = null) {
       ride.durationMinutes,
       waitingRateSettings,
       ride.waitingSeconds
+    );
+    fareQuote = applyStudentDiscountToFareQuote(
+      fareQuote,
+      Number.isFinite(Number(ride.fareQuote?.studentDiscountPercent))
+        ? Number(ride.fareQuote.studentDiscountPercent)
+        : await getVerifiedStudentDiscountPercent(ride.passenger)
     );
     if (fareQuote.error || (
       ride.fare === fareQuote.totalFare
@@ -1383,6 +1442,12 @@ const userSchema = new mongoose.Schema({
   nationalIdLast4: { type: String, default: '' },
   customerIdFront: { type: String, default: '', select: false },
   customerIdBack:  { type: String, default: '', select: false },
+  studentIdNumber: { type: String, default: '' },
+  studentInstitution: { type: String, default: '' },
+  studentIdImage: { type: String, default: '', select: false },
+  isStudent: { type: Boolean, default: false },
+  studentVerificationStatus: { type: String, enum: ['not_applicable', 'pending', 'approved', 'rejected'], default: 'not_applicable' },
+  studentVerifiedAt: { type: Date, default: null },
   identityVerifiedAt: { type: Date, default: null },
   identityVerificationStatus: { type: String, enum: ['pending', 'approved', 'rejected'], default: null }
 }, { timestamps: true });
@@ -1448,6 +1513,10 @@ const rideSchema = new mongoose.Schema({
     activeRules: [{ start: String, end: String, adjustmentPercent: Number }],
     adjustmentPercent: Number,
     subtotal: Number,
+    totalBeforeDiscount: Number,
+    studentDiscountPercent: Number,
+    studentDiscountAmount: Number,
+    payableFare: Number,
     totalFare: Number,
     calculatedAt: Date
   },
@@ -2981,7 +3050,7 @@ async function refreshRideFareFromCurrentSettings(ride, waitingRateSettings = nu
     Settings.findOne({ key: 'per_km_rates' }).lean(),
     Settings.findOne({ key: LONG_RANGE_SETTINGS_KEY }).lean()
   ]);
-  const fareQuote = calculateRideFare(
+  let fareQuote = calculateRideFare(
     normalizeFareSettings(settingsDoc?.value),
     normalizeLongRangeSettings(longRangeDoc?.value),
     ride.vehicleType,
@@ -2993,6 +3062,13 @@ async function refreshRideFareFromCurrentSettings(ride, waitingRateSettings = nu
     ride.waitingSeconds
   );
   if (fareQuote.error) return fareQuote;
+  const persistedDiscount = Number(ride.fareQuote?.studentDiscountPercent);
+  fareQuote = applyStudentDiscountToFareQuote(
+    fareQuote,
+    Number.isFinite(persistedDiscount)
+      ? persistedDiscount
+      : await getVerifiedStudentDiscountPercent(ride.passenger)
+  );
   const isActiveRide = ['accepted', 'arrived', 'in-progress'].includes(ride.status);
   if (isActiveRide && !Number.isFinite(Number(ride.agreedFareBeforeWaiting))) {
     ride.agreedFareBeforeWaiting = Math.max(0, Number(ride.fare || 0) - Number(ride.waitingFare || 0));
@@ -3443,6 +3519,19 @@ async function authMiddleware(req, res, next) {
   }
 }
 
+async function optionalCustomerAuth(req, _res, next) {
+  const auth = req.headers.authorization;
+  if (typeof auth === 'string' && auth.startsWith('Bearer ')) {
+    try {
+      const payload = jwt.verify(auth.slice(7), JWT_SECRET);
+      if (payload.role === 'customer') req.user = payload;
+    } catch {
+      // Keep public fare calculation available when an optional token is stale.
+    }
+  }
+  next();
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Admin Middleware (two flavours)
 // ─────────────────────────────────────────────────────────────────────────────
@@ -3674,7 +3763,8 @@ async function getAdminMapLocationForUser(user, now = new Date()) {
 app.post('/api/auth/register', async (req, res) => {
   try {
     const { name, email, password, phone, role, vehicleType, vehicleModel, vehiclePlate, ridePreference,
-             profilePhoto, licensePhoto, cnicFront, cnicBack, cnicNumber, vehicleRegPhoto, deviceId } = req.body;
+             profilePhoto, licensePhoto, cnicFront, cnicBack, cnicNumber, vehicleRegPhoto, deviceId,
+             isStudent, studentIdNumber, studentIdImage, studentInstitution } = req.body;
     const resolvedRoleEarly = role || 'customer';
     if (!['customer', 'driver'].includes(resolvedRoleEarly)) {
       return res.status(400).json({ error: 'Account type must be Customer or Driver' });
@@ -3689,6 +3779,10 @@ app.post('/api/auth/register', async (req, res) => {
     const normalizedPhone = normalizePhoneNumber(phone);
     if (!normalizedPhone) return res.status(400).json({ error: 'Enter a valid mobile number' });
     const resolvedRidePreference = resolvedRoleEarly === 'driver' ? normalizeRidePreference(ridePreference) : 'Both';
+    const registeringAsStudent = resolvedRoleEarly === 'customer' && isStudent === true;
+    if (registeringAsStudent && !(await getStudentDiscountSettings()).enabled) {
+      return res.status(403).json({ error: 'Student registration is currently disabled by Admin' });
+    }
     const normalizedCustomerId = normalizeNationalId(cnicNumber);
     if (resolvedRoleEarly === 'customer') {
       if (!cnicNumber) return res.status(400).json({ error: 'CNIC / NIC number is required' });
@@ -3697,6 +3791,11 @@ app.post('/api/auth/register', async (req, res) => {
       }
       if (!cnicFront) return res.status(400).json({ error: 'National ID Front is required' });
       if (!cnicBack) return res.status(400).json({ error: 'National ID Back is required' });
+      if (registeringAsStudent) {
+        if (!String(studentIdNumber || '').trim()) return res.status(400).json({ error: 'Student ID number is required' });
+        if (!String(studentInstitution || '').trim()) return res.status(400).json({ error: 'Institution is required' });
+        if (!studentIdImage) return res.status(400).json({ error: 'Student ID image is required' });
+      }
     }
     if (resolvedRoleEarly === 'driver') {
       if (!String(vehicleModel || '').trim()) return res.status(400).json({ error: 'Vehicle model is required' });
@@ -3713,7 +3812,8 @@ app.post('/api/auth/register', async (req, res) => {
     const registrationDocuments = resolvedRoleEarly === 'customer'
       ? [
           [cnicFront, 'National ID Front'],
-          [cnicBack, 'National ID Back']
+          [cnicBack, 'National ID Back'],
+          ...(registeringAsStudent ? [[studentIdImage, 'Student ID Image']] : [])
         ]
       : [
           [profilePhoto, 'Profile Photo'],
@@ -3760,11 +3860,13 @@ app.post('/api/auth/register', async (req, res) => {
     const registrationDeviceHash = resolvedRole === 'driver' ? hashDeviceIdentifier(deviceId) : '';
     let customerFrontFile = '';
     let customerBackFile = '';
+    let studentIdFile = '';
     try {
       customerFrontFile = resolvedRole === 'customer' ? await savePrivateIdentityDocument(cnicFront, 'customer_id_front') : '';
       customerBackFile = resolvedRole === 'customer' ? await savePrivateIdentityDocument(cnicBack, 'customer_id_back') : '';
+      studentIdFile = registeringAsStudent ? await savePrivateIdentityDocument(studentIdImage, 'student_id') : '';
     } catch (err) {
-      deletePrivateIdentityDocuments([customerFrontFile, customerBackFile]);
+      deletePrivateIdentityDocuments([customerFrontFile, customerBackFile, studentIdFile]);
       throw new Error(`Identity document upload failed: ${err.message}`);
     }
     const user = await User.create({
@@ -3773,7 +3875,9 @@ app.post('/api/auth/register', async (req, res) => {
       phone:         normalizedPhone,
       password:      hash,
       role:          resolvedRole,
-      accountStatus: resolvedRole === 'driver' ? 'pending' : (identityVerified ? 'active' : 'pending'),
+      accountStatus: resolvedRole === 'driver'
+        ? 'pending'
+        : customerRegistrationAccountStatus(registeringAsStudent, identityVerified),
       vehicleType:   resolvedRole === 'driver' ? normalizeFareVehicle(vehicleType) : '',
       ridePreference: resolvedRidePreference,
       vehicleModel:  vehicleModel   || '',
@@ -3783,11 +3887,16 @@ app.post('/api/auth/register', async (req, res) => {
       vehicleRegPhoto: resolvedRole === 'driver' ? await savePrivateDriverDocument(vehicleRegPhoto, 'vehicleReg') : '',
       cnicFront:     resolvedRole === 'driver' ? await savePrivateDriverDocument(cnicFront, 'cnicFront') : '',
       cnicBack:      resolvedRole === 'driver' ? await savePrivateDriverDocument(cnicBack, 'cnicBack') : '',
-      cnicNumber:    resolvedRole === 'driver' ? (cnicNumber || '') : '',
+      cnicNumber:    resolvedRole === 'customer' ? normalizedCustomerId : (cnicNumber || ''),
       nationalIdHash: nationalIdHash || undefined,
       nationalIdLast4: resolvedRole === 'customer' ? normalizedCustomerId.slice(-4) : '',
       customerIdFront: customerFrontFile,
       customerIdBack: customerBackFile,
+      isStudent: registeringAsStudent,
+      studentIdNumber: registeringAsStudent ? String(studentIdNumber).trim() : '',
+      studentInstitution: registeringAsStudent ? String(studentInstitution).trim() : '',
+      studentIdImage: studentIdFile,
+      studentVerificationStatus: registeringAsStudent ? 'pending' : 'not_applicable',
       identityVerifiedAt: resolvedRole === 'customer' ? new Date() : null,
       identityVerificationStatus: resolvedRole === 'customer' ? (identityVerified ? 'approved' : 'rejected') : null,
       deviceBindingHash: registrationDeviceHash || undefined,
@@ -3813,6 +3922,7 @@ app.post('/api/auth/register', async (req, res) => {
       sessionToken,
       user: { id: user._id, name: user.name, email: user.email || '', phone: user.phone,
                role: user.role, accountStatus: user.accountStatus, identityVerificationStatus: user.identityVerificationStatus,
+              isStudent: user.isStudent, studentVerificationStatus: user.studentVerificationStatus,
               vehicleType: user.vehicleType,
               ridePreference: user.ridePreference || 'Both',
               vehicleModel: user.vehicleModel, vehiclePlate: user.vehiclePlate,
@@ -3908,6 +4018,7 @@ app.post('/api/auth/login', async (req, res) => {
       sessionToken,
       user: { id: user._id, name: user.name, email: user.email || '', phone: user.phone,
                role: user.role, accountStatus: user.accountStatus, identityVerificationStatus: user.identityVerificationStatus,
+              isStudent: user.isStudent, studentVerificationStatus: user.studentVerificationStatus,
               profilePhoto: user.profilePhoto || '',
                vehicleType: user.vehicleType,
                ridePreference: user.ridePreference || 'Both',
@@ -4028,7 +4139,7 @@ app.get('/api/auth/me', authMiddleware, async (req, res) => {
 
 // Public fare quote used by both customer and driver apps. Pricing is always
 // calculated from the current Admin Settings document.
-app.post('/api/fare/calculate', async (req, res) => {
+app.post('/api/fare/calculate', optionalCustomerAuth, async (req, res) => {
   try {
     const [settingsDoc, ratesDoc, longRangeDoc, vehicleCategoryDoc, waitingRateDoc] = await Promise.all([
       Settings.findOne({ key: 'daily_fare_settings' }).lean(),
@@ -4053,7 +4164,8 @@ app.post('/api/fare/calculate', async (req, res) => {
       req.body?.waitingSeconds
     );
     if (result.error) return res.status(422).json({ error: result.error });
-    res.json(result);
+    const discountPercent = await getVerifiedStudentDiscountPercent(req.user?.id);
+    res.json(applyStudentDiscountToFareQuote(result, discountPercent));
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
@@ -4117,7 +4229,7 @@ app.post('/api/rides', authMiddleware, customerOnly, customerCanBook, async (req
     }
     const longRangeSettings = normalizeLongRangeSettings(longRangeDoc?.value);
     const rideBroadcastSettings = normalizeRideBroadcastSettings(rideBroadcastDoc?.value);
-    const fareQuote = calculateRideFare(
+    let fareQuote = calculateRideFare(
       normalizeFareSettings(settingsDoc?.value),
       longRangeSettings,
       normalizedVehicleType,
@@ -4128,7 +4240,9 @@ app.post('/api/rides', authMiddleware, customerOnly, customerCanBook, async (req
       normalizeWaitingRateSettings(waitingRateDoc?.value)
     );
     if (fareQuote.error) return res.status(422).json({ error: fareQuote.error });
-    const offerResult = resolveCustomerFareOffer(customerOffer, fareQuote.totalFare, customerFareOffset);
+    const discountPercent = await getVerifiedStudentDiscountPercent(req.user.id);
+    const discountedFareQuote = applyStudentDiscountToFareQuote(fareQuote, discountPercent);
+    const offerResult = resolveCustomerFareOffer(customerOffer, discountedFareQuote.totalFare, customerFareOffset);
     if (offerResult.error) return res.status(422).json({ error: offerResult.error });
     const broadcastExpiresAt = new Date(Date.now() + rideBroadcastSettings.broadcastRequestDurationSeconds * 1000);
     const ride = await Ride.create({
@@ -4141,13 +4255,13 @@ app.post('/api/rides', authMiddleware, customerOnly, customerCanBook, async (req
       // counter through the existing offer flow.
       fare:          offerResult.value,
       customerFareOffset: offerResult.offset,
-      fareQuote,
-      isLongRange:       !!fareQuote.isLongRange,
-      distance:      fareQuote.distanceKm,
-      durationMinutes: fareQuote.durationMinutes || 0,
-      waitingMinutes: fareQuote.waitingMinutes || 0,
-      waitingFare: fareQuote.waitingFare || 0,
-      vehicleType:   fareQuote.vehicleType,
+      fareQuote: discountedFareQuote,
+      isLongRange:       !!discountedFareQuote.isLongRange,
+      distance:      discountedFareQuote.distanceKm,
+      durationMinutes: discountedFareQuote.durationMinutes || 0,
+      waitingMinutes: discountedFareQuote.waitingMinutes || 0,
+      waitingFare: discountedFareQuote.waitingFare || 0,
+      vehicleType:   discountedFareQuote.vehicleType,
       notes:         notes         || '',
       paymentMethod: paymentMethod || 'cash',
       mobileAccount: mobileAccount || '',
@@ -4781,7 +4895,7 @@ app.patch('/api/rides/:id/update-fare', authMiddleware, async (req, res) => {
       Settings.findOne({ key: LONG_RANGE_SETTINGS_KEY }).lean(),
       Settings.findOne({ key: WAITING_RATE_SETTINGS_KEY }).lean()
     ]);
-    const fareQuote = calculateRideFare(
+    let fareQuote = calculateRideFare(
       normalizeFareSettings(settingsDoc?.value),
       normalizeLongRangeSettings(longRangeDoc?.value),
       ride.vehicleType,
@@ -4793,6 +4907,10 @@ app.patch('/api/rides/:id/update-fare', authMiddleware, async (req, res) => {
       ride.waitingSeconds
     );
     if (fareQuote.error) return res.status(422).json({ error: fareQuote.error });
+    fareQuote = applyStudentDiscountToFareQuote(
+      fareQuote,
+      await getVerifiedStudentDiscountPercent(req.user.id)
+    );
     ride.fare = fareQuote.totalFare;
     ride.customerFareOffset = 0;
     ride.fareQuote = fareQuote;
@@ -6083,6 +6201,68 @@ app.get('/api/admin/customer-identity/:userId/:side', adminJwt, requireSuperAdmi
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
+app.get('/api/admin/student-approvals', adminJwt, requirePerm('manageCustomers'), async (req, res) => {
+  try {
+    const status = String(req.query.status || 'pending');
+    const filter = { role: 'customer', isStudent: true };
+    if (['pending', 'approved', 'rejected'].includes(status)) filter.studentVerificationStatus = status;
+    const students = await User.find(filter)
+      .select('name email phone cnicNumber nationalIdLast4 studentIdNumber studentInstitution isStudent studentVerificationStatus studentVerifiedAt createdAt +customerIdFront +customerIdBack +studentIdImage')
+      .sort('-createdAt').limit(200).lean();
+    res.json(students.map(student => ({
+      ...student,
+      hasCnicFront: !!student.customerIdFront,
+      hasCnicBack: !!student.customerIdBack,
+      hasStudentIdImage: !!student.studentIdImage,
+      customerIdFront: undefined,
+      customerIdBack: undefined,
+      studentIdImage: undefined
+    })));
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.get('/api/admin/student-documents/:userId/:field', adminJwt, requirePerm('manageCustomers'), async (req, res) => {
+  const fields = { cnicFront: 'customerIdFront', cnicBack: 'customerIdBack', studentIdImage: 'studentIdImage' };
+  const field = fields[req.params.field];
+  if (!field) return res.status(404).json({ error: 'Document not found' });
+  try {
+    const student = await User.findOne({ _id: req.params.userId, role: 'customer', isStudent: true })
+      .select(`+${field}`);
+    const filename = student?.[field];
+    const filePath = filename ? path.join(CUSTOMER_ID_UPLOADS_DIR, path.basename(filename)) : '';
+    if (!filePath || !fs.existsSync(filePath)) return res.status(404).json({ error: 'Document not found' });
+    res.setHeader('Cache-Control', 'private, no-store');
+    res.type('image/jpeg').sendFile(filePath);
+  } catch (err) { res.status(500).json({ error: 'Unable to retrieve document' }); }
+});
+
+app.patch('/api/admin/student-approvals/:id', adminJwt, requirePerm('manageCustomers'), async (req, res) => {
+  try {
+    const status = String(req.body?.status || '').trim();
+    if (!['approved', 'rejected'].includes(status)) return res.status(400).json({ error: 'Student status must be approved or rejected' });
+    const student = await User.findOneAndUpdate(
+      {
+        _id: req.params.id,
+        role: 'customer',
+        isStudent: true,
+        identityVerificationStatus: 'approved'
+      },
+      {
+        studentVerificationStatus: status,
+        studentVerifiedAt: status === 'approved' ? new Date() : null,
+        accountStatus: status === 'approved' ? 'active' : 'pending'
+      },
+      { new: true }
+    ).select('-password');
+    if (!student) return res.status(404).json({ error: 'Student application not found' });
+    io.to(`user:${student._id}`).emit('student-verification:updated', {
+      status,
+      accountStatus: student.accountStatus
+    });
+    res.json({ success: true, user: student });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
 // POST /api/admin/sub-user/login — sub-admin credential login
 app.post('/api/admin/sub-user/login', async (req, res) => {
   try {
@@ -6456,7 +6636,7 @@ app.get('/api/admin/passengers', adminJwt, requirePerm('viewCustomers'), async (
     const filter = { role: 'customer' };
     if (['pending', 'active', 'blocked', 'suspended'].includes(status)) filter.accountStatus = status;
     const passengers = await User.find(filter)
-      .select('-password -otpCode -otpExpiry')
+      .select('-password -otpCode -otpExpiry isStudent studentVerificationStatus')
       .sort('-createdAt').limit(200);
     // Attach ride count to each passenger
     const withCounts = await Promise.all(passengers.map(async p => {
@@ -6471,7 +6651,7 @@ app.get('/api/admin/passengers', adminJwt, requirePerm('viewCustomers'), async (
 app.patch('/api/admin/users/:id/status', adminJwt, async (req, res) => {
   try {
     const { action, reason } = req.body;
-    const target = await User.findById(req.params.id).select('role');
+    const target = await User.findById(req.params.id).select('role isStudent studentVerificationStatus');
     if (!target) return res.status(404).json({ error: 'User not found' });
     if (!['driver', 'customer'].includes(target.role)) {
       return res.status(403).json({ error: 'Only Driver and Customer accounts can be managed from this endpoint' });
@@ -6504,6 +6684,16 @@ app.patch('/api/admin/users/:id/status', adminJwt, async (req, res) => {
     }
     if (!req.admin.isSuperAdmin && !hasAdminPermission(req.admin, requiredPermission)) {
       return res.status(403).json({ error: `Permission denied: ${requiredPermission} required` });
+    }
+    if (
+      target.role === 'customer'
+      && target.isStudent === true
+      && target.studentVerificationStatus !== 'approved'
+      && ['approve', 'unblock'].includes(action)
+    ) {
+      return res.status(409).json({
+        error: 'Student accounts must be approved from the Student Approvals panel after document review'
+      });
     }
 
     let update = {};
@@ -7335,12 +7525,13 @@ app.get('/api/per-km-rates', async (req, res) => {
 // and older clients, while giving the Customer app one coherent payload.
 app.get('/api/customer/fare-config', async (req, res) => {
   try {
-    const [ratesDoc, longRangeDoc, displayDoc, vehicleCategoryDoc, waitingRateDoc] = await Promise.all([
+    const [ratesDoc, longRangeDoc, displayDoc, vehicleCategoryDoc, waitingRateDoc, studentDiscountDoc] = await Promise.all([
       Settings.findOne({ key: 'per_km_rates' }).lean(),
       Settings.findOne({ key: LONG_RANGE_SETTINGS_KEY }).lean(),
       Settings.findOne({ key: CUSTOMER_FARE_DISPLAY_SETTINGS_KEY }).lean(),
       Settings.findOne({ key: VEHICLE_CATEGORY_SETTINGS_KEY }).lean(),
-      Settings.findOne({ key: WAITING_RATE_SETTINGS_KEY }).lean()
+      Settings.findOne({ key: WAITING_RATE_SETTINGS_KEY }).lean(),
+      Settings.findOne({ key: STUDENT_DISCOUNT_SETTINGS_KEY }).lean()
     ]);
     res.json({
       perKmRates: normalizePerKmRates(ratesDoc?.value),
@@ -7350,7 +7541,8 @@ app.get('/api/customer/fare-config', async (req, res) => {
         category,
         active: normalizeVehicleCategorySettings(vehicleCategoryDoc?.value)[category].active
       })),
-      waitingRateSettings: normalizeWaitingRateSettings(waitingRateDoc?.value)
+      waitingRateSettings: normalizeWaitingRateSettings(waitingRateDoc?.value),
+      studentFeatureEnabled: normalizeStudentDiscountSettings(studentDiscountDoc?.value).enabled
     });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
@@ -7372,6 +7564,31 @@ app.patch('/api/admin/customer-fare-display-settings', adminJwt, requirePerm('ma
     const payload = { settings, updatedAt: new Date().toISOString() };
     io.emit('customer-fare-display-settings:updated', payload);
     res.json({ success: true, ...payload });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.get('/api/admin/student-discount-settings', adminJwt, requirePerm('manageFareSettings'), async (_req, res) => {
+  try { res.json(await getStudentDiscountSettings()); }
+  catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.patch('/api/admin/student-discount-settings', adminJwt, requirePerm('manageFareSettings'), async (req, res) => {
+  try {
+    const raw = Number(req.body?.discountPercent);
+    if (!Number.isFinite(raw) || raw < 0 || raw > 100) {
+      return res.status(422).json({ error: 'Student discount must be a percentage from 0 to 100' });
+    }
+    const settings = normalizeStudentDiscountSettings({
+      enabled: req.body?.enabled !== false,
+      discountPercent: raw
+    });
+    await Settings.findOneAndUpdate(
+      { key: STUDENT_DISCOUNT_SETTINGS_KEY },
+      { key: STUDENT_DISCOUNT_SETTINGS_KEY, value: settings },
+      { upsert: true, new: true, setDefaultsOnInsert: true }
+    );
+    io.emit('student-discount-settings:updated', { settings });
+    res.json({ success: true, settings });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
@@ -8489,10 +8706,13 @@ module.exports = {
   calculateFareFromSettings,
   normalizeCustomerFareDisplaySettings,
   getCustomerFareDisplaySettings,
+  normalizeStudentDiscountSettings,
+  applyStudentDiscountToFareQuote,
   normalizeLongRangeSettings,
   validateLongRangeSettings,
   getLongRangeMinimumWalletBalance,
   calculateRideFare,
+  customerRegistrationAccountStatus,
   normalizeTerms,
   normalizeFareVehicle,
   storedVehicleTypesForFareCategory,

@@ -486,6 +486,24 @@ body{font-family:'Segoe UI',sans-serif;background:#0a0a0f;color:#fff;height:100d
         <span id="r-cnic-back-label" style="display:block;color:#888;font-size:.72rem;margin-top:.35rem">No image selected</span>
       </div>
       <p style="font-size:.7rem;color:#666;margin:-.35rem 0 1rem;line-height:1.4">Your details are matched securely against both ID images before an account is created.</p>
+        <label id="student-feature-toggle-row" style="display:none;align-items:center;gap:.55rem;margin:.35rem 0 .8rem;font-weight:700">
+        <input type="checkbox" id="r-is-student" onchange="toggleStudentRegistrationFields()">
+        <span>I'm a student and want the student discount</span>
+      </label>
+      <div id="student-registration-fields" style="display:none;border:1px solid #e6d9c5;border-radius:12px;padding:.75rem;margin-bottom:1rem;background:#fffaf2">
+        <div style="font-size:.76rem;color:#755d3b;line-height:1.45;margin-bottom:.65rem">Student verification is completed by Admin before the discount becomes active.</div>
+        <div class="form-group"><label>Student ID Number <span style="color:#f5c518">*</span></label><input type="text" id="r-student-id" placeholder="Your university / college ID"></div>
+        <div class="form-group"><label>Institution <span style="color:#f5c518">*</span></label><input type="text" id="r-student-institution" placeholder="University, college, or school"></div>
+        <div class="form-group">
+          <label>Student ID Card <span style="color:#f5c518">*</span></label>
+          <div class="document-upload-actions" role="group" aria-label="Student ID photo source">
+            <button class="document-source-btn" type="button" onclick="openDocumentSource('r-student-id-image','camera')">📷 Take Photo</button>
+            <button class="document-source-btn" type="button" onclick="openDocumentSource('r-student-id-image','gallery')">🖼️ Choose from Gallery</button>
+          </div>
+          <input class="document-file-input" type="file" id="r-student-id-image" accept="image/jpeg,image/png,image/webp" onchange="updateDocumentFileLabel(this,'r-student-id-image-label')">
+          <span id="r-student-id-image-label" style="display:block;color:#888;font-size:.72rem;margin-top:.35rem">No image selected</span>
+        </div>
+      </div>
       <div class="form-group"><label>Email <span style="color:#f5c518">*</span></label><input type="email" id="r-email" placeholder="you@email.com" autocomplete="email" required></div>
       <div class="form-group">
         <label>Password <span style="color:#f5c518">*</span></label>
@@ -785,9 +803,14 @@ body{font-family:'Segoe UI',sans-serif;background:#0a0a0f;color:#fff;height:100d
             <div class="customer-fare-breakdown" style="margin-top:.25rem"><span class="dist-badge" id="dist-badge" style="display:none">📍 <span id="dist-km-val">0</span> km</span></div>
           </div>
           <div class="fare-suggested customer-fare-breakdown">
-            <div class="fare-suggested-lbl">Admin quote</div>
+            <div class="fare-suggested-lbl">Payable fare</div>
             <div class="fare-suggested-val" id="fare-suggested-val">—</div>
           </div>
+        </div>
+        <div id="student-fare-breakdown" class="customer-fare-breakdown" style="display:block;margin:.65rem 0 0;padding:.6rem .7rem;border-radius:10px;background:#fffaf2;border:1px solid #ead9bb;font-size:.76rem;line-height:1.6">
+          <div style="display:flex;justify-content:space-between"><span>Total fare</span><strong id="fare-total-before-discount">Rs 0</strong></div>
+          <div style="display:flex;justify-content:space-between;color:#18834b"><span>Student discount</span><strong id="fare-student-discount">− Rs 0</strong></div>
+          <div style="display:flex;justify-content:space-between;border-top:1px solid #ead9bb;margin-top:.25rem;padding-top:.25rem"><span>Payable amount</span><strong id="fare-payable-amount">Rs 0</strong></div>
         </div>
         <div class="fare-stepper">
           <button class="fare-adj-btn" type="button" data-fare-adjustment aria-label="Lower fare offer" onclick="adjustOfferedFare(-fareAdjustmentStep())">−</button>
@@ -1058,6 +1081,7 @@ let customerPerKmRates = {};
 let customerLongRangeSettings = null;
 let customerVehicleCategories = [];
 let customerFareDisplaySettings = { showVehicleRates: true, showFareBreakdown: true };
+let customerStudentFeatureEnabled = false;
 let liveTripLine = null;
 let lastDriverLocation = null;
 let customerTrackingFollow = true;
@@ -1185,6 +1209,7 @@ function switchTab(t) {
   document.querySelectorAll('.auth-tab').forEach((b, i) =>
     b.classList.toggle('active', (i === 0) === (t === 'login')));
   document.getElementById('auth-error').textContent = '';
+  if (t === 'register') void loadCustomerPerKmRates();
   // Reset forgot steps
   if (t === 'forgot') {
     document.getElementById('fp-step1').style.display = 'block';
@@ -1232,6 +1257,36 @@ function updateDocumentFileLabel(input, labelId) {
   if (label) label.textContent = input.files?.[0]?.name || 'No image selected';
 }
 
+function toggleStudentRegistrationFields() {
+  const enabled = document.getElementById('r-is-student')?.checked === true;
+  const fields = document.getElementById('student-registration-fields');
+  if (fields) fields.style.display = customerStudentFeatureEnabled && enabled ? 'block' : 'none';
+}
+
+function renderCustomerStudentFeature(enabled = true) {
+  customerStudentFeatureEnabled = enabled !== false;
+  const toggle = document.getElementById('r-is-student');
+  const toggleRow = toggle?.closest('label');
+  const fields = document.getElementById('student-registration-fields');
+  if (toggleRow) toggleRow.style.display = customerStudentFeatureEnabled ? 'flex' : 'none';
+  if (toggle) {
+    toggle.disabled = !customerStudentFeatureEnabled;
+    if (!customerStudentFeatureEnabled) toggle.checked = false;
+  }
+  if (fields) {
+    fields.style.display = customerStudentFeatureEnabled && toggle?.checked ? 'block' : 'none';
+    fields.querySelectorAll('input, button').forEach(element => {
+      element.disabled = !customerStudentFeatureEnabled;
+    });
+    if (!customerStudentFeatureEnabled) {
+      fields.querySelectorAll('input').forEach(input => {
+        if (input.type === 'file') input.value = '';
+        else input.value = '';
+      });
+    }
+  }
+}
+
 async function doRegister() {
   const name  = document.getElementById('r-name').value.trim();
   const phone = document.getElementById('r-phone').value.trim();
@@ -1240,11 +1295,18 @@ async function doRegister() {
   const pass  = document.getElementById('r-pass').value;
   const frontFile = document.getElementById('r-cnic-front').files[0];
   const backFile = document.getElementById('r-cnic-back').files[0];
+  const isStudent = document.getElementById('r-is-student')?.checked === true;
+  const studentIdNumber = document.getElementById('r-student-id')?.value.trim() || '';
+  const studentInstitution = document.getElementById('r-student-institution')?.value.trim() || '';
+  const studentIdFile = document.getElementById('r-student-id-image')?.files[0];
   if (!name)  return (document.getElementById('auth-error').textContent = 'Full name is required');
   if (!phone) return (document.getElementById('auth-error').textContent = 'Phone number is required');
   if (!cnic)  return (document.getElementById('auth-error').textContent = 'CNIC / Identity Card Number is required');
   if (!frontFile) return (document.getElementById('auth-error').textContent = 'National ID Front is required');
   if (!backFile) return (document.getElementById('auth-error').textContent = 'National ID Back is required');
+  if (isStudent && !studentIdNumber) return (document.getElementById('auth-error').textContent = 'Student ID number is required');
+  if (isStudent && !studentInstitution) return (document.getElementById('auth-error').textContent = 'Institution is required');
+  if (isStudent && !studentIdFile) return (document.getElementById('auth-error').textContent = 'Student ID image is required');
   if (!email) return (document.getElementById('auth-error').textContent = 'Email address is required');
   if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return (document.getElementById('auth-error').textContent = 'Enter a valid email address');
   if (pass.length < 6) return (document.getElementById('auth-error').textContent = 'Password must be at least 6 characters');
@@ -1254,20 +1316,33 @@ async function doRegister() {
     if (submitButton) { submitButton.disabled = true; submitButton.textContent = 'Preparing documents…'; }
     document.getElementById('customer-upload-title').textContent = 'Preparing your documents…';
     document.getElementById('customer-upload-copy').textContent = 'Optimizing your images for a faster, more reliable upload.';
-    const [cnicFront, cnicBack] = await Promise.all([
+    const documents = await Promise.all([
       imageFileToDataUrl(frontFile, 'National ID Front', progress => setCustomerUploadProgress(5 + Math.round(progress * 18))),
-      imageFileToDataUrl(backFile, 'National ID Back', progress => setCustomerUploadProgress(23 + Math.round(progress * 18)))
+      imageFileToDataUrl(backFile, 'National ID Back', progress => setCustomerUploadProgress(23 + Math.round(progress * 18))),
+      ...(isStudent ? [imageFileToDataUrl(studentIdFile, 'Student ID Image', progress => setCustomerUploadProgress(41 + Math.round(progress * 8)))] : [])
     ]);
+    const [cnicFront, cnicBack, studentIdImage] = documents;
     document.getElementById('customer-upload-title').textContent = 'Uploading documents…';
     document.getElementById('customer-upload-copy').textContent = 'Please wait while we securely process your ID.';
     setCustomerUploadProgress(42);
-    const res = await registerCustomerWithProgress({ name, phone, email, password: pass, role: 'customer', cnicNumber: cnic, cnicFront, cnicBack });
+    const res = await registerCustomerWithProgress({
+      name, phone, email, password: pass, role: 'customer', cnicNumber: cnic, cnicFront, cnicBack,
+      isStudent, studentIdNumber, studentInstitution, studentIdImage
+    });
     setCustomerUploadProgress(100);
     document.getElementById('customer-upload-title').textContent = 'Your account has been completed successfully!';
-    const automaticallyApproved = res.user?.accountStatus === 'active' && res.user?.identityVerificationStatus === 'approved';
-    document.getElementById('customer-upload-copy').textContent = automaticallyApproved
-      ? 'Your identity matched successfully. Your account is approved and ready to book rides.'
-      : 'Your account is pending Admin verification because the automated match needs review.';
+    const isPendingStudent = isStudent && res.user?.studentVerificationStatus === 'pending';
+    const automaticallyApproved = !isPendingStudent
+      && res.user?.accountStatus === 'active'
+      && res.user?.identityVerificationStatus === 'approved';
+    document.getElementById('customer-upload-copy').textContent = isPendingStudent
+      ? 'Your CNIC and card images matched successfully. Your account is pending Admin Student Approval and cannot book rides yet.'
+      : automaticallyApproved
+        ? 'Your identity matched successfully. Your account is approved and ready to book rides.'
+        : 'Your account is pending Admin verification because the automated match needs review.';
+    if (isPendingStudent) {
+      document.getElementById('customer-upload-copy').textContent += ' Your student discount will activate after Student Approval.';
+    }
     document.getElementById('customer-upload-close').style.display = 'block';
     window._pendingCustomerSession = res;
   } catch (e) {
@@ -1889,6 +1964,7 @@ async function loadCustomerPerKmRates() {
   try {
     const config = await apiCall('/api/customer/fare-config');
     customerLongRangeSettings = config.longRangeSettings || null;
+    renderCustomerStudentFeature(config.studentFeatureEnabled !== false);
     renderCustomerFareDisplaySettings(config.displaySettings || {});
     renderCustomerVehicleCategories(config.vehicleCategories || []);
     renderCustomerPerKmRates(config.perKmRates || {});
@@ -3090,6 +3166,17 @@ async function updateFare() {
     customerFareOffset = 0;
     offeredFare = quote.totalFare + customerFareOffset;
     renderWaitingFareLine(quote);
+    const breakdown = document.getElementById('student-fare-breakdown');
+    const totalBeforeDiscount = Number(quote.totalBeforeDiscount ?? quote.totalFare ?? 0);
+    const discountAmount = Number(quote.studentDiscountAmount || 0);
+    const payableAmount = Number(quote.payableFare ?? quote.totalFare ?? 0);
+    if (breakdown) {
+      breakdown.style.display = customerFareDisplaySettings.showFareBreakdown ? 'block' : 'none';
+      breakdown.hidden = !customerFareDisplaySettings.showFareBreakdown;
+      document.getElementById('fare-total-before-discount').textContent = `Rs ${totalBeforeDiscount.toLocaleString()}`;
+      document.getElementById('fare-student-discount').textContent = `− Rs ${discountAmount.toLocaleString()} (${Number(quote.studentDiscountPercent || 0)}%)`;
+      document.getElementById('fare-payable-amount').textContent = `Rs ${payableAmount.toLocaleString()}`;
+    }
     const stopCount = dropoffs.slice(0, activeStops).filter(d => d).length;
     const distLabel = stopCount > 1 ? `📍 ${dist.toFixed(1)} km total · ${stopCount} stops` : `📍 ${dist.toFixed(1)} km`;
     const adjustment = quote.adjustmentPercent
@@ -3723,6 +3810,26 @@ function connectSocket() {
     renderCustomerPerKmRates(customerPerKmRates);
     showToast('Admin updated Customer fare display settings.', 'info');
   });
+  socket.on('student-discount-settings:updated', ({ settings } = {}) => {
+    renderCustomerStudentFeature(settings?.enabled !== false);
+    if (pickup && dropoffs.slice(0, activeStops).some(Boolean)) updateFare();
+    showToast('Admin updated the student discount. Your quote has been refreshed.', 'info');
+  });
+  socket.on('student-verification:updated', ({ status, accountStatus }) => {
+    if (!user?.isStudent) return;
+    user = {
+      ...user,
+      accountStatus: accountStatus || user.accountStatus,
+      studentVerificationStatus: status || user.studentVerificationStatus
+    };
+    localStorage.setItem('rh_user', JSON.stringify(user));
+    showToast(
+      status === 'approved'
+        ? 'Student verification approved. Booking and discount access are now enabled.'
+        : 'Student verification is still pending. Student discounts remain unavailable.',
+      status === 'approved' ? 'success' : 'info'
+    );
+  });
   socket.on('vehicle-settings:updated', ({ settings }) => {
     const categories = Object.entries(settings || {}).map(([category, config]) => ({
       category,
@@ -4170,6 +4277,7 @@ if (token && user && user.role === 'driver') {
   bootApp();
 } else {
   document.getElementById('auth-screen').style.display = 'flex';
+  void loadCustomerPerKmRates();
 }
 </script>
 <!-- ── PWA Service Worker Registration ── -->
