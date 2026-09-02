@@ -396,6 +396,74 @@ textarea.support-input{resize:vertical;min-height:85px}
   .stats-strip{left:50%;right:auto;transform:translateX(-50%);width:min(560px,calc(100% - 32px))}
   .online-bar{left:50%;right:auto;transform:translateX(-50%);width:min(560px,calc(100% - 32px))}
 }
+
+/* ── Premium market refinement ──
+   Visual-only layer over the Driver Console skin. Realtime readiness, offer,
+   navigation, payment, and ride-state handlers remain unchanged. */
+body{font-family:'DM Sans','Segoe UI',sans-serif;background:var(--dc-night);color:var(--dc-ink)}
+#auth-screen{background:radial-gradient(circle at 50% -15%,#1d3438 0,#111718 42%,#0b0f10 100%);color:var(--dc-ink)}
+.auth-logo{letter-spacing:-.055em;color:var(--dc-ink)}
+.auth-logo span{color:var(--dc-cyan)}
+.auth-subtitle{color:var(--dc-muted)}
+.auth-card{background:rgba(24,32,34,.86);border:1px solid rgba(116,224,209,.18);border-radius:24px;box-shadow:0 24px 60px rgba(0,0,0,.36);backdrop-filter:blur(18px)}
+.auth-tabs{background:#111819;border:1px solid var(--dc-line);border-radius:13px}
+.auth-tab{min-height:44px;color:var(--dc-dim);font-weight:700}
+.auth-tab.active{background:#24454a;color:var(--dc-cyan);box-shadow:0 5px 13px rgba(0,0,0,.2)}
+.form-group label{color:var(--dc-muted);font-size:.72rem;font-weight:800;letter-spacing:.025em}
+.form-group input,.form-group select{background:#111819;border-color:var(--dc-line);border-radius:12px;min-height:48px;color:var(--dc-ink)}
+.form-group input::placeholder{color:#667174}
+.form-group input:focus,.form-group select:focus{border-color:var(--dc-cyan);box-shadow:0 0 0 4px rgba(116,224,209,.11)}
+.btn-primary{min-height:50px;border-radius:13px;background:var(--dc-cyan);color:#10201f;box-shadow:0 8px 18px rgba(116,224,209,.16);transition:transform .18s,background .18s,box-shadow .18s}
+.btn-primary:hover{background:#9aeee2;box-shadow:0 10px 24px rgba(116,224,209,.22);transform:translateY(-1px)}
+.btn-primary:active{transform:translateY(0) scale(.99)}
+.btn-text-link{color:var(--dc-cyan);font-weight:700}
+.document-source-btn{background:#111819;border-color:var(--dc-line);color:var(--dc-ink);border-radius:10px;min-height:44px}
+.document-source-btn:hover,.document-source-btn:focus-visible{border-color:var(--dc-cyan);background:#182c35}
+.header{height:70px;padding:14px 18px 12px;background:linear-gradient(180deg,rgba(17,23,24,.98),rgba(17,23,24,.76),transparent);backdrop-filter:blur(12px)}
+.header-logo{font-weight:800;letter-spacing:-.045em}
+.header-logo .brand-mark{box-shadow:0 5px 16px rgba(116,224,209,.12)}
+.earnings-badge{padding:.44rem .72rem;border-radius:999px;box-shadow:0 5px 13px rgba(0,0,0,.16)}
+.btn-dots{min-width:40px;min-height:40px}
+.driver-ops-control{filter:drop-shadow(0 16px 28px rgba(0,0,0,.38))}
+.driver-ops-head{border-color:rgba(116,224,209,.2);box-shadow:0 8px 20px rgba(0,0,0,.2)}
+.driver-ops-summary{min-height:44px}
+.driver-ops-summary:hover,.driver-ops-summary:focus-visible{background:rgba(116,224,209,.06);border-radius:11px;outline:none}
+.driver-ops-dot{box-shadow:0 0 0 4px rgba(116,224,209,.1)}
+.driver-ops-details{background:rgba(24,32,34,.98);border:1px solid rgba(116,224,209,.15);border-radius:0 0 17px 17px;box-shadow:0 12px 28px rgba(0,0,0,.25)}
+.driver-ops-row{padding:.72rem .78rem;border-bottom-color:var(--dc-line)}
+.toggle-label{box-shadow:inset 0 1px 2px rgba(0,0,0,.24),0 4px 12px rgba(0,0,0,.18)}
+.toggle-input:checked+.toggle-label{background:var(--dc-cyan)}
+.stats-strip{background:rgba(17,24,25,.9);border:1px solid rgba(116,224,209,.16);border-radius:17px;box-shadow:0 12px 28px rgba(0,0,0,.28);backdrop-filter:blur(16px)}
+.stat-item{min-height:54px}
+.stat-item+.stat-item{border-left-color:var(--dc-line)}
+.stat-val{color:var(--dc-cyan)}
+#info-panel,#active-panel,#payments-panel{border:1px solid rgba(116,224,209,.14);border-radius:22px;box-shadow:0 18px 42px rgba(0,0,0,.34);backdrop-filter:blur(16px)}
+.panel-header,.active-panel-header{border-bottom-color:var(--dc-line)}
+.ap-passenger,.ap-route,.wallet-summary-wrap,.pay-accounts-section,.trx-form,.pay-item{border-radius:14px;box-shadow:0 5px 14px rgba(0,0,0,.14)}
+.ap-btn,.btn-call-pass,.btn-wa-pass,.btn-accept,.btn-counter,.btn-reject,.btn-sup-cancel,.btn-sup-submit,.btn-submit-trx{min-height:46px;border-radius:12px;font-weight:800}
+.ap-btn:hover,.btn-accept:hover,.btn-counter:hover{transform:translateY(-1px)}
+.ap-btn.cancel,.btn-reject{background:transparent}
+.nav-destination{border-radius:15px;box-shadow:0 7px 16px rgba(0,0,0,.18)}
+.nav-metric{background:rgba(17,24,25,.8);border:1px solid var(--dc-line);border-radius:12px;padding:.55rem}
+.nav-recenter-btn{border-radius:11px}
+#ride-request{border-radius:22px;box-shadow:0 18px 42px rgba(0,0,0,.4);backdrop-filter:blur(18px)}
+.rr-header{padding-bottom:.7rem;border-bottom:1px solid var(--dc-line)}
+.rr-route,.rr-meta-item,#rr-payment-row,.rr-counter-wrap{border-radius:13px!important}
+.rr-point{min-height:42px}
+.rr-timer{border-radius:999px;padding:.35rem .62rem}
+.btn-accept{box-shadow:0 8px 18px rgba(116,224,209,.14)}
+.btn-reject{border-color:var(--dc-line)}
+.support-overlay,.modal-overlay{background:rgba(5,10,11,.64);backdrop-filter:blur(8px)}
+.support-modal,.modal-card{border:1px solid rgba(116,224,209,.17);border-radius:22px;box-shadow:0 22px 54px rgba(0,0,0,.42)}
+.support-input,.modal-field input{background:#111819;border-color:var(--dc-line);border-radius:11px;color:var(--dc-ink);min-height:46px}
+.support-input:focus,.modal-field input:focus{border-color:var(--dc-cyan);box-shadow:0 0 0 4px rgba(116,224,209,.1)}
+.btn-sup-cancel,.btn-sup-submit{min-height:46px;border-radius:12px}
+.toast{top:max(1rem,env(safe-area-inset-top));border-radius:12px;box-shadow:0 12px 28px rgba(0,0,0,.3);padding:.75rem 1rem}
+@media (max-width:430px){
+  .header{padding-left:14px;padding-right:14px}
+  .driver-ops-control{top:78px}
+  #ride-request{left:8px;right:8px;border-radius:20px}
+}
 </style>
 </head>
 <body>
