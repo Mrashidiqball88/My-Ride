@@ -2559,7 +2559,7 @@ function isGenericRideLocationAddress(value) {
   const parts = String(value || '')
     .split(',')
     .map(part => part.trim().toLocaleLowerCase())
-    .filter(Boolean);
+    .filter(part => part && part !== 'pakistan');
   const genericParts = new Set([
     'lahore', 'punjab', 'pakistan', 'karachi', 'sindh', 'islamabad',
     'rawalpindi', 'peshawar', 'khyber pakhtunkhwa', 'quetta', 'balochistan',
@@ -3250,13 +3250,9 @@ async function setStop(idx, lat, lng, preDisplay = null) {
   syncCustomerCenterPin();
   document.getElementById('map-hint').style.display = 'none';
 
-  if (pickup) {
-    const distKm = await drawRoute();
-    routeDistanceKm = distKm;
-    updateFare();
-  } else {
-    setCustomerMapCenter({ lat, lng }, 14);
-  }
+  // Resolve the label immediately after a map-pin selection. Do not wait for
+  // route/fare work, which can be slow or unavailable, before filling the
+  // visible drop-off field.
   void reverseLocationLabel(lat, lng).then(label => {
     const selected = dropoffs[idx];
     if (!label || !selected
@@ -3264,9 +3260,21 @@ async function setStop(idx, lat, lng, preDisplay = null) {
       || Math.abs(selected.lng - lng) > 0.000001) return;
     selected.address = label;
     const input = document.getElementById(`stop-${idx}-input`);
-    if (input) input.value = label;
+    if (input) {
+      input.value = label;
+      input.classList.add('has-val');
+    }
+    updateClearBtn(`stop-${idx}`);
     updateBookingSheetSummary();
   });
+
+  if (pickup) {
+    const distKm = await drawRoute();
+    routeDistanceKm = distKm;
+    updateFare();
+  } else {
+    setCustomerMapCenter({ lat, lng }, 14);
+  }
   return true;
 }
 
@@ -3646,7 +3654,16 @@ async function bookRide() {
   })();
 
   try {
-    const pickupLocation = await resolveRideLocationAddress(pickup);
+    // The live geocoder updates the visible pickup input before all
+    // asynchronous state reconciliation necessarily completes. Prefer that
+    // precise non-generic label for the request, then fall back to the
+    // coordinate-based reverse lookup when the input is still generic.
+    const pickupInputAddress = document.getElementById('pickup-input')?.value.trim() || '';
+    const pickupForPayload = pickupInputAddress
+      && !isGenericRideLocationAddress(pickupInputAddress)
+      ? { ...pickup, address: pickupInputAddress }
+      : pickup;
+    const pickupLocation = await resolveRideLocationAddress(pickupForPayload);
     const preciseDropoffs = await Promise.all(
       activeDropoffsList.map(dropoff => resolveRideLocationAddress(dropoff))
     );

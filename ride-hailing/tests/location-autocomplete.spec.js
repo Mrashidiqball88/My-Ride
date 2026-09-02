@@ -483,19 +483,27 @@ test.describe('live nationwide location autocomplete', () => {
 
   test('sends precise reverse-geocoded addresses in the booking payload', async ({ page }) => {
     let bookingPayload;
-    await page.route(/\/api\/geocode\/reverse(?:\?|$)/, route => route.fulfill({
+    await page.route(/\/api\/geocode\/reverse(?:\?|$)/, async route => {
+      const url = new URL(route.request().url());
+      const isPickup = url.searchParams.get('lat') === '31.5204';
+      return route.fulfill({
       contentType: 'application/json',
       body: JSON.stringify({
-        display_name: '12 Main Boulevard, Gulberg III, Lahore, Punjab, Pakistan',
+        display_name: isPickup
+          ? 'Lahore, Punjab'
+          : '12 Main Boulevard, Gulberg III, Lahore, Punjab, Pakistan',
         address: {
-          house_number: '12',
-          road: 'Main Boulevard',
-          suburb: 'Gulberg III',
+          ...(isPickup ? {} : {
+            house_number: '12',
+            road: 'Main Boulevard',
+            suburb: 'Gulberg III'
+          }),
           city: 'Lahore',
           state: 'Punjab'
         }
       })
-    }));
+      });
+    });
     await page.route(/\/api\/rides(?:\?|$)/, async route => {
       bookingPayload = JSON.parse(route.request().postData() || '{}');
       return route.fulfill({
@@ -519,6 +527,8 @@ test.describe('live nationwide location autocomplete', () => {
       document.getElementById('app').style.display = 'flex';
       pickup = { lat: 31.5204, lng: 74.3587, address: 'Lahore, Punjab' };
       dropoffs[0] = { lat: 31.5304, lng: 74.3687, address: 'Lahore, Punjab' };
+      document.getElementById('pickup-input').value =
+        '12 Canal Bank Road, Shadman Colony, Lahore, Punjab';
       activeStops = 1;
       routeDistanceKm = 7;
       routeDurationMinutes = 15;
@@ -530,7 +540,7 @@ test.describe('live nationwide location autocomplete', () => {
 
     await expect.poll(() => bookingPayload).toMatchObject({
       pickupLocation: {
-        address: '12 Main Boulevard, Gulberg III, Lahore, Punjab'
+        address: '12 Canal Bank Road, Shadman Colony, Lahore, Punjab'
       },
       dropoffLocation: {
         address: '12 Main Boulevard, Gulberg III, Lahore, Punjab'
@@ -581,6 +591,36 @@ test.describe('live nationwide location autocomplete', () => {
       hint: 'Move the map under the center pin, then release to choose your drop-off'
     });
     await expect(page.locator('#location-sheet')).toHaveAttribute('aria-hidden', 'true');
+  });
+
+  test('fills the drop-off address after a map pin is committed', async ({ page }) => {
+    await page.route(/\/api\/geocode\/reverse(?:\?|$)/, route => route.fulfill({
+      contentType: 'application/json',
+      body: JSON.stringify({
+        display_name: 'Mall Road, Lahore, Punjab, Pakistan',
+        address: {
+          road: 'Mall Road',
+          city: 'Lahore',
+          state: 'Punjab'
+        }
+      })
+    }));
+
+    await page.goto('/customer');
+    await page.evaluate(() => {
+      document.getElementById('auth-screen').style.display = 'none';
+      document.getElementById('app').style.display = 'flex';
+      mapMode = 'stop-0';
+      return setStop(0, 31.5204, 74.3587);
+    });
+
+    await expect.poll(() => page.evaluate(() => ({
+      address: dropoffs[0]?.address,
+      input: document.getElementById('stop-0-input')?.value
+    }))).toEqual({
+      address: 'Mall Road, Lahore, Punjab',
+      input: 'Mall Road, Lahore, Punjab'
+    });
   });
 
   test('commits the fixed center pin after a customer map drag', async ({ page }) => {
