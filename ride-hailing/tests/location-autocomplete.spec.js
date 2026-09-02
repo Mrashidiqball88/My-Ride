@@ -146,6 +146,73 @@ test.describe('live nationwide location autocomplete', () => {
       .toHaveText(/\d+\.\d{4},\s+\d+\.\d{4}/);
   });
 
+  test('resets a silent voice search after exactly five seconds and can start again', async ({ page }) => {
+    await page.addInitScript(() => {
+      Object.defineProperty(navigator, 'mediaDevices', {
+        configurable: true,
+        value: undefined
+      });
+      window.__recognitions = [];
+      window.SpeechRecognition = class {
+        constructor() {
+          this.aborted = false;
+          window.__recognitions.push(this);
+        }
+        start() { this.onstart?.(); }
+        abort() { this.aborted = true; }
+        stop() { this.onend?.(); }
+      };
+    });
+    await page.route(/\/api\/geocode(?:\?|$)/, route => route.fulfill({
+      contentType: 'application/json',
+      body: '[]'
+    }));
+
+    await page.goto('/customer');
+    await page.evaluate(() => startVoiceSearch('pickup'));
+    await expect(page.locator('.btn-voice[aria-pressed="true"]')).toHaveCount(1);
+
+    await page.waitForTimeout(5_100);
+    await expect.poll(() => page.evaluate(() => ({
+      aborted: window.__recognitions[0]?.aborted,
+      count: window.__recognitions.length,
+      value: document.getElementById('pickup-input').value,
+      pressed: document.querySelector('.btn-voice[aria-pressed="true"]') !== null,
+      listening: document.querySelector('.btn-voice.listening') !== null,
+      status: document.getElementById('location-voice-status').textContent
+    }))).toEqual({
+      aborted: true,
+      count: 1,
+      value: '',
+      pressed: false,
+      listening: false,
+      status: 'Voice search timed out. Try again or type the location.'
+    });
+
+    await page.evaluate(() => startVoiceSearch('pickup'));
+    await expect.poll(() => page.evaluate(() => ({
+      count: window.__recognitions.length,
+      pressed: document.querySelector('.btn-voice[aria-pressed="true"]') !== null
+    }))).toEqual({ count: 2, pressed: true });
+    await page.evaluate(() => {
+      window.__recognitions[1].onresult({ results: [[{ transcript: 'Main Boulevard' }]] });
+    });
+    await expect(page.locator('#pickup-input')).toHaveValue('Main Boulevard');
+
+    await page.waitForTimeout(5_100);
+    await expect.poll(() => page.evaluate(() => ({
+      aborted: window.__recognitions[1]?.aborted,
+      value: document.getElementById('pickup-input').value,
+      pressed: document.querySelector('.btn-voice[aria-pressed="true"]') !== null,
+      listening: document.querySelector('.btn-voice.listening') !== null
+    }))).toEqual({
+      aborted: true,
+      value: 'Main Boulevard',
+      pressed: false,
+      listening: false
+    });
+  });
+
   test('preserves mixed Urdu and English input for the live provider query', async ({ page }) => {
     let requestedQuery;
     await page.route(/\/api\/geocode(?:\?|$)/, async route => {

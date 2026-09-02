@@ -1099,6 +1099,7 @@ if (window.mapboxgl?.setRTLTextPlugin) {
   }, true);
 }
 const CUSTOMER_SEARCH_TIMEOUT_MS = Number(window.__CUSTOMER_SEARCH_TIMEOUT_MS) || 5500;
+const VOICE_SEARCH_TIMEOUT_MS = 5000;
 const CUSTOMER_PERMISSION_TIMEOUT_MS = Number(window.__CUSTOMER_PERMISSION_TIMEOUT_MS) || 4500;
 const CUSTOMER_MAP_DEFAULT_CENTER = [69.3451, 30.3753]; // Pakistan; GPS or pickup replaces this.
 const CUSTOMER_MAP_DEFAULT_ZOOM = 5.5;
@@ -1169,6 +1170,7 @@ let voiceRecognition = null;
 let voiceSearchType = null;
 let voiceSearchSession = 0;
 let voiceSearchTimeout = null;
+let voiceSearchHasResult = false;
 let bookingSheetDrag = null;
 let currentFareQuote = null;
 let fareQuoteRequest = 0;
@@ -2942,6 +2944,37 @@ function setVoiceButtonState(type, listening) {
   });
 }
 
+function resetVoiceSearchSession(type, {
+  abort = false,
+  clearInput = false,
+  message = '',
+  isError = false
+} = {}) {
+  const activeRecognition = voiceRecognition;
+  voiceSearchSession++;
+  clearVoiceSearchTimeout();
+  if (abort && activeRecognition) {
+    try {
+      if (typeof activeRecognition.abort === 'function') activeRecognition.abort();
+      else if (typeof activeRecognition.stop === 'function') activeRecognition.stop();
+    } catch {}
+  }
+  voiceRecognition = null;
+  voiceSearchType = null;
+  voiceSearchHasResult = false;
+  if (type) setVoiceButtonState(type, false);
+  if (clearInput) {
+    const input = document.getElementById(`${type}-input`);
+    if (input) {
+      input.value = '';
+      input.classList.remove('has-val');
+      updateClearBtn(type);
+      onLocInput(type);
+    }
+  }
+  if (message) setVoiceStatus(message, isError);
+}
+
 function primeVoiceMicrophonePermission() {
   const getUserMedia = navigator.mediaDevices?.getUserMedia;
   if (typeof getUserMedia !== 'function') return null;
@@ -2981,6 +3014,7 @@ function startVoiceSearch(type) {
   const session = ++voiceSearchSession;
   voiceRecognition = recognition;
   voiceSearchType = type;
+  voiceSearchHasResult = false;
   recognition.lang = language;
   recognition.continuous = false;
   recognition.interimResults = false;
@@ -2997,6 +3031,7 @@ function startVoiceSearch(type) {
       .join(' ')
       .trim();
     if (!transcript) return;
+    voiceSearchHasResult = true;
     input.value = transcript;
     input.classList.add('has-val');
     updateClearBtn(type);
@@ -3010,11 +3045,7 @@ function startVoiceSearch(type) {
   };
   recognition.onerror = event => {
     if (voiceSearchSession !== session || voiceRecognition !== recognition) return;
-    clearVoiceSearchTimeout();
-    voiceSearchSession++;
-    voiceRecognition = null;
-    voiceSearchType = null;
-    setVoiceButtonState(type, false);
+    resetVoiceSearchSession(type);
     customerReadinessState.microphone = event.error === 'not-allowed' ? 'denied' : customerReadinessState.microphone;
     const message = event.error === 'not-allowed'
       ? 'Microphone access was blocked. Allow it in browser settings or type the location.'
@@ -3025,10 +3056,7 @@ function startVoiceSearch(type) {
   };
   recognition.onend = () => {
     if (voiceSearchSession !== session) return;
-    clearVoiceSearchTimeout();
-    setVoiceButtonState(type, false);
-    voiceRecognition = null;
-    voiceSearchType = null;
+    resetVoiceSearchSession(type);
     // Do not erase the result/error message when the browser closes a
     // one-shot recognition session. onresult/onerror already left useful
     // feedback, and the input/suggestion list remains available for selection.
@@ -3042,47 +3070,44 @@ function startVoiceSearch(type) {
       );
     }
   };
-  const microphoneRequest = primeVoiceMicrophonePermission();
+  voiceSearchTimeout = setTimeout(() => {
+    if (voiceSearchSession !== session || voiceRecognition !== recognition) return;
+    const hadResult = voiceSearchHasResult;
+    resetVoiceSearchSession(type, {
+      abort: true,
+      clearInput: !hadResult,
+      message: hadResult ? '' : 'Voice search timed out. Try again or type the location.',
+      isError: !hadResult
+    });
+  }, VOICE_SEARCH_TIMEOUT_MS);
+  let microphoneRequest = null;
+  try {
+    microphoneRequest = primeVoiceMicrophonePermission();
+  } catch (error) {
+    resetVoiceSearchSession(type, {
+      abort: true,
+      message: 'Microphone access was blocked. Allow it in browser or app settings, then try again.',
+      isError: true
+    });
+  }
   if (microphoneRequest) {
     microphoneRequest.catch(error => {
       if (voiceSearchSession !== session || voiceRecognition !== recognition) return;
       if (error?.name === 'NotAllowedError' || error?.name === 'SecurityError') {
         customerReadinessState.microphone = 'denied';
-        voiceSearchSession++;
-        clearVoiceSearchTimeout();
-        try { recognition.abort(); } catch {}
-        voiceRecognition = null;
-        voiceSearchType = null;
-        setVoiceButtonState(type, false);
-        setVoiceStatus('Microphone access was blocked. Allow it in browser or app settings, then try again.', true);
+        resetVoiceSearchSession(type, {
+          abort: true,
+          message: 'Microphone access was blocked. Allow it in browser or app settings, then try again.',
+          isError: true
+        });
       }
     });
   }
-  voiceSearchTimeout = setTimeout(() => {
-    if (voiceSearchSession !== session || voiceRecognition !== recognition) return;
-    voiceSearchSession++;
-    try {
-      if (typeof recognition.abort === 'function') recognition.abort();
-      else recognition.stop();
-    } catch {}
-    clearVoiceSearchTimeout();
-    voiceRecognition = null;
-    voiceSearchType = null;
-    setVoiceButtonState(type, false);
-    input.value = '';
-    input.classList.remove('has-val');
-    updateClearBtn(type);
-    onLocInput(type);
-    setVoiceStatus('Voice search timed out. Try again or type the location.', true);
-  }, CUSTOMER_SEARCH_TIMEOUT_MS);
   try {
     recognition.start();
   } catch (error) {
-    clearVoiceSearchTimeout();
+    resetVoiceSearchSession(type);
     setVoiceStatus('Voice search could not start. You can type the location instead.', true);
-    voiceRecognition = null;
-    voiceSearchType = null;
-    setVoiceButtonState(type, false);
   }
 }
 
