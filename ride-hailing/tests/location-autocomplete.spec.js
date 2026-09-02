@@ -43,6 +43,63 @@ async function visibleLocationNames(page) {
 }
 
 test.describe('live nationwide location autocomplete', () => {
+  test('auto-detects current location and fills pickup on customer boot', async ({ page }) => {
+    await page.addInitScript(() => {
+      localStorage.setItem('rh_token', 'location-boot-test-token');
+      localStorage.setItem('rh_user', JSON.stringify({
+        id: 'location-boot-customer',
+        _id: 'location-boot-customer',
+        name: 'Location Boot Customer',
+        role: 'customer'
+      }));
+      window.__customerGpsCalls = 0;
+      Object.defineProperty(navigator, 'geolocation', {
+        configurable: true,
+        value: {
+          getCurrentPosition(success) {
+            window.__customerGpsCalls++;
+            success({
+              coords: { latitude: 31.5204, longitude: 74.3587 }
+            });
+          },
+          watchPosition() {
+            return 42;
+          },
+          clearWatch() {}
+        }
+      });
+    });
+    await page.route(/\/api\/geocode\/reverse(?:\?|$)/, route => route.fulfill({
+      contentType: 'application/json',
+      body: JSON.stringify({
+        display_name: '22 Canal Bank Road, Shadman Colony, Lahore, Punjab',
+        address: {
+          house_number: '22',
+          road: 'Canal Bank Road',
+          suburb: 'Shadman Colony',
+          city: 'Lahore',
+          state: 'Punjab'
+        }
+      })
+    }));
+
+    await page.goto('/customer');
+    await expect(page.locator('#pickup-input')).toHaveValue(
+      '22 Canal Bank Road, Shadman Colony, Lahore, Punjab'
+    );
+    await expect.poll(() => page.evaluate(() => ({
+      calls: window.__customerGpsCalls,
+      pickup: pickup && { lat: pickup.lat, lng: pickup.lng, address: pickup.address }
+    }))).toEqual({
+      calls: 1,
+      pickup: {
+        lat: 31.5204,
+        lng: 74.3587,
+        address: '22 Canal Bank Road, Shadman Colony, Lahore, Punjab'
+      }
+    });
+  });
+
   test('renders arbitrary live provider places nationwide without local lists or city filtering', async ({ page }) => {
     const requests = [];
     await page.route(/\/api\/geocode(?:\?|$)/, async route => {

@@ -1973,6 +1973,10 @@ function bootApp() {
   loadCustomerPerKmRates();
   loadEmergencyContacts();   // pre-cache for SOS
   loadCustomerTerms();
+  // Request the first live fix independently of the optional capability
+  // checklist. The callback can populate state before Mapbox finishes loading;
+  // initMap() materializes the state-owned marker afterward.
+  startCustomerGpsTracking();
   void initCustomerReadiness();
   // Double rAF ensures the browser has fully painted the flex layout before
   // Mapbox measures #map — fixes the 0×0 container race condition.
@@ -2271,20 +2275,20 @@ function applyCustomerGpsPosition(pos, { forceCenter = false } = {}) {
   // Startup/browser GPS can briefly return an unavailable or malformed fix.
   if (!Number.isFinite(lat) || !Number.isFinite(lng)
     || lat < -90 || lat > 90 || lng < -180 || lng > 180
-    || (lat === 0 && lng === 0) || !map) return false;
+    || (lat === 0 && lng === 0)) return false;
   const isFirstFix = !customerGpsHasFix;
   customerGpsHasFix = true;
   customerLocation = { lat, lng };
 
   if (customerLocationMarker) customerLocationMarker.setLngLat([lng, lat]);
-  else {
+  else if (map) {
     customerLocationMarker = createCustomerDomMarker(lat, lng, {
       className: 'customer-location-marker',
       interactive: false
     });
   }
 
-  if (forceCenter || (customerMapAutoCenter && !pickup && isFirstFix)) {
+  if (map && (forceCenter || (customerMapAutoCenter && !pickup && isFirstFix))) {
     const zoom = Math.max(15, map.getZoom());
     setCustomerMapCenter({ lat, lng }, zoom);
   }
