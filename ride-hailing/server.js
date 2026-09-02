@@ -6011,6 +6011,9 @@ app.get('/api/geocode', async (req, res) => {
 });
 
 app.get('/api/geocode/reverse', authMiddleware, async (req, res) => {
+  // Pickup labels must always correspond to the latest pin coordinates; do
+  // not allow an intermediary or browser cache to serve an older city label.
+  res.set('Cache-Control', 'no-store');
   const lat = Number(req.query.lat);
   const lng = Number(req.query.lng);
   if (!Number.isFinite(lat) || !Number.isFinite(lng)

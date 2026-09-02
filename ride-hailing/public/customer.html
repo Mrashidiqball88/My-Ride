@@ -735,7 +735,7 @@ body{font-family:'DM Sans','Segoe UI',sans-serif;background:var(--lr-paper);colo
       <div class="loc-wrap" id="pickup-wrap">
         <span class="pin-indicator">📍</span>
          <input class="location-input" id="pickup-input" dir="auto"
-               placeholder="Search pickup (e.g. Thokar Niaz Baig)"
+               aria-label="Pickup location"
                autocomplete="off" spellcheck="false"
                oninput="onLocInput('pickup');updateClearBtn('pickup')"
                onfocus="onLocFocus('pickup')"
@@ -1154,6 +1154,7 @@ let customerCityDetectionInFlight = false;
 let locationSearchQuery = '';
 let locationSearchLoading = false;
 let locationSearchError = '';
+let customerPickupReverseRequest = 0;
 let customerReadinessState = {
   location: 'checking',
   microphone: 'checking',
@@ -2532,6 +2533,31 @@ async function reverseLocationLabel(lat, lng) {
   }
 }
 
+async function syncPickupInputWithPin(lat, lng, requestId) {
+  const label = await reverseLocationLabel(lat, lng);
+  const currentPickup = pickup;
+  if (requestId !== customerPickupReverseRequest
+    || !currentPickup
+    || Math.abs(currentPickup.lat - lat) > 0.000001
+    || Math.abs(currentPickup.lng - lng) > 0.000001) return;
+
+  const input = document.getElementById('pickup-input');
+  if (!input) return;
+  if (label) {
+    currentPickup.address = label;
+    input.value = label;
+    input.classList.add('has-val');
+  } else {
+    // Never show a synthetic city or placeholder when the provider has not
+    // returned a label for the current pin.
+    currentPickup.address = '';
+    input.value = '';
+    input.classList.remove('has-val');
+  }
+  updateClearBtn('pickup');
+  updateBookingSheetSummary();
+}
+
 function escapeLocationText(value) {
   return String(value ?? '').replace(/[&<>"']/g, char => ({
     '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
@@ -3064,6 +3090,7 @@ function setCustomerPickupCityContext(lat, lng) {
 async function setPickup(lat, lng, preDisplay = null, { source = 'manual' } = {}) {
   if (source !== 'gps') customerAutoPickupEnabled = false;
   invalidateLocationSearchContext();
+  const reverseRequestId = ++customerPickupReverseRequest;
   pickup = { lat, lng };
   setCustomerPickupCityContext(lat, lng);
   if (pickupMarker) pickupMarker.remove();
@@ -3071,13 +3098,16 @@ async function setPickup(lat, lng, preDisplay = null, { source = 'manual' } = {}
     ? createCustomerDomMarker(lat, lng, { className: 'pickup-marker' })
     : null;
   closeDropdown('pickup');
-  document.getElementById('pickup-input').value = preDisplay || 'Locating…';
-  document.getElementById('pickup-input').classList.add('has-val');
-  const addr = preDisplay || 'Pinned location';
+  const input = document.getElementById('pickup-input');
+  const addr = preDisplay || '';
   pickup.address = addr;
-  document.getElementById('pickup-input').value = addr;
+  if (input) {
+    input.value = addr;
+    input.classList.toggle('has-val', Boolean(addr));
+  }
   updateClearBtn('pickup');
   updateBookingSheetSummary();
+  if (!preDisplay) void syncPickupInputWithPin(lat, lng, reverseRequestId);
 
   mapMode = 'stop-0';
   syncCustomerCenterPin();
@@ -3092,17 +3122,6 @@ async function setPickup(lat, lng, preDisplay = null, { source = 'manual' } = {}
     updateFare();
   } else {
     setCustomerMapCenter({ lat, lng }, 14);
-  }
-  if (!preDisplay) {
-    void reverseLocationLabel(lat, lng).then(label => {
-      if (!label || !pickup
-        || Math.abs(pickup.lat - lat) > 0.000001
-        || Math.abs(pickup.lng - lng) > 0.000001) return;
-      pickup.address = label;
-      const input = document.getElementById('pickup-input');
-      if (input) input.value = label;
-      updateBookingSheetSummary();
-    });
   }
   return true;
 }
@@ -3155,19 +3174,19 @@ async function setStop(idx, lat, lng, preDisplay = null) {
 function locateMe() {
   if (!navigator.geolocation) return showToast('Geolocation not supported by this browser', 'error');
   const inp = document.getElementById('pickup-input');
-  if (inp) { inp.value = '📍 Locating…'; inp.classList.add('has-val'); }
+  if (inp) { inp.value = ''; inp.classList.remove('has-val'); }
   navigator.geolocation.getCurrentPosition(pos => {
     customerMapAutoCenter = true;
     applyCustomerGpsPosition(pos, { forceCenter: true });
     setPickup(pos.coords.latitude, pos.coords.longitude).then(applied => {
-      if (!applied && inp?.value === '📍 Locating…') {
+      if (!applied && inp) {
         inp.value = '';
         inp.classList.remove('has-val');
       }
     });
   }, () => {
     showToast('Could not get your location — check GPS permissions', 'error');
-    if (inp && inp.value === '📍 Locating…') { inp.value = ''; inp.classList.remove('has-val'); }
+    if (inp) { inp.value = ''; inp.classList.remove('has-val'); }
   }, { enableHighAccuracy: true, timeout: 10000 });
 }
 
@@ -3194,6 +3213,7 @@ function clearLocation(type) {
     // Clearing is an intentional manual override; subsequent watchPosition
     // updates must not silently recreate the pickup pin.
     customerAutoPickupEnabled = false;
+    customerPickupReverseRequest++;
     invalidateLocationSearchContext();
     pickup = null;
     resetCustomerCityContext({ detectGpsFallback: true });
