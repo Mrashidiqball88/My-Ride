@@ -2882,9 +2882,10 @@ function rejectRide() {
 // Accept the broadcast ride directly. The server atomically assigns the ride
 // to this Driver and emits the same accepted event used by other clients.
 async function acceptRide() {
-  if (!pendingRide || acceptRideInFlight) return;
+  const rideRequest = pendingRide;
+  if (!rideRequest || acceptRideInFlight) return;
   acceptRideInFlight = true;
-  const rideId  = pendingRide.id || pendingRide._id;
+  const rideId  = String(rideRequest.id || rideRequest._id || '');
   if (!rideId) {
     acceptRideInFlight = false;
     showToast('This ride request is missing its ID. Please wait for it to refresh.', 'error');
@@ -2896,8 +2897,10 @@ async function acceptRide() {
     acceptBtn.textContent = '✓ Accept';
   }
   try {
-    const ride = await apiCall(`/api/rides/${rideId}/accept`, 'PATCH', {}, 12_000);
-    socket.emit('ride:join', rideId);
+    const ride = await apiCall(`/api/rides/${encodeURIComponent(rideId)}/accept`, 'PATCH', {}, 12_000);
+    // The API response is authoritative; a disconnected socket must not make
+    // a successful acceptance look like a frozen button.
+    socket?.emit('ride:join', rideId);
     sentOffer = null;
     hideRideRequest();
     activeRide = ride;

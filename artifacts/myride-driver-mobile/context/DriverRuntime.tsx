@@ -938,6 +938,7 @@ export function DriverRuntimeProvider({ children }: { children: ReactNode }) {
       // A timeout does not tell us whether the server committed the
       // acceptance. Re-read authoritative state before allowing another
       // attempt, avoiding duplicate claims or a stuck Accept button.
+      setAcceptingRide(false);
       await hydrateAvailableRides().catch(() => undefined);
       throw error;
     } finally {
