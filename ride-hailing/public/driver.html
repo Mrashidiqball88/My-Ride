@@ -2879,38 +2879,36 @@ function rejectRide() {
   showToast('Ride rejected', 'info');
 }
 
-// Send an accept-type offer at the customer's listed fare.
-// The customer sees it in their offers list and confirms the booking by choosing us.
+// Accept the broadcast ride directly. The server atomically assigns the ride
+// to this Driver and emits the same accepted event used by other clients.
 async function acceptRide() {
   if (!pendingRide || acceptRideInFlight) return;
   acceptRideInFlight = true;
-  const rideId  = pendingRide.id;
-  const offeredFare = pendingRide.fare;
+  const rideId  = pendingRide.id || pendingRide._id;
+  if (!rideId) {
+    acceptRideInFlight = false;
+    showToast('This ride request is missing its ID. Please wait for it to refresh.', 'error');
+    return;
+  }
   const acceptBtn = document.querySelector('.btn-accept');
   if (acceptBtn) {
     acceptBtn.disabled = true;
-    acceptBtn.textContent = 'Sending…';
+    acceptBtn.textContent = '✓ Accept';
   }
   try {
-    await apiCall(`/api/rides/${rideId}/counter`, 'PATCH', { price: offeredFare, type: 'accept' }, 12_000);
+    const ride = await apiCall(`/api/rides/${rideId}/accept`, 'PATCH', {}, 12_000);
     socket.emit('ride:join', rideId);
-    sentOffer = { rideId };
-    pendingRide = null;
-    clearInterval(requestTimer);
-    stopRideAlert();
-    // Hide action buttons, show offer-sent confirmation
-    document.getElementById('rr-actions').style.display   = 'none';
-    document.getElementById('rr-offer-sent').style.display = 'block';
-    document.getElementById('rr-offer-sent').textContent  =
-      `✓ Offer sent at Rs ${(offeredFare || 0).toLocaleString()} — waiting for customer…`;
-    document.getElementById('rr-timer').textContent = '⏳';
-    document.getElementById('rr-counter-input').value = '';
-    showToast('Offer sent! Waiting for customer to choose.', 'success');
+    sentOffer = null;
+    hideRideRequest();
+    activeRide = ride;
+    showActivePanel(ride);
+    showRideOnMap(ride);
+    showToast('🎉 Ride accepted! Head to pickup.', 'success');
   } catch (e) {
-    // A timeout may happen after the server has committed the offer. Refresh
-    // the authoritative available-ride state and leave retrying idempotent.
+    // A timeout may happen after the server has committed the acceptance.
+    // Refresh authoritative state before allowing another action.
     await reconcileRideRequestsAfterReconnect().catch(() => {});
-    showToast(e.message || 'Could not send offer — try again', 'error');
+    showToast(e.message || 'Could not accept ride — try again', 'error');
   } finally {
     acceptRideInFlight = false;
     if (pendingRide && acceptBtn) {

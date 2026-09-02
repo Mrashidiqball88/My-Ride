@@ -4245,12 +4245,14 @@ app.post('/api/rides', authMiddleware, customerOnly, customerCanBook, async (req
     const discountedFareQuote = applyStudentDiscountToFareQuote(fareQuote, discountPercent);
     const offerResult = resolveCustomerFareOffer(customerOffer, discountedFareQuote.totalFare, customerFareOffset);
     if (offerResult.error) return res.status(422).json({ error: offerResult.error });
+    const precisePickupLocation = await resolveRideLocationAddress(pickupLocation);
+    const preciseStops = await Promise.all(stops.map(stop => resolveRideLocationAddress(stop)));
     const broadcastExpiresAt = new Date(Date.now() + rideBroadcastSettings.broadcastRequestDurationSeconds * 1000);
     const ride = await Ride.create({
       passenger:        req.user.id,
-      pickupLocation,
-      dropoffLocation:  stops[0],        // primary stop
-      dropoffLocations: stops,
+      pickupLocation: precisePickupLocation,
+      dropoffLocation:  preciseStops[0],        // primary stop
+      dropoffLocations: preciseStops,
       // The quote remains the server-authoritative pricing baseline. A customer
       // may publish a bounded negotiation offer, which drivers can accept or
       // counter through the existing offer flow.
@@ -5710,6 +5712,73 @@ async function reverseNominatimLocation(lat, lng) {
   });
 }
 
+function isGenericRideLocationAddress(value) {
+  const parts = String(value || '')
+    .split(',')
+    .map(part => part.trim().toLocaleLowerCase())
+    .filter(Boolean);
+  const genericParts = new Set([
+    'lahore', 'punjab', 'pakistan', 'karachi', 'sindh', 'islamabad',
+    'rawalpindi', 'peshawar', 'khyber pakhtunkhwa', 'quetta', 'balochistan',
+    'faisalabad', 'multan', 'hyderabad', 'capital territory'
+  ]);
+  return !parts.length || (parts.length <= 2 && parts.every(part => genericParts.has(part)));
+}
+
+async function resolveRideLocationAddress(location) {
+  const original = { ...(location || {}) };
+  const lat = Number(original.lat);
+  const lng = Number(original.lng);
+  if (!Number.isFinite(lat) || !Number.isFinite(lng)
+    || !isGenericRideLocationAddress(original.address)) return original;
+
+  let mapboxResult = null;
+  const token = getMapboxAccessToken();
+  if (token) {
+    try {
+      const url = new URL(`${MAPBOX_GEOCODE_URL}${encodeURIComponent(`${lng},${lat}`)}.json`);
+      url.searchParams.set('access_token', token);
+      url.searchParams.set('language', 'en');
+      url.searchParams.set('types', 'address,poi,neighborhood,locality,place,postcode');
+      const upstream = await fetch(url, {
+        headers: { 'Accept-Language': 'en' },
+        signal: AbortSignal.timeout(5000)
+      });
+      if (upstream.ok) {
+        const data = await readJsonResponseWithLimit(upstream, MAPBOX_MAX_RESPONSE_BYTES);
+        const results = (data?.features || []).map(normalizeMapboxFeature).filter(Boolean);
+        mapboxResult = results.find(result => reverseAddressIsDetailed(result.address)) || results[0] || null;
+      }
+    } catch (error) {
+      console.warn('Ride location Mapbox reverse lookup failed:', error.message);
+    }
+  }
+
+  if (mapboxResult && reverseAddressIsDetailed(mapboxResult.address)) {
+    return {
+      ...original,
+      address: detailedReverseDisplayName(mapboxResult.address, mapboxResult.display_name)
+    };
+  }
+
+  try {
+    const nominatimResult = await reverseNominatimLocation(lat, lng);
+    if (nominatimResult && reverseAddressIsDetailed(nominatimResult.address)) {
+      return {
+        ...original,
+        address: detailedReverseDisplayName(nominatimResult.address, nominatimResult.display_name)
+      };
+    }
+  } catch (error) {
+    console.warn('Ride location Nominatim reverse lookup failed:', error.message);
+  }
+
+  // Never persist a city-only label. The Driver card will fall back to the
+  // validated coordinates, which is more honest and actionable than a false
+  // "Lahore, Punjab" pickup.
+  return { ...original, address: '' };
+}
+
 async function readJsonResponseWithLimit(response, maxBytes) {
   const contentLength = Number(response.headers?.get?.('content-length'));
   if (Number.isFinite(contentLength) && contentLength > maxBytes) {
@@ -6042,7 +6111,15 @@ app.get('/api/geocode/reverse', authMiddleware, async (req, res) => {
           throw new Error(`Reverse geocode upstream ${upstream.status}${detail ? `: ${detail}` : ''}`);
         }
         const data = await readJsonResponseWithLimit(upstream, MAPBOX_MAX_RESPONSE_BYTES);
-        mapboxResult = data?.features?.map(normalizeMapboxFeature).find(Boolean) || null;
+        const mapboxResults = (data?.features || [])
+          .map(normalizeMapboxFeature)
+          .filter(Boolean);
+        // Mapbox often puts a city/place feature before the detailed
+        // address/road feature. Prefer the most specific valid result so a
+        // pickup never degrades to only "Lahore, Punjab".
+        mapboxResult = mapboxResults.find(result => reverseAddressIsDetailed(result.address))
+          || mapboxResults[0]
+          || null;
       } catch (error) {
         mapboxError = error;
       }

@@ -391,7 +391,7 @@ test.describe('live nationwide location autocomplete', () => {
     }))).toMatchObject({
       dropoff: { lat: 33.5651, lng: 73.0169 },
       mode: 'idle',
-      input: 'New Drop-off Chowk'
+      input: 'New Drop-off Chowk, Rawalpindi'
     });
     await expect(page.locator('#customer-center-pin')).not.toHaveClass(/visible/);
   });
@@ -422,6 +422,65 @@ test.describe('live nationwide location autocomplete', () => {
       address: '22 Canal Bank Road, Shadman Colony, Lahore, Punjab',
       input: '22 Canal Bank Road, Shadman Colony, Lahore, Punjab'
     });
+  });
+
+  test('sends precise reverse-geocoded addresses in the booking payload', async ({ page }) => {
+    let bookingPayload;
+    await page.route(/\/api\/geocode\/reverse(?:\?|$)/, route => route.fulfill({
+      contentType: 'application/json',
+      body: JSON.stringify({
+        display_name: '12 Main Boulevard, Gulberg III, Lahore, Punjab, Pakistan',
+        address: {
+          house_number: '12',
+          road: 'Main Boulevard',
+          suburb: 'Gulberg III',
+          city: 'Lahore',
+          state: 'Punjab'
+        }
+      })
+    }));
+    await page.route(/\/api\/rides(?:\?|$)/, async route => {
+      bookingPayload = JSON.parse(route.request().postData() || '{}');
+      return route.fulfill({
+        status: 201,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          _id: 'ride-precise-location',
+          status: 'requested',
+          fare: 1000,
+          fareQuote: { totalFare: 1000 },
+          pickupLocation: bookingPayload.pickupLocation,
+          dropoffLocation: bookingPayload.dropoffLocation,
+          dropoffLocations: bookingPayload.dropoffLocations
+        })
+      });
+    });
+
+    await page.goto('/customer');
+    await page.evaluate(() => {
+      document.getElementById('auth-screen').style.display = 'none';
+      document.getElementById('app').style.display = 'flex';
+      pickup = { lat: 31.5204, lng: 74.3587, address: 'Lahore, Punjab' };
+      dropoffs[0] = { lat: 31.5304, lng: 74.3687, address: 'Lahore, Punjab' };
+      activeStops = 1;
+      routeDistanceKm = 7;
+      routeDurationMinutes = 15;
+      currentFareQuote = { totalFare: 1000 };
+      offeredFare = 1000;
+      customerFareOffset = 0;
+      return bookRide();
+    });
+
+    await expect.poll(() => bookingPayload).toMatchObject({
+      pickupLocation: {
+        address: '12 Main Boulevard, Gulberg III, Lahore, Punjab'
+      },
+      dropoffLocation: {
+        address: '12 Main Boulevard, Gulberg III, Lahore, Punjab'
+      }
+    });
+    expect(bookingPayload.pickupLocation.address).not.toBe('Lahore, Punjab');
+    expect(bookingPayload.dropoffLocation.address).not.toBe('Lahore, Punjab');
   });
 
   test('dismisses the drop-off sheet with a downward swipe', async ({ page }) => {

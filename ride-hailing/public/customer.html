@@ -2526,13 +2526,54 @@ async function reverseLocationLabel(lat, lng) {
       .split(',')
       .map(part => part.trim())
       .filter(part => part && part.toLocaleLowerCase() !== 'pakistan');
-    if (providerParts.length >= 2) return providerParts.slice(0, 8).join(', ');
+    const genericParts = new Set([
+      'lahore', 'punjab', 'pakistan', 'karachi', 'sindh', 'islamabad',
+      'rawalpindi', 'peshawar', 'khyber pakhtunkhwa', 'quetta', 'balochistan',
+      'faisalabad', 'multan', 'hyderabad', 'capital territory'
+    ]);
+    const isGeneric = value => {
+      const parts = String(value || '')
+        .split(',')
+        .map(part => part.trim().toLocaleLowerCase())
+        .filter(Boolean);
+      return parts.length > 0 && parts.length <= 2 && parts.every(part => genericParts.has(part));
+    };
+    if (providerParts.length >= 2 && !isGeneric(providerParts.join(', '))) {
+      return providerParts.slice(0, 8).join(', ');
+    }
     const label = buildLabel(data);
-    return [label.primary, label.secondary].filter(Boolean).join(', ')
-      || providerParts.slice(0, 3).join(', ');
+    const structured = [label.primary, label.secondary].filter(Boolean).join(', ');
+    if (structured && !isGeneric(structured)) return structured;
+    const providerLabel = providerParts.slice(0, 8).join(', ');
+    return isGeneric(providerLabel) ? '' : providerLabel;
   } catch {
     return '';
   }
+}
+
+function isGenericRideLocationAddress(value) {
+  const parts = String(value || '')
+    .split(',')
+    .map(part => part.trim().toLocaleLowerCase())
+    .filter(Boolean);
+  const genericParts = new Set([
+    'lahore', 'punjab', 'pakistan', 'karachi', 'sindh', 'islamabad',
+    'rawalpindi', 'peshawar', 'khyber pakhtunkhwa', 'quetta', 'balochistan',
+    'faisalabad', 'multan', 'hyderabad', 'capital territory'
+  ]);
+  return !parts.length || (parts.length <= 2 && parts.every(part => genericParts.has(part)));
+}
+
+async function resolveRideLocationAddress(location) {
+  const resolved = { ...(location || {}) };
+  const lat = Number(resolved.lat);
+  const lng = Number(resolved.lng);
+  if (!Number.isFinite(lat) || !Number.isFinite(lng)) return resolved;
+  const existing = String(resolved.address || '').trim();
+  if (!isGenericRideLocationAddress(existing)) return resolved;
+  const precise = await reverseLocationLabel(lat, lng);
+  resolved.address = precise || '';
+  return resolved;
 }
 
 async function syncPickupInputWithPin(lat, lng, requestId) {
@@ -2549,7 +2590,7 @@ async function syncPickupInputWithPin(lat, lng, requestId) {
     currentPickup.address = label;
     input.value = label;
     input.classList.add('has-val');
-  } else {
+  } else if (isGenericRideLocationAddress(currentPickup.address)) {
     // Never show a synthetic city or placeholder when the provider has not
     // returned a label for the current pin.
     currentPickup.address = '';
@@ -2749,8 +2790,9 @@ function selectLocationFromSheet(index) {
   // Close first so the customer immediately returns to the normal booking
   // view before the map marker/geocoding work begins.
   closeLocationSheet();
-  if (type === 'pickup') setPickup(+item.lat, +item.lon, item.primary);
-  else if (type.startsWith('stop-')) setStop(parseInt(type.split('-')[1], 10), +item.lat, +item.lon, item.primary);
+  const selectedAddress = item.addressLine || item.display_name || item.primary;
+  if (type === 'pickup') setPickup(+item.lat, +item.lon, selectedAddress);
+  else if (type.startsWith('stop-')) setStop(parseInt(type.split('-')[1], 10), +item.lat, +item.lon, selectedAddress);
 }
 
 document.getElementById('location-sheet-list')?.addEventListener('click', event => {
@@ -3161,7 +3203,7 @@ async function setPickup(lat, lng, preDisplay = null, { source = 'manual' } = {}
   }
   updateClearBtn('pickup');
   updateBookingSheetSummary();
-  if (!preDisplay) void syncPickupInputWithPin(lat, lng, reverseRequestId);
+  void syncPickupInputWithPin(lat, lng, reverseRequestId);
 
   mapMode = 'stop-0';
   syncCustomerCenterPin();
@@ -3211,18 +3253,16 @@ async function setStop(idx, lat, lng, preDisplay = null) {
   } else {
     setCustomerMapCenter({ lat, lng }, 14);
   }
-  if (!preDisplay) {
-    void reverseLocationLabel(lat, lng).then(label => {
-      const selected = dropoffs[idx];
-      if (!label || !selected
-        || Math.abs(selected.lat - lat) > 0.000001
-        || Math.abs(selected.lng - lng) > 0.000001) return;
-      selected.address = label;
-      const input = document.getElementById(`stop-${idx}-input`);
-      if (input) input.value = label;
-      updateBookingSheetSummary();
-    });
-  }
+  void reverseLocationLabel(lat, lng).then(label => {
+    const selected = dropoffs[idx];
+    if (!label || !selected
+      || Math.abs(selected.lat - lat) > 0.000001
+      || Math.abs(selected.lng - lng) > 0.000001) return;
+    selected.address = label;
+    const input = document.getElementById(`stop-${idx}-input`);
+    if (input) input.value = label;
+    updateBookingSheetSummary();
+  });
   return true;
 }
 
@@ -3602,10 +3642,14 @@ async function bookRide() {
   })();
 
   try {
+    const pickupLocation = await resolveRideLocationAddress(pickup);
+    const preciseDropoffs = await Promise.all(
+      activeDropoffsList.map(dropoff => resolveRideLocationAddress(dropoff))
+    );
     const ride = await apiCall('/api/rides', 'POST', {
-      pickupLocation:   { ...pickup },
-      dropoffLocation:  { ...activeDropoffsList[0] },             // primary stop
-      dropoffLocations: activeDropoffsList.map(d => ({ ...d })), // full list
+      pickupLocation,
+      dropoffLocation:  { ...preciseDropoffs[0] },       // primary stop
+      dropoffLocations: preciseDropoffs,                 // full list
       distance:         +dist.toFixed(2),
       durationMinutes:  Number(routeDurationMinutes || 0).toFixed(2),
       vehicleType:      selectedVehicle,

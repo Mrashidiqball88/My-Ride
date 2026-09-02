@@ -1256,6 +1256,11 @@ test.describe('live Mongo fare refresh', () => {
 
     try {
       await openAuthenticatedClient(driverPage, baseURL, '/driver', matchingDriver, matchingToken);
+      await driverPage.evaluate(() => {
+        user.paidUntilDate = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
+        dailyFeeDue = false;
+        localStorage.setItem('rh_user', JSON.stringify(user));
+      });
       await driverPage.evaluate(() => toggleOnline(true));
       await expect.poll(() => driverPage.evaluate(() => isOnline)).toBe(true);
       await expect.poll(() => io.sockets.adapter.rooms.get('drivers:Car Mini Non-AC')?.size || 0).toBeGreaterThan(0);
@@ -1285,15 +1290,17 @@ test.describe('live Mongo fare refresh', () => {
 
       const acceptedRide = await createRide('Instant acceptance');
       await expect(driverPage.locator('#ride-request')).toBeVisible();
-      const accepted = await request.patch(`/api/rides/${acceptedRide._id}/accept`, {
-        headers: authHeaders(matchingDriver)
-      });
-      expect(accepted.status()).toBe(200);
+      await expect(driverPage.locator('.btn-accept')).toHaveText('✓ Accept');
+      await driverPage.locator('.btn-accept').click();
       await expect(driverPage.locator('#ride-request')).toBeHidden();
       await expect(driverPage.locator('#active-panel')).toBeVisible();
       await expect.poll(() => driverPage.evaluate(rideId =>
         String(activeRide?._id) === String(rideId), acceptedRide._id
       )).toBe(true);
+      expect((await models.Ride.findById(acceptedRide._id).select('status driver').lean())).toMatchObject({
+        status: 'accepted',
+        driver: matchingDriver._id
+      });
     } finally {
       await driverPage.close();
       await request.dispose();

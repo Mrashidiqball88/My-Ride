@@ -260,6 +260,51 @@ test('Reverse geocoding falls back to a detailed local address when Mapbox is ci
   });
 });
 
+test('Reverse geocoding prefers a detailed Mapbox feature over a city feature', async () => {
+  process.env.MAPBOX_PUBLIC_TOKEN = 'test-mapbox-token';
+  process.env.NOMINATIM_MIN_INTERVAL_MS = '0';
+  const requests = [];
+  const cityFeature = mapboxFeature('Lahore', 'Lahore', 'place', 'place', 31.5204, 74.3587, {});
+  cityFeature.place_name = 'Lahore, Punjab, Pakistan';
+  cityFeature.context = [
+    { id: 'region.1', text: 'Punjab' },
+    { id: 'country.1', short_code: 'pk', text: 'Pakistan' }
+  ];
+  const addressFeature = mapboxFeature('22 Canal Bank Road', 'Lahore', 'address', 'address', 31.5204, 74.3587, {
+    address: '22'
+  });
+  addressFeature.place_name = '22 Canal Bank Road, Shadman Colony, Lahore, Punjab, Pakistan';
+  addressFeature.context = [
+    { id: 'neighborhood.1', text: 'Shadman Colony' },
+    { id: 'place.1', text: 'Lahore' },
+    { id: 'region.1', text: 'Punjab' },
+    { id: 'country.1', short_code: 'pk', text: 'Pakistan' }
+  ];
+  global.fetch = async url => {
+    const parsed = new URL(url);
+    requests.push(parsed);
+    return {
+      ok: true,
+      json: async () => parsed.origin === 'https://api.mapbox.com'
+        ? { features: [cityFeature, addressFeature] }
+        : []
+    };
+  };
+
+  await withServer(async server => {
+    const token = jwt.sign({ id: 'admin-1', isAdmin: true }, 'ride-hailing-secret-fallback');
+    const response = await httpFetch(
+      `http://127.0.0.1:${server.address().port}/api/geocode/reverse?lat=31.5204&lng=74.3587`,
+      { headers: { authorization: `Bearer ${token}` } }
+    );
+    const body = await response.json();
+    assert.equal(response.status, 200);
+    assert.equal(body.provider, 'mapbox');
+    assert.match(body.display_name, /Canal Bank Road/);
+    assert.equal(requests.some(url => url.origin === 'https://nominatim.openstreetmap.org'), false);
+  });
+});
+
 test('Nominatim normalization filters non-Pakistan and invalid-coordinate results while merging with Mapbox', async () => {
   process.env.MAPBOX_PUBLIC_TOKEN = 'test-mapbox-token';
   process.env.NOMINATIM_MIN_INTERVAL_MS = '0';

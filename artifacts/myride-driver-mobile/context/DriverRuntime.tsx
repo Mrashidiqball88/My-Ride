@@ -922,18 +922,22 @@ export function DriverRuntimeProvider({ children }: { children: ReactNode }) {
     }
     setAcceptingRide(true);
     try {
-      await apiWithTimeout(`/api/rides/${offer.id}/counter`, tokenRef.current, sessionRef.current || undefined, {
-        method: 'PATCH', body: JSON.stringify({ price: offer.fare, type: 'accept' }),
+      const response = await apiWithTimeout(`/api/rides/${offer.id}/accept`, tokenRef.current, sessionRef.current || undefined, {
+        method: 'PATCH', body: JSON.stringify({}),
       });
+      const ride = normalizeRideRequest(response as RideRequest & { _id?: string });
       socket.current?.emit('ride:join', offer.id);
       clearRideAlert(offer.id);
-      sentOfferRef.current = offer;
-      setSentOffer(offer);
+      sentOfferRef.current = null;
+      setSentOffer(null);
       setPendingRide(null);
+      setActiveRide(ride);
+      setActiveRideId(ride.id);
+      await SecureStore.setItemAsync(ACTIVE_RIDE_KEY, ride.id);
     } catch (error) {
-      // A timeout does not tell us whether the server committed the offer.
-      // Re-read available rides instead of leaving the button in a limbo
-      // state or blindly retrying and creating duplicate offers.
+      // A timeout does not tell us whether the server committed the
+      // acceptance. Re-read authoritative state before allowing another
+      // attempt, avoiding duplicate claims or a stuck Accept button.
       await hydrateAvailableRides().catch(() => undefined);
       throw error;
     } finally {
