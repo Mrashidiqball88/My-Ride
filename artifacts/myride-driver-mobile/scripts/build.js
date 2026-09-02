@@ -23,7 +23,9 @@ function findWorkspaceRoot(startDir) {
 
 const workspaceRoot = findWorkspaceRoot(projectRoot);
 const basePath = (process.env.BASE_PATH || '/').replace(/\/+$/, '');
-const metroPort = Number(process.env.METRO_PORT || 8081);
+// The shared mockup preview owns 8081 in the workspace. Keep the native build
+// on its own default port, while still allowing CI to choose another one.
+const metroPort = Number(process.env.METRO_PORT || 8082);
 const metroBaseUrl = `http://localhost:${metroPort}`;
 
 function exitWithError(message) {
@@ -142,6 +144,10 @@ async function startMetro(expoPublicDomain, expoPublicReplId) {
   console.log(`Setting EXPO_PUBLIC_DOMAIN=${expoPublicDomain}`);
   const env = {
     ...process.env,
+    // Expo's dependency doctor calls an online metadata endpoint during
+    // startup. A transient empty response must not prevent a local Metro
+    // bundle or the Android build pipeline from starting.
+    EXPO_OFFLINE: process.env.EXPO_OFFLINE || '1',
     EXPO_PUBLIC_DOMAIN: expoPublicDomain,
     EXPO_PUBLIC_REPL_ID: expoPublicReplId,
   };

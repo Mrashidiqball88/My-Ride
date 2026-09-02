@@ -17,6 +17,7 @@
       "supportsTablet": false,
       "bundleIdentifier": "com.myride.driver",
       "infoPlist": {
+        "NSCameraUsageDescription": "My Ride uses the camera when you choose to capture driver documents.",
         "NSLocationWhenInUseUsageDescription": "My Ride uses your location to match you with nearby rides while you are online.",
         "NSLocationAlwaysAndWhenInUseUsageDescription": "My Ride keeps your location updated while you are online so riders can receive reliable driver tracking."
       }
@@ -26,6 +27,7 @@
         "ACCESS_COARSE_LOCATION",
         "ACCESS_FINE_LOCATION",
         "ACCESS_BACKGROUND_LOCATION",
+        "CAMERA",
         "FOREGROUND_SERVICE",
         "FOREGROUND_SERVICE_LOCATION",
         "POST_NOTIFICATIONS",

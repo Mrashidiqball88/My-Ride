@@ -46,3 +46,5 @@
 - [Android Driver alert capabilities](android-driver-alert-capabilities.md) — Expo permission APIs cannot inspect special Android alert settings; use a generated native bridge and fail closed until prebuild capabilities pass.
 - [Polymorphic support references](polymorphic-support-references.md) — Mongoose refPath documents must persist their concrete model discriminator at creation time or validation/population fails.
 - [Settings cache test doubles](settings-cache-test-doubles.md) — settings loaders need an explicit seam for disconnected test doubles without weakening production database-readiness fallbacks.
+- [Expo local image parser](expo-local-image-parser.md) — Metro passes image paths to its size parser, so local replacements must support both paths and byte buffers.
+- [Driver Metro build port](driver-metro-build-port.md) — native static builds need a dedicated default port because the shared mockup preview owns 8081.

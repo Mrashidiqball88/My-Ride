@@ -4,7 +4,7 @@ const { test, before, after } = require('node:test');
 const assert = require('node:assert/strict');
 const jwt = require('jsonwebtoken');
 const mongoose = require('mongoose');
-const { MongoMemoryServer } = require('mongodb-memory-server');
+const { MongoMemoryReplSet } = require('mongodb-memory-server');
 const service = require('../server');
 
 const { server, models, FARE_VEHICLE_CATEGORIES, findLongRangeBroadcastDrivers, runDailyDeduction } = service;
@@ -75,7 +75,7 @@ async function registerDriver({ name, phone, vehicleType, ridePreference }) {
 }
 
 before(async () => {
-  mongo = await MongoMemoryServer.create();
+  mongo = await MongoMemoryReplSet.create({ replSet: { count: 1 } });
   await mongoose.connect(mongo.getUri());
   await new Promise(resolve => server.listen(0, resolve));
   baseURL = `http://127.0.0.1:${server.address().port}`;

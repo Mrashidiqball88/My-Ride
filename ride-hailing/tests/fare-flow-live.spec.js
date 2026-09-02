@@ -4,7 +4,7 @@
 const { test, expect } = require('@playwright/test');
 const jwt = require('jsonwebtoken');
 const mongoose = require('mongoose');
-const { MongoMemoryServer } = require('mongodb-memory-server');
+const { MongoMemoryReplSet } = require('mongodb-memory-server');
 
 const fare = require('../server');
 const {
@@ -98,7 +98,7 @@ test.describe('live Mongo fare refresh', () => {
   let coasterDriver;
 
   test.beforeAll(async () => {
-    mongo = await MongoMemoryServer.create();
+    mongo = await MongoMemoryReplSet.create({ replSet: { count: 1 } });
     await mongoose.connect(mongo.getUri());
 
     customer = await models.User.create({

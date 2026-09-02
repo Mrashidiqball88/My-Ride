@@ -1,0 +1,16 @@
+{
+  "name": "@workspace/safe-image-size",
+  "version": "1.0.0",
+  "private": true,
+  "main": "./index.cjs",
+  "module": "./index.mjs",
+  "exports": {
+    ".": {
+      "require": "./index.cjs",
+      "import": "./index.mjs"
+    }
+  },
+  "engines": {
+    "node": ">=16"
+  }
+}

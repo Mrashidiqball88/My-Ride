@@ -1,6 +1,12 @@
 'use strict';
 
-const { createClient } = require('redis');
+let createClient = null;
+try {
+  ({ createClient } = require('redis'));
+} catch {
+  // Redis is an optional acceleration layer. The MongoDB dispatcher must
+  // remain importable when the optional client is not installed/configured.
+}
 
 const REDIS_NAMESPACE = String(process.env.REDIS_NAMESPACE || 'myride').trim() || 'myride';
 const DRIVER_GEO_KEY = `${REDIS_NAMESPACE}:drivers:geo`;
@@ -48,6 +54,10 @@ async function startRedisAcceleration({ log = console } = {}) {
   const url = configuredRedisUrl();
   if (!url) {
     logger.log('[redis] REDIS_URL not configured; using MongoDB dispatch fallback');
+    return false;
+  }
+  if (!createClient) {
+    logger.warn('[redis] Redis client is unavailable; using MongoDB dispatch fallback');
     return false;
   }
 

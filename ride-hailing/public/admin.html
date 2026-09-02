@@ -138,8 +138,9 @@ body{font-family:'Segoe UI',system-ui,sans-serif;background:#06060e;color:#e2e8f
 .live-map-count::before{content:"";width:8px;height:8px;border-radius:50%;background:#64748b}
 .live-map-count.driver::before{background:#38bdf8;box-shadow:0 0 0 3px rgba(56,189,248,.12)}
 .live-map-count.customer::before{background:#f5c518;box-shadow:0 0 0 3px rgba(245,197,24,.12)}
-.admin-live-map-body{display:grid;grid-template-columns:minmax(0,1fr) 240px;gap:.85rem}
-#admin-live-map{height:520px;min-height:390px;width:100%;background:#090b14;border-radius:12px;overflow:hidden}
+.admin-live-map-body{display:grid;grid-template-columns:minmax(0,1fr) 240px;gap:.85rem;align-items:stretch}
+.admin-live-map-canvas{position:relative;min-width:0;height:520px;min-height:390px}
+#admin-live-map{height:100%;min-height:100%;width:100%;background:#090b14;border-radius:12px;overflow:hidden}
 .admin-live-map-roster{height:520px;min-height:390px;overflow-y:auto;background:#090b14;border:1px solid #1e1e2e;border-radius:12px;padding:.65rem}
 .live-roster-title{font-size:.65rem;color:#64748b;text-transform:uppercase;letter-spacing:.08em;font-weight:900;padding:.15rem .2rem .5rem}
 .live-roster-item{display:flex;align-items:center;gap:.55rem;width:100%;text-align:left;background:none;border:0;border-top:1px solid #1e1e2e;color:#cbd5e1;padding:.65rem .2rem;cursor:pointer}
@@ -353,7 +354,8 @@ textarea.modal-input{resize:vertical;min-height:70px}
   .admin-live-map-header{flex-direction:column}
   .admin-live-map-actions{justify-content:flex-start}
   .admin-live-map-body{grid-template-columns:1fr}
-  #admin-live-map{height:390px;min-height:320px}
+  .admin-live-map-canvas{height:390px;min-height:320px}
+  #admin-live-map{height:100%;min-height:100%}
   .admin-live-map-roster{height:auto;max-height:240px;min-height:0}
   .live-map-modal{width:100%;max-height:calc(100dvh - 1.5rem)}
   #live-location-map{height:300px}
@@ -1515,6 +1517,9 @@ let adminLiveMap = null;
 let adminLiveLocations = [];
 let adminLiveMarkers = new Map();
 let adminLiveMapHasFitted = false;
+let adminLiveMapRetryTimer = null;
+let adminLiveMapResizeObserver = null;
+let adminLiveMapResizeBound = false;
 let adminLiveLocationRefreshTimer = null;
 let adminPlaceSearchTimer = null;
 let adminPlaceSearchSeq = 0;
@@ -2141,7 +2146,7 @@ async function loadStats() {
 
 // ── 1. OVERVIEW ──────────────────────────────────────────────────────────────
 async function loadOverview() {
-  initAdminLiveMap();
+  scheduleAdminLiveMapInit();
   startAdminCityDetection();
   updateAdminPlaceCityLabel();
   await loadStats();
@@ -2850,10 +2855,19 @@ function focusAdminPlace(item) {
   const expand = document.getElementById('admin-place-expand');
   if (expand) expand.style.display = 'none';
   const center = [Number(item.lon), Number(item.lat)];
-  if (!adminLiveMap) initAdminLiveMap();
+  if (!adminLiveMap) {
+    scheduleAdminLiveMapInit();
+    const retryMove = () => {
+      if (!adminLiveMap) return setTimeout(retryMove, 150);
+      if (adminLiveMap.isStyleLoaded()) adminLiveMap.easeTo({ center, zoom: 14, duration: 500 });
+      else adminLiveMap.once('load', () => adminLiveMap?.easeTo({ center, zoom: 14, duration: 500 }));
+    };
+    retryMove();
+    return;
+  }
   const move = () => adminLiveMap?.easeTo({ center, zoom: 14, duration: 500 });
-  if (adminLiveMap?.isStyleLoaded()) move();
-  else adminLiveMap?.once('load', move);
+  if (adminLiveMap.isStyleLoaded()) move();
+  else adminLiveMap.once('load', move);
 }
 
 document.getElementById('admin-place-search-results')?.addEventListener('click', event => {
@@ -2873,10 +2887,12 @@ document.getElementById('admin-place-search-results')?.addEventListener('scroll'
 function initAdminLiveMap() {
   const mapEl = document.getElementById('admin-live-map');
   if (!mapEl || !window.mapboxgl || !MAPBOX_PUBLIC_TOKEN) return false;
+  if (!mapEl.offsetWidth || !mapEl.offsetHeight) return false;
   if (adminLiveMap) {
     requestAnimationFrame(() => adminLiveMap?.resize());
     return true;
   }
+  mapboxgl.accessToken = MAPBOX_PUBLIC_TOKEN;
   adminLiveMap = new mapboxgl.Map({
     container: mapEl,
     style: 'mapbox://styles/mapbox/streets-v12',
@@ -2889,12 +2905,64 @@ function initAdminLiveMap() {
     touchPitch: false
   });
   adminLiveMap.addControl(new mapboxgl.NavigationControl({ showCompass: false }), 'top-right');
+  adminLiveMap.on('error', event => {
+    const state = document.getElementById('admin-live-map-state');
+    if (event?.error) console.warn('Admin Mapbox map error:', event.error);
+    if (state) {
+      state.textContent = 'The map service could not load. Check the Mapbox token or network access, then refresh.';
+      state.classList.add('visible');
+    }
+  });
   adminLiveMap.on('load', () => {
     adminLiveMap?.resize();
     if (adminLiveLocations.length) renderAdminLiveLocations(adminLiveLocations);
   });
+  if ('ResizeObserver' in window && !adminLiveMapResizeObserver) {
+    adminLiveMapResizeObserver = new ResizeObserver(() => {
+      if (adminLiveMap && mapEl.offsetWidth && mapEl.offsetHeight) {
+        requestAnimationFrame(() => adminLiveMap?.resize());
+      }
+    });
+    adminLiveMapResizeObserver.observe(mapEl);
+  }
+  if (!adminLiveMapResizeBound) {
+    window.addEventListener('resize', () => {
+      if (adminLiveMap && document.getElementById('sec-overview')?.classList.contains('active')) {
+        requestAnimationFrame(() => adminLiveMap?.resize());
+      }
+    });
+    adminLiveMapResizeBound = true;
+  }
   requestAnimationFrame(() => adminLiveMap?.resize());
   return true;
+}
+
+function scheduleAdminLiveMapInit() {
+  if (adminLiveMapRetryTimer !== null) return;
+  const attempt = () => {
+    adminLiveMapRetryTimer = null;
+    const mapEl = document.getElementById('admin-live-map');
+    const state = document.getElementById('admin-live-map-state');
+    if (!mapEl || !document.getElementById('sec-overview')?.classList.contains('active')) return;
+    if (initAdminLiveMap()) {
+      if (adminLiveLocations.length && adminLiveMap?.isStyleLoaded()) {
+        renderAdminLiveLocations(adminLiveLocations);
+      }
+      return;
+    }
+    if (state) {
+      state.textContent = !MAPBOX_PUBLIC_TOKEN
+        ? 'Map configuration is unavailable. Add a Mapbox public token and refresh.'
+        : !window.mapboxgl
+          ? 'Loading the map service…'
+          : 'Preparing the map container…';
+      state.classList.add('visible');
+    }
+    if (MAPBOX_PUBLIC_TOKEN && (!window.mapboxgl || !mapEl.offsetWidth || !mapEl.offsetHeight)) {
+      adminLiveMapRetryTimer = setTimeout(attempt, 250);
+    }
+  };
+  requestAnimationFrame(attempt);
 }
 
 function createAdminLiveMarker(location) {
@@ -2936,10 +3004,7 @@ function renderAdminLiveLocations(locations) {
   if (sync) sync.textContent = formatLiveLocationTime(new Date());
 
   if (!initAdminLiveMap()) {
-    if (state) {
-      state.textContent = 'The live map is unavailable. Refresh the page to try again.';
-      state.classList.add('visible');
-    }
+    scheduleAdminLiveMapInit();
     return;
   }
   if (!adminLiveMap.isStyleLoaded()) {

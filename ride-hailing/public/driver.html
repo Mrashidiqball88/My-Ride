@@ -263,6 +263,10 @@ body{font-family:'Segoe UI',sans-serif;background:#0a0a0f;color:#fff;height:100d
 .photo-upload-lbl{font-size:.72rem;color:#888;font-weight:600;display:block;margin-bottom:.3rem}
 .photo-upload-lbl .req{color:#f5c518;margin-left:.2rem}
 .photo-preview-img{width:68px;height:68px;border-radius:8px;object-fit:cover;border:2px solid #333;display:block;margin-bottom:.3rem}
+.document-upload-actions{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:.45rem;margin-top:.35rem}
+.document-source-btn{border:1px solid #333;border-radius:8px;padding:.5rem .4rem;background:#13131a;color:#ddd;font-size:.72rem;font-weight:700;cursor:pointer;transition:border-color .2s,background .2s}
+.document-source-btn:hover,.document-source-btn:focus-visible{border-color:#f5c518;background:#1a180c;outline:none}
+.document-file-input{position:absolute;width:1px;height:1px;opacity:0;pointer-events:none}
 .photo-file-input{width:100%;background:#13131a;border:1px dashed #333;border-radius:8px;padding:.45rem .6rem;color:#888;font-size:.78rem;cursor:pointer}
 .photo-file-input::-webkit-file-upload-button{background:#1e3a5f;color:#fff;border:none;border-radius:6px;padding:.2rem .5rem;font-size:.72rem;cursor:pointer}
 /* ── Call Passenger ── */
@@ -485,27 +489,47 @@ textarea.support-input{resize:vertical;min-height:85px}
         <div class="photo-upload-group">
           <span class="photo-upload-lbl">Profile Photo <span class="req">*</span></span>
           <img id="prev-profile" class="photo-preview-img" style="display:none" src="">
-          <input class="photo-file-input" type="file" id="r-profile-photo" accept="image/*" capture="user" onchange="previewPhoto(this,'prev-profile')">
+          <div class="document-upload-actions" role="group" aria-label="Profile photo source">
+            <button class="document-source-btn" type="button" onclick="openDocumentSource('r-profile-photo','camera','user')">📷 Take Photo</button>
+            <button class="document-source-btn" type="button" onclick="openDocumentSource('r-profile-photo','gallery')">🖼️ Choose from Gallery</button>
+          </div>
+          <input class="document-file-input" type="file" id="r-profile-photo" accept="image/*" onchange="previewPhoto(this,'prev-profile')">
         </div>
         <div class="photo-upload-group">
           <span class="photo-upload-lbl">Driving License (Front) <span class="req">*</span></span>
           <img id="prev-license" class="photo-preview-img" style="display:none" src="">
-          <input class="photo-file-input" type="file" id="r-license-photo" accept="image/*" capture="environment" onchange="previewPhoto(this,'prev-license')">
+          <div class="document-upload-actions" role="group" aria-label="Driving license photo source">
+            <button class="document-source-btn" type="button" onclick="openDocumentSource('r-license-photo','camera')">📷 Take Photo</button>
+            <button class="document-source-btn" type="button" onclick="openDocumentSource('r-license-photo','gallery')">🖼️ Choose from Gallery</button>
+          </div>
+          <input class="document-file-input" type="file" id="r-license-photo" accept="image/*" onchange="previewPhoto(this,'prev-license')">
         </div>
         <div class="photo-upload-group">
           <span class="photo-upload-lbl">CNIC Front <span class="req">*</span></span>
           <img id="prev-cnic-f" class="photo-preview-img" style="display:none" src="">
-          <input class="photo-file-input" type="file" id="r-cnic-front" accept="image/*" capture="environment" onchange="previewPhoto(this,'prev-cnic-f')">
+          <div class="document-upload-actions" role="group" aria-label="CNIC front photo source">
+            <button class="document-source-btn" type="button" onclick="openDocumentSource('r-cnic-front','camera')">📷 Take Photo</button>
+            <button class="document-source-btn" type="button" onclick="openDocumentSource('r-cnic-front','gallery')">🖼️ Choose from Gallery</button>
+          </div>
+          <input class="document-file-input" type="file" id="r-cnic-front" accept="image/*" onchange="previewPhoto(this,'prev-cnic-f')">
         </div>
         <div class="photo-upload-group">
           <span class="photo-upload-lbl">CNIC Back <span class="req">*</span></span>
           <img id="prev-cnic-b" class="photo-preview-img" style="display:none" src="">
-          <input class="photo-file-input" type="file" id="r-cnic-back" accept="image/*" capture="environment" onchange="previewPhoto(this,'prev-cnic-b')">
+          <div class="document-upload-actions" role="group" aria-label="CNIC back photo source">
+            <button class="document-source-btn" type="button" onclick="openDocumentSource('r-cnic-back','camera')">📷 Take Photo</button>
+            <button class="document-source-btn" type="button" onclick="openDocumentSource('r-cnic-back','gallery')">🖼️ Choose from Gallery</button>
+          </div>
+          <input class="document-file-input" type="file" id="r-cnic-back" accept="image/*" onchange="previewPhoto(this,'prev-cnic-b')">
         </div>
         <div class="photo-upload-group">
           <span class="photo-upload-lbl">Vehicle Registration Book / Documents <span class="req">*</span></span>
           <img id="prev-vehicle-reg" class="photo-preview-img" style="display:none" src="">
-          <input class="photo-file-input" type="file" id="r-vehicle-reg" accept="image/*" capture="environment" onchange="previewPhoto(this,'prev-vehicle-reg')">
+          <div class="document-upload-actions" role="group" aria-label="Vehicle registration document source">
+            <button class="document-source-btn" type="button" onclick="openDocumentSource('r-vehicle-reg','camera')">📷 Take Photo</button>
+            <button class="document-source-btn" type="button" onclick="openDocumentSource('r-vehicle-reg','gallery')">🖼️ Choose from Gallery</button>
+          </div>
+          <input class="document-file-input" type="file" id="r-vehicle-reg" accept="image/*" onchange="previewPhoto(this,'prev-vehicle-reg')">
         </div>
         <div style="display:flex;gap:.5rem;margin-top:.5rem">
           <button class="btn-primary" style="flex:.4;background:#1a1a28;color:#888;border:1px solid #333;margin-top:0" onclick="prevRegStep()">← Back</button>
@@ -1241,6 +1265,14 @@ function prevRegStep() {
   document.getElementById('reg-step2').style.display = 'none';
   document.getElementById('reg-step1').style.display = 'block';
   document.getElementById('auth-error').textContent = '';
+}
+
+function openDocumentSource(inputId, source, cameraFacing = 'environment') {
+  const input = document.getElementById(inputId);
+  if (!input) return;
+  if (source === 'camera') input.setAttribute('capture', cameraFacing);
+  else input.removeAttribute('capture');
+  input.click();
 }
 
 // ── Eager image compression ────────────────────────────────────────────────
@@ -3585,7 +3617,11 @@ if (token && user && user.role === 'driver') {
     <input type="text" id="cv-model" placeholder="Vehicle model (e.g. Suzuki Cultus 2022)" style="width:100%;padding:.7rem;border-radius:8px;border:1px solid #333;background:#0d0d1a;color:#fff;margin-bottom:.5rem;box-sizing:border-box;font-size:.875rem">
     <input type="text" id="cv-plate" placeholder="Number plate (e.g. LHR-1234)" style="width:100%;padding:.7rem;border-radius:8px;border:1px solid #333;background:#0d0d1a;color:#fff;margin-bottom:.4rem;box-sizing:border-box;font-size:.875rem;text-transform:uppercase">
      <label for="cv-vehicle-reg" style="display:block;color:#cbd5e1;font-size:.76rem;font-weight:700;margin:.7rem 0 .35rem">Vehicle Registration / Ownership Document <span style="color:#f5c518">*</span></label>
-     <input class="photo-file-input" type="file" id="cv-vehicle-reg" accept="image/*" capture="environment" onchange="previewPhoto(this,'cv-vehicle-preview')">
+     <div class="document-upload-actions" role="group" aria-label="Updated vehicle document source">
+       <button class="document-source-btn" type="button" onclick="openDocumentSource('cv-vehicle-reg','camera')">📷 Take Photo</button>
+       <button class="document-source-btn" type="button" onclick="openDocumentSource('cv-vehicle-reg','gallery')">🖼️ Choose from Gallery</button>
+     </div>
+     <input class="document-file-input" type="file" id="cv-vehicle-reg" accept="image/*" onchange="previewPhoto(this,'cv-vehicle-preview')">
      <img id="cv-vehicle-preview" class="photo-preview-img" style="display:none;margin:.55rem 0 0" src="" alt="New vehicle document preview">
     <p id="cv-err" style="color:#ff4444;font-size:.78rem;min-height:1em;margin-bottom:.5rem"></p>
     <div style="display:flex;gap:.5rem">

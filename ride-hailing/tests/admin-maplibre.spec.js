@@ -11,6 +11,7 @@ const ADMIN_TOKEN = jwt.sign(
 
 test.describe('Admin Mapbox maps and city-aware place search', () => {
   test('renders both Admin maps without Leaflet and prioritizes the GPS city', async ({ page }) => {
+    await page.setViewportSize({ width: 1440, height: 900 });
     const reverseRequests = [];
     const placeRequests = [];
     const forbiddenMapRequests = [];

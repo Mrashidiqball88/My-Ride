@@ -1510,7 +1510,14 @@ const rideSchema = new mongoose.Schema({
   // authoritative across server restarts and lets reconnecting drivers render
   // the remaining time rather than restarting a local countdown.
   broadcastDurationSeconds: { type: Number, default: null },
-  broadcastExpiresAt: { type: Date, default: null }
+  broadcastExpiresAt: { type: Date, default: null },
+  // Financial settlement is committed in the same MongoDB transaction as the
+  // ride transition and both wallet ledger entries. This marker makes a
+  // retried completion request a read-only idempotent replay.
+  settlementStatus: { type: String, enum: ['pending', 'settled'], default: 'pending' },
+  settledAt: { type: Date, default: null },
+  settledFare: { type: Number, default: null },
+  settledDriverEarnings: { type: Number, default: null }
 }, { timestamps: true });
 
 rideSchema.index({ status: 1, vehicleType: 1, createdAt: -1 });
@@ -1530,6 +1537,7 @@ const walletSchema = new mongoose.Schema({
     paymentMethod: { type: String, default: '' },
     mobileAccount: { type: String, default: '' },
     rideId: { type: String, default: '' },
+    operationId: { type: String, default: '' },
     createdAt:     { type: Date, default: Date.now }
   }]
 }, { timestamps: true });
@@ -1640,12 +1648,18 @@ const paymentSchema = new mongoose.Schema({
     balanceAfter:  { type: Number, default: null },
     passValidUntil:{ type: Date, default: null },
     createdAt:     { type: Date, default: Date.now }
-  }]
+  }],
+  // Approval and wallet credit are committed together. Retries return the
+  // committed result instead of crediting the Driver a second time.
+  walletCreditedAt: { type: Date, default: null },
+  walletCreditOperationId: { type: String, default: null },
+  paidUntilDate: { type: Date, default: null }
 }, { timestamps: true });
 
 // Database-enforced protections against repeated payment references and daily spam.
 paymentSchema.index({ trxId: 1 }, { unique: true });
 paymentSchema.index({ driver: 1, submittedDate: 1 }, { unique: true });
+paymentSchema.index({ walletCreditOperationId: 1 }, { unique: true, sparse: true });
 
 // Key-value settings store
 const settingsSchema = new mongoose.Schema({
@@ -2454,32 +2468,222 @@ async function findLongRangeBroadcastDrivers(pickupLocation, vehicleType, longRa
   return { drivers, radiusKm };
 }
 
-async function chargeLongRangeCommission(ride, driverId, timing, longRangeSettings) {
+async function chargeLongRangeCommission(ride, driverId, timing, longRangeSettings, { session } = {}) {
   if (!ride.isLongRange || longRangeSettings.commissionTiming !== timing || ride.longRangeCommissionChargedAt) {
     return { ok: true, alreadyCharged: !!ride.longRangeCommissionChargedAt };
   }
   const amount = Number((Number(ride.fare) * longRangeSettings.commissionPercent / 100).toFixed(2));
   if (!amount) {
-    await Ride.updateOne({ _id: ride._id, longRangeCommissionChargedAt: null }, {
-      $set: { longRangeCommissionAmount: 0, longRangeCommissionChargedAt: new Date() }
-    });
-    return { ok: true };
+    const chargedAt = new Date();
+    await Ride.updateOne(
+      { _id: ride._id, longRangeCommissionChargedAt: null },
+      { $set: { longRangeCommissionAmount: 0, longRangeCommissionChargedAt: chargedAt } },
+      session ? { session } : undefined
+    );
+    return { ok: true, charged: true, amount: 0, chargedAt };
   }
   const debited = await Wallet.findOneAndUpdate({
     user: driverId, balance: { $gte: amount },
     transactions: { $not: { $elemMatch: { rideId: String(ride._id), description: 'Long Range commission' } } }
   }, {
     $inc: { balance: -amount },
-    $push: { transactions: { amount, type: 'debit', description: 'Long Range commission', rideId: String(ride._id) } }
-  }, { new: true });
+    $push: {
+      transactions: {
+        amount,
+        type: 'debit',
+        description: 'Long Range commission',
+        rideId: String(ride._id),
+        operationId: `ride:${ride._id}:long-range-commission`
+      }
+    }
+  }, { new: true, ...(session ? { session } : {}) });
   if (!debited) {
-    const already = await Wallet.exists({ user: driverId, transactions: { $elemMatch: { rideId: String(ride._id), description: 'Long Range commission' } } });
+    const alreadyQuery = Wallet.exists({
+      user: driverId,
+      transactions: { $elemMatch: { rideId: String(ride._id), description: 'Long Range commission' } }
+    });
+    if (session) alreadyQuery.session(session);
+    const already = await alreadyQuery;
     if (!already) return { ok: false, error: 'Wallet balance is insufficient for the Long Range commission.' };
+    const chargedAt = ride.longRangeCommissionChargedAt || new Date();
+    await Ride.updateOne(
+      { _id: ride._id, longRangeCommissionChargedAt: null },
+      { $set: { longRangeCommissionAmount: amount, longRangeCommissionChargedAt: chargedAt } },
+      session ? { session } : undefined
+    );
+    return { ok: true, alreadyCharged: true, amount, chargedAt };
   }
-  await Ride.updateOne({ _id: ride._id, longRangeCommissionChargedAt: null }, {
-    $set: { longRangeCommissionAmount: amount, longRangeCommissionChargedAt: new Date() }
+  const chargedAt = new Date();
+  await Ride.updateOne(
+    { _id: ride._id, longRangeCommissionChargedAt: null },
+    { $set: { longRangeCommissionAmount: amount, longRangeCommissionChargedAt: chargedAt } },
+    session ? { session } : undefined
+  );
+  return { ok: true, charged: true, amount, chargedAt };
+}
+
+class FinancialTransactionRequiredError extends Error {
+  constructor(message = 'A transaction-capable MongoDB connection is required for financial operations.') {
+    super(message);
+    this.name = 'FinancialTransactionRequiredError';
+    this.code = 'FINANCIAL_TRANSACTION_REQUIRED';
+    this.statusCode = 503;
+  }
+}
+
+function isTransactionUnsupportedError(error) {
+  const message = String(error?.message || '');
+  return error?.code === 20
+    || error?.code === 263
+    || error?.codeName === 'IllegalOperation'
+    || /Transaction numbers are only allowed|transactions are not supported|Transaction not supported/i.test(message);
+}
+
+async function runFinancialTransaction(work) {
+  if (mongoose.connection.readyState !== 1) {
+    throw new FinancialTransactionRequiredError('Financial operations are temporarily unavailable until MongoDB is connected.');
+  }
+  const session = await mongoose.startSession();
+  try {
+    let result;
+    await session.withTransaction(
+      async () => {
+        result = await work(session);
+      },
+      {
+        readConcern: { level: 'snapshot' },
+        writeConcern: { w: 'majority' },
+        maxCommitTimeMS: 10_000
+      }
+    );
+    return result;
+  } catch (error) {
+    if (isTransactionUnsupportedError(error)) {
+      throw new FinancialTransactionRequiredError();
+    }
+    throw error;
+  } finally {
+    await session.endSession();
+  }
+}
+
+function financialError(message, statusCode = 500, code = 'FINANCIAL_OPERATION_FAILED') {
+  const error = new Error(message);
+  error.statusCode = statusCode;
+  error.code = code;
+  return error;
+}
+
+async function completeRideFinancialSettlement(rideId, driverId, waitingRateSettings) {
+  return runFinancialTransaction(async session => {
+    const ride = await Ride.findOne({ _id: rideId, driver: driverId }).session(session);
+    if (!ride) return { ride: null, alreadySettled: false };
+    if (ride.status === 'completed' && ride.settlementStatus === 'settled') {
+      return { ride, alreadySettled: true };
+    }
+    if (ride.status !== 'in-progress') return { ride: null, alreadySettled: false };
+
+    applyWaitingStateToRide(
+      ride,
+      observeRideWaiting(ride, ride.driverLocation, waitingRateSettings, new Date())
+    );
+    const fareQuote = await refreshRideFareFromCurrentSettings(ride, waitingRateSettings);
+    if (fareQuote?.error) {
+      // Older rides may not contain the distance/settings fields needed for a
+      // recalculation, while their persisted fare is still authoritative.
+      // Preserve that valid fare; never invent a replacement or settle a ride
+      // with no usable fare at all.
+      if (!Number.isFinite(Number(ride.fare)) || Number(ride.fare) < 0) {
+        throw financialError(fareQuote.error, 422, 'FARE_CALCULATION_FAILED');
+      }
+    }
+
+    const commission = await chargeLongRangeCommission(
+      ride,
+      driverId,
+      'completed',
+      await getLongRangeSettings(),
+      { session }
+    );
+    if (!commission.ok) {
+      throw financialError(commission.error, 403, 'LONG_RANGE_COMMISSION_FAILED');
+    }
+    if (commission.charged) {
+      ride.longRangeCommissionAmount = commission.amount;
+      ride.longRangeCommissionChargedAt = commission.chargedAt;
+    }
+
+    const fare = Number(ride.fare);
+    const earnings = +(fare * 0.85).toFixed(2);
+    const operationId = `ride:${ride._id}:settlement`;
+    const customerWallet = await Wallet.findOneAndUpdate(
+      { user: ride.passenger },
+      {
+        $inc: { balance: -fare },
+        $push: {
+          transactions: {
+            amount: fare,
+            type: 'debit',
+            description: 'Ride fare',
+            rideId: String(ride._id),
+            operationId
+          }
+        }
+      },
+      // Customer wallets are normally provisioned at registration. Upsert
+      // here keeps legacy/manual accounts settleable while still recording
+      // the debit in the same transaction as the ride completion.
+      { new: true, upsert: true, session }
+    );
+    if (!customerWallet) {
+      throw financialError('Customer wallet is unavailable; the ride was not completed.', 503, 'CUSTOMER_WALLET_UNAVAILABLE');
+    }
+
+    const driverWallet = await Wallet.findOneAndUpdate(
+      { user: ride.driver },
+      {
+        $inc: { balance: earnings, realCashWallet: earnings },
+        $push: {
+          transactions: {
+            amount: earnings,
+            type: 'credit',
+            description: 'Ride earnings',
+            rideId: String(ride._id),
+            operationId
+          }
+        }
+      },
+      { new: true, upsert: true, session }
+    );
+    if (!driverWallet) {
+      throw financialError('Driver wallet is unavailable; the ride was not completed.', 503, 'DRIVER_WALLET_UNAVAILABLE');
+    }
+
+    const settledAt = new Date();
+    ride.status = 'completed';
+    ride.settlementStatus = 'settled';
+    ride.settledAt = settledAt;
+    ride.settledFare = fare;
+    ride.settledDriverEarnings = earnings;
+    await ride.save({ session });
+
+    const driverUpdate = await User.updateOne(
+      { _id: ride.driver },
+      { $inc: { totalRides: 1 } },
+      { session }
+    );
+    const passengerUpdate = await User.updateOne(
+      { _id: ride.passenger },
+      { $inc: { totalRides: 1 } },
+      { session }
+    );
+    if ((driverUpdate.matchedCount === 0 && driverUpdate.n === 0)
+      || (passengerUpdate.matchedCount === 0 && passengerUpdate.n === 0)) {
+      throw financialError('Ride participants could not be updated; the ride was not completed.', 503, 'RIDE_PARTICIPANT_UPDATE_FAILED');
+    }
+
+    return { ride, alreadySettled: false };
   });
-  return { ok: true };
 }
 
 async function validateLongRangeDriverEligibility(driverId, settings) {
@@ -4300,6 +4504,12 @@ app.patch('/api/rides/:id/status', authMiddleware, driverOnly, async (req, res) 
       return res.status(403).json({ error: 'You are not the driver for this ride' });
     }
 
+    // A retried completion after a committed settlement is a successful
+    // read-only replay. Never send it through the financial writes again.
+    if (status === 'completed' && ride.status === 'completed' && ride.settlementStatus === 'settled') {
+      return res.json(ride);
+    }
+
     const allowed = STATUS_TRANSITIONS[ride.status] || [];
     if (!allowed.includes(status)) {
       return res.status(400).json({ error: `Cannot transition from "${ride.status}" to "${status}"` });
@@ -4328,13 +4538,24 @@ app.patch('/api/rides/:id/status', authMiddleware, driverOnly, async (req, res) 
 
     if (status === 'completed') {
       const waitingRateSettings = await getWaitingRateSettings({ force: true });
-      applyWaitingStateToRide(
-        ride,
-        observeRideWaiting(ride, ride.driverLocation, waitingRateSettings, new Date())
+      const settlement = await completeRideFinancialSettlement(
+        ride._id,
+        req.user.id,
+        waitingRateSettings
       );
-      await refreshRideFareFromCurrentSettings(ride, waitingRateSettings).catch(() => null);
-      const commission = await chargeLongRangeCommission(ride, req.user.id, 'completed', await getLongRangeSettings());
-      if (!commission.ok) return res.status(403).json({ error: commission.error });
+      if (!settlement.ride) {
+        return res.status(409).json({ error: 'Ride is no longer in progress.' });
+      }
+      if (settlement.alreadySettled) return res.json(settlement.ride);
+
+      emitRideLifecycle(settlement.ride, 'ride:status', {
+        status: 'completed',
+        fare: settlement.ride.fare,
+        fareQuote: settlement.ride.fareQuote,
+        waitingMinutes: settlement.ride.waitingMinutes,
+        waitingFare: settlement.ride.waitingFare
+      });
+      return res.json(settlement.ride);
     }
     ride.status = status;
     await ride.save();
@@ -4349,26 +4570,9 @@ app.patch('/api/rides/:id/status', authMiddleware, driverOnly, async (req, res) 
       } : {})
     });
 
-    if (status === 'completed') {
-      await Wallet.updateOne(
-        { user: ride.passenger },
-        { $inc: { balance: -ride.fare },
-          $push: { transactions: { amount: ride.fare, type: 'debit', description: 'Ride fare' } } }
-      );
-      const earnings = +(ride.fare * 0.85).toFixed(2);
-      await Wallet.updateOne(
-        { user: ride.driver },
-        { $inc: { balance: earnings, realCashWallet: earnings },   // ride earnings → realCashWallet
-          $push: { transactions: { amount: earnings, type: 'credit', description: 'Ride earnings' } } },
-        { upsert: true }
-      );
-      await User.updateOne({ _id: ride.driver },    { $inc: { totalRides: 1 } });
-      await User.updateOne({ _id: ride.passenger }, { $inc: { totalRides: 1 } });
-    }
-
     res.json(ride);
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    res.status(err.statusCode || 500).json({ error: err.message, ...(err.code ? { code: err.code } : {}) });
   }
 });
 
@@ -4824,62 +5028,95 @@ function paymentAdminActor(admin) {
 }
 
 async function approveDriverPayment(paymentId, admin, adminNote = '') {
-  const now = new Date();
-  const actor = paymentAdminActor(admin);
-  const payment = await Payment.findOneAndUpdate(
-    { _id: paymentId, status: 'pending' },
-    {
-      $set: {
-        status: 'approved',
-        adminNote: String(adminNote || '').trim(),
-        approvedBy: actor.id,
-        approvedAt: now
-      }
-    },
-    { new: true }
-  );
-  if (!payment) return null;
+  return runFinancialTransaction(async session => {
+    const payment = await Payment.findById(paymentId).session(session);
+    if (!payment) return null;
 
-  const passValidUntil = new Date(now.getTime() + ACTIVE_FEE_PASS_MS);
-  const wallet = await Wallet.findOneAndUpdate(
-    { user: payment.driver },
-    {
-      $inc: { balance: payment.amount, realCashWallet: payment.amount },
-      $set: { fee_paid_at: now },
-      $push: {
-        transactions: {
-          amount: payment.amount,
-          type: 'credit',
-          description: `Approved driver recharge (TRX ${payment.trxId})`,
-          paymentMethod: payment.paymentType,
-          mobileAccount: payment.trxId
-        }
+    const existingApproval = payment.status === 'approved' && payment.walletCreditedAt;
+    if (existingApproval) {
+      const wallet = await Wallet.findOne({ user: payment.driver }).session(session);
+      if (!wallet) {
+        throw financialError('Approved payment wallet is unavailable and requires reconciliation.', 503, 'APPROVED_PAYMENT_RECONCILIATION_REQUIRED');
       }
-    },
-    { new: true, upsert: true }
-  );
-  await User.updateOne(
-    { _id: payment.driver },
-    { lastDailyFeePaidAt: now, paidUntilDate: passValidUntil, isFreeTrial: false }
-  );
-  await Payment.updateOne(
-    { _id: payment._id },
-    {
-      $push: {
-        auditLog: {
-          action: 'approved',
-          actorId: actor.id,
-          actorRole: actor.role,
-          reason: String(adminNote || '').trim(),
-          balanceBefore: Number(wallet.balance) - Number(payment.amount),
-          balanceAfter: Number(wallet.balance),
-          passValidUntil,
-          createdAt: now
-        }
-      }
+      const passValidUntil = payment.paidUntilDate
+        || [...(payment.auditLog || [])].reverse().find(entry => entry.action === 'approved')?.passValidUntil
+        || new Date(new Date(payment.approvedAt || payment.walletCreditedAt).getTime() + ACTIVE_FEE_PASS_MS);
+      return {
+        payment,
+        wallet,
+        passValidUntil,
+        actor: paymentAdminActor({ id: payment.approvedBy })
+      };
     }
-  );
-  return { payment, wallet, passValidUntil, actor };
+    if (payment.status !== 'pending') return null;
+
+    const now = new Date();
+    const actor = paymentAdminActor(admin);
+    const passValidUntil = new Date(now.getTime() + ACTIVE_FEE_PASS_MS);
+    const operationId = `payment:${payment._id}:wallet-credit`;
+    const walletBeforeDoc = await Wallet.findOne({ user: payment.driver }).session(session);
+    const balanceBefore = Number(walletBeforeDoc?.balance || 0);
+    const wallet = await Wallet.findOneAndUpdate(
+      { user: payment.driver },
+      {
+        $inc: { balance: payment.amount, realCashWallet: payment.amount },
+        $set: { fee_paid_at: now },
+        $push: {
+          transactions: {
+            amount: payment.amount,
+            type: 'credit',
+            description: `Approved driver recharge (TRX ${payment.trxId})`,
+            paymentMethod: payment.paymentType,
+            mobileAccount: payment.trxId,
+            operationId
+          }
+        }
+      },
+      { new: true, upsert: true, session }
+    );
+    if (!wallet) {
+      throw financialError('Driver wallet is unavailable; the payment was not approved.', 503, 'DRIVER_WALLET_UNAVAILABLE');
+    }
+
+    const approvedPayment = await Payment.findOneAndUpdate(
+      { _id: payment._id, status: 'pending' },
+      {
+        $set: {
+          status: 'approved',
+          adminNote: String(adminNote || '').trim(),
+          approvedBy: actor.id,
+          approvedAt: now,
+          walletCreditedAt: now,
+          walletCreditOperationId: operationId,
+          paidUntilDate: passValidUntil
+        },
+        $push: {
+          auditLog: {
+            action: 'approved',
+            actorId: actor.id,
+            actorRole: actor.role,
+            reason: String(adminNote || '').trim(),
+            balanceBefore,
+            balanceAfter: Number(wallet.balance),
+            passValidUntil,
+            createdAt: now
+          }
+        }
+      },
+      { new: true, session }
+    );
+    if (!approvedPayment) return null;
+
+    const driverUpdate = await User.updateOne(
+      { _id: payment.driver },
+      { lastDailyFeePaidAt: now, paidUntilDate: passValidUntil, isFreeTrial: false },
+      { session }
+    );
+    if (driverUpdate.matchedCount === 0 && driverUpdate.n === 0) {
+      throw financialError('Driver account could not be updated; the payment was not approved.', 503, 'DRIVER_UPDATE_FAILED');
+    }
+    return { payment: approvedPayment, wallet, passValidUntil, actor };
+  });
 }
 
 async function rejectDriverPayment(paymentId, admin, reason = '') {
@@ -6435,7 +6672,9 @@ app.patch('/api/admin/payments/:id/approve', adminJwt, requirePerm('approveWalle
       balanceAfter: approved.wallet.balance,
       passValidUntil: approved.passValidUntil
     });
-  } catch (err) { res.status(500).json({ error: err.message }); }
+  } catch (err) {
+    res.status(err.statusCode || 500).json({ error: err.message, ...(err.code ? { code: err.code } : {}) });
+  }
 });
 
 app.patch('/api/admin/payments/:id/reject', adminJwt, requirePerm('approveWalletTopups'), async (req, res) => {
@@ -8287,6 +8526,8 @@ module.exports = {
   driverRidePayload,
   emitRideLifecycle,
   chargeLongRangeCommission,
+  completeRideFinancialSettlement,
+  approveDriverPayment,
   refreshPendingRideFares,
   SUB_ADMIN_PERMISSION_CATALOG,
   normalizeSubAdminPermissions,

@@ -35,6 +35,10 @@ body{font-family:'Segoe UI',sans-serif;background:#0a0a0f;color:#fff;height:100d
 .form-group input,.form-group select{width:100%;background:#0a0a0f;border:1px solid #333;border-radius:10px;padding:.75rem 1rem;color:#fff;font-size:.95rem;outline:none;transition:border-color .2s}
 .form-group input:focus,.form-group select:focus{border-color:#f5c518}
 .form-group select option{background:#13131a}
+.document-upload-actions{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:.45rem;margin-top:.35rem}
+.document-source-btn{border:1px solid #333;border-radius:9px;padding:.55rem .45rem;background:#13131a;color:#ddd;font-size:.78rem;font-weight:700;cursor:pointer;transition:border-color .2s,background .2s}
+.document-source-btn:hover,.document-source-btn:focus-visible{border-color:#f5c518;background:#1a180c;outline:none}
+.document-file-input{position:absolute;width:1px;height:1px;opacity:0;pointer-events:none}
 .btn-primary{width:100%;background:#f5c518;color:#0a0a0f;border:none;border-radius:12px;padding:.85rem;font-size:1rem;font-weight:700;cursor:pointer;margin-top:.5rem;transition:opacity .2s}
 .btn-primary:hover{opacity:.9}
 .btn-primary:disabled{opacity:.5;cursor:not-allowed}
@@ -463,8 +467,24 @@ body{font-family:'Segoe UI',sans-serif;background:#0a0a0f;color:#fff;height:100d
       <div class="form-group"><label>Full Name (as on National ID) <span style="color:#f5c518">*</span></label><input type="text" id="r-name" placeholder="Your legal full name" autocomplete="name"></div>
       <div class="form-group"><label>Phone Number <span style="color:#f5c518">*</span></label><input type="tel" id="r-phone" placeholder="+92 300 0000000" inputmode="tel"></div>
       <div class="form-group"><label>CNIC / Identity Card Number <span style="color:#f5c518">*</span></label><input type="text" id="r-cnic" placeholder="e.g. 35202-1234567-9" inputmode="numeric" maxlength="20"></div>
-      <div class="form-group"><label>National ID — Front <span style="color:#f5c518">*</span></label><input type="file" id="r-cnic-front" accept="image/jpeg,image/png,image/webp" capture="environment"></div>
-      <div class="form-group"><label>National ID — Back <span style="color:#f5c518">*</span></label><input type="file" id="r-cnic-back" accept="image/jpeg,image/png,image/webp" capture="environment"></div>
+      <div class="form-group">
+        <label>National ID — Front <span style="color:#f5c518">*</span></label>
+        <div class="document-upload-actions" role="group" aria-label="National ID front photo source">
+          <button class="document-source-btn" type="button" onclick="openDocumentSource('r-cnic-front','camera')">📷 Take Photo</button>
+          <button class="document-source-btn" type="button" onclick="openDocumentSource('r-cnic-front','gallery')">🖼️ Choose from Gallery</button>
+        </div>
+        <input class="document-file-input" type="file" id="r-cnic-front" accept="image/jpeg,image/png,image/webp" onchange="updateDocumentFileLabel(this,'r-cnic-front-label')">
+        <span id="r-cnic-front-label" style="display:block;color:#888;font-size:.72rem;margin-top:.35rem">No image selected</span>
+      </div>
+      <div class="form-group">
+        <label>National ID — Back <span style="color:#f5c518">*</span></label>
+        <div class="document-upload-actions" role="group" aria-label="National ID back photo source">
+          <button class="document-source-btn" type="button" onclick="openDocumentSource('r-cnic-back','camera')">📷 Take Photo</button>
+          <button class="document-source-btn" type="button" onclick="openDocumentSource('r-cnic-back','gallery')">🖼️ Choose from Gallery</button>
+        </div>
+        <input class="document-file-input" type="file" id="r-cnic-back" accept="image/jpeg,image/png,image/webp" onchange="updateDocumentFileLabel(this,'r-cnic-back-label')">
+        <span id="r-cnic-back-label" style="display:block;color:#888;font-size:.72rem;margin-top:.35rem">No image selected</span>
+      </div>
       <p style="font-size:.7rem;color:#666;margin:-.35rem 0 1rem;line-height:1.4">Your details are matched securely against both ID images before an account is created.</p>
       <div class="form-group"><label>Email <span style="color:#f5c518">*</span></label><input type="email" id="r-email" placeholder="you@email.com" autocomplete="email" required></div>
       <div class="form-group">
@@ -1197,6 +1217,19 @@ async function doLogin() {
     const res = await apiCall('/api/auth/login', 'POST', { identifier, password: pass });
     saveSession(res);
   } catch (e) { document.getElementById('auth-error').textContent = e.message; }
+}
+
+function openDocumentSource(inputId, source) {
+  const input = document.getElementById(inputId);
+  if (!input) return;
+  if (source === 'camera') input.setAttribute('capture', 'environment');
+  else input.removeAttribute('capture');
+  input.click();
+}
+
+function updateDocumentFileLabel(input, labelId) {
+  const label = document.getElementById(labelId);
+  if (label) label.textContent = input.files?.[0]?.name || 'No image selected';
 }
 
 async function doRegister() {
