@@ -1290,7 +1290,7 @@ test.describe('live Mongo fare refresh', () => {
 
       const acceptedRide = await createRide('Instant acceptance');
       await expect(driverPage.locator('#ride-request')).toBeVisible();
-      await expect(driverPage.locator('.btn-accept')).toHaveText('✓ Accept');
+      await expect(driverPage.locator('.btn-accept')).toHaveText('Accept');
       await driverPage.locator('.btn-accept').click();
       await expect(driverPage.locator('#ride-request')).toBeHidden();
       await expect(driverPage.locator('#active-panel')).toBeVisible();

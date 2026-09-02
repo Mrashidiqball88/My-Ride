@@ -866,7 +866,7 @@ body{font-family:'DM Sans','Segoe UI',sans-serif;background:var(--dc-night);colo
   <div class="rr-actions" id="rr-actions">
     <button class="btn-reject" onclick="rejectRide()">✗ Reject</button>
     <button class="btn-counter" onclick="sendCounter()">⇄ Counter</button>
-    <button class="btn-accept" onclick="acceptRide()">✓ Accept</button>
+    <button class="btn-accept" onclick="acceptRide()">Accept</button>
   </div>
 </div>
 
@@ -2771,7 +2771,7 @@ function showRideRequest(ride, { suppressAlert = false } = {}) {
       acceptBtn.onclick = (e) => { e.stopPropagation(); goToPayFee(_rate); };
     } else {
       acceptBtn.disabled = false;
-      acceptBtn.textContent = '✓ Accept';
+      acceptBtn.textContent = 'Accept';
       acceptBtn.style.opacity = '';
       acceptBtn.style.cursor  = '';
       acceptBtn.onclick = () => acceptRide();
@@ -2885,21 +2885,20 @@ async function acceptRide() {
   const rideRequest = pendingRide;
   if (!rideRequest || acceptRideInFlight) return;
   acceptRideInFlight = true;
-  const rideId  = String(rideRequest.id || rideRequest._id || '');
+  const rideId = String(rideRequest.id || rideRequest._id || '');
   if (!rideId) {
     acceptRideInFlight = false;
     showToast('This ride request is missing its ID. Please wait for it to refresh.', 'error');
     return;
   }
   const acceptBtn = document.querySelector('.btn-accept');
-  if (acceptBtn) {
-    acceptBtn.disabled = true;
-    acceptBtn.textContent = '✓ Accept';
-  }
   try {
-    const ride = await apiCall(`/api/rides/${encodeURIComponent(rideId)}/accept`, 'PATCH', {}, 12_000);
-    // The API response is authoritative; a disconnected socket must not make
-    // a successful acceptance look like a frozen button.
+    const ride = await apiCall(
+      `/api/rides/${encodeURIComponent(rideId)}/accept`,
+      'PATCH',
+      {},
+      12_000
+    );
     socket?.emit('ride:join', rideId);
     sentOffer = null;
     hideRideRequest();
@@ -2914,9 +2913,9 @@ async function acceptRide() {
     showToast(e.message || 'Could not accept ride — try again', 'error');
   } finally {
     acceptRideInFlight = false;
-    if (pendingRide && acceptBtn) {
+    if (acceptBtn) {
       acceptBtn.disabled = false;
-      acceptBtn.textContent = '✓ Accept';
+      acceptBtn.textContent = 'Accept';
     }
   }
 }
@@ -3793,7 +3792,7 @@ function unlockAcceptButton() {
   const acceptBtn = document.querySelector('.btn-accept');
   if (acceptBtn && pendingRide) {
     acceptBtn.disabled      = false;
-    acceptBtn.textContent   = '✓ Accept';
+    acceptBtn.textContent   = 'Accept';
     acceptBtn.style.opacity = '';
     acceptBtn.style.cursor  = '';
     acceptBtn.onclick = () => acceptRide();
