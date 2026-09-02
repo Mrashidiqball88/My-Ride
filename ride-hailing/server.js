@@ -189,9 +189,10 @@ app.use(express.urlencoded({ limit: process.env.REQUEST_BODY_LIMIT || '32mb', ex
 const PUBLIC_DIR = path.resolve(__dirname, 'public');
 app.use(express.static(PUBLIC_DIR, {
   setHeaders: (res, filePath) => {
-    // The Admin shell contains authentication/bootstrap JavaScript and must
-    // never be served from an old proxy/browser cache after a deployment.
-    if (path.basename(filePath) === 'admin.html') {
+    // The Admin and Customer shells contain authentication/bootstrap and live
+    // location/voice JavaScript; neither may be served from an old cache after
+    // a deployment.
+    if (['admin.html', 'customer.html'].includes(path.basename(filePath))) {
       res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
       res.setHeader('Pragma', 'no-cache');
       res.setHeader('Expires', '0');
@@ -8041,10 +8042,10 @@ function servePage(page) {
         console.error('[servePage] PAGES["' + page + '"] is empty — startup load failed silently');
         return res.status(500).json({ error: 'page not loaded' });
       }
-      if (page === 'admin') {
-        // This route bypasses express.static because pages are preloaded at
-        // startup. Apply the same no-cache policy as the direct /admin.html
-        // static asset so reverse proxies cannot retain an old Admin shell.
+      if (page === 'admin' || page === 'customer') {
+        // These routes bypass express.static because pages are preloaded at
+        // startup. Do not let a browser, service worker, or reverse proxy
+        // retain an older shell after a deployment.
         res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
         res.setHeader('Pragma', 'no-cache');
         res.setHeader('Expires', '0');
@@ -8065,6 +8066,9 @@ app.get('/',         servePage('customer'));
 
 // Catch-all: serve customer SPA for any unmatched path (deep-link support).
 app.use(function(_req, res) {
+  res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
+  res.setHeader('Pragma', 'no-cache');
+  res.setHeader('Expires', '0');
   res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
   res.end(PAGES.customer);
 });

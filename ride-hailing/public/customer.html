@@ -2942,6 +2942,19 @@ function setVoiceButtonState(type, listening) {
   });
 }
 
+function primeVoiceMicrophonePermission() {
+  const getUserMedia = navigator.mediaDevices?.getUserMedia;
+  if (typeof getUserMedia !== 'function') return null;
+  // SpeechRecognition permission behavior varies between Chrome profiles and
+  // Android WebViews. Prime the same-origin microphone permission explicitly,
+  // then release the short-lived stream; recognition owns the live session.
+  const request = getUserMedia.call(navigator.mediaDevices, { audio: true });
+  request.then(stream => {
+    stream.getTracks().forEach(track => track.stop());
+  }).catch(() => {});
+  return request;
+}
+
 function startVoiceSearch(type) {
   const Recognition = speechRecognitionConstructor();
   const input = document.getElementById(`${type}-input`);
@@ -3029,6 +3042,22 @@ function startVoiceSearch(type) {
       );
     }
   };
+  const microphoneRequest = primeVoiceMicrophonePermission();
+  if (microphoneRequest) {
+    microphoneRequest.catch(error => {
+      if (voiceSearchSession !== session || voiceRecognition !== recognition) return;
+      if (error?.name === 'NotAllowedError' || error?.name === 'SecurityError') {
+        customerReadinessState.microphone = 'denied';
+        voiceSearchSession++;
+        clearVoiceSearchTimeout();
+        try { recognition.abort(); } catch {}
+        voiceRecognition = null;
+        voiceSearchType = null;
+        setVoiceButtonState(type, false);
+        setVoiceStatus('Microphone access was blocked. Allow it in browser or app settings, then try again.', true);
+      }
+    });
+  }
   voiceSearchTimeout = setTimeout(() => {
     if (voiceSearchSession !== session || voiceRecognition !== recognition) return;
     voiceSearchSession++;
@@ -3136,11 +3165,13 @@ async function setStop(idx, lat, lng, preDisplay = null) {
     })
     : null;
   closeDropdown(`stop-${idx}`);
-  document.getElementById(`stop-${idx}-input`).value = preDisplay || 'Locating…';
-  document.getElementById(`stop-${idx}-input`).classList.add('has-val');
-  const addr = preDisplay || 'Pinned location';
+  const input = document.getElementById(`stop-${idx}-input`);
+  const addr = preDisplay || '';
   dropoffs[idx].address = addr;
-  document.getElementById(`stop-${idx}-input`).value = addr;
+  if (input) {
+    input.value = addr;
+    input.classList.toggle('has-val', Boolean(addr));
+  }
   updateClearBtn(`stop-${idx}`);
   updateBookingSheetSummary();
 
