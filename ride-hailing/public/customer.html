@@ -125,7 +125,7 @@ body{font-family:'Segoe UI',sans-serif;background:#0a0a0f;color:#fff;height:100d
 .loc-primary{font-size:.85rem;color:#ddd;font-weight:600;line-height:1.3}
 .loc-secondary{font-size:.72rem;color:#555;margin-top:.1rem}
 .loc-loading{padding:.6rem .85rem;font-size:.8rem;color:#555;text-align:center}
-.location-sheet{position:fixed;left:0;right:0;bottom:var(--location-viewport-bottom,0px);z-index:40;display:flex;flex-direction:column;height:min(72dvh,620px);max-height:calc(var(--location-viewport-height,100dvh) - 8px);min-height:220px;background:#13131a;border-top:1px solid #3a3a4a;border-radius:20px 20px 0 0;box-shadow:0 -12px 35px rgba(0,0,0,.5);transform:translateY(110%);transition:transform .22s ease;pointer-events:none;touch-action:manipulation;visibility:hidden}
+.location-sheet{position:fixed;left:0;right:0;bottom:var(--location-viewport-bottom,0px);z-index:40;display:flex;flex-direction:column;height:min(72dvh,620px);max-height:calc(var(--location-viewport-height,100dvh) - 8px);min-height:220px;background:#13131a;border-top:1px solid #3a3a4a;border-radius:20px 20px 0 0;box-shadow:0 -12px 35px rgba(0,0,0,.5);transform:translateY(110%);transition:transform .22s ease;pointer-events:none;touch-action:none;visibility:hidden}
 .location-sheet.open{transform:translateY(0);pointer-events:auto}.location-sheet.expanded{height:min(88dvh,760px)}
 .location-sheet.open{visibility:visible}
 .location-sheet.dragging{transition:none}
@@ -137,6 +137,8 @@ body{font-family:'Segoe UI',sans-serif;background:#0a0a0f;color:#fff;height:100d
 .sheet-header-copy{flex:1}.sheet-kicker{font-size:.63rem;color:#f5c518;font-weight:800;text-transform:uppercase;letter-spacing:.08em}.sheet-title{font-size:.92rem;color:#fff;font-weight:700;margin-top:.15rem}
 .sheet-controls{display:flex;align-items:center;gap:.4rem;flex-shrink:0}.voice-language{background:#0a0a0f;border:1px solid #3a3a4a;color:#ccc;border-radius:8px;padding:.35rem .4rem;font-size:.68rem;max-width:112px}.voice-language:focus{border-color:#f5c518;outline:none}
 .sheet-close{width:32px;height:32px;border:1px solid #343448;background:#1e1e2e;color:#bbb;border-radius:50%;font-size:.9rem;cursor:pointer}
+.sheet-map-pin-action{display:flex;align-items:center;gap:.55rem;width:calc(100% - 1.4rem);margin:.45rem .7rem .25rem;padding:.72rem .8rem;border:1px solid #6b3c22;border-radius:11px;background:#2b1b16;color:#ffad78;text-align:left;font-size:.78rem;font-weight:750;cursor:pointer}
+.sheet-map-pin-action:hover,.sheet-map-pin-action:active{background:#3a231b;border-color:#cc6622}
 .sheet-list{height:0;min-height:0;flex:1 1 auto;overflow-y:scroll;overflow-x:hidden;overscroll-behavior:contain;-webkit-overflow-scrolling:touch;padding:.35rem .7rem 1.2rem;touch-action:pan-y;scrollbar-width:thin}
 .sheet-item{display:flex;align-items:flex-start;gap:.7rem;width:100%;border:0;border-bottom:1px solid #242436;background:transparent;color:#fff;text-align:left;padding:.78rem .45rem;cursor:pointer;min-height:58px}
 .sheet-item:last-child{border-bottom:0}.sheet-item:active,.sheet-item:focus-visible{background:#22223a;outline:none}.sheet-item-icon{width:30px;text-align:center;font-size:1.15rem}.sheet-item-copy{min-width:0}.sheet-item-primary{font-size:.86rem;color:#eee;font-weight:650;line-height:1.3}.sheet-item-secondary{font-size:.7rem;color:#777;margin-top:.15rem;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.sheet-item.my-location{background:#142333;border:1px solid #22547b;border-radius:11px;margin:.3rem 0 .45rem;padding:.72rem .45rem}.sheet-section-label{padding:.55rem .45rem .25rem;color:#f5c518;font-size:.62rem;font-weight:800;letter-spacing:.08em;text-transform:uppercase}.sheet-empty{padding:1rem .5rem;text-align:center;color:#777;font-size:.8rem}
@@ -2425,9 +2427,14 @@ async function reverseLocationLabel(lat, lng) {
     );
     if (!response.ok) return '';
     const data = await response.json();
+    const providerParts = String(data.display_name || '')
+      .split(',')
+      .map(part => part.trim())
+      .filter(part => part && part.toLocaleLowerCase() !== 'pakistan');
+    if (providerParts.length >= 2) return providerParts.slice(0, 8).join(', ');
     const label = buildLabel(data);
     return [label.primary, label.secondary].filter(Boolean).join(', ')
-      || String(data.display_name || '').split(',').slice(0, 3).join(', ').trim();
+      || providerParts.slice(0, 3).join(', ');
   } catch {
     return '';
   }
@@ -2557,6 +2564,11 @@ function renderLocationSheet(type, results, query = '', { loading = locationSear
       <span class="sheet-item-icon">🎯</span><span class="sheet-item-copy">
       <span class="sheet-item-primary">Pin-Point / My Location</span>
       <span class="sheet-item-secondary">Use your phone GPS for the pickup point</span></span></button>`;
+  } else {
+    markup += `<button type="button" class="sheet-map-pin-action" data-location-action="map-pin">
+      <span aria-hidden="true">📍</span>
+      <span>Select location via Map Pin</span>
+    </button>`;
   }
   const scope = locationSearchScope(query);
   // The server requests up to 50 provider records. Keep that full bounded
@@ -2627,18 +2639,43 @@ document.getElementById('location-sheet-list')?.addEventListener('click', event 
   if (event.target.closest('[data-location-action="locate"]')) {
     closeLocationSheet();
     locateMe();
+    return;
+  }
+  if (event.target.closest('[data-location-action="map-pin"]')) {
+    selectLocationViaMapPin(activeLocationSearch);
   }
 });
 
-// The grabber and header dismiss the sheet; the result list remains a normal
-// scroll container, so swiping a long result list never accidentally closes
-// the search surface.
+function selectLocationViaMapPin(type) {
+  const target = type === 'pickup' || String(type || '').startsWith('stop-')
+    ? type
+    : 'stop-0';
+  cancelLocationSearchRequest(target);
+  closeLocationSheet();
+  mapMode = target;
+  customerMapSelectionGesture = false;
+  syncCustomerCenterPin();
+  const hint = document.getElementById('map-hint');
+  if (hint) {
+    hint.textContent = target === 'pickup'
+      ? 'Move the map under the center pin, then release to choose your pickup'
+      : 'Move the map under the center pin, then release to choose your drop-off';
+    hint.className = target === 'pickup' ? 'map-hint' : 'map-hint dropoff-mode';
+    hint.style.display = 'block';
+  }
+  if (!map) showToast('Map is still loading. You can place the pin as soon as it is ready.', 'info');
+  else map.resize?.();
+}
+
+// The whole sheet can be dragged, including the reparented search bar. Result
+// lists keep native scrolling, and actionable controls keep their normal click
+// behavior.
 function beginLocationSheetDrag(event) {
-  if (event.target.closest('button')) return;
+  if (event.target.closest('.sheet-list') || event.target.closest('button, select, a')) return;
   const sheet = document.getElementById('location-sheet');
   locationSheetDrag = { id: event.pointerId, startY: event.clientY, currentY: 0 };
   sheet.classList.add('dragging');
-  event.currentTarget.setPointerCapture(event.pointerId);
+  try { sheet.setPointerCapture?.(event.pointerId); } catch {}
 }
 
 function moveLocationSheetDrag(event) {
@@ -2667,13 +2704,14 @@ function cancelLocationSheetDrag() {
   closeLocationSheet();
 }
 
-['location-sheet-grabber', 'location-sheet-header'].forEach(id => {
-  const surface = document.getElementById(id);
-  surface?.addEventListener('pointerdown', beginLocationSheetDrag);
-  surface?.addEventListener('pointermove', moveLocationSheetDrag);
-  surface?.addEventListener('pointerup', endLocationSheetDrag);
-  surface?.addEventListener('pointercancel', cancelLocationSheetDrag);
-});
+const locationSheetSurface = document.getElementById('location-sheet');
+locationSheetSurface?.addEventListener('pointerdown', beginLocationSheetDrag);
+// Track the end of a drag outside the original header/search target. This is
+// important on mobile browsers where the pointer leaves the header before
+// pointerup, and on WebViews that do not preserve pointer capture.
+window.addEventListener('pointermove', moveLocationSheetDrag);
+window.addEventListener('pointerup', endLocationSheetDrag);
+window.addEventListener('pointercancel', cancelLocationSheetDrag);
 
 function closeDropdown(type) {
   document.getElementById(`${type}-dropdown`)?.classList.remove('open');

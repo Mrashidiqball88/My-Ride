@@ -2,6 +2,7 @@
 
 const { test, afterEach } = require('node:test');
 const assert = require('node:assert/strict');
+const jwt = require('jsonwebtoken');
 
 const {
   app,
@@ -195,6 +196,67 @@ test('Customer search omits invalid proximity coordinates', async () => {
     const result = await request(server, '/api/geocode?q=airport&proximity=181,91');
     assert.equal(result.response.status, 200);
     assert.equal(mapboxRequested.searchParams.get('proximity'), null);
+  });
+});
+
+test('Reverse geocoding falls back to a detailed local address when Mapbox is city-level', async () => {
+  process.env.MAPBOX_PUBLIC_TOKEN = 'test-mapbox-token';
+  process.env.NOMINATIM_MIN_INTERVAL_MS = '0';
+  const requests = [];
+  global.fetch = async url => {
+    const parsed = new URL(url);
+    requests.push(parsed);
+    if (parsed.origin === 'https://api.mapbox.com') {
+      return {
+        ok: true,
+        json: async () => ({
+          features: [{
+            type: 'Feature',
+            id: 'place.lahore',
+            text: 'Lahore',
+            place_name: 'Lahore, Punjab, Pakistan',
+            place_type: ['place'],
+            geometry: { type: 'Point', coordinates: [74.3587, 31.5204] },
+            context: [
+              { id: 'region.1', text: 'Punjab' },
+              { id: 'country.1', short_code: 'pk', text: 'Pakistan' }
+            ]
+          }]
+        })
+      };
+    }
+    return {
+      ok: true,
+      json: async () => ({
+        lat: '31.5204',
+        lon: '74.3587',
+        display_name: 'House 22, Canal Bank Road, Shadman Colony, Lahore, Punjab, Pakistan',
+        address: {
+          house_number: '22',
+          road: 'Canal Bank Road',
+          suburb: 'Shadman Colony',
+          city: 'Lahore',
+          state: 'Punjab',
+          country: 'Pakistan',
+          country_code: 'pk'
+        }
+      })
+    };
+  };
+
+  await withServer(async server => {
+    const token = jwt.sign({ id: 'admin-1', isAdmin: true }, 'ride-hailing-secret-fallback');
+    const response = await httpFetch(
+      `http://127.0.0.1:${server.address().port}/api/geocode/reverse?lat=31.5204&lng=74.3587`,
+      { headers: { authorization: `Bearer ${token}` } }
+    );
+    const body = await response.json();
+    assert.equal(response.status, 200);
+    assert.equal(body.provider, 'nominatim');
+    assert.equal(body.display_name, '22 Canal Bank Road, Shadman Colony, Lahore, Punjab');
+    assert.equal(body.address.road, 'Canal Bank Road');
+    assert.equal(requests.some(url => url.origin === 'https://nominatim.openstreetmap.org'
+      && url.pathname === '/reverse'), true);
   });
 });
 

@@ -329,6 +329,77 @@ test.describe('live nationwide location autocomplete', () => {
     await expect(page.locator('#customer-center-pin')).not.toHaveClass(/visible/);
   });
 
+  test('renders a detailed reverse-geocoded pickup label', async ({ page }) => {
+    await page.route(/\/api\/geocode\/reverse(?:\?|$)/, route => route.fulfill({
+      contentType: 'application/json',
+      body: JSON.stringify({
+        display_name: '22 Canal Bank Road, Shadman Colony, Lahore, Punjab',
+        address: {
+          house_number: '22',
+          road: 'Canal Bank Road',
+          suburb: 'Shadman Colony',
+          city: 'Lahore',
+          state: 'Punjab'
+        }
+      })
+    }));
+
+    await page.goto('/customer');
+    await page.evaluate(async () => {
+      await setPickup(31.5204, 74.3587);
+    });
+    await expect.poll(() => page.evaluate(() => ({
+      address: pickup?.address,
+      input: document.getElementById('pickup-input')?.value
+    }))).toEqual({
+      address: '22 Canal Bank Road, Shadman Colony, Lahore, Punjab',
+      input: '22 Canal Bank Road, Shadman Colony, Lahore, Punjab'
+    });
+  });
+
+  test('dismisses the drop-off sheet with a downward swipe', async ({ page }) => {
+    await page.goto('/customer');
+    await page.evaluate(() => {
+      document.getElementById('auth-screen').style.display = 'none';
+      document.getElementById('app').style.display = 'flex';
+      renderLocationSheet('stop-0', [], '');
+    });
+    const sheet = page.locator('#location-sheet');
+    const header = page.locator('#location-sheet-header .sheet-header-copy');
+    await expect(sheet).toHaveClass(/open/);
+    await page.waitForTimeout(300);
+    const box = await header.boundingBox();
+    expect(box).not.toBeNull();
+    await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+    await page.mouse.down();
+    await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2 + 180);
+    await page.mouse.up();
+    await expect(sheet).toHaveAttribute('aria-hidden', 'true');
+  });
+
+  test('returns from drop-off search to the active map pin', async ({ page }) => {
+    await page.goto('/customer');
+    await page.evaluate(() => {
+      document.getElementById('auth-screen').style.display = 'none';
+      document.getElementById('app').style.display = 'flex';
+      renderLocationSheet('stop-0', [], '');
+    });
+    await expect(page.locator('[data-location-action="map-pin"]')).toContainText('Select location via Map Pin');
+    await page.locator('[data-location-action="map-pin"]').click();
+    await expect.poll(() => page.evaluate(() => ({
+      mode: mapMode,
+      activeSearch: activeLocationSearch,
+      pinVisible: document.getElementById('customer-center-pin')?.classList.contains('visible'),
+      hint: document.getElementById('map-hint')?.textContent
+    }))).toEqual({
+      mode: 'stop-0',
+      activeSearch: null,
+      pinVisible: true,
+      hint: 'Move the map under the center pin, then release to choose your drop-off'
+    });
+    await expect(page.locator('#location-sheet')).toHaveAttribute('aria-hidden', 'true');
+  });
+
   test('commits the fixed center pin after a customer map drag', async ({ page }) => {
     await page.goto('/customer');
     const selected = await page.evaluate(() => {

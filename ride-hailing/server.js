@@ -5422,6 +5422,7 @@ app.post('/api/sos', authMiddleware, async (req, res) => {
 const MAPBOX_GEOCODE_URL = 'https://api.mapbox.com/geocoding/v5/mapbox.places/';
 const MAPBOX_RESULT_LIMIT = 10;
 const NOMINATIM_GEOCODE_URL = 'https://nominatim.openstreetmap.org/search';
+const NOMINATIM_REVERSE_URL = 'https://nominatim.openstreetmap.org/reverse';
 const NOMINATIM_RESULT_LIMIT = 20;
 const NOMINATIM_MAX_RESPONSE_BYTES = 1_048_576;
 const NOMINATIM_DEFAULT_USER_AGENT = 'MyRide/1.0 (Pakistan ride-hailing location search)';
@@ -5473,12 +5474,14 @@ function mapboxAddress(feature) {
     const text = String(value || '').trim();
     if (text) address[key] = text;
   };
+  const placeTypes = Array.isArray(feature?.place_type) ? feature.place_type : [];
   set('name', directText('text') || properties.name);
-  set('road', contextText('street') || ((feature?.place_type || []).includes('address') ? directText('text') : ''));
+  set('road', contextText('street') || (placeTypes.includes('address') ? directText('text') : ''));
   set('house_number', directText('address'));
   set('suburb', contextText('neighborhood', 'locality'));
   set('district', contextText('district'));
-  set('city', contextText('place', 'locality'));
+  set('city', contextText('place', 'locality')
+    || (placeTypes.includes('place') || placeTypes.includes('locality') ? directText('text') : ''));
   set('state', contextText('region'));
   set('postcode', contextText('postcode'));
   set('country', contextText('country'));
@@ -5619,6 +5622,91 @@ function normalizeNominatimResult(result) {
     nominatim_id: result?.place_id || `${result?.osm_type || 'place'}:${result?.osm_id || ''}`,
     provider: 'nominatim'
   };
+}
+
+function uniqueReverseAddressParts(parts) {
+  const seen = new Set();
+  return parts
+    .map(part => String(part || '').trim())
+    .filter(part => {
+      if (!part || part.toLocaleLowerCase() === 'pakistan') return false;
+      const key = part.toLocaleLowerCase();
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+}
+
+function detailedReverseDisplayName(address = {}, displayName = '') {
+  const street = [address.house_number, address.road].filter(Boolean).join(' ');
+  const structured = uniqueReverseAddressParts([
+    street,
+    !street || String(address.name || '').toLocaleLowerCase() !== street.toLocaleLowerCase()
+      ? address.name
+      : '',
+    address.suburb || address.neighbourhood || address.quarter,
+    address.district,
+    address.city || address.town || address.municipality,
+    address.state || address.province,
+    address.postcode
+  ]);
+  const providerParts = uniqueReverseAddressParts(String(displayName || '').split(','));
+  const parts = structured.length >= 2
+    ? structured
+    : uniqueReverseAddressParts([...structured, ...providerParts]);
+  return parts.slice(0, 8).join(', ');
+}
+
+function reverseAddressIsDetailed(address = {}) {
+  const city = String(address.city || address.town || address.municipality || '').trim().toLocaleLowerCase();
+  const localParts = [
+    address.house_number,
+    address.road,
+    address.suburb,
+    address.neighbourhood,
+    address.quarter,
+    address.district,
+    address.name && String(address.name).trim().toLocaleLowerCase() !== city
+      ? address.name
+      : ''
+  ];
+  return localParts.some(part => String(part || '').trim());
+}
+
+async function reverseNominatimLocation(lat, lng) {
+  if (!isNominatimEnabled()) return null;
+  return queueNominatimRequest(async () => {
+    const url = new URL(NOMINATIM_REVERSE_URL);
+    url.searchParams.set('lat', String(lat));
+    url.searchParams.set('lon', String(lng));
+    url.searchParams.set('format', 'jsonv2');
+    url.searchParams.set('addressdetails', '1');
+    url.searchParams.set('namedetails', '1');
+    url.searchParams.set('zoom', '18');
+    url.searchParams.set('accept-language', 'en');
+    const headers = {
+      'Accept': 'application/json',
+      'Accept-Language': 'en',
+      'User-Agent': nominatimUserAgent()
+    };
+    const referrer = String(process.env.NOMINATIM_REFERRER || '').trim();
+    if (referrer) headers.Referer = referrer;
+    const upstream = await fetch(url, {
+      headers,
+      signal: AbortSignal.timeout(6000)
+    });
+    if (!upstream.ok) throw new Error(`Nominatim reverse upstream ${upstream.status}`);
+    const result = await readJsonResponseWithLimit(upstream, NOMINATIM_MAX_RESPONSE_BYTES);
+    if (!isPakistanNominatimResult(result, lat, lng)) return null;
+    const address = nominatimAddress(result);
+    return {
+      display_name: String(result?.display_name || '').trim(),
+      address,
+      lat: Number(lat),
+      lng: Number(lng),
+      provider: 'nominatim'
+    };
+  });
 }
 
 async function readJsonResponseWithLimit(response, maxBytes) {
@@ -5933,30 +6021,71 @@ app.get('/api/geocode/reverse', authMiddleware, async (req, res) => {
 
   try {
     const token = getMapboxAccessToken();
-    if (!token) throw new Error('Mapbox public token is not configured');
-    const url = new URL(`${MAPBOX_GEOCODE_URL}${encodeURIComponent(`${lng},${lat}`)}.json`);
-    url.searchParams.set('access_token', token);
-    url.searchParams.set('language', 'en');
-    url.searchParams.set('types', 'address,neighborhood,locality,place,postcode');
-    const upstream = await fetch(url, {
-      headers: { 'Accept-Language': 'en' },
-      signal: AbortSignal.timeout(5000)
-    });
-    if (!upstream.ok) {
-      const detail = await readMapboxErrorMessage(upstream);
-      throw new Error(`Reverse geocode upstream ${upstream.status}${detail ? `: ${detail}` : ''}`);
+    let mapboxResult = null;
+    let mapboxError = null;
+    if (token) {
+      try {
+        const url = new URL(`${MAPBOX_GEOCODE_URL}${encodeURIComponent(`${lng},${lat}`)}.json`);
+        url.searchParams.set('access_token', token);
+        url.searchParams.set('language', 'en');
+        url.searchParams.set('types', 'address,poi,neighborhood,locality,place,postcode');
+        const upstream = await fetch(url, {
+          headers: { 'Accept-Language': 'en' },
+          signal: AbortSignal.timeout(5000)
+        });
+        if (!upstream.ok) {
+          const detail = await readMapboxErrorMessage(upstream);
+          throw new Error(`Reverse geocode upstream ${upstream.status}${detail ? `: ${detail}` : ''}`);
+        }
+        const data = await readJsonResponseWithLimit(upstream, MAPBOX_MAX_RESPONSE_BYTES);
+        mapboxResult = data?.features?.map(normalizeMapboxFeature).find(Boolean) || null;
+      } catch (error) {
+        mapboxError = error;
+      }
     }
-    const data = await readJsonResponseWithLimit(upstream, MAPBOX_MAX_RESPONSE_BYTES);
-    const result = data?.features?.map(normalizeMapboxFeature).find(Boolean);
-    const address = result?.address || {};
-    const city = address.city || address.district || address.state || '';
-    res.json({
-      city: String(city).trim(),
-      display_name: result?.display_name || '',
-      address,
-      lat,
-      lng
-    });
+
+    const mapboxAddress = mapboxResult?.address || {};
+    if (mapboxResult && reverseAddressIsDetailed(mapboxAddress)) {
+      const displayName = detailedReverseDisplayName(mapboxAddress, mapboxResult.display_name);
+      return res.json({
+        city: String(mapboxAddress.city || mapboxAddress.district || mapboxAddress.state || '').trim(),
+        display_name: displayName || mapboxResult.display_name || '',
+        address: mapboxAddress,
+        lat,
+        lng,
+        provider: 'mapbox'
+      });
+    }
+
+    try {
+      const nominatimResult = await reverseNominatimLocation(lat, lng);
+      if (nominatimResult) {
+        const address = nominatimResult.address || {};
+        return res.json({
+          city: String(address.city || address.district || address.state || '').trim(),
+          display_name: detailedReverseDisplayName(address, nominatimResult.display_name),
+          address,
+          lat,
+          lng,
+          provider: 'nominatim'
+        });
+      }
+    } catch (error) {
+      if (!mapboxResult) mapboxError = error;
+    }
+
+    if (mapboxResult) {
+      const displayName = detailedReverseDisplayName(mapboxAddress, mapboxResult.display_name);
+      return res.json({
+        city: String(mapboxAddress.city || mapboxAddress.district || mapboxAddress.state || '').trim(),
+        display_name: displayName || mapboxResult.display_name || '',
+        address: mapboxAddress,
+        lat,
+        lng,
+        provider: 'mapbox'
+      });
+    }
+    throw mapboxError || new Error('No reverse-geocoding provider returned a result');
   } catch (err) {
     console.error('Reverse geocode error:', err.message);
     res.status(502).json({ error: 'Reverse geocoding is temporarily unavailable' });
