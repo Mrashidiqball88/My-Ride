@@ -2588,18 +2588,25 @@ async function syncPickupInputWithPin(lat, lng, requestId) {
     || Math.abs(currentPickup.lat - lat) > 0.000001
     || Math.abs(currentPickup.lng - lng) > 0.000001) return;
 
+  const resolvedLabel = String(label || '').trim();
   const input = document.getElementById('pickup-input');
-  if (!input) return;
-  if (label) {
-    currentPickup.address = label;
-    input.value = label;
-    input.classList.add('has-val');
+  if (resolvedLabel) {
+    // Keep the resolved address in the authoritative pickup object and
+    // explicitly mirror it into the live search field. The input may have
+    // been moved into the location sheet while the request was in flight.
+    currentPickup.address = resolvedLabel;
+    if (input) {
+      input.value = resolvedLabel;
+      input.classList.add('has-val');
+    }
   } else if (isGenericRideLocationAddress(currentPickup.address)) {
     // Never show a synthetic city or placeholder when the provider has not
     // returned a label for the current pin.
     currentPickup.address = '';
-    input.value = '';
-    input.classList.remove('has-val');
+    if (input) {
+      input.value = '';
+      input.classList.remove('has-val');
+    }
   }
   updateClearBtn('pickup');
   updateBookingSheetSummary();

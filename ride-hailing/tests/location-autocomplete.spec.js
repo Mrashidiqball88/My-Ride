@@ -457,11 +457,10 @@ test.describe('live nationwide location autocomplete', () => {
     await page.route(/\/api\/geocode\/reverse(?:\?|$)/, route => route.fulfill({
       contentType: 'application/json',
       body: JSON.stringify({
-        display_name: '22 Canal Bank Road, Shadman Colony, Lahore, Punjab',
+        display_name: 'Mall Road, Lahore, Punjab, Pakistan',
         address: {
-          house_number: '22',
-          road: 'Canal Bank Road',
-          suburb: 'Shadman Colony',
+          road: 'Mall Road',
+          suburb: 'The Mall',
           city: 'Lahore',
           state: 'Punjab'
         }
@@ -476,8 +475,8 @@ test.describe('live nationwide location autocomplete', () => {
       address: pickup?.address,
       input: document.getElementById('pickup-input')?.value
     }))).toEqual({
-      address: '22 Canal Bank Road, Shadman Colony, Lahore, Punjab',
-      input: '22 Canal Bank Road, Shadman Colony, Lahore, Punjab'
+      address: 'Mall Road, Lahore, Punjab',
+      input: 'Mall Road, Lahore, Punjab'
     });
   });
 
