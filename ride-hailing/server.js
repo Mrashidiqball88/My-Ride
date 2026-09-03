@@ -7161,7 +7161,9 @@ app.get('/api/admin/passengers', adminJwt, requirePerm('viewCustomers'), async (
     const filter = { role: 'customer' };
     if (['pending', 'active', 'blocked', 'suspended'].includes(status)) filter.accountStatus = status;
     const passengers = await User.find(filter)
-      .select('-password -otpCode -otpExpiry isStudent studentVerificationStatus')
+      // Keep the projection exclusion-only. Mixing inclusion fields with
+      // exclusions makes Mongoose reject the query before it reaches MongoDB.
+      .select('-password -otpCode -otpExpiry')
       .sort('-createdAt').limit(200);
     // Attach ride count to each passenger
     const withCounts = await Promise.all(passengers.map(async p => {

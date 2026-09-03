@@ -681,7 +681,6 @@ input[type=date]:focus{border-color:#f5c518}
         <p class="section-intro">View customer accounts, identity status, and review actions in a single customer-focused workspace.</p>
         <div class="management-shortcuts">
           <button class="management-shortcut" onclick="loadPassengers('all')"><strong>Customer accounts & verification</strong><span>Open a customer record to see the current CNIC and identity outcome.</span></button>
-          <button class="management-shortcut" onclick="showSection('blk-pass')"><strong>Restricted accounts</strong><span>Review blocked customer accounts and restore access when appropriate.</span></button>
         </div>
         <div class="table-wrap"><table class="data-table">
           <thead><tr><th>Passenger</th><th>Phone</th><th>CNIC</th><th>Rides</th><th>Status</th><th>Joined</th><th>Actions</th></tr></thead>
@@ -2313,7 +2312,7 @@ async function rejectPayment(paymentId) {
 
 async function loadAuditLogs() {
   const tbody = document.getElementById('audit-tbody');
-  tbody.innerHTML = '<tr><td colspan="6" class="loading-row">Loading…</td></tr>';
+  tbody.innerHTML = '<tr><td colspan="7" class="loading-row">Loading…</td></tr>';
   try {
     const entries = await api('/api/admin/audit-logs');
     if (!entries.length) {
@@ -2440,7 +2439,7 @@ setInterval(() => {
 async function loadPassengers(status = 'all') {
   currentPassStatus = status;
   const tbody = document.getElementById('pass-tbody');
-  tbody.innerHTML = '<tr><td colspan="6" class="loading-row">Loading…</td></tr>';
+  tbody.innerHTML = '<tr><td colspan="7" class="loading-row">Loading…</td></tr>';
   try {
     const passengers = await api(`/api/admin/passengers?status=${status}`);
     if (!passengers.length) { tbody.innerHTML = '<tr><td colspan="7" class="empty-state"><span class="empty-icon">👥</span>No passengers found</td></tr>'; return; }
@@ -2464,7 +2463,7 @@ async function loadPassengers(status = 'all') {
         ${isSuperAdmin ? `<button class="btn btn-red" onclick="openDeleteModal('${p._id}','${p.name.replace(/'/g,"\\'")}','customer')" title="Delete Account">🗑</button>` : ''}
       </div></td>
     </tr>`).join('');
-  } catch (e) { tbody.innerHTML = `<tr><td colspan="6" style="text-align:center;color:#ef4444;padding:1rem">${e.message}</td></tr>`; }
+  } catch (e) { tbody.innerHTML = `<tr><td colspan="7" style="text-align:center;color:#ef4444;padding:1rem">${escHtml(e.message)}</td></tr>`; }
 }
 
 // ── 5. NEW REQUESTS ───────────────────────────────────────────────────────────
