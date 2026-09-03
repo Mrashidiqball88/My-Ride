@@ -23,6 +23,7 @@
 - [Ride cancellation events](ride-cancellation-events.md) — fan out a dedicated cancellation event to pending and assigned Drivers; make client cleanup idempotent with the generic status event.
 - [Driver alert recovery race](driver-alert-recovery-race.md) — queue a second rehydration pass when reconnect status refresh overlaps the initial socket recovery read.
 - [Map rendering and GPS follow](map-rendering-and-gps-follow.md) — use Mapbox Streets; active Driver rides follow and rotate around the blue marker until a deliberate map gesture pauses follow.
+- [Customer map generation guards](customer-map-generation-guards.md) — invalidate stale route, nearby-driver, and marker work before applying newer coordinate selections.
 - [Socket room reference normalization](socket-room-reference-normalization.md) — resolve populated MongoDB references before building Socket.io personal-room names.
 - [Strict active-ride tracking](strict-active-ride-tracking.md) — serialize one three-second GPS cycle and restore native availability mode when rides end.
 - [Pickup PIN authority](pickup-pin-authority.md) — release the ride PIN only from persisted server-side pickup proximity, never from client GPS calculations.

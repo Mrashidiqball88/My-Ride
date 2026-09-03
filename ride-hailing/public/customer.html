@@ -1217,6 +1217,9 @@ let customerAutoPickupEnabled = true;
 let customerMapAutoCenter = true;
 let customerLocation = null;
 let customerLocationMarker = null;
+let customerRouteRequest = 0;
+let customerMapLineRevision = Object.create(null);
+let nearbyDriversRequest = 0;
 let pendingVerificationPin = null;
 const CUSTOMER_OFFER_MIN_MULTIPLIER = 0.5;
 const CUSTOMER_OFFER_MAX_MULTIPLIER = 2;
@@ -2086,6 +2089,32 @@ function createCustomerDomMarker(lat, lng, { className = '', html = '', interact
     .addTo(map);
 }
 
+function removeCustomerMarker(marker) {
+  if (marker && typeof marker.remove === 'function') {
+    try { marker.remove(); } catch {}
+  }
+  return null;
+}
+
+function clearCustomerNearbyDriverMarkers({ invalidate = false } = {}) {
+  if (invalidate) nearbyDriversRequest++;
+  nearbyDriversLayer.forEach(marker => removeCustomerMarker(marker));
+  nearbyDriversLayer = [];
+}
+
+function syncCustomerMarkerVisibility() {
+  const samePoint = Boolean(
+    pickup &&
+    customerLocation &&
+    Math.abs(Number(pickup.lat) - Number(customerLocation.lat)) < 0.00008 &&
+    Math.abs(Number(pickup.lng) - Number(customerLocation.lng)) < 0.00008
+  );
+  const locationElement = customerLocationMarker?.getElement?.();
+  const pickupElement = pickupMarker?.getElement?.();
+  if (locationElement) locationElement.style.display = samePoint ? 'none' : '';
+  if (pickupElement) pickupElement.style.display = '';
+}
+
 function customerMapSelectionIsActive() {
   return mapMode === 'pickup' || mapMode.startsWith('stop-');
 }
@@ -2136,13 +2165,19 @@ function routeFeature(coords) {
 }
 
 function removeCustomerMapLine(ids) {
+  customerMapLineRevision[ids.source] = (customerMapLineRevision[ids.source] || 0) + 1;
   if (!map) return;
-  if (typeof map.getLayer === 'function' && map.getLayer(ids.line)) map.removeLayer(ids.line);
-  if (typeof map.getLayer === 'function' && map.getLayer(ids.shadow)) map.removeLayer(ids.shadow);
-  if (typeof map.getSource === 'function' && map.getSource(ids.source)) map.removeSource(ids.source);
+  try {
+    if (typeof map.getLayer === 'function' && map.getLayer(ids.line)) map.removeLayer(ids.line);
+    if (typeof map.getLayer === 'function' && map.getLayer(ids.shadow)) map.removeLayer(ids.shadow);
+    if (typeof map.getSource === 'function' && map.getSource(ids.source)) map.removeSource(ids.source);
+  } catch (error) {
+    console.warn('Could not clear Customer map line:', error.message);
+  }
 }
 
-function removeCustomerRouteLine() {
+function removeCustomerRouteLine({ invalidate = true } = {}) {
+  if (invalidate) customerRouteRequest++;
   removeCustomerMapLine(CUSTOMER_ROUTE_IDS);
   routeLine = null;
 }
@@ -2154,7 +2189,10 @@ function removeCustomerLiveTripLine() {
 
 function setCustomerMapLine(ids, coords, { color, shadowColor, width, shadowWidth, opacity, dashed = false } = {}) {
   if (!map || !coords?.length) return;
+  const revision = (customerMapLineRevision[ids.source] || 0) + 1;
+  customerMapLineRevision[ids.source] = revision;
   const apply = () => {
+    if (!map || customerMapLineRevision[ids.source] !== revision) return;
     if (!map.getSource(ids.source)) {
       map.addSource(ids.source, { type: 'geojson', data: routeFeature(coords) });
       map.addLayer({
@@ -2220,6 +2258,7 @@ function initMap() {
       });
     }
   });
+  syncCustomerMarkerVisibility();
   map.on('error', event => {
     if (event?.error) console.warn('Mapbox map error:', event.error);
   });
@@ -2287,6 +2326,7 @@ function applyCustomerGpsPosition(pos, { forceCenter = false } = {}) {
       interactive: false
     });
   }
+  syncCustomerMarkerVisibility();
 
   if (map && (forceCenter || (customerMapAutoCenter && !pickup && isFirstFix))) {
     const zoom = Math.max(15, map.getZoom());
@@ -2319,14 +2359,15 @@ const _vehicleIcons = {
 
 async function pollNearbyDrivers() {
   if (activeRide || !map || !token) return;
+  const requestId = ++nearbyDriversRequest;
+  clearCustomerNearbyDriverMarkers();
   const center = pickup
     ? { lat: pickup.lat, lng: pickup.lng }
     : { lat: map.getCenter().lat, lng: map.getCenter().lng };
   try {
     const nearby = await apiCall(`/api/drivers/nearby?lat=${center.lat}&lng=${center.lng}`);
-    nearbyDriversLayer.forEach(m => m.remove());
-    nearbyDriversLayer = [];
-    if (activeRide) return; // double-check: ride may have started while request was in flight
+    if (requestId !== nearbyDriversRequest || activeRide || !map) return;
+    clearCustomerNearbyDriverMarkers();
     nearby.forEach(d => {
       const icon = _vehicleIcons[d.vehicleType] || '🚗';
       const marker = createCustomerDomMarker(d.lat, d.lng, {
@@ -2345,8 +2386,7 @@ function startNearbyDrivers() {
 
 function stopNearbyDrivers() {
   if (nearbyPollInterval) { clearInterval(nearbyPollInterval); nearbyPollInterval = null; }
-  nearbyDriversLayer.forEach(m => m.remove());
-  nearbyDriversLayer = [];
+  clearCustomerNearbyDriverMarkers({ invalidate: true });
 }
 
 function formatCoordinateLabel(lat, lng) {
@@ -2530,18 +2570,7 @@ async function reverseLocationLabel(lat, lng) {
       .split(',')
       .map(part => part.trim())
       .filter(part => part && part.toLocaleLowerCase() !== 'pakistan');
-    const genericParts = new Set([
-      'lahore', 'punjab', 'pakistan', 'karachi', 'sindh', 'islamabad',
-      'rawalpindi', 'peshawar', 'khyber pakhtunkhwa', 'quetta', 'balochistan',
-      'faisalabad', 'multan', 'hyderabad', 'capital territory'
-    ]);
-    const isGeneric = value => {
-      const parts = String(value || '')
-        .split(',')
-        .map(part => part.trim().toLocaleLowerCase())
-        .filter(Boolean);
-      return parts.length > 0 && parts.length <= 2 && parts.every(part => genericParts.has(part));
-    };
+    const isGeneric = value => isGenericReverseLabel(value, data);
     if (providerParts.length >= 2 && !isGeneric(providerParts.join(', '))) {
       return providerParts.slice(0, 8).join(', ');
     }
@@ -2555,17 +2584,36 @@ async function reverseLocationLabel(lat, lng) {
   }
 }
 
+function reverseResultHasSpecificAddress(data = {}) {
+  const address = data.address || {};
+  const fields = [
+    data.name, data.namedetails?.name,
+    address.name, address.house_number, address.house_name, address.road,
+    address.street, address.street_name, address.footway, address.pedestrian,
+    address.path, address.building, address.neighbourhood, address.suburb,
+    address.quarter, address.residential, address.village, address.hamlet,
+    address.town, address.locality, address.amenity, address.shop,
+    address.office, address.tourism
+  ];
+  return fields.some(value => String(value || '').trim());
+}
+
+function isGenericReverseLabel(value, data = {}) {
+  const parts = String(value || '')
+    .split(',')
+    .map(part => part.trim())
+    .filter(part => part && part.toLocaleLowerCase() !== 'pakistan');
+  if (!parts.length) return true;
+  if (reverseResultHasSpecificAddress(data)) return false;
+  return parts.length <= 2;
+}
+
 function isGenericRideLocationAddress(value) {
   const parts = String(value || '')
     .split(',')
     .map(part => part.trim().toLocaleLowerCase())
     .filter(part => part && part !== 'pakistan');
-  const genericParts = new Set([
-    'lahore', 'punjab', 'pakistan', 'karachi', 'sindh', 'islamabad',
-    'rawalpindi', 'peshawar', 'khyber pakhtunkhwa', 'quetta', 'balochistan',
-    'faisalabad', 'multan', 'hyderabad', 'capital territory'
-  ]);
-  return !parts.length || (parts.length <= 2 && parts.every(part => genericParts.has(part)));
+  return !parts.length || parts.length <= 2;
 }
 
 async function resolveRideLocationAddress(location) {
@@ -3199,12 +3247,17 @@ async function setPickup(lat, lng, preDisplay = null, { source = 'manual' } = {}
   if (source !== 'gps') customerAutoPickupEnabled = false;
   invalidateLocationSearchContext();
   const reverseRequestId = ++customerPickupReverseRequest;
+  pickupMarker = removeCustomerMarker(pickupMarker);
+  clearCustomerNearbyDriverMarkers({ invalidate: true });
+  removeCustomerRouteLine();
+  routeDistanceKm = null;
+  routeDurationMinutes = null;
   pickup = { lat, lng };
   setCustomerPickupCityContext(lat, lng);
-  if (pickupMarker) pickupMarker.remove();
   pickupMarker = map
     ? createCustomerDomMarker(lat, lng, { className: 'pickup-marker' })
     : null;
+  syncCustomerMarkerVisibility();
   closeDropdown('pickup');
   const input = document.getElementById('pickup-input');
   const addr = preDisplay || '';
@@ -3226,8 +3279,10 @@ async function setPickup(lat, lng, preDisplay = null, { source = 'manual' } = {}
 
   if (dropoffs[0]) {
     const distKm = await drawRoute();
-    routeDistanceKm = distKm;
-    updateFare();
+    if (distKm !== null) {
+      routeDistanceKm = distKm;
+      updateFare();
+    }
   } else {
     setCustomerMapCenter({ lat, lng }, 14);
   }
@@ -3236,8 +3291,12 @@ async function setPickup(lat, lng, preDisplay = null, { source = 'manual' } = {}
 
 // ── Set a specific stop by index (0=Drop1, 1=Drop2, …) ────────────────────
 async function setStop(idx, lat, lng, preDisplay = null) {
+  stopMarkers[idx] = removeCustomerMarker(stopMarkers[idx]);
+  clearCustomerNearbyDriverMarkers({ invalidate: true });
+  removeCustomerRouteLine();
+  routeDistanceKm = null;
+  routeDurationMinutes = null;
   dropoffs[idx] = { lat, lng };
-  if (stopMarkers[idx]) stopMarkers[idx].remove();
   stopMarkers[idx] = map
     ? createCustomerDomMarker(lat, lng, {
       className: idx === 0 ? 'dropoff-marker' : 'dropoff-marker stop-extra-marker'
@@ -3278,8 +3337,10 @@ async function setStop(idx, lat, lng, preDisplay = null) {
 
   if (pickup) {
     const distKm = await drawRoute();
-    routeDistanceKm = distKm;
-    updateFare();
+    if (distKm !== null) {
+      routeDistanceKm = distKm;
+      updateFare();
+    }
   } else {
     setCustomerMapCenter({ lat, lng }, 14);
   }
@@ -3333,14 +3394,16 @@ function clearLocation(type) {
     invalidateLocationSearchContext();
     pickup = null;
     resetCustomerCityContext({ detectGpsFallback: true });
-    if (pickupMarker) { pickupMarker.remove(); pickupMarker = null; }
+    pickupMarker = removeCustomerMarker(pickupMarker);
+    clearCustomerNearbyDriverMarkers({ invalidate: true });
+    syncCustomerMarkerVisibility();
     const hint = document.getElementById('map-hint');
     if (hint) { hint.textContent = 'Move the map under the fixed pin, or search a pickup location below'; hint.className = 'map-hint'; hint.style.display = 'block'; }
     mapMode = 'pickup';
   } else {
     const idx = parseInt(type.replace('stop-', ''));
     dropoffs[idx] = null;
-    if (stopMarkers[idx]) { stopMarkers[idx].remove(); stopMarkers[idx] = null; }
+    stopMarkers[idx] = removeCustomerMarker(stopMarkers[idx]);
   }
   updateBookingSheetSummary();
 
@@ -3354,11 +3417,19 @@ function clearLocation(type) {
 
   // If there's still a valid pickup+stop combo, redraw route
   const hasRoute = pickup && dropoffs.slice(0, activeStops).some(d => d);
-  if (hasRoute) drawRoute().then(km => { routeDistanceKm = km; updateFare(); });
+  if (hasRoute) {
+    drawRoute().then(km => {
+      if (km !== null) {
+        routeDistanceKm = km;
+        updateFare();
+      }
+    });
+  }
 }
 
 async function drawRoute() {
-  removeCustomerRouteLine();
+  const requestId = ++customerRouteRequest;
+  removeCustomerRouteLine({ invalidate: false });
 
   // Build ordered waypoints: pickup + all non-null stops (in order)
   const activeDropoffs = dropoffs.slice(0, activeStops).filter(d => d !== null);
@@ -3367,6 +3438,7 @@ async function drawRoute() {
 
   try {
     const route = await requestRoadRoute(waypoints);
+    if (requestId !== customerRouteRequest) return null;
     setCustomerMapLine(CUSTOMER_ROUTE_IDS, route.coords, {
       color: '#f26a4f', shadowColor: '#000', width: 5, shadowWidth: 8, opacity: 1
     });
@@ -3377,6 +3449,7 @@ async function drawRoute() {
       : Math.max(1, route.distanceMeters / 1000 / 28 * 60);
     return route.distanceMeters / 1000;
   } catch (error) {
+    if (requestId !== customerRouteRequest) return null;
     // Never draw an air route when road geometry is unavailable.
     console.warn('Road route unavailable:', error.message);
     const fallbackDistance = waypoints.slice(0, -1).reduce((sum, point, index) =>
@@ -3612,7 +3685,9 @@ function addStop() {
 
 function removeStop(idx) {
   // Clear the stop at idx and shift higher stops down to close the gap
-  if (stopMarkers[idx]) { stopMarkers[idx].remove(); stopMarkers[idx] = null; }
+  stopMarkers[idx] = removeCustomerMarker(stopMarkers[idx]);
+  clearCustomerNearbyDriverMarkers({ invalidate: true });
+  removeCustomerRouteLine();
   dropoffs[idx] = null;
 
   for (let i = idx; i < activeStops - 1; i++) {
@@ -3626,8 +3701,8 @@ function removeStop(idx) {
     fromInput.classList.remove('has-val');
   }
   // Wipe the last (now-duplicate) slot
+  stopMarkers[activeStops - 1] = removeCustomerMarker(stopMarkers[activeStops - 1]);
   dropoffs[activeStops - 1]    = null;
-  stopMarkers[activeStops - 1] = null;
 
   activeStops--;
   document.getElementById(`stop-wrap-${activeStops}`).style.display = 'none';
@@ -3635,7 +3710,12 @@ function removeStop(idx) {
 
   // Redraw if possible
   if (pickup && dropoffs[0]) {
-    drawRoute().then(dist => { routeDistanceKm = dist; updateFare(); });
+    drawRoute().then(dist => {
+      if (dist !== null) {
+        routeDistanceKm = dist;
+        updateFare();
+      }
+    });
   } else {
     routeDistanceKm = null;
     routeDurationMinutes = null;
