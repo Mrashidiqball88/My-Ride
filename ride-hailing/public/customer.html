@@ -2558,11 +2558,13 @@ function buildLabel(item) {
 async function reverseLocationLabel(lat, lng) {
   try {
     const response = await fetch(
-      `/api/geocode/reverse?lat=${encodeURIComponent(lat)}&lng=${encodeURIComponent(lng)}`,
-      { headers: {
-        ...(token ? { Authorization: `Bearer ${token}` } : {}),
-        ...(sessionToken ? { 'X-Session-Token': sessionToken } : {})
-      } }
+      `https://nominatim.openstreetmap.org/reverse?format=jsonv2&lat=${encodeURIComponent(lat)}&lon=${encodeURIComponent(lng)}&zoom=18&addressdetails=1&namedetails=1`,
+      {
+        headers: {
+          Accept: 'application/json',
+          'Accept-Language': 'en'
+        }
+      }
     );
     if (!response.ok) return '';
     const data = await response.json();
