@@ -797,14 +797,14 @@ body{font-family:'DM Sans','Segoe UI',sans-serif;background:var(--dc-night);colo
           <div class="wsum-lbl">Bonus Credits (Rs)</div>
         </div>
       </div>
-      <!-- Balance breakdown: real cash vs bonus credit -->
+      <!-- Balance breakdown: current wallet balance vs bonus credit -->
       <div class="wsum-breakdown">
         <div class="wsum-breakdown-row">
-          <span class="wsum-breakdown-lbl">💵 Real Cash</span>
+          <span class="wsum-breakdown-lbl">💵 Current Wallet Balance</span>
           <span class="wsum-breakdown-val real-cash" id="wsum-real-cash">Rs —</span>
         </div>
         <div class="wsum-breakdown-row">
-          <span class="wsum-breakdown-lbl">🎁 Bonus Credit</span>
+          <span class="wsum-breakdown-lbl">🎁 Bonus Credit Portion</span>
           <span class="wsum-breakdown-val bonus-credit" id="wsum-bonus-credit">Rs —</span>
         </div>
       </div>
@@ -3432,15 +3432,16 @@ function formatRsAmount(amount) {
 async function loadWalletSummary() {
   try {
     const data = await apiCall('/api/wallet/summary');
-    // 3-card summary — total shown as sum of real cash + bonus
-    const realCash  = Number(data.realCashWallet ?? 0);
-    const bonusCred = Number(data.bonusWallet    ?? 0);
-    const total     = realCash + bonusCred;
+    // Total Balance is the authoritative spendable amount. The breakdown
+    // shows the current real-cash and bonus portions separately.
+    const currentWallet = Number(data.currentWalletBalance ?? data.realCashWallet ?? 0);
+    const bonusCred = Number(data.bonusAvailable ?? data.bonusWallet ?? 0);
+    const total = Number(data.balance ?? (currentWallet + bonusCred));
     document.getElementById('wsum-balance').textContent = formatRsAmount(total);
     document.getElementById('wsum-balance').style.color = total < 0 ? '#ef4444' : '#4caf50';
     document.getElementById('wsum-bonus').textContent = formatRsAmount(bonusCred);
     // Breakdown rows
-    document.getElementById('wsum-real-cash').textContent    = formatRsAmount(realCash);
+    document.getElementById('wsum-real-cash').textContent    = formatRsAmount(currentWallet);
     document.getElementById('wsum-bonus-credit').textContent = formatRsAmount(bonusCred);
 
     // Transaction ledger

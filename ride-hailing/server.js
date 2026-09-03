@@ -671,6 +671,154 @@ function endOfTodayUTC() {
 // simultaneous online requests from charging the same driver twice.
 const ACTIVE_FEE_PASS_MS = 24 * 60 * 60 * 1000;
 
+const WALLET_FUNDING_SOURCES = Object.freeze({
+  REAL: 'real',
+  BONUS: 'bonus',
+  MIXED: 'mixed',
+  UNKNOWN: 'unknown'
+});
+
+function roundWalletAmount(value) {
+  return Number((Number(value) || 0).toFixed(2));
+}
+
+function isBonusTransactionDescription(description = '') {
+  return /bonus|trial|promotional/i.test(String(description));
+}
+
+function getWalletSourceBalances(wallet) {
+  const trackedReal = Number(wallet?.realCashAvailable);
+  const trackedBonus = Number(wallet?.bonusAvailable);
+  const transactions = Array.isArray(wallet?.transactions) ? wallet.transactions : [];
+  const hasLegacyTransactions = transactions.some(transaction => {
+    const source = String(transaction.fundingSource || '').toLowerCase();
+    return ![WALLET_FUNDING_SOURCES.REAL, WALLET_FUNDING_SOURCES.BONUS, WALLET_FUNDING_SOURCES.MIXED].includes(source);
+  });
+
+  if (Number.isFinite(trackedReal) && Number.isFinite(trackedBonus) && !hasLegacyTransactions) {
+    // Some old test/manual wallets contain an aggregate balance but no ledger
+    // credits. Treat that unclassified balance as real rather than allowing a
+    // zero-valued default source bucket to misclassify a new fee as bonus.
+    if (!transactions.length && trackedReal === 0 && trackedBonus === 0 && Number(wallet?.balance) > 0
+      && Number(wallet?.realCashWallet || 0) === 0 && Number(wallet?.bonusWallet || 0) === 0) {
+      return { realCashAvailable: roundWalletAmount(wallet.balance), bonusAvailable: 0 };
+    }
+    return {
+      realCashAvailable: Math.max(0, roundWalletAmount(trackedReal)),
+      bonusAvailable: Math.max(0, roundWalletAmount(trackedBonus))
+    };
+  }
+
+  let realCashAvailable = 0;
+  let bonusAvailable = 0;
+  let hasCreditLedger = false;
+  for (const transaction of transactions) {
+    const amount = Math.max(0, roundWalletAmount(transaction.amount));
+    const source = String(transaction.fundingSource || '').toLowerCase();
+    if (transaction.type === 'credit') {
+      hasCreditLedger = true;
+      if (source === WALLET_FUNDING_SOURCES.BONUS || (!source && isBonusTransactionDescription(transaction.description))) {
+        bonusAvailable += amount;
+      } else {
+        realCashAvailable += amount;
+      }
+      continue;
+    }
+
+    if (transaction.type !== 'debit') continue;
+    const explicitReal = Number(transaction.realAmount);
+    const explicitBonus = Number(transaction.bonusAmount);
+    if (Number.isFinite(explicitReal) || Number.isFinite(explicitBonus)
+      || [WALLET_FUNDING_SOURCES.REAL, WALLET_FUNDING_SOURCES.BONUS, WALLET_FUNDING_SOURCES.MIXED].includes(source)) {
+      bonusAvailable = Math.max(0, bonusAvailable - Math.max(0, Number.isFinite(explicitBonus) ? explicitBonus : source === WALLET_FUNDING_SOURCES.BONUS ? amount : 0));
+      realCashAvailable = Math.max(0, realCashAvailable - Math.max(0, Number.isFinite(explicitReal) ? explicitReal : source === WALLET_FUNDING_SOURCES.REAL ? amount : 0));
+      continue;
+    }
+
+    // Legacy debits do not carry their source. Consume bonus first so an
+    // unknown historical debit can never be overstated as real revenue.
+    const legacyBonusDebit = Math.min(bonusAvailable, amount);
+    bonusAvailable -= legacyBonusDebit;
+    realCashAvailable = Math.max(0, realCashAvailable - (amount - legacyBonusDebit));
+  }
+
+  if (!hasCreditLedger && !transactions.length) {
+    const legacyBonus = Math.max(0, roundWalletAmount(wallet?.bonusWallet));
+    const legacyReal = Math.max(0, roundWalletAmount(wallet?.realCashWallet));
+    if (legacyBonus || legacyReal) {
+      return { realCashAvailable: legacyReal, bonusAvailable: legacyBonus };
+    }
+    return { realCashAvailable: Math.max(0, roundWalletAmount(wallet?.balance)), bonusAvailable: 0 };
+  }
+
+  return {
+    realCashAvailable: roundWalletAmount(realCashAvailable),
+    bonusAvailable: roundWalletAmount(bonusAvailable)
+  };
+}
+
+function allocateWalletDebit(wallet, amount) {
+  const total = Math.max(0, roundWalletAmount(amount));
+  const sourceBalances = getWalletSourceBalances(wallet);
+  const bonusAmount = Math.min(total, sourceBalances.bonusAvailable);
+  const realAmount = total - bonusAmount;
+  const fundingSource = bonusAmount > 0 && realAmount > 0
+    ? WALLET_FUNDING_SOURCES.MIXED
+    : bonusAmount > 0
+      ? WALLET_FUNDING_SOURCES.BONUS
+      : WALLET_FUNDING_SOURCES.REAL;
+  return {
+    ...sourceBalances,
+    amount: total,
+    realAmount: roundWalletAmount(realAmount),
+    bonusAmount: roundWalletAmount(bonusAmount),
+    fundingSource,
+    remainingReal: roundWalletAmount(sourceBalances.realCashAvailable - realAmount),
+    remainingBonus: roundWalletAmount(sourceBalances.bonusAvailable - bonusAmount)
+  };
+}
+
+async function ensureWalletSourceBalances(userId, { session } = {}) {
+  if (!mongoose.isValidObjectId(userId)) return null;
+  const walletQuery = Wallet.findOne({ user: userId })
+    .select('balance realCashWallet bonusWallet realCashAvailable bonusAvailable transactions');
+  if (session) walletQuery.session(session);
+  const wallet = await walletQuery.lean();
+  if (!wallet) return null;
+
+  const balances = getWalletSourceBalances(wallet);
+  const hasTrackedFields = Number.isFinite(Number(wallet.realCashAvailable))
+    && Number.isFinite(Number(wallet.bonusAvailable))
+    && !wallet.transactions?.some(transaction => {
+      const source = String(transaction.fundingSource || '').toLowerCase();
+      return ![WALLET_FUNDING_SOURCES.REAL, WALLET_FUNDING_SOURCES.BONUS, WALLET_FUNDING_SOURCES.MIXED].includes(source);
+    });
+  const hasUnclassifiedAggregate = !wallet.transactions?.length
+    && Number(wallet.balance) > 0
+    && Number(wallet.realCashAvailable || 0) === 0
+    && Number(wallet.bonusAvailable || 0) === 0
+    && Number(wallet.realCashWallet || 0) === 0
+    && Number(wallet.bonusWallet || 0) === 0;
+  if (!hasTrackedFields || hasUnclassifiedAggregate) {
+    const updateQuery = Wallet.updateOne(
+      { _id: wallet._id },
+      {
+        $set: {
+          realCashAvailable: balances.realCashAvailable,
+          bonusAvailable: balances.bonusAvailable
+        }
+      }
+    );
+    if (session) updateQuery.session(session);
+    await updateQuery;
+  }
+  return {
+    ...wallet,
+    realCashAvailable: balances.realCashAvailable,
+    bonusAvailable: balances.bonusAvailable
+  };
+}
+
 async function chargeDailyFeeForOnlineDriver(driverId, driver, dailyFeeSettings = null) {
   if (isLongRangeOnlyDriver(driver)) {
     return { allowed: true, charged: false, rate: null, exempt: true, reason: 'Long Range Only drivers are exempt from the Daily Fee' };
@@ -688,12 +836,13 @@ async function chargeDailyFeeForOnlineDriver(driverId, driver, dailyFeeSettings 
   }
 
   const walletSnapshot = await Wallet.findOne({ user: driverId })
-    .select('fee_paid_at balance').lean();
+    .select('fee_paid_at balance realCashWallet bonusWallet realCashAvailable bonusAvailable transactions').lean();
   const previousFeePaidAt = walletSnapshot?.fee_paid_at || driver.lastDailyFeePaidAt;
   if (previousFeePaidAt && new Date(previousFeePaidAt) > activePassCutoff) {
     return { allowed: true, charged: false, rate, alreadyPaid: true, feePaidAt: previousFeePaidAt };
   }
 
+  const allocation = allocateWalletDebit(walletSnapshot, rate);
   const wallet = await Wallet.findOneAndUpdate(
     {
       user: driverId,
@@ -706,12 +855,20 @@ async function chargeDailyFeeForOnlineDriver(driverId, driver, dailyFeeSettings 
     },
     {
       $inc: { balance: -rate },
-      $set: { fee_paid_at: now, dailyFeeChargedDate: todayUTC() },
+      $set: {
+        fee_paid_at: now,
+        dailyFeeChargedDate: todayUTC(),
+        realCashAvailable: allocation.remainingReal,
+        bonusAvailable: allocation.remainingBonus
+      },
       $push: {
         transactions: {
           amount: rate,
           type: 'debit',
-          description: `Automatic daily fee for going online (${driver.vehicleType || 'Car'})`
+          description: `Automatic daily fee for going online (${driver.vehicleType || 'Car'})`,
+          fundingSource: allocation.fundingSource,
+          realAmount: allocation.realAmount,
+          bonusAmount: allocation.bonusAmount
         }
       }
     },
@@ -735,7 +892,16 @@ async function chargeDailyFeeForOnlineDriver(driverId, driver, dailyFeeSettings 
       isFreeTrial: false
     }
   );
-  return { allowed: true, charged: true, rate, balance: wallet.balance, feePaidAt: now };
+  return {
+    allowed: true,
+    charged: true,
+    rate,
+    balance: wallet.balance,
+    feePaidAt: now,
+    fundingSource: allocation.fundingSource,
+    realAmount: allocation.realAmount,
+    bonusAmount: allocation.bonusAmount
+  };
 }
 
 const DEFAULT_PER_KM_RATES = {
@@ -1618,6 +1784,8 @@ const walletSchema = new mongoose.Schema({
   balance:        { type: Number, default: 0 },             // net spendable (all credits − debits)
   realCashWallet: { type: Number, default: 0 },             // deposits + ride earnings only
   bonusWallet:    { type: Number, default: 0 },             // promotional bonuses only
+  realCashAvailable: { type: Number, default: 0 },           // current spendable real-cash bucket
+  bonusAvailable: { type: Number, default: 0 },              // current spendable bonus bucket
   dailyFeeChargedDate: { type: String, default: '' },       // legacy calendar-day marker
   fee_paid_at:      { type: Date, default: null },          // rolling 24-hour pass start
   transactions: [{
@@ -1628,6 +1796,9 @@ const walletSchema = new mongoose.Schema({
     mobileAccount: { type: String, default: '' },
     rideId: { type: String, default: '' },
     operationId: { type: String, default: '' },
+    fundingSource: { type: String, enum: Object.values(WALLET_FUNDING_SOURCES), default: WALLET_FUNDING_SOURCES.UNKNOWN },
+    realAmount: { type: Number, default: 0 },
+    bonusAmount: { type: Number, default: 0 },
     createdAt:     { type: Date, default: Date.now }
   }]
 }, { timestamps: true });
@@ -2609,18 +2780,27 @@ async function chargeLongRangeCommission(ride, driverId, timing, longRangeSettin
     );
     return { ok: true, charged: true, amount: 0, chargedAt };
   }
+  const walletSnapshot = await ensureWalletSourceBalances(driverId, { session });
+  const allocation = allocateWalletDebit(walletSnapshot, amount);
   const debited = await Wallet.findOneAndUpdate({
     user: driverId, balance: { $gte: amount },
     transactions: { $not: { $elemMatch: { rideId: String(ride._id), description: 'Long Range commission' } } }
   }, {
     $inc: { balance: -amount },
+    $set: {
+      realCashAvailable: allocation.remainingReal,
+      bonusAvailable: allocation.remainingBonus
+    },
     $push: {
       transactions: {
         amount,
         type: 'debit',
         description: 'Long Range commission',
         rideId: String(ride._id),
-        operationId: `ride:${ride._id}:long-range-commission`
+        operationId: `ride:${ride._id}:long-range-commission`,
+        fundingSource: allocation.fundingSource,
+        realAmount: allocation.realAmount,
+        bonusAmount: allocation.bonusAmount
       }
     }
   }, { new: true, ...(session ? { session } : {}) });
@@ -2638,7 +2818,15 @@ async function chargeLongRangeCommission(ride, driverId, timing, longRangeSettin
       { $set: { longRangeCommissionAmount: amount, longRangeCommissionChargedAt: chargedAt } },
       session ? { session } : undefined
     );
-    return { ok: true, alreadyCharged: true, amount, chargedAt };
+    return {
+      ok: true,
+      alreadyCharged: true,
+      amount,
+      chargedAt,
+      fundingSource: allocation.fundingSource,
+      realAmount: allocation.realAmount,
+      bonusAmount: allocation.bonusAmount
+    };
   }
   const chargedAt = new Date();
   await Ride.updateOne(
@@ -2646,7 +2834,15 @@ async function chargeLongRangeCommission(ride, driverId, timing, longRangeSettin
     { $set: { longRangeCommissionAmount: amount, longRangeCommissionChargedAt: chargedAt } },
     session ? { session } : undefined
   );
-  return { ok: true, charged: true, amount, chargedAt };
+  return {
+    ok: true,
+    charged: true,
+    amount,
+    chargedAt,
+    fundingSource: allocation.fundingSource,
+    realAmount: allocation.realAmount,
+    bonusAmount: allocation.bonusAmount
+  };
 }
 
 class FinancialTransactionRequiredError extends Error {
@@ -2766,17 +2962,25 @@ async function completeRideFinancialSettlement(rideId, driverId, waitingRateSett
       throw financialError('Customer wallet is unavailable; the ride was not completed.', 503, 'CUSTOMER_WALLET_UNAVAILABLE');
     }
 
+    await ensureWalletSourceBalances(ride.driver, { session });
     const driverWallet = await Wallet.findOneAndUpdate(
       { user: ride.driver },
       {
-        $inc: { balance: earnings, realCashWallet: earnings },
+        $inc: {
+          balance: earnings,
+          realCashWallet: earnings,
+          realCashAvailable: earnings
+        },
         $push: {
           transactions: {
             amount: earnings,
             type: 'credit',
             description: 'Ride earnings',
             rideId: String(ride._id),
-            operationId
+              operationId,
+              fundingSource: WALLET_FUNDING_SOURCES.REAL,
+              realAmount: earnings,
+              bonusAmount: 0
           }
         }
       },
@@ -5425,12 +5629,17 @@ async function approveDriverPayment(paymentId, admin, adminNote = '') {
     const actor = paymentAdminActor(admin);
     const passValidUntil = new Date(now.getTime() + ACTIVE_FEE_PASS_MS);
     const operationId = `payment:${payment._id}:wallet-credit`;
+    await ensureWalletSourceBalances(payment.driver, { session });
     const walletBeforeDoc = await Wallet.findOne({ user: payment.driver }).session(session);
     const balanceBefore = Number(walletBeforeDoc?.balance || 0);
     const wallet = await Wallet.findOneAndUpdate(
       { user: payment.driver },
       {
-        $inc: { balance: payment.amount, realCashWallet: payment.amount },
+        $inc: {
+          balance: payment.amount,
+          realCashWallet: payment.amount,
+          realCashAvailable: payment.amount
+        },
         $set: { fee_paid_at: now },
         $push: {
           transactions: {
@@ -5439,7 +5648,10 @@ async function approveDriverPayment(paymentId, admin, adminNote = '') {
             description: `Approved driver recharge (TRX ${payment.trxId})`,
             paymentMethod: payment.paymentType,
             mobileAccount: payment.trxId,
-            operationId
+            operationId,
+            fundingSource: WALLET_FUNDING_SOURCES.REAL,
+            realAmount: payment.amount,
+            bonusAmount: 0
           }
         }
       },
@@ -7530,13 +7742,7 @@ app.get('/api/wallet/summary', authMiddleware, async (req, res) => {
     const balance      = wallet?.balance || 0;
     const transactions = wallet?.transactions || [];
 
-    // Sum all bonus/promotional credits
-    const totalBonus = transactions
-      .filter(t => t.type === 'credit' &&
-        (t.description?.toLowerCase().includes('bonus') ||
-         t.description?.toLowerCase().includes('trial') ||
-         t.description?.toLowerCase().includes('promotional')))
-      .reduce((s, t) => s + t.amount, 0);
+    const sourceBalances = getWalletSourceBalances(wallet);
 
     // Recent ledger — last 40 entries newest first
     const ledger = [...transactions].reverse().slice(0, 40).map(t => ({
@@ -7546,10 +7752,22 @@ app.get('/api/wallet/summary', authMiddleware, async (req, res) => {
     // Today's payment submission
     const todayPayment = await Payment.findOne({ driver: req.user.id, submittedDate: todayUTC() });
 
-    const realCashWallet = wallet?.realCashWallet || 0;
-    const bonusWalletAmt = wallet?.bonusWallet    || 0;
-    res.json({ balance, totalBonus, vehicleType, ledger, todayPayment: todayPayment || null,
-               realCashWallet, bonusWallet: bonusWalletAmt });
+    const currentWalletBalance = sourceBalances.realCashAvailable;
+    const bonusWalletAmt = sourceBalances.bonusAvailable;
+    res.json({
+      balance,
+      totalBonus: bonusWalletAmt,
+      currentWalletBalance,
+      vehicleType,
+      ledger,
+      todayPayment: todayPayment || null,
+      // Keep the legacy names for older Driver clients while exposing the
+      // source-aware values they should render.
+      realCashWallet: currentWalletBalance,
+      bonusWallet: bonusWalletAmt,
+      realCashAvailable: currentWalletBalance,
+      bonusAvailable: bonusWalletAmt
+    });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
@@ -7643,8 +7861,23 @@ app.post('/api/admin/drivers/grant-trial', adminJwt, requirePerm('manageDriverPa
     for (const driver of drivers) {
       await Wallet.findOneAndUpdate(
         { user: driver._id },
-        { $inc: { balance: bonusAmount, bonusWallet: bonusAmount },
-          $push: { transactions: { amount: bonusAmount, type: 'credit', description: `Admin Free Bonus Credit (Rs ${bonusAmount.toLocaleString('en-PK', { maximumFractionDigits: 2 })})` } } },
+        {
+          $inc: {
+            balance: bonusAmount,
+            bonusWallet: bonusAmount,
+            bonusAvailable: bonusAmount
+          },
+          $push: {
+            transactions: {
+              amount: bonusAmount,
+              type: 'credit',
+              description: `Admin Free Bonus Credit (Rs ${bonusAmount.toLocaleString('en-PK', { maximumFractionDigits: 2 })})`,
+              fundingSource: WALLET_FUNDING_SOURCES.BONUS,
+              realAmount: 0,
+              bonusAmount
+            }
+          }
+        },
         { upsert: true, new: true }
       );
       await User.updateOne({ _id: driver._id }, { paidUntilDate, isFreeTrial: true, trialStartDate });
@@ -7677,12 +7910,19 @@ app.post('/api/admin/drivers/grant-wallet-bonus', adminJwt, requirePerm('manageD
       await Wallet.findOneAndUpdate(
         { user: driver._id },
         {
-          $inc: { balance: bonusAmount, bonusWallet: bonusAmount },
+          $inc: {
+            balance: bonusAmount,
+            bonusWallet: bonusAmount,
+            bonusAvailable: bonusAmount
+          },
           $push: {
             transactions: {
               amount: bonusAmount,
               type: 'credit',
-              description: `Admin Wallet Bonus Credit (Rs ${bonusAmount.toLocaleString('en-PK', { maximumFractionDigits: 2 })})`
+              description: `Admin Wallet Bonus Credit (Rs ${bonusAmount.toLocaleString('en-PK', { maximumFractionDigits: 2 })})`,
+              fundingSource: WALLET_FUNDING_SOURCES.BONUS,
+              realAmount: 0,
+              bonusAmount
             }
           }
         },
@@ -8344,10 +8584,13 @@ app.get('/api/admin/daily-income', adminJwt, requirePerm('viewOverview'), async 
 const ADMIN_REVENUE_PERIODS = new Set([7, 30, 90, 365]);
 const ADMIN_REVENUE_FIELDS = [
   'dailyFeeCollections',
+  'bonusFundedDailyFees',
   'rideCommissions',
   'longRangeCommissions',
+  'bonusFundedLongRangeCommissions',
   'bonusCredits',
-  'approvedWalletFunding'
+  'approvedWalletFunding',
+  'unclassifiedFeeDeductions'
 ];
 
 function normalizeAdminRevenueDays(value) {
@@ -8361,10 +8604,12 @@ function adminRevenueTotals(bucket = {}) {
     Number((Number(bucket[field]) || 0).toFixed(2))
   ]));
   const grossRevenue = totals.dailyFeeCollections + totals.rideCommissions + totals.longRangeCommissions;
+  const bonusNonRevenueEarnings = totals.bonusFundedDailyFees + totals.bonusFundedLongRangeCommissions;
   return {
     ...totals,
     grossRevenue: Number(grossRevenue.toFixed(2)),
-    netRevenue: Number((grossRevenue - totals.bonusCredits).toFixed(2))
+    netRevenue: Number(grossRevenue.toFixed(2)),
+    bonusNonRevenueEarnings: Number(bonusNonRevenueEarnings.toFixed(2))
   };
 }
 
@@ -8378,6 +8623,28 @@ function mergeAdminRevenueBuckets(...buckets) {
 function adminWalletRevenueGroup() {
   const description = { $ifNull: ['$transactions.description', ''] };
   const amount = { $ifNull: ['$transactions.amount', 0] };
+  const source = { $ifNull: ['$transactions.fundingSource', WALLET_FUNDING_SOURCES.UNKNOWN] };
+  const hasTrackedSource = {
+    $in: [source, [
+      WALLET_FUNDING_SOURCES.REAL,
+      WALLET_FUNDING_SOURCES.BONUS,
+      WALLET_FUNDING_SOURCES.MIXED
+    ]]
+  };
+  const realAmount = {
+    $cond: [
+      { $in: [source, [WALLET_FUNDING_SOURCES.REAL, WALLET_FUNDING_SOURCES.MIXED]] },
+      { $ifNull: ['$transactions.realAmount', amount] },
+      0
+    ]
+  };
+  const bonusAmount = {
+    $cond: [
+      { $in: [source, [WALLET_FUNDING_SOURCES.BONUS, WALLET_FUNDING_SOURCES.MIXED]] },
+      { $ifNull: ['$transactions.bonusAmount', amount] },
+      0
+    ]
+  };
   const isDailyFee = {
     $and: [
       { $eq: ['$transactions.type', 'debit'] },
@@ -8396,11 +8663,34 @@ function adminWalletRevenueGroup() {
       { $regexMatch: { input: description, regex: 'bonus|trial|promotional', options: 'i' } }
     ]
   };
+  const bonusCreditAmount = {
+    $cond: [
+      { $eq: ['$transactions.type', 'credit'] },
+      {
+        $cond: [
+          { $in: [source, [WALLET_FUNDING_SOURCES.BONUS, WALLET_FUNDING_SOURCES.MIXED]] },
+          { $ifNull: ['$transactions.bonusAmount', amount] },
+          { $cond: [isBonus, amount, 0] }
+        ]
+      },
+      0
+    ]
+  };
+  const isLegacyFee = {
+    $and: [
+      { $eq: ['$transactions.type', 'debit'] },
+      { $or: [isDailyFee, isLongRangeCommission] },
+      { $not: [hasTrackedSource] }
+    ]
+  };
   return {
     _id: null,
-    dailyFeeCollections: { $sum: { $cond: [isDailyFee, amount, 0] } },
-    longRangeCommissions: { $sum: { $cond: [isLongRangeCommission, amount, 0] } },
-    bonusCredits: { $sum: { $cond: [isBonus, amount, 0] } }
+    dailyFeeCollections: { $sum: { $cond: [isDailyFee, realAmount, 0] } },
+    bonusFundedDailyFees: { $sum: { $cond: [isDailyFee, bonusAmount, 0] } },
+    longRangeCommissions: { $sum: { $cond: [isLongRangeCommission, realAmount, 0] } },
+    bonusFundedLongRangeCommissions: { $sum: { $cond: [isLongRangeCommission, bonusAmount, 0] } },
+    bonusCredits: { $sum: bonusCreditAmount },
+    unclassifiedFeeDeductions: { $sum: { $cond: [isLegacyFee, amount, 0] } }
   };
 }
 
@@ -9503,6 +9793,8 @@ module.exports = {
   isLongRangeOnlyDriver,
   canDriverReceiveRideForPreference,
   chargeDailyFeeForOnlineDriver,
+  getWalletSourceBalances,
+  allocateWalletDebit,
   runDailyDeduction,
   normalizeRideBroadcastSettings,
   validateRideBroadcastSettings,

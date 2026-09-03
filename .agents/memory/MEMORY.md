@@ -52,3 +52,4 @@
 - [Expo local image parser](expo-local-image-parser.md) — Metro passes image paths to its size parser, so local replacements must support both paths and byte buffers.
 - [Driver Metro build port](driver-metro-build-port.md) — native static builds need a dedicated default port because the shared mockup preview owns 8081.
 - [Partitioned user role queries](partitioned-user-role-queries.md) — role-scoped facade queries must not require a legacy role field absent from split collections.
+- [Wallet source accounting](wallet-source-accounting.md) — only real-funded fee portions and ride commissions are platform revenue; legacy fee debits stay unclassified.

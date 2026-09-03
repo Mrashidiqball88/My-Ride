@@ -901,7 +901,7 @@ button,input,select,textarea{
           <div class="sec-hdr">
             <div class="revenue-header-copy">
               <h2>📈 Admin Earnings / Platform Revenue</h2>
-              <p>Track persisted platform income from Driver daily fees and ride commissions. Wallet funding and promotional credits remain visible as separate accounting activity.</p>
+              <p>Real Platform Revenue includes only cash-funded fees and settled ride commissions. Bonus-funded fees and promotional credits stay outside real earnings.</p>
             </div>
             <div class="revenue-period-control">
               <label for="revenue-period-select">Period</label>
@@ -918,7 +918,7 @@ button,input,select,textarea{
             <div class="loading-row">Loading platform revenue…</div>
           </div>
           <p class="revenue-accounting-note">
-            <strong>Accounting note:</strong> Net platform revenue = daily fee collections + ride commissions + long-range commissions − promotional wallet credits. Approved Driver recharges are wallet funding, not revenue.
+            <strong>Accounting note:</strong> Real Platform Revenue = real-cash daily fees + ride commissions + real-cash Long Range commissions. Bonus-funded deductions are Bonus / Non-Revenue Earnings; approved Driver recharges are wallet funding, not revenue.
           </p>
           <div class="revenue-trend">
             <div class="revenue-trend-header">
@@ -927,7 +927,7 @@ button,input,select,textarea{
             </div>
             <div class="table-wrap">
               <table class="data-table">
-                <thead><tr><th>Date</th><th>Daily Fees</th><th>Ride Commission</th><th>Long Range</th><th>Gross</th><th>Promo Credits</th><th>Net Revenue</th></tr></thead>
+                <thead><tr><th>Date</th><th>Real Daily Fees</th><th>Ride Commission</th><th>Real Long Range</th><th>Real Revenue</th><th>Bonus / Non-Revenue</th><th>Bonus Credits</th></tr></thead>
                 <tbody id="revenue-trend-body"><tr><td colspan="7" class="loading-row">Loading…</td></tr></tbody>
               </table>
             </div>
@@ -2670,11 +2670,12 @@ function renderRevenueAnalytics(data) {
   if (periodLabel) periodLabel.textContent = `Last ${data.days || 30} days · all-time comparison below`;
 
   const cards = [
-    ['Net Platform Revenue', period.netRevenue, allTime.netRevenue, 'Net after promo credits', 'revenue-kpi-cyan'],
-    ['Daily Fee Collections', period.dailyFeeCollections, allTime.dailyFeeCollections, 'Automatic online-fee debits', 'revenue-kpi-gold'],
-    ['Ride Commission', period.rideCommissions, allTime.rideCommissions, 'Fare margin retained', 'revenue-kpi-green'],
-    ['Long-Range Commission', period.longRangeCommissions, allTime.longRangeCommissions, 'Additional ride commission', 'revenue-kpi-purple'],
-    ['Promo Credits Granted', period.bonusCredits, allTime.bonusCredits, 'Expense / wallet liability', 'revenue-kpi-red'],
+    ['Real Platform Revenue', period.netRevenue, allTime.netRevenue, 'Cash-funded fees + ride commissions', 'revenue-kpi-cyan'],
+    ['Real Daily Fee Collections', period.dailyFeeCollections, allTime.dailyFeeCollections, 'Bonus-funded fees excluded', 'revenue-kpi-gold'],
+    ['Ride Commission', period.rideCommissions, allTime.rideCommissions, 'Settled customer fare margin', 'revenue-kpi-green'],
+    ['Real Long-Range Commission', period.longRangeCommissions, allTime.longRangeCommissions, 'Bonus-funded commission excluded', 'revenue-kpi-purple'],
+    ['Bonus / Non-Revenue Earnings', period.bonusNonRevenueEarnings, allTime.bonusNonRevenueEarnings, 'Fees paid from bonus credits', 'revenue-kpi-red'],
+    ['Bonus Credits Granted', period.bonusCredits, allTime.bonusCredits, 'Promotional wallet credits', 'revenue-kpi-red'],
     ['Approved Wallet Funding', period.approvedWalletFunding, allTime.approvedWalletFunding, 'Not platform revenue', 'revenue-kpi']
   ];
   const kpis = document.getElementById('revenue-kpis');
@@ -2700,9 +2701,9 @@ function renderRevenueAnalytics(data) {
       <td style="color:#f5c95a;font-weight:700">${revenueAmount(day.dailyFeeCollections)}</td>
       <td style="color:#4ade9a;font-weight:700">${revenueAmount(day.rideCommissions)}</td>
       <td style="color:#aebaff;font-weight:700">${revenueAmount(day.longRangeCommissions)}</td>
-      <td style="font-weight:800">${revenueAmount(day.grossRevenue)}</td>
-      <td style="color:#ff9da7">${revenueAmount(day.bonusCredits)}</td>
-      <td style="color:#45d5f5;font-weight:800">${revenueAmount(day.netRevenue)}</td>
+      <td style="font-weight:800;color:#45d5f5">${revenueAmount(day.netRevenue)}</td>
+      <td style="color:#ff9da7">${revenueAmount(day.bonusNonRevenueEarnings)}</td>
+      <td style="color:#fda4af">${revenueAmount(day.bonusCredits)}</td>
     </tr>`).join('');
 }
 
