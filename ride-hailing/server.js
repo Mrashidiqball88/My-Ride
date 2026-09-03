@@ -8341,6 +8341,231 @@ app.get('/api/admin/daily-income', adminJwt, requirePerm('viewOverview'), async 
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
+const ADMIN_REVENUE_PERIODS = new Set([7, 30, 90, 365]);
+const ADMIN_REVENUE_FIELDS = [
+  'dailyFeeCollections',
+  'rideCommissions',
+  'longRangeCommissions',
+  'bonusCredits',
+  'approvedWalletFunding'
+];
+
+function normalizeAdminRevenueDays(value) {
+  const days = Number.parseInt(value, 10);
+  return ADMIN_REVENUE_PERIODS.has(days) ? days : 30;
+}
+
+function adminRevenueTotals(bucket = {}) {
+  const totals = Object.fromEntries(ADMIN_REVENUE_FIELDS.map(field => [
+    field,
+    Number((Number(bucket[field]) || 0).toFixed(2))
+  ]));
+  const grossRevenue = totals.dailyFeeCollections + totals.rideCommissions + totals.longRangeCommissions;
+  return {
+    ...totals,
+    grossRevenue: Number(grossRevenue.toFixed(2)),
+    netRevenue: Number((grossRevenue - totals.bonusCredits).toFixed(2))
+  };
+}
+
+function mergeAdminRevenueBuckets(...buckets) {
+  return adminRevenueTotals(Object.fromEntries(ADMIN_REVENUE_FIELDS.map(field => [
+    field,
+    buckets.reduce((sum, bucket) => sum + (Number(bucket?.[field]) || 0), 0)
+  ])));
+}
+
+function adminWalletRevenueGroup() {
+  const description = { $ifNull: ['$transactions.description', ''] };
+  const amount = { $ifNull: ['$transactions.amount', 0] };
+  const isDailyFee = {
+    $and: [
+      { $eq: ['$transactions.type', 'debit'] },
+      { $regexMatch: { input: description, regex: '^Automatic daily fee for going online', options: 'i' } }
+    ]
+  };
+  const isLongRangeCommission = {
+    $and: [
+      { $eq: ['$transactions.type', 'debit'] },
+      { $eq: [description, 'Long Range commission'] }
+    ]
+  };
+  const isBonus = {
+    $and: [
+      { $eq: ['$transactions.type', 'credit'] },
+      { $regexMatch: { input: description, regex: 'bonus|trial|promotional', options: 'i' } }
+    ]
+  };
+  return {
+    _id: null,
+    dailyFeeCollections: { $sum: { $cond: [isDailyFee, amount, 0] } },
+    longRangeCommissions: { $sum: { $cond: [isLongRangeCommission, amount, 0] } },
+    bonusCredits: { $sum: { $cond: [isBonus, amount, 0] } }
+  };
+}
+
+function adminRevenueTrendGroup() {
+  return {
+    ...adminWalletRevenueGroup(),
+    _id: { $dateToString: { format: '%Y-%m-%d', date: '$transactions.createdAt', timezone: 'UTC' } }
+  };
+}
+
+function adminRideRevenueGroup() {
+  return { _id: null, rideCommissions: { $sum: '$_platformCommission' } };
+}
+
+function adminRideRevenueTrendGroup() {
+  return {
+    _id: { $dateToString: { format: '%Y-%m-%d', date: '$_revenueDate', timezone: 'UTC' } },
+    rideCommissions: { $sum: '$_platformCommission' }
+  };
+}
+
+function adminPaymentRevenueGroup() {
+  return { _id: null, approvedWalletFunding: { $sum: '$amount' } };
+}
+
+function adminPaymentRevenueTrendGroup() {
+  return {
+    _id: { $dateToString: { format: '%Y-%m-%d', date: '$_revenueDate', timezone: 'UTC' } },
+    approvedWalletFunding: { $sum: '$amount' }
+  };
+}
+
+// GET /api/admin/revenue — persisted platform revenue and funding analytics
+app.get('/api/admin/revenue', adminJwt, requirePerm('viewOverview'), async (req, res) => {
+  try {
+    const days = normalizeAdminRevenueDays(req.query.days);
+    const todayStart = new Date();
+    todayStart.setUTCHours(0, 0, 0, 0);
+    const since = new Date(todayStart);
+    since.setUTCDate(since.getUTCDate() - (days - 1));
+
+    const walletPeriodMatch = { 'transactions.createdAt': { $gte: since } };
+    const rideRevenueMatch = {
+      status: 'completed',
+      settlementStatus: 'settled'
+    };
+    const paymentRevenueMatch = { status: 'approved' };
+
+    const settledFare = { $ifNull: ['$settledFare', '$fare'] };
+    const settledDriverEarnings = {
+      $ifNull: ['$settledDriverEarnings', { $multiply: [settledFare, 0.85] }]
+    };
+    const commissionDifference = { $subtract: [settledFare, settledDriverEarnings] };
+
+    const [walletFacets, rideFacets, paymentFacets] = await Promise.all([
+      Wallet.aggregate([
+        { $unwind: '$transactions' },
+        {
+          $facet: {
+            allTime: [{ $group: adminWalletRevenueGroup() }],
+            period: [
+              { $match: walletPeriodMatch },
+              { $group: adminWalletRevenueGroup() }
+            ],
+            trend: [
+              { $match: walletPeriodMatch },
+              { $group: adminRevenueTrendGroup() },
+              { $sort: { _id: 1 } }
+            ]
+          }
+        }
+      ]),
+      Ride.aggregate([
+        { $match: rideRevenueMatch },
+        {
+          $addFields: {
+            _settledFareValue: settledFare,
+            _settledDriverEarningsValue: settledDriverEarnings,
+            _revenueDate: { $ifNull: ['$settledAt', { $ifNull: ['$updatedAt', '$createdAt'] }] }
+          }
+        },
+        {
+          $addFields: {
+            _platformCommission: {
+              $cond: [
+                { $gt: [commissionDifference, 0] },
+                commissionDifference,
+                0
+              ]
+            }
+          }
+        },
+        {
+          $facet: {
+            allTime: [{ $group: adminRideRevenueGroup() }],
+            period: [
+              { $match: { _revenueDate: { $gte: since } } },
+              { $group: adminRideRevenueGroup() }
+            ],
+            trend: [
+              { $match: { _revenueDate: { $gte: since } } },
+              { $group: adminRideRevenueTrendGroup() },
+              { $sort: { _id: 1 } }
+            ]
+          }
+        }
+      ]),
+      Payment.aggregate([
+        { $match: paymentRevenueMatch },
+        {
+          $addFields: {
+            _revenueDate: { $ifNull: ['$approvedAt', { $ifNull: ['$updatedAt', '$createdAt'] }] }
+          }
+        },
+        {
+          $facet: {
+            allTime: [{ $group: adminPaymentRevenueGroup() }],
+            period: [
+              { $match: { _revenueDate: { $gte: since } } },
+              { $group: adminPaymentRevenueGroup() }
+            ],
+            trend: [
+              { $match: { _revenueDate: { $gte: since } } },
+              { $group: adminPaymentRevenueTrendGroup() },
+              { $sort: { _id: 1 } }
+            ]
+          }
+        }
+      ])
+    ]);
+
+    const wallet = walletFacets[0] || {};
+    const rides = rideFacets[0] || {};
+    const payments = paymentFacets[0] || {};
+    const allTime = mergeAdminRevenueBuckets(wallet.allTime?.[0], rides.allTime?.[0], payments.allTime?.[0]);
+    const period = mergeAdminRevenueBuckets(wallet.period?.[0], rides.period?.[0], payments.period?.[0]);
+    const walletTrend = Object.fromEntries((wallet.trend || []).map(row => [row._id, row]));
+    const rideTrend = Object.fromEntries((rides.trend || []).map(row => [row._id, row]));
+    const paymentTrend = Object.fromEntries((payments.trend || []).map(row => [row._id, row]));
+    const trend = [];
+
+    for (let index = 0; index < days; index += 1) {
+      const date = new Date(since);
+      date.setUTCDate(date.getUTCDate() + index);
+      const dateKey = date.toISOString().slice(0, 10);
+      trend.push({
+        date: dateKey,
+        ...mergeAdminRevenueBuckets(walletTrend[dateKey], rideTrend[dateKey], paymentTrend[dateKey])
+      });
+    }
+
+    res.json({
+      asOf: new Date().toISOString(),
+      days,
+      periodStart: since.toISOString(),
+      periodEnd: new Date().toISOString(),
+      allTime,
+      period,
+      trend
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Web Push Routes
 // ─────────────────────────────────────────────────────────────────────────────

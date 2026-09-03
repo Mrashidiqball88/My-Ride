@@ -290,6 +290,34 @@ body{font-family:'Segoe UI',system-ui,sans-serif;background:#06060e;color:#e2e8f
 .income-bar-fill{height:100%;background:#f5c518;border-radius:100px;transition:width .5s ease}
 .income-total{font-size:.85rem;font-weight:800;color:#f5c518;min-width:80px;text-align:right}
 
+/* ── Admin earnings analytics ── */
+.revenue-section{margin-top:1rem;background:#0f0f1e;border:1px solid #1e1e2e;border-radius:14px;padding:1rem}
+.revenue-header-copy{min-width:220px;flex:1}
+.revenue-header-copy p{margin:.3rem 0 0;font-size:.72rem;color:#64748b;line-height:1.45}
+.revenue-period-control{display:flex;align-items:center;gap:.45rem;flex-wrap:wrap}
+.revenue-period-control label{font-size:.67rem;color:#64748b;font-weight:800;text-transform:uppercase;letter-spacing:.06em}
+.revenue-period-select{background:#06060e;border:1px solid #1e1e2e;border-radius:8px;padding:.42rem .6rem;color:#cbd5e1;font-size:.75rem;outline:none}
+.revenue-period-select:focus{border-color:#45d5f5;box-shadow:0 0 0 3px rgba(69,213,245,.1)}
+.revenue-kpi-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(165px,1fr));gap:.7rem;margin:1rem 0}
+.revenue-kpi{background:#0a1421;border:1px solid #1e1e2e;border-radius:11px;padding:.8rem .9rem;min-width:0}
+.revenue-kpi-label{font-size:.64rem;color:#64778d;text-transform:uppercase;letter-spacing:.06em;font-weight:800}
+.revenue-kpi-value{margin-top:.35rem;font-size:1.22rem;font-weight:850;color:#e2e8f0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.revenue-kpi-meta{margin-top:.28rem;font-size:.67rem;color:#475569;line-height:1.35}
+.revenue-kpi-cyan{border-color:#18556a}.revenue-kpi-cyan .revenue-kpi-value{color:#45d5f5}
+.revenue-kpi-gold{border-color:#574615}.revenue-kpi-gold .revenue-kpi-value{color:#f5c95a}
+.revenue-kpi-green{border-color:#174a3b}.revenue-kpi-green .revenue-kpi-value{color:#4ade9a}
+.revenue-kpi-purple{border-color:#334078}.revenue-kpi-purple .revenue-kpi-value{color:#aebaff}
+.revenue-kpi-red{border-color:#522a35}.revenue-kpi-red .revenue-kpi-value{color:#ff9da7}
+.revenue-accounting-note{margin:.1rem 0 .9rem;color:#91a3b7;font-size:.7rem;line-height:1.5}
+.revenue-accounting-note strong{color:#d5dfeb}
+.revenue-trend{border-top:1px solid #1e1e2e;padding-top:.85rem}
+.revenue-trend-header{display:flex;align-items:center;justify-content:space-between;gap:.75rem;flex-wrap:wrap;margin-bottom:.6rem}
+.revenue-trend-header h3{font-size:.78rem;color:#e2e8f0}
+.revenue-trend-header span{font-size:.68rem;color:#64748b}
+.revenue-trend .table-wrap{margin:0}
+.revenue-trend .data-table{min-width:760px}
+.revenue-trend .data-table td,.revenue-trend .data-table th{white-space:nowrap}
+
 /* ── Doc viewer ── */
 .doc-grid{display:grid;grid-template-columns:1fr 1fr;gap:.75rem;margin-top:.75rem}
 .doc-item{background:#06060e;border:1px solid #1e1e2e;border-radius:10px;overflow:hidden;transition:border-color .2s}
@@ -681,6 +709,18 @@ button,input,select,textarea{
 }
 .admin-search,.admin-live-map-panel{border-radius:14px}
 .admin-search-field-label,.admin-place-search-label{color:var(--admin-muted)}
+.revenue-section{
+  background:linear-gradient(145deg,rgba(17,29,45,.96),rgba(12,22,35,.96));
+  border-color:var(--admin-line);
+  box-shadow:0 8px 24px rgba(0,0,0,.1);
+}
+.revenue-kpi{background:#0a1421;border-color:var(--admin-line)}
+.revenue-kpi-cyan{border-color:#18556a}.revenue-kpi-gold{border-color:#574615}
+.revenue-kpi-green{border-color:#174a3b}.revenue-kpi-purple{border-color:#334078}
+.revenue-kpi-red{border-color:#522a35}
+.revenue-trend{border-top-color:var(--admin-line)}
+.revenue-accounting-note{color:var(--admin-muted)}
+.revenue-accounting-note strong{color:var(--admin-text-soft)}
 .search-result,.admin-place-result,.permission-group,.perm-row{
   background:#0a1421;
   border-color:var(--admin-line);
@@ -739,6 +779,13 @@ button,input,select,textarea{
   #top-header{min-height:56px;padding:.7rem 1rem}
   #content-area{padding:1rem;scrollbar-gutter:stable}
   .stat-card{padding:1rem}
+  .revenue-section{padding:.85rem}
+  .revenue-header-copy{min-width:100%}
+  .revenue-period-control{width:100%;justify-content:flex-start}
+  .revenue-period-select{flex:1;min-width:150px}
+  .revenue-kpi-grid{grid-template-columns:repeat(2,minmax(0,1fr));gap:.55rem}
+  .revenue-kpi{padding:.72rem .7rem}
+  .revenue-kpi-value{font-size:1rem}
 }
 </style>
 </head>
@@ -849,6 +896,42 @@ button,input,select,textarea{
         <div class="income-section">
           <div class="sec-hdr"><h2>💰 Last 7 Days Income</h2><button class="btn-refresh" onclick="loadOverview()">↻ Refresh</button></div>
           <div id="income-strip"><div class="loading-row">Loading…</div></div>
+        </div>
+        <div class="revenue-section" id="admin-revenue-section">
+          <div class="sec-hdr">
+            <div class="revenue-header-copy">
+              <h2>📈 Admin Earnings / Platform Revenue</h2>
+              <p>Track persisted platform income from Driver daily fees and ride commissions. Wallet funding and promotional credits remain visible as separate accounting activity.</p>
+            </div>
+            <div class="revenue-period-control">
+              <label for="revenue-period-select">Period</label>
+              <select id="revenue-period-select" class="revenue-period-select" onchange="loadRevenueAnalytics()">
+                <option value="7">Last 7 days</option>
+                <option value="30" selected>Last 30 days</option>
+                <option value="90">Last 90 days</option>
+                <option value="365">Last 12 months</option>
+              </select>
+              <button class="btn-refresh" type="button" onclick="loadRevenueAnalytics()">↻ Refresh</button>
+            </div>
+          </div>
+          <div class="revenue-kpi-grid" id="revenue-kpis">
+            <div class="loading-row">Loading platform revenue…</div>
+          </div>
+          <p class="revenue-accounting-note">
+            <strong>Accounting note:</strong> Net platform revenue = daily fee collections + ride commissions + long-range commissions − promotional wallet credits. Approved Driver recharges are wallet funding, not revenue.
+          </p>
+          <div class="revenue-trend">
+            <div class="revenue-trend-header">
+              <h3>Revenue over time</h3>
+              <span id="revenue-period-label">Loading period…</span>
+            </div>
+            <div class="table-wrap">
+              <table class="data-table">
+                <thead><tr><th>Date</th><th>Daily Fees</th><th>Ride Commission</th><th>Long Range</th><th>Gross</th><th>Promo Credits</th><th>Net Revenue</th></tr></thead>
+                <tbody id="revenue-trend-body"><tr><td colspan="7" class="loading-row">Loading…</td></tr></tbody>
+              </table>
+            </div>
+          </div>
         </div>
         <div class="admin-search" id="admin-search">
           <div class="sec-hdr" style="margin-bottom:.55rem">
@@ -2553,7 +2636,7 @@ async function loadOverview() {
   scheduleAdminLiveMapInit();
   startAdminCityDetection();
   updateAdminPlaceCityLabel();
-  await loadStats();
+  await Promise.all([loadStats(), loadRevenueAnalytics()]);
   try {
     const income = await api('/api/admin/daily-income');
     const last7  = income.slice(0, 7);
@@ -2574,6 +2657,69 @@ async function loadOverview() {
     }
   } catch {}
   await loadAdminLiveLocations();
+}
+
+function revenueAmount(value) {
+  return `Rs ${Number(value || 0).toLocaleString('en-PK', { maximumFractionDigits: 2 })}`;
+}
+
+function renderRevenueAnalytics(data) {
+  const period = data.period || {};
+  const allTime = data.allTime || {};
+  const periodLabel = document.getElementById('revenue-period-label');
+  if (periodLabel) periodLabel.textContent = `Last ${data.days || 30} days · all-time comparison below`;
+
+  const cards = [
+    ['Net Platform Revenue', period.netRevenue, allTime.netRevenue, 'Net after promo credits', 'revenue-kpi-cyan'],
+    ['Daily Fee Collections', period.dailyFeeCollections, allTime.dailyFeeCollections, 'Automatic online-fee debits', 'revenue-kpi-gold'],
+    ['Ride Commission', period.rideCommissions, allTime.rideCommissions, 'Fare margin retained', 'revenue-kpi-green'],
+    ['Long-Range Commission', period.longRangeCommissions, allTime.longRangeCommissions, 'Additional ride commission', 'revenue-kpi-purple'],
+    ['Promo Credits Granted', period.bonusCredits, allTime.bonusCredits, 'Expense / wallet liability', 'revenue-kpi-red'],
+    ['Approved Wallet Funding', period.approvedWalletFunding, allTime.approvedWalletFunding, 'Not platform revenue', 'revenue-kpi']
+  ];
+  const kpis = document.getElementById('revenue-kpis');
+  if (kpis) {
+    kpis.innerHTML = cards.map(([label, value, total, detail, tone]) => `
+      <div class="revenue-kpi ${tone}">
+        <div class="revenue-kpi-label">${label}</div>
+        <div class="revenue-kpi-value">${revenueAmount(value)}</div>
+        <div class="revenue-kpi-meta">${detail} · All time: ${revenueAmount(total)}</div>
+      </div>`).join('');
+  }
+
+  const trendBody = document.getElementById('revenue-trend-body');
+  const trend = Array.isArray(data.trend) ? [...data.trend].reverse() : [];
+  if (!trendBody) return;
+  if (!trend.length) {
+    trendBody.innerHTML = '<tr><td colspan="7"><div class="empty-state"><span class="empty-icon">📊</span>No revenue activity in this period</div></td></tr>';
+    return;
+  }
+  trendBody.innerHTML = trend.map(day => `
+    <tr>
+      <td>${escHtml(day.date)}</td>
+      <td style="color:#f5c95a;font-weight:700">${revenueAmount(day.dailyFeeCollections)}</td>
+      <td style="color:#4ade9a;font-weight:700">${revenueAmount(day.rideCommissions)}</td>
+      <td style="color:#aebaff;font-weight:700">${revenueAmount(day.longRangeCommissions)}</td>
+      <td style="font-weight:800">${revenueAmount(day.grossRevenue)}</td>
+      <td style="color:#ff9da7">${revenueAmount(day.bonusCredits)}</td>
+      <td style="color:#45d5f5;font-weight:800">${revenueAmount(day.netRevenue)}</td>
+    </tr>`).join('');
+}
+
+async function loadRevenueAnalytics() {
+  const selector = document.getElementById('revenue-period-select');
+  const kpis = document.getElementById('revenue-kpis');
+  const trendBody = document.getElementById('revenue-trend-body');
+  const days = selector?.value || '30';
+  if (kpis) kpis.innerHTML = '<div class="loading-row">Loading platform revenue…</div>';
+  if (trendBody) trendBody.innerHTML = '<tr><td colspan="7" class="loading-row">Loading…</td></tr>';
+  try {
+    const data = await api(`/api/admin/revenue?days=${encodeURIComponent(days)}`);
+    renderRevenueAnalytics(data);
+  } catch (e) {
+    if (kpis) kpis.innerHTML = `<div class="empty-state" style="color:#ff7280">Unable to load revenue analytics: ${escHtml(e.message)}</div>`;
+    if (trendBody) trendBody.innerHTML = '<tr><td colspan="7"><div class="empty-state" style="color:#ff7280">Revenue trend unavailable</div></td></tr>';
+  }
 }
 
 // ── 2. PAYMENTS ───────────────────────────────────────────────────────────────
