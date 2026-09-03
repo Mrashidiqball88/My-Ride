@@ -4338,7 +4338,23 @@ function connectToRideRoom(rideId) {
     showToast('Your driver has reached the pickup point. Share the PIN to start.', 'success');
   });
 
-  socket.on('ride:status', ({ rideId, status, fare, fareQuote }) => {
+  function handleCustomerRideCancellation({ rideId, status, cancelledBy, emergency } = {}) {
+    if (status && status !== 'cancelled') return;
+    if (!activeRide || String(activeRide._id) !== String(rideId)) return;
+    endRide();
+    showToast(
+      emergency && cancelledBy === 'driver'
+        ? 'Emergency cancelled by driver'
+        : 'Ride was cancelled',
+      emergency && cancelledBy === 'driver' ? 'error' : 'error'
+    );
+  }
+
+  // Dedicated emergency event is emitted before the generic lifecycle event.
+  // The active-ride guard makes the second event a harmless no-op.
+  socket.on('ride_cancelled', handleCustomerRideCancellation);
+
+  socket.on('ride:status', ({ rideId, status, fare, fareQuote, cancelledBy, emergency }) => {
     if (!activeRide || String(activeRide._id) !== String(rideId)) return;
     if (status === 'completed' && fareQuote) {
       activeRide.fare = fare;
@@ -4354,7 +4370,9 @@ function connectToRideRoom(rideId) {
       showToast('Ride completed! 🎉', 'success');
       setTimeout(() => showRatingModal({ rideId: completedRideId, driverName: completedDriverName }), 300);
     }
-    else if (status === 'cancelled') { endRide(); showToast('Ride was cancelled', 'error'); }
+    else if (status === 'cancelled') {
+      handleCustomerRideCancellation({ rideId, status, cancelledBy, emergency });
+    }
     else if (status === 'arrived') {
       document.getElementById('ar-status-text').textContent = 'Driver has arrived! 📍';
       updateCustomerCancellationControl('arrived');

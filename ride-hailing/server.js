@@ -1793,9 +1793,17 @@ function userModelsForFilter(filter = {}) {
   return [Customer, Driver];
 }
 
+function filterForUserModel(filter = {}, model) {
+  const scopedModels = userModelsForFilter(filter);
+  if (scopedModels.length !== 1 || scopedModels[0] !== model) return filter;
+  const scopedFilter = { ...filter };
+  delete scopedFilter.role;
+  return scopedFilter;
+}
+
 async function findUserModel(filter = {}) {
   for (const model of userModelsForFilter(filter)) {
-    const found = await model.findOne(filter).select('_id').lean();
+    const found = await model.findOne(filterForUserModel(filter, model)).select('_id').lean();
     if (found) return model;
   }
   return null;
@@ -1837,7 +1845,7 @@ const User = {
   find(filter = {}) {
     return new PartitionedUserQuery(async options => {
       const values = await Promise.all(userModelsForFilter(filter).map(async model => {
-        const query = applyUserQueryOptions(model.find(filter), {
+        const query = applyUserQueryOptions(model.find(filterForUserModel(filter, model)), {
           ...options,
           // Global sorting/limiting happens after the role collections merge.
           limitValue: undefined
@@ -1852,7 +1860,7 @@ const User = {
   findOne(filter = {}) {
     return new PartitionedUserQuery(async options => {
       for (const model of userModelsForFilter(filter)) {
-        const query = applyUserQueryOptions(model.findOne(filter), options);
+        const query = applyUserQueryOptions(model.findOne(filterForUserModel(filter, model)), options);
         const result = await query.exec();
         if (result) return result;
       }
@@ -1875,17 +1883,19 @@ const User = {
   updateOne(filter, update, options = {}) {
     return new PartitionedUserQuery(async () => {
       const model = await findUserModel(filter);
-      if (model) return model.updateOne(filter, update, options);
+      if (model) return model.updateOne(filterForUserModel(filter, model), update, options);
       if (options.upsert) {
         const target = userModelsForFilter(filter)[0];
-        return target.updateOne(filter, update, options);
+        return target.updateOne(filterForUserModel(filter, target), update, options);
       }
       return { acknowledged: true, matchedCount: 0, modifiedCount: 0 };
     });
   },
   updateMany(filter, update, options = {}) {
     return new PartitionedUserQuery(async () => {
-      const results = await Promise.all(userModelsForFilter(filter).map(model => model.updateMany(filter, update, options)));
+      const results = await Promise.all(userModelsForFilter(filter).map(model =>
+        model.updateMany(filterForUserModel(filter, model), update, options)
+      ));
       return {
         acknowledged: results.every(result => result.acknowledged !== false),
         matchedCount: results.reduce((sum, result) => sum + (result.matchedCount || 0), 0),
@@ -1899,7 +1909,10 @@ const User = {
         ? userModelsForFilter(filter)[0]
         : await findUserModel(filter);
       if (!model) return null;
-      return applyUserQueryOptions(model.findOneAndUpdate(filter, update, options), queryOptions).exec();
+      return applyUserQueryOptions(
+        model.findOneAndUpdate(filterForUserModel(filter, model), update, options),
+        queryOptions
+      ).exec();
     });
   },
   findByIdAndUpdate(id, update, options = {}) {
@@ -1912,11 +1925,15 @@ const User = {
   deleteOne(filter, options = {}) {
     return new PartitionedUserQuery(async () => {
       const model = await findUserModel(filter);
-      return model ? model.deleteOne(filter, options) : { acknowledged: true, deletedCount: 0 };
+      return model
+        ? model.deleteOne(filterForUserModel(filter, model), options)
+        : { acknowledged: true, deletedCount: 0 };
     });
   },
   countDocuments(filter = {}) {
-    return Promise.all(userModelsForFilter(filter).map(model => model.countDocuments(filter)))
+    return Promise.all(userModelsForFilter(filter).map(model =>
+      model.countDocuments(filterForUserModel(filter, model))
+    ))
       .then(counts => counts.reduce((sum, count) => sum + count, 0));
   }
 };
@@ -4700,7 +4717,6 @@ app.patch('/api/rides/:id/accept', authMiddleware, async (req, res) => {
     // is the authoritative acceptance audience for this request.
     const driverUser = await User.findOne({
       _id: req.user.id,
-      role: 'driver',
       accountStatus: 'active',
       isOnline: true
     }).select('name phone vehicleType vehicleModel vehiclePlate rating profilePhoto');
@@ -4888,6 +4904,87 @@ app.patch('/api/rides/:id/cancel', authMiddleware, async (req, res) => {
   }
 });
 
+// Emergency cancellation is deliberately separate from the normal Customer
+// cancellation rules. It is an idempotent, driver-authorized terminal
+// transition that also clears live location bindings while retaining the
+// passenger/driver references needed for ride history and audit.
+async function cancelRideForDriverEmergency(rideId, driverId) {
+  if (!mongoose.isValidObjectId(rideId)) {
+    const error = new Error('Invalid ride ID');
+    error.statusCode = 400;
+    throw error;
+  }
+
+  const ride = await Ride.findOneAndUpdate(
+    {
+      _id: rideId,
+      driver: driverId,
+      status: { $in: ['accepted', 'arrived', 'in-progress'] }
+    },
+    {
+      $set: {
+        status: 'cancelled',
+        verificationPin: null
+      },
+      $unset: {
+        pickupReachedAt: 1,
+        driverLocation: 1,
+        passengerLocation: 1,
+        passengerLocationUpdatedAt: 1,
+        waitingStartedAt: 1
+      }
+    },
+    { new: true }
+  )
+    .populate('passenger', 'name phone')
+    .populate('driver', 'name phone vehicleType vehicleModel vehiclePlate rating profilePhoto');
+
+  if (!ride) {
+    const existing = await Ride.findById(rideId);
+    if (!existing) {
+      const error = new Error('Ride not found');
+      error.statusCode = 404;
+      throw error;
+    }
+    if (String(existing.driver) !== String(driverId)) {
+      const error = new Error('You are not the driver for this ride');
+      error.statusCode = 403;
+      throw error;
+    }
+    if (existing.status === 'cancelled') return existing;
+
+    const error = new Error('Ride is no longer active');
+    error.statusCode = 409;
+    throw error;
+  }
+
+  const cancellationDetail = {
+    status: 'cancelled',
+    cancelledBy: 'driver',
+    cancellationReason: 'emergency',
+    emergency: true
+  };
+  const cancellationAudience = {
+    notifyVehicleDrivers: true,
+    notifyDriverIds: ride.notifiedDriverIds || []
+  };
+
+  // Emit the dedicated event first. The generic status event remains for
+  // older clients, and all consumers are idempotent by ride ID.
+  emitRideLifecycle(ride, 'ride_cancelled', cancellationDetail, cancellationAudience);
+  emitRideLifecycle(ride, 'ride:status', cancellationDetail, cancellationAudience);
+  return ride;
+}
+
+app.post('/api/rides/:id/emergency-cancel', authMiddleware, driverOnly, async (req, res) => {
+  try {
+    const ride = await cancelRideForDriverEmergency(req.params.id, req.user.id);
+    res.json(rideResponseForUser(ride, 'driver'));
+  } catch (err) {
+    res.status(err.statusCode || 500).json({ error: err.message });
+  }
+});
+
 // PATCH /api/rides/:id/counter — driver submits an offer or counter-offer
 app.patch('/api/rides/:id/counter', authMiddleware, driverOnly, async (req, res) => {
   try {
@@ -5010,14 +5107,12 @@ app.patch('/api/rides/:id/accept-driver', authMiddleware, customerOnly, customer
       }
     }
 
-    const driverUser = await User.findOne({
-      _id: driverId,
-      role: 'driver',
-      accountStatus: 'active',
-      isOnline: true,
-      lastOnlineHeartbeat: { $gte: new Date(Date.now() - DRIVER_HEARTBEAT_MAX_AGE_MS) }
-    }).select('name phone vehicleType vehicleModel vehiclePlate rating profilePhoto');
-    if (!driverUser) {
+    const driverUser = await User.findById(driverId)
+      .select('name phone role accountStatus isOnline lastOnlineHeartbeat vehicleType vehicleModel vehiclePlate rating profilePhoto');
+    const driverHeartbeatIsFresh = driverUser?.lastOnlineHeartbeat &&
+      new Date(driverUser.lastOnlineHeartbeat).getTime() >= Date.now() - DRIVER_HEARTBEAT_MAX_AGE_MS;
+    if (!driverUser || driverUser.role !== 'driver' || driverUser.accountStatus !== 'active' ||
+        !driverUser.isOnline || !driverHeartbeatIsFresh) {
       await Ride.updateOne(
         { _id: ride._id, driver: driverId, status: 'accepted' },
         { $set: { driver: null, status: 'requested', verificationPin: null } }
@@ -8464,6 +8559,31 @@ io.on('connection', async (socket) => {
   });
   socket.on('ride:leave', async (rideId) => {
     if (await isRideParticipant(rideId)) socket.leave(`ride:${rideId}`);
+  });
+
+  // The native/web Driver emergency hold must be authoritative even when the
+  // UI clears itself before the network round trip finishes. The ack lets the
+  // client decide whether a REST retry is needed.
+  socket.on('ride:emergency-cancel', async ({ rideId } = {}, acknowledge) => {
+    if (role !== 'driver') {
+      if (typeof acknowledge === 'function') acknowledge({ ok: false, error: 'Drivers only', retryable: false });
+      return;
+    }
+    try {
+      const ride = await cancelRideForDriverEmergency(rideId, id);
+      if (typeof acknowledge === 'function') {
+        acknowledge({ ok: true, rideId: String(ride._id), status: ride.status });
+      }
+    } catch (err) {
+      if (typeof acknowledge === 'function') {
+        acknowledge({
+          ok: false,
+          error: err.message,
+          code: err.statusCode || 500,
+          retryable: ![400, 403, 404, 409].includes(err.statusCode)
+        });
+      }
+    }
   });
 
   // Driver sends location updates during a ride

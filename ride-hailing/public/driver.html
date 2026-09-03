@@ -940,6 +940,7 @@ let pendingRide   = null;   // current popup ride
 let sentOffer     = null;   // { rideId } after driver sends an offer, before customer chooses
 let acceptRideInFlight = false;
 let activeRide    = null;   // accepted ride
+const DRIVER_ACTIVE_RIDE_STORAGE_KEY = 'rh_active_ride';
 let requestTimer  = null;
 let emergencyRideClearHoldTimer = null;
 let emergencyRideClearIgnoreClickUntil = 0;
@@ -2651,7 +2652,7 @@ function connectSocket() {
     }
   });
 
-  function handleRideCancelled({ rideId, status, cancelledBy = 'customer' } = {}) {
+  function handleRideCancelled({ rideId, status, cancelledBy = 'customer', emergency = false } = {}) {
     if (status && status !== 'cancelled') return;
     const cancelledId = String(rideId || '');
     if (!cancelledId) return;
@@ -2668,9 +2669,11 @@ function connectSocket() {
     requestTimer = null;
     stopRideAlert();
 
-    const message = cancelledBy === 'customer'
-      ? 'Ride cancelled by customer'
-      : 'Ride cancelled';
+    const message = emergency && cancelledBy === 'driver'
+      ? 'Emergency cancellation saved'
+      : cancelledBy === 'customer'
+        ? 'Ride cancelled by customer'
+        : 'Ride cancelled';
     if (matchesActive) {
       endActiveRide();
     } else {
@@ -2987,6 +2990,12 @@ function emergencyClearRideLocally() {
   rideIds.forEach(rideId => {
     socket?.emit('ride:leave', rideId);
   });
+  localStorage.removeItem(DRIVER_ACTIVE_RIDE_STORAGE_KEY);
+
+  // The local recovery path stays immediate. Each ID is also sent to the
+  // authoritative server; unassigned pending offers are safely rejected by
+  // the server while an assigned active ride is cancelled for both parties.
+  rideIds.forEach(rideId => requestEmergencyRideCancellation(rideId));
 
   stopActiveRideLocationSync();
   clearInterval(requestTimer);
@@ -3012,6 +3021,25 @@ function emergencyClearRideLocally() {
   renderAvailabilityState();
   requestAnimationFrame(() => map?.resize());
   showToast('Ride cleared locally. Driver dashboard is available.', 'info');
+}
+
+function requestEmergencyRideCancellation(rideId) {
+  if (!rideId || !token) return;
+  const path = `/api/rides/${encodeURIComponent(rideId)}/emergency-cancel`;
+  let acknowledged = false;
+  if (socket?.connected) {
+    socket.emit('ride:emergency-cancel', { rideId }, response => {
+      acknowledged = true;
+      if (!response?.ok && response?.retryable) apiCall(path, 'POST').catch(() => {});
+    });
+    // A disconnected transport can leave the socket event without an ack.
+    // Retry through REST; the server transition is idempotent.
+    setTimeout(() => {
+      if (!acknowledged) apiCall(path, 'POST').catch(() => {});
+    }, 2500);
+  } else {
+    apiCall(path, 'POST').catch(() => {});
+  }
 }
 
 function rejectRide() {
@@ -3099,6 +3127,7 @@ async function sendCounter() {
 // ── Active Ride Panel ──────────────────────────────────────────────────────
 function showActivePanel(ride) {
   activeRide = ride;
+  localStorage.setItem(DRIVER_ACTIVE_RIDE_STORAGE_KEY, String(ride._id || ride.id));
   hideIdleInfoPanel();
   document.getElementById('active-panel').style.display = 'block';
   document.getElementById('app').classList.add('navigation-active');
@@ -3187,6 +3216,7 @@ function endActiveRide() {
   const finishedRideId = activeRide?._id;
   stopActiveRideLocationSync();
   activeRide = null;
+  localStorage.removeItem(DRIVER_ACTIVE_RIDE_STORAGE_KEY);
   navigationFollowing = false;
 
   document.getElementById('active-panel').style.display = 'none';

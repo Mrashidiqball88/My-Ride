@@ -398,8 +398,29 @@ export function DriverRuntimeProvider({ children }: { children: ReactNode }) {
       // status, so recover it before showing navigation.
       void hydrateActiveRide();
     });
+    const clearCancelledRide = ({ rideId, status }: { rideId: string; status?: string }) => {
+      if (status && status !== 'cancelled') return;
+      const cancelledRideId = String(rideId || '');
+      if (!cancelledRideId) return;
+      locallyClearedRideIds.current.add(cancelledRideId);
+      clearRideAlert(cancelledRideId);
+      setPendingRide(current => current?.id === cancelledRideId ? null : current);
+      setSentOffer(current => current?.id === cancelledRideId ? null : current);
+      if (sentOfferRef.current?.id === cancelledRideId) sentOfferRef.current = null;
+      if (activeRideIdRef.current === cancelledRideId) {
+        activeRideIdRef.current = null;
+        setActiveRide(null);
+        setActiveRideId(null);
+        void SecureStore.deleteItemAsync(ACTIVE_RIDE_KEY);
+      }
+    };
+    nextSocket.on('ride_cancelled', clearCancelledRide);
     nextSocket.on('ride:status', ({ rideId, status }: { rideId: string; status: string }) => {
-      if (['completed', 'cancelled'].includes(status)) {
+      if (status === 'cancelled') {
+        clearCancelledRide({ rideId, status });
+        return;
+      }
+      if (status === 'completed') {
         setActiveRideId(current => {
           if (current === rideId) {
             void SecureStore.deleteItemAsync(ACTIVE_RIDE_KEY);
@@ -408,12 +429,6 @@ export function DriverRuntimeProvider({ children }: { children: ReactNode }) {
           }
           return current;
         });
-      }
-      if (status === 'cancelled') {
-        clearRideAlert(rideId);
-        setPendingRide(current => current?.id === rideId ? null : current);
-        setSentOffer(current => current?.id === rideId ? null : current);
-        if (sentOfferRef.current?.id === rideId) sentOfferRef.current = null;
       }
     });
     nextSocket.on('account:suspended', ({ reason }: { reason?: string }) => {
@@ -909,6 +924,34 @@ export function DriverRuntimeProvider({ children }: { children: ReactNode }) {
     return String(response.message || 'Verification code requested. Check the development server log.');
   }, []);
 
+  const requestEmergencyRideCancellation = useCallback((rideId: string) => {
+    const token = tokenRef.current;
+    const session = sessionRef.current || undefined;
+    if (!rideId || !token) return;
+    const path = `/api/rides/${encodeURIComponent(rideId)}/emergency-cancel`;
+    let acknowledged = false;
+    const fallback = () => {
+      if (acknowledged) return;
+      acknowledged = true;
+      void api(path, token, session, { method: 'POST' }).catch(() => undefined);
+    };
+    if (socket.current?.connected) {
+      socket.current.emit(
+        'ride:emergency-cancel',
+        { rideId },
+        (response: { ok?: boolean; retryable?: boolean } = {}) => {
+          acknowledged = true;
+          if (!response.ok && response.retryable) {
+            void api(path, token, session, { method: 'POST' }).catch(() => undefined);
+          }
+        },
+      );
+      setTimeout(fallback, 2500);
+    } else {
+      fallback();
+    }
+  }, []);
+
   const signIn = useCallback(async (identifier: string, password: string, otp?: string) => {
     const deviceId = await getDriverDeviceId();
     const response = await api('/api/auth/login', undefined, undefined, {
@@ -948,6 +991,7 @@ export function DriverRuntimeProvider({ children }: { children: ReactNode }) {
     rideIds.forEach(rideId => {
       locallyClearedRideIds.current.add(rideId);
       socket.current?.emit('ride:leave', rideId);
+      requestEmergencyRideCancellation(rideId);
     });
 
     emergencyClearGeneration.current += 1;
@@ -963,7 +1007,10 @@ export function DriverRuntimeProvider({ children }: { children: ReactNode }) {
     setAcceptingRide(false);
     setError(null);
     void SecureStore.deleteItemAsync(ACTIVE_RIDE_KEY);
-  }, [activeRide, activeRideId, clearAllRideAlerts, pendingRide, sentOffer]);
+    if (isOnlineRef.current && Platform.OS !== 'web') {
+      void startLocationService(false).catch(() => undefined);
+    }
+  }, [activeRide, activeRideId, clearAllRideAlerts, pendingRide, requestEmergencyRideCancellation, sentOffer, startLocationService]);
 
   const acceptRide = useCallback(async () => {
     if (!pendingRide || !tokenRef.current || acceptingRide) return;

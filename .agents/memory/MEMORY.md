@@ -51,3 +51,4 @@
 - [Settings cache test doubles](settings-cache-test-doubles.md) — settings loaders need an explicit seam for disconnected test doubles without weakening production database-readiness fallbacks.
 - [Expo local image parser](expo-local-image-parser.md) — Metro passes image paths to its size parser, so local replacements must support both paths and byte buffers.
 - [Driver Metro build port](driver-metro-build-port.md) — native static builds need a dedicated default port because the shared mockup preview owns 8081.
+- [Partitioned user role queries](partitioned-user-role-queries.md) — role-scoped facade queries must not require a legacy role field absent from split collections.
