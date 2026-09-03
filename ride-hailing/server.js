@@ -250,6 +250,8 @@ app.use(['/api/auth/login', '/api/admin/login', '/api/admin/sub-user/login'],
   rateLimit({ windowMs: 15 * 60 * 1000, max: 30, key: identityRateKey }));
 app.use(['/api/auth/register', '/api/auth/forgot-password', '/api/auth/reset-password', '/api/admin/forgot-password'],
   rateLimit({ windowMs: 15 * 60 * 1000, max: 20, key: identityRateKey }));
+app.use('/api/auth/phone-otp/request',
+  rateLimit({ windowMs: 10 * 60 * 1000, max: 5, key: identityRateKey }));
 app.use('/api/geocode', rateLimit({ windowMs: 60 * 1000, max: 120 }));
 app.use('/api/fare/calculate', rateLimit({ windowMs: 60 * 1000, max: 120 }));
 app.use('/api/sos', rateLimit({ windowMs: 10 * 60 * 1000, max: 20 }));
@@ -1383,7 +1385,7 @@ function normalizeMongoUri(uri) {
 
 const userSchema = new mongoose.Schema({
   name:    { type: String, required: true, trim: true },
-  email:   { type: String, required: true, unique: true, lowercase: true, trim: true },
+  email:   { type: String, required: false, unique: false, lowercase: true, trim: true, default: null },
   password:{ type: String, required: true },
   phone:   { type: String, default: '', trim: true },
   role:    { type: String, enum: ['customer', 'driver'], default: 'customer' },
@@ -1469,6 +1471,14 @@ customerSchema.remove('isAdmin');
 const driverSchema = userSchema.clone();
 driverSchema.path('role').default('driver');
 driverSchema.remove('isAdmin');
+driverSchema.index(
+  { email: 1 },
+  {
+    unique: true,
+    name: 'driver_email_unique',
+    partialFilterExpression: { email: { $type: 'string' } }
+  }
+);
 // Dispatch and recovery both filter by live availability and pickup distance.
 // Keep those reads indexable even though the final Haversine check remains in
 // application code for exact-radius correctness.
@@ -1941,15 +1951,21 @@ async function migrateLegacyUserData() {
 
 async function removeCustomerEmailIndex() {
   if (mongoose.connection.readyState !== 1) return;
-  try {
-    const customersCollection = mongoose.connection.collection('customers');
-    const indexes = await customersCollection.indexes();
-    if (indexes.some(index => index.name === 'email_1')) {
-      await customersCollection.dropIndex('email_1');
-      console.log('✓ Removed invalid customers.email_1 index');
+  for (const collectionName of ['customers', 'drivers']) {
+    try {
+      const collection = mongoose.connection.collection(collectionName);
+      const indexes = await collection.indexes();
+      if (indexes.some(index => index.name === 'email_1')) {
+        await collection.dropIndex('email_1');
+        console.log(`✓ Removed invalid ${collectionName}.email_1 index`);
+      }
+    } catch (error) {
+      // A fresh preview database does not have either collection until the
+      // first account is seeded. Continue so the other role is still cleaned.
+      if (!/ns does not exist|namespace .* not found/i.test(error.message)) {
+        console.warn(`${collectionName} optional email index cleanup skipped:`, error.message);
+      }
     }
-  } catch (error) {
-    console.warn('Customer email index cleanup skipped:', error.message);
   }
 }
 
@@ -3286,6 +3302,61 @@ function phoneLookupValues(value) {
   return [...new Set([normalized, raw].filter(Boolean))];
 }
 
+const PHONE_OTP_TTL_MS = 10 * 60 * 1000;
+const PHONE_OTP_MAX_ATTEMPTS = 5;
+const PHONE_OTP_CHALLENGES = new Map();
+
+function phoneOtpIsAvailable() {
+  // This is deliberately a mock/test flow until a real SMS provider is
+  // selected. Never accept the fixed test code in production.
+  return process.env.NODE_ENV !== 'production';
+}
+
+function phoneOtpKey(role, purpose, phone) {
+  return `${role}:${purpose}:${phone}`;
+}
+
+async function issuePhoneOtp({ role, purpose, phone }) {
+  const fixedTestCode = phoneOtpIsAvailable() && (
+    process.env.NODE_ENV === 'test' ||
+    process.env.DEMO_ACCOUNTS_ENABLED === 'true' ||
+    process.env.PHONE_OTP_TEST_MODE === 'true'
+  );
+  const code = fixedTestCode
+    ? '1234'
+    : String(crypto.randomInt(1000, 10000));
+  const key = phoneOtpKey(role, purpose, phone);
+  PHONE_OTP_CHALLENGES.set(key, {
+    otpHash: await bcrypt.hash(code, 10),
+    expiresAt: Date.now() + PHONE_OTP_TTL_MS,
+    attempts: 0
+  });
+  if (phoneOtpIsAvailable()) {
+    console.info(`[phone-otp] ${purpose} ${role} code for ${phone}: ${code}`);
+  }
+}
+
+async function consumePhoneOtp({ role, purpose, phone, otp }) {
+  if (!phoneOtpIsAvailable()) return { ok: false, error: 'Phone OTP authentication is not available in production yet' };
+  const key = phoneOtpKey(role, purpose, phone);
+  const challenge = PHONE_OTP_CHALLENGES.get(key);
+  if (!challenge || challenge.expiresAt <= Date.now()) {
+    PHONE_OTP_CHALLENGES.delete(key);
+    return { ok: false, error: 'OTP has expired — request a new code' };
+  }
+  challenge.attempts += 1;
+  if (challenge.attempts > PHONE_OTP_MAX_ATTEMPTS) {
+    PHONE_OTP_CHALLENGES.delete(key);
+    return { ok: false, error: 'Too many OTP attempts. Request a new code.' };
+  }
+  const normalizedOtp = String(otp || '').trim();
+  const fixedCodeAccepted = phoneOtpIsAvailable() && normalizedOtp === '1234';
+  const matches = fixedCodeAccepted || await bcrypt.compare(normalizedOtp, challenge.otpHash).catch(() => false);
+  if (!matches) return { ok: false, error: 'Invalid or expired OTP' };
+  PHONE_OTP_CHALLENGES.delete(key);
+  return { ok: true };
+}
+
 function normalizeNameForMatch(value) {
   return String(value || '').toUpperCase().replace(/[^A-Z]/g, '');
 }
@@ -3785,21 +3856,55 @@ async function getAdminMapLocationForUser(user, now = new Date()) {
 // Auth Routes
 // ─────────────────────────────────────────────────────────────────────────────
 
+app.post('/api/auth/phone-otp/request', async (req, res) => {
+  try {
+    if (!phoneOtpIsAvailable()) {
+      return res.status(503).json({ error: 'Phone OTP authentication is not configured for production yet' });
+    }
+    const role = String(req.body?.role || 'customer').trim().toLowerCase();
+    const purpose = String(req.body?.purpose || 'login').trim().toLowerCase();
+    const phone = normalizePhoneNumber(req.body?.phone);
+    if (!['customer', 'driver'].includes(role)) {
+      return res.status(400).json({ error: 'Account type must be Customer or Driver' });
+    }
+    if (!['login', 'signup'].includes(purpose)) {
+      return res.status(400).json({ error: 'OTP purpose must be login or signup' });
+    }
+    if (!phone) return res.status(400).json({ error: 'Enter a valid mobile number' });
+    const existingUser = await User.findOne({ phone: { $in: phoneLookupValues(phone) } })
+      .select('role').lean();
+    if (purpose === 'signup' && existingUser) {
+      return res.status(409).json({ error: 'Phone number already registered' });
+    }
+    if (purpose === 'login' && existingUser && existingUser.role !== role) {
+      return res.status(409).json({ error: 'Use the app for your registered account type' });
+    }
+    await issuePhoneOtp({ role, purpose, phone });
+    res.json({
+      success: true,
+      message: 'A phone verification code has been issued. In development/test mode, check the server log for the generated code.'
+    });
+  } catch (err) {
+    res.status(500).json({ error: 'Unable to issue phone verification code' });
+  }
+});
+
 app.post('/api/auth/register', async (req, res) => {
   try {
     const { name, email, password, phone, role, vehicleType, vehicleModel, vehiclePlate, ridePreference,
              profilePhoto, licensePhoto, cnicFront, cnicBack, cnicNumber, vehicleRegPhoto, deviceId,
-             isStudent, studentIdNumber, studentIdImage, studentInstitution } = req.body;
+             isStudent, studentIdNumber, studentIdImage, studentInstitution, otp } = req.body;
     const resolvedRoleEarly = role || 'customer';
+    const phoneOtp = String(otp || '').trim();
+    const usingPhoneOtp = Boolean(phoneOtp);
     if (!['customer', 'driver'].includes(resolvedRoleEarly)) {
       return res.status(400).json({ error: 'Account type must be Customer or Driver' });
     }
     if (!String(name || '').trim()) return res.status(400).json({ error: 'Full name is required' });
-    if (!password) return res.status(400).json({ error: 'Password is required' });
-    if (String(password).length < 6) return res.status(400).json({ error: 'Password must be at least 6 characters' });
-    if (typeof email !== 'string' || !email.trim()) return res.status(400).json({ error: 'Email address is required' });
-    const resolvedEmail = email.toLowerCase().trim();
-    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(resolvedEmail))
+    if (!usingPhoneOtp && !password) return res.status(400).json({ error: 'Password or phone OTP is required' });
+    if (!usingPhoneOtp && String(password).length < 6) return res.status(400).json({ error: 'Password must be at least 6 characters' });
+    const resolvedEmail = typeof email === 'string' && email.trim() ? email.toLowerCase().trim() : null;
+    if (resolvedEmail && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(resolvedEmail))
       return res.status(400).json({ error: 'Enter a valid email address' });
     const normalizedPhone = normalizePhoneNumber(phone);
     if (!normalizedPhone) return res.status(400).json({ error: 'Enter a valid mobile number' });
@@ -3834,6 +3939,15 @@ app.post('/api/auth/register', async (req, res) => {
     if (resolvedRoleEarly === 'driver' && !FARE_VEHICLE_CATEGORIES.includes(normalizeFareVehicle(vehicleType))) {
       return res.status(400).json({ error: 'Choose a valid vehicle category' });
     }
+    if (usingPhoneOtp) {
+      const verification = await consumePhoneOtp({
+        role: resolvedRoleEarly,
+        purpose: 'signup',
+        phone: normalizedPhone,
+        otp: phoneOtp
+      });
+      if (!verification.ok) return res.status(401).json({ error: verification.error });
+    }
     const registrationDocuments = resolvedRoleEarly === 'customer'
       ? [
           [cnicFront, 'National ID Front'],
@@ -3855,7 +3969,7 @@ app.post('/api/auth/register', async (req, res) => {
       }
     }
 
-    if (await User.findOne({ email: resolvedEmail }))
+    if (resolvedEmail && await User.findOne({ email: resolvedEmail }))
       return res.status(409).json({ error: 'Email already registered' });
     if (await User.findOne({ phone: { $in: phoneLookupValues(phone) } }))
       return res.status(409).json({ error: 'Phone number already registered' });
@@ -3880,7 +3994,9 @@ app.post('/api/auth/register', async (req, res) => {
       }
     }
 
-    const hash = await bcrypt.hash(password, 12);
+    const hash = usingPhoneOtp
+      ? await bcrypt.hash(crypto.randomBytes(32).toString('hex'), 12)
+      : await bcrypt.hash(password, 12);
     const resolvedRole = role || 'customer';
     const registrationDeviceHash = resolvedRole === 'driver' ? hashDeviceIdentifier(deviceId) : '';
     let customerFrontFile = '';
@@ -3898,7 +4014,7 @@ app.post('/api/auth/register', async (req, res) => {
       name,
       email:         resolvedEmail,
       phone:         normalizedPhone,
-      password:      hash,
+       password:      hash,
       role:          resolvedRole,
       accountStatus: resolvedRole === 'driver'
         ? 'pending'
@@ -3963,8 +4079,11 @@ app.post('/api/auth/login', async (req, res) => {
   try {
     // Accept { identifier, password } (new) or { email, password } (legacy)
     const identifier = (req.body.identifier || req.body.email || '').trim();
-    const { password } = req.body;
-    if (!identifier || !password) return res.status(400).json({ error: 'Phone/email and password required' });
+    const { password, otp } = req.body;
+    const phoneOtp = String(otp || '').trim();
+    const usingPhoneOtp = Boolean(phoneOtp);
+    if (!identifier || (!password && !usingPhoneOtp)) return res.status(400).json({ error: 'Phone/email and password or OTP required' });
+    if (usingPhoneOtp && identifier.includes('@')) return res.status(400).json({ error: 'Phone OTP login requires a mobile number' });
 
     // Look up by email if it contains @, otherwise by phone
     const normalizedPhone = identifier.includes('@') ? '' : normalizePhoneNumber(identifier);
@@ -3976,8 +4095,20 @@ app.post('/api/auth/login', async (req, res) => {
       : await User.findOne({ phone: { $in: phoneLookupValues(identifier) } }).select('+deviceBindingHash');
 
     if (!user) return res.status(404).json({ error: 'No account found with this phone number or email' });
-    if (!(await bcrypt.compare(password, user.password)))
+    if (req.body?.role && req.body.role !== user.role) {
+      return res.status(403).json({ error: 'Use the app for your registered account type' });
+    }
+    if (usingPhoneOtp) {
+      const verification = await consumePhoneOtp({
+        role: user.role,
+        purpose: 'login',
+        phone: normalizePhoneNumber(user.phone) || normalizedPhone,
+        otp: phoneOtp
+      });
+      if (!verification.ok) return res.status(401).json({ error: verification.error });
+    } else if (!(await bcrypt.compare(password, user.password))) {
       return res.status(401).json({ error: 'Incorrect password. Please try again.' });
+    }
 
     if (user.role === 'driver') {
       const loginDeviceHash = hashDeviceIdentifier(req.body?.deviceId);
@@ -6346,6 +6477,71 @@ app.put('/api/admin/security/recovery-key', adminJwt, requireSuperAdmin, async (
     });
     res.json({ success: true, recoveryKeyConfigured: true, message: 'Secret Recovery Key changed. Please sign in again.' });
   } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+async function verifyAdminFlushPassword(password) {
+  if (typeof password !== 'string' || !password) return false;
+  const security = await getAdminSecurity();
+  return verifySuperAdminPassword(password, security);
+}
+
+async function flushRoleData(role) {
+  const Model = role === 'driver' ? Driver : Customer;
+  const users = await Model.find({}).select('_id').lean();
+  const ids = users.map(user => user._id);
+  const userResult = await Model.deleteMany({});
+  const related = await Promise.all([
+    ...(role === 'driver'
+      ? [
+          Wallet.deleteMany({ user: { $in: ids } }),
+          Payment.deleteMany({ driver: { $in: ids } }),
+          PushSub.deleteMany({ user: { $in: ids } })
+        ]
+      : []),
+    Ticket.deleteMany({ user: { $in: ids }, role }),
+    SOS.deleteMany({ user: { $in: ids }, userModel: role === 'driver' ? 'Driver' : 'Customer' })
+  ]);
+  const offset = role === 'driver' ? 3 : 0;
+  if (role === 'driver') {
+    await Promise.all(ids.map(id => {
+      io.in(`user:${id}`).disconnectSockets(true);
+      return removeDriverPresence(id).catch(() => undefined);
+    }));
+  }
+  return {
+    users: userResult.deletedCount || 0,
+    wallets: related[0]?.deletedCount || 0,
+    payments: related[1]?.deletedCount || 0,
+    pushSubscriptions: related[2]?.deletedCount || 0,
+    supportTickets: related[offset]?.deletedCount || 0,
+    sosAlerts: related[offset + 1]?.deletedCount || 0
+  };
+}
+
+app.post('/api/admin/data/flush-drivers', adminJwt, requireSuperAdmin, async (req, res) => {
+  try {
+    if (!(await verifyAdminFlushPassword(req.body?.password))) {
+      return res.status(401).json({ error: 'Current Admin password is incorrect' });
+    }
+    const counts = await flushRoleData('driver');
+    res.json({ success: true, role: 'driver', counts, message: `Driver data flushed. ${counts.users} Driver account(s) removed.` });
+  } catch (err) {
+    console.error('Driver data flush failed:', err.message);
+    res.status(500).json({ error: 'Unable to flush Driver data' });
+  }
+});
+
+app.post('/api/admin/data/flush-customers', adminJwt, requireSuperAdmin, async (req, res) => {
+  try {
+    if (!(await verifyAdminFlushPassword(req.body?.password))) {
+      return res.status(401).json({ error: 'Current Admin password is incorrect' });
+    }
+    const counts = await flushRoleData('customer');
+    res.json({ success: true, role: 'customer', counts, message: `Customer data flushed. ${counts.users} Customer account(s) removed.` });
+  } catch (err) {
+    console.error('Customer data flush failed:', err.message);
+    res.status(500).json({ error: 'Unable to flush Customer data' });
+  }
 });
 
 app.post('/api/admin/forgot-password/request-otp', async (req, res) => {

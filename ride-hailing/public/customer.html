@@ -543,14 +543,24 @@ body{font-family:'DM Sans','Segoe UI',sans-serif;background:var(--lr-paper);colo
     <!-- Sign In -->
     <div id="login-form">
       <div class="form-group"><label>Phone or Email</label><input type="text" id="l-email" placeholder="03001234567 or you@email.com" autocomplete="username" inputmode="tel"></div>
-      <div class="form-group">
+      <div class="auth-method-toggle" style="display:flex;gap:.4rem;margin:-.2rem 0 .8rem">
+        <button type="button" class="auth-tab active" id="customer-password-login-tab" onclick="setCustomerLoginAuthMode('password')">Password</button>
+        <button type="button" class="auth-tab" id="customer-otp-login-tab" onclick="setCustomerLoginAuthMode('otp')">Phone OTP</button>
+      </div>
+      <div class="form-group" id="customer-login-password-group">
         <label>Password</label>
         <div class="pw-wrap">
           <input type="password" id="l-pass" placeholder="••••••••" autocomplete="current-password">
           <button type="button" class="pw-eye" onclick="togglePw('l-pass')" tabindex="-1">👁</button>
         </div>
       </div>
-      <button class="btn-primary" onclick="doLogin()">Sign In</button>
+      <div class="form-group" id="customer-login-otp-group" style="display:none">
+        <label>Phone Verification Code</label>
+        <input type="text" id="l-otp" placeholder="Enter code" maxlength="6" inputmode="numeric" autocomplete="one-time-code">
+        <button type="button" class="btn-text-link" onclick="requestCustomerOtp('login')">Request phone OTP</button>
+        <div id="customer-login-otp-status" style="font-size:.7rem;color:#888;min-height:1rem"></div>
+      </div>
+      <button class="btn-primary" id="customer-login-btn" onclick="doLogin()">Sign In</button>
       <div style="text-align:center;margin-top:.6rem">
         <button class="btn-text-link" onclick="switchTab('forgot')">Forgot Password?</button>
       </div>
@@ -598,13 +608,23 @@ body{font-family:'DM Sans','Segoe UI',sans-serif;background:var(--lr-paper);colo
           <span id="r-student-id-image-label" style="display:block;color:#888;font-size:.72rem;margin-top:.35rem">No image selected</span>
         </div>
       </div>
-      <div class="form-group"><label>Email <span style="color:#f5c518">*</span></label><input type="email" id="r-email" placeholder="you@email.com" autocomplete="email" required></div>
-      <div class="form-group">
+      <div class="form-group"><label>Email <span style="color:#888">(optional)</span></label><input type="email" id="r-email" placeholder="you@email.com (optional)" autocomplete="email"></div>
+      <div class="auth-method-toggle" style="display:flex;gap:.4rem;margin:.2rem 0 .8rem">
+        <button type="button" class="auth-tab active" id="customer-password-register-tab" onclick="setCustomerRegisterAuthMode('password')">Password</button>
+        <button type="button" class="auth-tab" id="customer-otp-register-tab" onclick="setCustomerRegisterAuthMode('otp')">Phone OTP</button>
+      </div>
+      <div class="form-group" id="customer-register-password-group">
         <label>Password <span style="color:#f5c518">*</span></label>
         <div class="pw-wrap">
           <input type="password" id="r-pass" placeholder="min 6 characters" autocomplete="new-password">
           <button type="button" class="pw-eye" onclick="togglePw('r-pass')" tabindex="-1">👁</button>
         </div>
+      </div>
+      <div class="form-group" id="customer-register-otp-group" style="display:none">
+        <label>Phone Verification Code</label>
+        <input type="text" id="r-otp" placeholder="Enter code" maxlength="6" inputmode="numeric" autocomplete="one-time-code">
+        <button type="button" class="btn-text-link" onclick="requestCustomerOtp('signup')">Request phone OTP</button>
+        <div id="customer-register-otp-status" style="font-size:.7rem;color:#888;min-height:1rem"></div>
       </div>
       <button class="btn-primary" onclick="doRegister()">Create Account</button>
     </div>
@@ -1300,13 +1320,52 @@ function showToast(msg, type = 'info') {
 }
 
 // ── Auth ──────────────────────────────────────────────────────────────────
+let customerLoginAuthMode = 'password';
+let customerRegisterAuthMode = 'password';
+
+function setCustomerLoginAuthMode(mode) {
+  customerLoginAuthMode = mode;
+  document.getElementById('customer-login-password-group').style.display = mode === 'password' ? 'block' : 'none';
+  document.getElementById('customer-login-otp-group').style.display = mode === 'otp' ? 'block' : 'none';
+  document.getElementById('customer-password-login-tab').classList.toggle('active', mode === 'password');
+  document.getElementById('customer-otp-login-tab').classList.toggle('active', mode === 'otp');
+  document.getElementById('customer-login-btn').textContent = mode === 'password' ? 'Sign In' : 'Verify & Sign In';
+  document.getElementById('auth-error').textContent = '';
+}
+
+function setCustomerRegisterAuthMode(mode) {
+  customerRegisterAuthMode = mode;
+  document.getElementById('customer-register-password-group').style.display = mode === 'password' ? 'block' : 'none';
+  document.getElementById('customer-register-otp-group').style.display = mode === 'otp' ? 'block' : 'none';
+  document.getElementById('customer-password-register-tab').classList.toggle('active', mode === 'password');
+  document.getElementById('customer-otp-register-tab').classList.toggle('active', mode === 'otp');
+  document.getElementById('auth-error').textContent = '';
+}
+
+async function requestCustomerOtp(purpose) {
+  const phone = document.getElementById(purpose === 'login' ? 'l-email' : 'r-phone').value.trim();
+  const status = document.getElementById(purpose === 'login' ? 'customer-login-otp-status' : 'customer-register-otp-status');
+  if (!phone || phone.includes('@')) {
+    document.getElementById('auth-error').textContent = 'Enter a valid mobile number for phone OTP';
+    return;
+  }
+  status.textContent = 'Requesting code…';
+  try {
+    const result = await apiCall('/api/auth/phone-otp/request', 'POST', { phone, role: 'customer', purpose });
+    status.textContent = result.message || 'Code requested. Check your phone or the development server log.';
+  } catch (error) {
+    status.textContent = '';
+    document.getElementById('auth-error').textContent = error.message;
+  }
+}
+
 function switchTab(t) {
   document.getElementById('login-form').style.display    = t === 'login'    ? 'block' : 'none';
   document.getElementById('register-form').style.display = t === 'register' ? 'block' : 'none';
   document.getElementById('forgot-form').style.display   = t === 'forgot'   ? 'block' : 'none';
   // Tabs row visible only for login/register
   document.getElementById('auth-tabs-row').style.display = t === 'forgot' ? 'none' : 'flex';
-  document.querySelectorAll('.auth-tab').forEach((b, i) =>
+  document.querySelectorAll('.auth-tabs > .auth-tab').forEach((b, i) =>
     b.classList.toggle('active', (i === 0) === (t === 'login')));
   document.getElementById('auth-error').textContent = '';
   if (t === 'register') void loadCustomerPerKmRates();
@@ -1338,8 +1397,15 @@ async function doLogin() {
   const identifier = document.getElementById('l-email').value.trim();
   const pass = document.getElementById('l-pass').value;
   if (!identifier) return (document.getElementById('auth-error').textContent = 'Enter your phone number or email');
+  if (customerLoginAuthMode === 'otp') {
+    if (identifier.includes('@')) return (document.getElementById('auth-error').textContent = 'Phone OTP login requires a mobile number');
+    const otp = document.getElementById('l-otp').value.trim();
+    if (!otp) return (document.getElementById('auth-error').textContent = 'Enter the phone verification code');
+  }
   try {
-    const res = await apiCall('/api/auth/login', 'POST', { identifier, password: pass });
+    const res = await apiCall('/api/auth/login', 'POST', customerLoginAuthMode === 'otp'
+      ? { identifier, otp, role: 'customer' }
+      : { identifier, password: pass, role: 'customer' });
     saveSession(res);
   } catch (e) { document.getElementById('auth-error').textContent = e.message; }
 }
@@ -1407,9 +1473,10 @@ async function doRegister() {
   if (isStudent && !studentIdNumber) return (document.getElementById('auth-error').textContent = 'Student ID number is required');
   if (isStudent && !studentInstitution) return (document.getElementById('auth-error').textContent = 'Institution is required');
   if (isStudent && !studentIdFile) return (document.getElementById('auth-error').textContent = 'Student ID image is required');
-  if (!email) return (document.getElementById('auth-error').textContent = 'Email address is required');
-  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return (document.getElementById('auth-error').textContent = 'Enter a valid email address');
-  if (pass.length < 6) return (document.getElementById('auth-error').textContent = 'Password must be at least 6 characters');
+  if (email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return (document.getElementById('auth-error').textContent = 'Enter a valid email address');
+  const otp = document.getElementById('r-otp').value.trim();
+  if (customerRegisterAuthMode === 'otp' && !otp) return (document.getElementById('auth-error').textContent = 'Enter the phone verification code');
+  if (customerRegisterAuthMode === 'password' && pass.length < 6) return (document.getElementById('auth-error').textContent = 'Password must be at least 6 characters');
   try {
     const submitButton = document.querySelector('#register-form .btn-primary');
     showCustomerUploadWait();
@@ -1426,7 +1493,8 @@ async function doRegister() {
     document.getElementById('customer-upload-copy').textContent = 'Please wait while we securely process your ID.';
     setCustomerUploadProgress(42);
     const res = await registerCustomerWithProgress({
-      name, phone, email, password: pass, role: 'customer', cnicNumber: cnic, cnicFront, cnicBack,
+      name, phone, ...(email ? { email } : {}), ...(customerRegisterAuthMode === 'password' ? { password: pass } : { otp }),
+      role: 'customer', cnicNumber: cnic, cnicFront, cnicBack,
       isStudent, studentIdNumber, studentInstitution, studentIdImage
     });
     setCustomerUploadProgress(100);

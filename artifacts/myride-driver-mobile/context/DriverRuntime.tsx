@@ -93,7 +93,8 @@ type RuntimeContext = {
   driverLocation: DriverLocation | null; error: string | null;
   longRange: LongRangeState | null;
   alertReadiness: AlertReadiness;
-  signIn(identifier: string, password: string): Promise<void>;
+  requestPhoneOtp(phone: string, purpose?: 'login' | 'signup'): Promise<string>;
+  signIn(identifier: string, password: string, otp?: string): Promise<void>;
   signOut(): Promise<void>;
   setOnline(next: boolean): Promise<void>;
   prepareAlertReadiness(): Promise<void>;
@@ -900,9 +901,22 @@ export function DriverRuntimeProvider({ children }: { children: ReactNode }) {
     });
   }, [activeRideId, isOnline, ready, refreshAlertReadiness, setOnlineState, startLocationService, user]);
 
-  const signIn = useCallback(async (identifier: string, password: string) => {
+  const requestPhoneOtp = useCallback(async (phone: string, purpose: 'login' | 'signup' = 'login') => {
+    const response = await api('/api/auth/phone-otp/request', undefined, undefined, {
+      method: 'POST',
+      body: JSON.stringify({ phone, role: 'driver', purpose }),
+    });
+    return String(response.message || 'Verification code requested. Check the development server log.');
+  }, []);
+
+  const signIn = useCallback(async (identifier: string, password: string, otp?: string) => {
     const deviceId = await getDriverDeviceId();
-    const response = await api('/api/auth/login', undefined, undefined, { method: 'POST', body: JSON.stringify({ identifier, password, deviceId }) });
+    const response = await api('/api/auth/login', undefined, undefined, {
+      method: 'POST',
+      body: JSON.stringify(otp
+        ? { identifier, otp, role: 'driver', deviceId }
+        : { identifier, password, role: 'driver', deviceId }),
+    });
     if (response.user?.role !== 'driver') throw new Error('Use the Customer app for this account.');
     if (response.user?.accountStatus !== 'active') throw new Error('Your Driver profile is pending Admin approval.');
     tokenRef.current = response.token; sessionRef.current = response.sessionToken || null;
@@ -997,9 +1011,9 @@ export function DriverRuntimeProvider({ children }: { children: ReactNode }) {
 
   const value = useMemo<RuntimeContext>(() => ({
     ready, user, isOnline, connection, pendingRide, sentOffer, activeRide, activeRideId, driverLocation, error, longRange, alertReadiness,
-    acceptingRide, signIn, signOut, setOnline: setOnlineState, prepareAlertReadiness, confirmLockScreenAlerts, openAlertSetting, setLongRange, acceptRide,
+    acceptingRide, requestPhoneOtp, signIn, signOut, setOnline: setOnlineState, prepareAlertReadiness, confirmLockScreenAlerts, openAlertSetting, setLongRange, acceptRide,
     dismissRide: () => setPendingRide(null), emergencyClearRide, clearError: () => setError(null),
-  }), [acceptRide, acceptingRide, activeRide, activeRideId, alertReadiness, confirmLockScreenAlerts, driverLocation, emergencyClearRide, error, isOnline, openAlertSetting, pendingRide, prepareAlertReadiness, ready, sentOffer, setOnlineState, setLongRange, signIn, signOut, user, connection, longRange]);
+  }), [acceptRide, acceptingRide, activeRide, activeRideId, alertReadiness, confirmLockScreenAlerts, driverLocation, emergencyClearRide, error, isOnline, openAlertSetting, pendingRide, prepareAlertReadiness, ready, requestPhoneOtp, sentOffer, setOnlineState, setLongRange, signIn, signOut, user, connection, longRange]);
   return <DriverContext.Provider value={value}>{children}</DriverContext.Provider>;
 }
 

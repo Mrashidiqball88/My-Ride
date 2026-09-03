@@ -59,6 +59,9 @@ function DriverHome() {
   const runtime = useDriverRuntime();
   const [identifier, setIdentifier] = useState('');
   const [password, setPassword] = useState('');
+  const [otp, setOtp] = useState('');
+  const [authMode, setAuthMode] = useState<'password' | 'otp'>('password');
+  const [otpMessage, setOtpMessage] = useState('');
   const [busy, setBusy] = useState(false);
   const [, setClock] = useState(Date.now());
   const isWeb = Platform.OS === 'web';
@@ -77,8 +80,15 @@ function DriverHome() {
 
   const signIn = async () => {
     setBusy(true);
-    try { await runtime.signIn(identifier.trim(), password); }
+    try { await runtime.signIn(identifier.trim(), authMode === 'password' ? password : '', authMode === 'otp' ? otp.trim() : undefined); }
     catch (error) { report(error instanceof Error ? error.message : 'Unable to sign in'); }
+    finally { setBusy(false); }
+  };
+  const requestOtp = async () => {
+    setBusy(true);
+    setOtpMessage('');
+    try { setOtpMessage(await runtime.requestPhoneOtp(identifier.trim(), 'login')); }
+    catch (error) { report(error instanceof Error ? error.message : 'Unable to request phone OTP'); }
     finally { setBusy(false); }
   };
   const toggle = async (value: boolean) => {
@@ -133,9 +143,19 @@ function DriverHome() {
       <View style={[styles.authCard, { backgroundColor: colors.card, borderColor: colors.border, borderRadius: colors.radius + 10 }]}>
         <Text style={[styles.cardTitle, { color: colors.foreground }]}>Sign in to drive</Text>
         <TextInput testID="driver-identifier" value={identifier} onChangeText={setIdentifier} placeholder="Phone or email" placeholderTextColor={colors.mutedForeground} autoCapitalize="none" style={[styles.input, { color: colors.foreground, borderColor: colors.input }]} />
-        <TextInput testID="driver-password" value={password} onChangeText={setPassword} placeholder="Password" placeholderTextColor={colors.mutedForeground} secureTextEntry style={[styles.input, { color: colors.foreground, borderColor: colors.input }]} />
+         <View style={styles.authModes}>
+           <Pressable testID="driver-password-mode" onPress={() => setAuthMode('password')} style={[styles.modeButton, { borderColor: authMode === 'password' ? colors.primary : colors.border, backgroundColor: authMode === 'password' ? colors.secondary : colors.card }]}><Text style={{ color: colors.foreground }}>Password</Text></Pressable>
+           <Pressable testID="driver-otp-mode" onPress={() => setAuthMode('otp')} style={[styles.modeButton, { borderColor: authMode === 'otp' ? colors.primary : colors.border, backgroundColor: authMode === 'otp' ? colors.secondary : colors.card }]}><Text style={{ color: colors.foreground }}>Phone OTP</Text></Pressable>
+         </View>
+         {authMode === 'password'
+           ? <TextInput testID="driver-password" value={password} onChangeText={setPassword} placeholder="Password" placeholderTextColor={colors.mutedForeground} secureTextEntry style={[styles.input, { color: colors.foreground, borderColor: colors.input }]} />
+           : <View style={styles.otpBlock}>
+             <TextInput testID="driver-otp" value={otp} onChangeText={setOtp} placeholder="Phone verification code" placeholderTextColor={colors.mutedForeground} keyboardType="number-pad" autoComplete="sms-otp" style={[styles.input, { color: colors.foreground, borderColor: colors.input }]} />
+             <Pressable testID="driver-request-otp" onPress={() => void requestOtp()} disabled={busy} style={styles.otpLink}><Text style={{ color: colors.primary }}>Request phone OTP</Text></Pressable>
+             {!!otpMessage && <Text style={[styles.otpMessage, { color: colors.mutedForeground }]}>{otpMessage}</Text>}
+           </View>}
         <Pressable testID="driver-sign-in" disabled={busy} onPress={signIn} style={({ pressed }) => [styles.primaryButton, { backgroundColor: colors.primary, opacity: pressed || busy ? .75 : 1, borderRadius: colors.radius }]}>
-          {busy ? <ActivityIndicator color={colors.primaryForeground} /> : <Text style={[styles.buttonText, { color: colors.primaryForeground }]}>Sign in</Text>}
+           {busy ? <ActivityIndicator color={colors.primaryForeground} /> : <Text style={[styles.buttonText, { color: colors.primaryForeground }]}>{authMode === 'password' ? 'Sign in' : 'Verify & sign in'}</Text>}
         </Pressable>
       </View>
       <Text style={[styles.legal, { color: colors.mutedForeground }]}>Use the Driver web app to register and upload documents. Admin approval is required before this app can go online.</Text>
@@ -209,7 +229,7 @@ const styles = StyleSheet.create({
   auth: { flex: 1, paddingHorizontal: 24, alignItems: 'center' }, brandMark: { width: 62, height: 62, borderRadius: 21, alignItems: 'center', justifyContent: 'center', marginBottom: 18 },
   brand: { fontSize: 30, fontFamily: 'Inter_700Bold' }, subtle: { fontSize: 15, marginTop: 6 }, authCard: { width: '100%', borderWidth: 1, padding: 20, marginTop: 34, gap: 12 },
   cardTitle: { fontFamily: 'Inter_700Bold', fontSize: 19, marginBottom: 5 }, input: { borderWidth: 1, borderRadius: 12, paddingHorizontal: 14, paddingVertical: 14, fontFamily: 'Inter_400Regular', fontSize: 16 },
-  primaryButton: { height: 52, justifyContent: 'center', alignItems: 'center', marginTop: 4 }, buttonText: { fontFamily: 'Inter_700Bold', fontSize: 16 }, legal: { fontFamily: 'Inter_400Regular', fontSize: 13, lineHeight: 19, textAlign: 'center', marginTop: 20, paddingHorizontal: 12 },
+   primaryButton: { height: 52, justifyContent: 'center', alignItems: 'center', marginTop: 4 }, buttonText: { fontFamily: 'Inter_700Bold', fontSize: 16 }, authModes: { flexDirection: 'row', gap: 8 }, modeButton: { flex: 1, minHeight: 42, borderWidth: 1, borderRadius: 10, justifyContent: 'center', alignItems: 'center' }, otpBlock: { gap: 6 }, otpLink: { alignSelf: 'flex-start', paddingVertical: 2 }, otpMessage: { fontSize: 12, lineHeight: 17 }, legal: { fontFamily: 'Inter_400Regular', fontSize: 13, lineHeight: 19, textAlign: 'center', marginTop: 20, paddingHorizontal: 12 },
    app: { flex: 1, paddingHorizontal: 20 }, header: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingVertical: 20 }, eyebrow: { fontFamily: 'Inter_700Bold', fontSize: 11, letterSpacing: 1.2 }, name: { fontFamily: 'Inter_700Bold', fontSize: 24, marginTop: 3 },
   setupCard: { borderWidth: 1, padding: 16, marginBottom: 12 }, setupRow: { flexDirection: 'row', alignItems: 'center', gap: 9, marginTop: 11 }, setupRowText: { flex: 1, fontFamily: 'Inter_500Medium', fontSize: 13 }, setupMessage: { fontFamily: 'Inter_500Medium', fontSize: 12, lineHeight: 18, marginTop: 14 }, setupActions: { gap: 10, marginTop: 16 },
   statusCard: { borderWidth: 1, padding: 18 }, statusRow: { flexDirection: 'row', alignItems: 'center', gap: 12 }, statusDot: { width: 12, height: 12, borderRadius: 6 }, statusTitle: { fontFamily: 'Inter_700Bold', fontSize: 18 }, statusCopy: { fontFamily: 'Inter_400Regular', fontSize: 13, marginTop: 3, lineHeight: 19 },

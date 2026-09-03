@@ -481,14 +481,24 @@ body{font-family:'DM Sans','Segoe UI',sans-serif;background:var(--dc-night);colo
     <!-- Sign In -->
     <div id="login-form">
       <div class="form-group"><label>Phone or Email</label><input type="text" id="l-email" placeholder="03001234567 or email" inputmode="tel" autocomplete="username"></div>
-      <div class="form-group">
-        <label>Password</label>
+       <div style="display:flex;gap:.4rem;margin:-.2rem 0 .8rem">
+         <button type="button" class="auth-tab active" id="driver-password-login-tab" onclick="setDriverLoginAuthMode('password')">Password</button>
+         <button type="button" class="auth-tab" id="driver-otp-login-tab" onclick="setDriverLoginAuthMode('otp')">Phone OTP</button>
+       </div>
+       <div class="form-group" id="driver-login-password-group">
+         <label>Password</label>
         <div class="pw-wrap">
           <input type="password" id="l-pass" placeholder="••••••••" autocomplete="current-password">
           <button type="button" class="pw-eye" onclick="togglePw('l-pass')" tabindex="-1">👁</button>
         </div>
       </div>
-      <button class="btn-primary" onclick="doLogin()">Sign In</button>
+       <div class="form-group" id="driver-login-otp-group" style="display:none">
+         <label>Phone Verification Code</label>
+         <input type="text" id="l-otp" placeholder="Enter code" maxlength="6" inputmode="numeric" autocomplete="one-time-code">
+         <button type="button" class="btn-text-link" onclick="requestDriverOtp('login')">Request phone OTP</button>
+         <div id="driver-login-otp-status" style="font-size:.7rem;color:#888;min-height:1rem"></div>
+       </div>
+       <button class="btn-primary" id="driver-login-btn" onclick="doLogin()">Sign In</button>
       <div style="text-align:center;margin-top:.6rem">
         <button class="btn-text-link" onclick="switchTab('forgot')">Forgot Password?</button>
       </div>
@@ -506,7 +516,11 @@ body{font-family:'DM Sans','Segoe UI',sans-serif;background:var(--dc-night);colo
         <p style="text-align:center;font-size:.73rem;color:#555;margin-bottom:.9rem">Step 1 of 2 — Basic Information</p>
         <div class="form-group"><label>Full Name <span style="color:#f5c518">*</span></label><input type="text" id="r-name" placeholder="Driver name"></div>
         <div class="form-group"><label>Phone Number <span style="color:#f5c518">*</span></label><input type="tel" id="r-phone" placeholder="+92 300 0000000" inputmode="tel"></div>
-        <div class="form-group"><label>Email <span style="color:#f5c518">*</span></label><input type="email" id="r-email" placeholder="you@email.com" autocomplete="email" required></div>
+         <div class="form-group"><label>Email <span style="color:#888">(optional)</span></label><input type="email" id="r-email" placeholder="you@email.com (optional)" autocomplete="email"></div>
+         <div style="display:flex;gap:.4rem;margin:.2rem 0 .8rem">
+           <button type="button" class="auth-tab active" id="driver-password-register-tab" onclick="setDriverRegisterAuthMode('password')">Password</button>
+           <button type="button" class="auth-tab" id="driver-otp-register-tab" onclick="setDriverRegisterAuthMode('otp')">Phone OTP</button>
+         </div>
         <div class="form-group">
           <label>Password <span style="color:#f5c518">*</span></label>
           <div class="pw-wrap">
@@ -514,6 +528,12 @@ body{font-family:'DM Sans','Segoe UI',sans-serif;background:var(--dc-night);colo
             <button type="button" class="pw-eye" onclick="togglePw('r-pass')" tabindex="-1">👁</button>
           </div>
         </div>
+         <div class="form-group" id="driver-register-otp-group" style="display:none">
+           <label>Phone Verification Code</label>
+           <input type="text" id="r-otp" placeholder="Enter code" maxlength="6" inputmode="numeric" autocomplete="one-time-code">
+           <button type="button" class="btn-text-link" onclick="requestDriverOtp('signup')">Request phone OTP</button>
+           <div id="driver-register-otp-status" style="font-size:.7rem;color:#888;min-height:1rem"></div>
+         </div>
         <div class="form-group">
           <label>Vehicle Type <span style="color:#f5c518">*</span></label>
           <select id="r-vehicle">
@@ -1251,6 +1271,45 @@ function initTodayFareWidget() {
 }
 
 // ── Auth ───────────────────────────────────────────────────────────────────
+let driverLoginAuthMode = 'password';
+let driverRegisterAuthMode = 'password';
+
+function setDriverLoginAuthMode(mode) {
+  driverLoginAuthMode = mode;
+  document.getElementById('driver-login-password-group').style.display = mode === 'password' ? 'block' : 'none';
+  document.getElementById('driver-login-otp-group').style.display = mode === 'otp' ? 'block' : 'none';
+  document.getElementById('driver-password-login-tab').classList.toggle('active', mode === 'password');
+  document.getElementById('driver-otp-login-tab').classList.toggle('active', mode === 'otp');
+  document.getElementById('driver-login-btn').textContent = mode === 'password' ? 'Sign In' : 'Verify & Sign In';
+  document.getElementById('auth-error').textContent = '';
+}
+
+function setDriverRegisterAuthMode(mode) {
+  driverRegisterAuthMode = mode;
+  document.getElementById('driver-register-password-group').style.display = mode === 'password' ? 'block' : 'none';
+  document.getElementById('driver-register-otp-group').style.display = mode === 'otp' ? 'block' : 'none';
+  document.getElementById('driver-password-register-tab').classList.toggle('active', mode === 'password');
+  document.getElementById('driver-otp-register-tab').classList.toggle('active', mode === 'otp');
+  document.getElementById('auth-error').textContent = '';
+}
+
+async function requestDriverOtp(purpose) {
+  const phone = document.getElementById(purpose === 'login' ? 'l-email' : 'r-phone').value.trim();
+  const status = document.getElementById(purpose === 'login' ? 'driver-login-otp-status' : 'driver-register-otp-status');
+  if (!phone || phone.includes('@')) {
+    document.getElementById('auth-error').textContent = 'Enter a valid mobile number for phone OTP';
+    return;
+  }
+  status.textContent = 'Requesting code…';
+  try {
+    const result = await apiCall('/api/auth/phone-otp/request', 'POST', { phone, role: 'driver', purpose });
+    status.textContent = result.message || 'Code requested. Check your phone or the development server log.';
+  } catch (error) {
+    status.textContent = '';
+    document.getElementById('auth-error').textContent = error.message;
+  }
+}
+
 function switchTab(t) {
   document.getElementById('login-form').style.display    = t === 'login'    ? 'block' : 'none';
   document.getElementById('register-form').style.display = t === 'register' ? 'block' : 'none';
@@ -1261,7 +1320,7 @@ function switchTab(t) {
       const el = document.getElementById(id); if (el) el.style.display = i === 0 ? 'block' : 'none';
     });
   }
-  document.querySelectorAll('.auth-tab').forEach((b, i) => b.classList.toggle('active', (i === 0) === (t === 'login') || (i === 1) === (t === 'register')));
+  document.querySelectorAll('.auth-tabs > .auth-tab').forEach((b, i) => b.classList.toggle('active', (i === 0) === (t === 'login') || (i === 1) === (t === 'register')));
   document.getElementById('auth-error').textContent = '';
 }
 
@@ -1300,9 +1359,14 @@ async function doLogin() {
   const pass = document.getElementById('l-pass').value;
   const errEl = document.getElementById('auth-error');
   if (!identifier) return (errEl.textContent = 'Enter your phone number or email');
-  if (!pass) return (errEl.textContent = 'Enter your password');
+  const otp = document.getElementById('l-otp').value.trim();
+  if (driverLoginAuthMode === 'password' && !pass) return (errEl.textContent = 'Enter your password');
+  if (driverLoginAuthMode === 'otp' && !otp) return (errEl.textContent = 'Enter the phone verification code');
+  if (driverLoginAuthMode === 'otp' && identifier.includes('@')) return (errEl.textContent = 'Phone OTP login requires a mobile number');
   try {
-    const res = await apiCall('/api/auth/login', 'POST', { identifier, password: pass, deviceId: getDriverDeviceId() });
+    const res = await apiCall('/api/auth/login', 'POST', driverLoginAuthMode === 'otp'
+      ? { identifier, otp, role: 'driver', deviceId: getDriverDeviceId() }
+      : { identifier, password: pass, role: 'driver', deviceId: getDriverDeviceId() });
     if (res.user.role !== 'driver') throw new Error('This account is registered as a customer. Please use the Driver App.');
     saveSession(res);
   } catch (e) { errEl.textContent = e.message; }
@@ -1323,11 +1387,13 @@ function nextRegStep() {
   const name  = document.getElementById('r-name').value.trim();
   const phone = document.getElementById('r-phone').value.trim();
   const pass  = document.getElementById('r-pass').value;
+  const otp   = document.getElementById('r-otp').value.trim();
   const model = document.getElementById('r-vehicle-model').value.trim();
   const plate = document.getElementById('r-plate').value.trim();
   if (!name)  return (errEl.textContent = 'Full name is required');
   if (!phone) return (errEl.textContent = 'Phone number is required');
-  if (pass.length < 6) return (errEl.textContent = 'Password must be at least 6 characters');
+  if (driverRegisterAuthMode === 'password' && pass.length < 6) return (errEl.textContent = 'Password must be at least 6 characters');
+  if (driverRegisterAuthMode === 'otp' && !otp) return (errEl.textContent = 'Enter the phone verification code');
   if (!model) return (errEl.textContent = 'Vehicle model is required');
   if (!plate) return (errEl.textContent = 'Number plate is required');
   errEl.textContent = '';
@@ -1435,6 +1501,7 @@ async function doRegister() {
   const vehicleModel = document.getElementById('r-vehicle-model').value.trim();
   const vehiclePlate = document.getElementById('r-plate').value.trim().toUpperCase();
   const pass         = document.getElementById('r-pass').value;
+  const otp          = document.getElementById('r-otp').value.trim();
 
   const errEl     = document.getElementById('auth-error');
   const submitBtn = document.getElementById('reg-submit-btn');
@@ -1452,9 +1519,9 @@ async function doRegister() {
   errEl.textContent = '';
   if (!name) return (errEl.textContent = 'Full name is required');
   if (!phone) return (errEl.textContent = 'Phone number is required');
-  if (!email) return (errEl.textContent = 'Email address is required');
-  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return (errEl.textContent = 'Enter a valid email address');
-  if (pass.length < 6) return (errEl.textContent = 'Password must be at least 6 characters');
+  if (email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return (errEl.textContent = 'Enter a valid email address');
+  if (driverRegisterAuthMode === 'password' && pass.length < 6) return (errEl.textContent = 'Password must be at least 6 characters');
+  if (driverRegisterAuthMode === 'otp' && !otp) return (errEl.textContent = 'Enter the phone verification code');
   if (!vehicleModel) return (errEl.textContent = 'Vehicle model is required');
   if (!vehiclePlate) return (errEl.textContent = 'Number plate is required');
   if (submitBtn) { submitBtn.disabled = true; submitBtn.textContent = '⏳ Preparing documents…'; }
@@ -1514,7 +1581,8 @@ async function doRegister() {
   };
 
   xhr.send(JSON.stringify({
-    name, phone, email, password: pass, role: 'driver', vehicleType: vehicle,
+    name, phone, ...(email ? { email } : {}), ...(driverRegisterAuthMode === 'password' ? { password: pass } : { otp }),
+    role: 'driver', vehicleType: vehicle,
     ridePreference: document.getElementById('r-ride-preference').value,
     vehicleModel, vehiclePlate, profilePhoto, licensePhoto, cnicFront, cnicBack, vehicleRegPhoto,
     deviceId: getDriverDeviceId()

@@ -473,6 +473,7 @@ input[type=date]:focus{border-color:#f5c518}
        <div class="sb-item"        onclick="showSection('terms-settings')" data-sec="terms-settings"><span class="sb-icon">📜</span> Terms & Conditions Settings</div>
       <div class="sb-item"        onclick="showSection('live-rides')"   data-sec="live-rides">  <span class="sb-icon">🗺️</span> Live Rides</div>
        <div class="sb-item"        onclick="showSection('ride-retention')" data-sec="ride-retention"><span class="sb-icon">🧹</span> Rides Data Retention</div>
+       <div class="sb-item"        onclick="showSection('data-management')" data-sec="data-management"><span class="sb-icon">⚠️</span> Data Management</div>
       <div class="sb-item"        onclick="showSection('sos')"          data-sec="sos">         <span class="sb-icon">🆘</span> SOS Monitor <span class="sb-badge-count" id="sos-cnt" style="display:none">0</span></div>
       <div class="sb-item"        onclick="showSection('ratings')"      data-sec="ratings">      <span class="sb-icon">⭐</span> Ratings & Feedback</div>
       <div class="sb-item"        onclick="showSection('support')"      data-sec="support">      <span class="sb-icon">🎫</span> Support Tickets <span class="sb-badge-count" id="sup-cnt" style="display:none">0</span></div>
@@ -774,6 +775,26 @@ input[type=date]:focus{border-color:#f5c518}
             <button class="btn btn-red" id="retention-purge-btn" type="button" onclick="purgeOldRides()">Purge Old Ride History</button>
           </div>
           <div class="retention-feedback" id="retention-feedback" role="status"></div>
+        </div>
+      </div>
+
+      <!-- ════ 10. DATA MANAGEMENT ════ -->
+      <div class="section-panel" id="sec-data-management">
+        <div class="sec-hdr">
+          <h2>⚠️ Data Management</h2>
+        </div>
+        <div class="retention-card">
+          <p class="section-intro">Super Admin only. These actions permanently remove accounts for one role and their directly owned wallet, payment, and push-subscription records. Rides, Admin records, settings, and the other role are preserved.</p>
+          <div class="retention-grid">
+            <div class="retention-stat"><div class="retention-stat-label">Customer flush</div><div class="retention-stat-value">Customers only</div></div>
+            <div class="retention-stat"><div class="retention-stat-label">Driver flush</div><div class="retention-stat-value">Drivers only</div></div>
+            <div class="retention-stat"><div class="retention-stat-label">Protection</div><div class="retention-stat-value">Admin password required</div></div>
+          </div>
+          <div style="display:flex;flex-wrap:wrap;gap:.75rem;margin-top:1rem">
+            <button class="btn btn-red" id="flush-customers-btn" type="button" onclick="flushRoleDataFromAdmin('customers')">Flush Customer Data</button>
+            <button class="btn btn-red" id="flush-drivers-btn" type="button" onclick="flushRoleDataFromAdmin('drivers')">Flush Driver Data</button>
+          </div>
+          <div class="retention-feedback" id="data-management-feedback" role="status"></div>
         </div>
       </div>
 
@@ -1622,7 +1643,7 @@ function hasSectionAccess(name) {
   if (name === 'app-settings') {
     return ['manageRideSettings', 'manageFareSettings', 'manageLocationAliases', 'managePaymentSettings'].some(hasPermission);
   }
-  if (['sub-admins', 'deletions', 'ride-retention'].includes(name)) return isSuperAdmin;
+  if (['sub-admins', 'deletions', 'ride-retention', 'data-management'].includes(name)) return isSuperAdmin;
   return false;
 }
 
@@ -2015,7 +2036,7 @@ const SECTION_TITLES = {
   'live-rides':'Live Rides & History', sos:'SOS Alert Monitor',
   'fee-compliance':'Driver Wallets & Daily Fees',
   'app-settings':'App Settings / Pricing', 'terms-settings':'Terms & Conditions Settings', 'location-aliases':'Customer Location Aliases',
-  'ride-settings':'Ride Settings', 'fare-settings':'Daily Fare Settings', 'waiting-rate-settings':'Per-Minute Waiting / Stop Rates', 'customer-fare-display-settings':'Customer Fare Display', 'student-discount-settings':'Student Discount', 'long-range-settings':'Long Range Ride Settings', 'pay-settings':'Payment Settings', 'ride-retention':'Rides Data Retention', ratings:'Ratings & Feedback', support:'Support Tickets', 'audit-logs':'Payment & Pass Audit Logs',
+  'ride-settings':'Ride Settings', 'fare-settings':'Daily Fare Settings', 'waiting-rate-settings':'Per-Minute Waiting / Stop Rates', 'customer-fare-display-settings':'Customer Fare Display', 'student-discount-settings':'Student Discount', 'long-range-settings':'Long Range Ride Settings', 'pay-settings':'Payment Settings', 'ride-retention':'Rides Data Retention', 'data-management':'Data Management', ratings:'Ratings & Feedback', support:'Support Tickets', 'audit-logs':'Payment & Pass Audit Logs',
     deletions:'Account Deletion Requests', 'sub-admins':'Sub-Admin User Management'
 };
 const SECTION_SAVE_HANDLERS = {
@@ -2144,7 +2165,7 @@ function showSection(name) {
     drivers: () => loadDrivers(currentDriverStatus), passengers: () => loadPassengers(currentPassStatus),
     'new-requests': loadNewRequests, 'student-approvals': () => loadStudentApprovals(currentStudentStatus), 'temp-blocked': loadTempBlocked,
     'blk-pass': loadBlockedPass, 'live-rides': () => loadRides(currentRideStatus),
-    'ride-retention': loadRideRetention,
+     'ride-retention': loadRideRetention, 'data-management': () => undefined,
     sos: () => loadSOS(currentSOSFilter), 'ride-settings': loadRideSettings, 'fare-settings': loadFareSettings, 'customer-fare-display-settings': loadCustomerFareDisplaySettings, 'student-discount-settings': loadStudentDiscountSettings, 'long-range-settings': loadLongRangeSettings, 'terms-settings': loadTermsSettings, 'location-aliases': loadLocationAliases, 'pay-settings': loadPaymentSettings,
     'fee-compliance': loadFeeCompliance, 'waiting-rate-settings': loadWaitingRateSettings,
     ratings: loadRatings, support: () => loadSupportTickets(currentSupStatus),
@@ -2660,6 +2681,37 @@ async function purgeOldRides() {
     showToast(e.message || 'Could not purge ride history', 'error');
   } finally {
     if (button) { button.disabled = false; button.textContent = 'Purge Old Ride History'; }
+  }
+}
+
+async function flushRoleDataFromAdmin(role) {
+  const isDriver = role === 'drivers';
+  const label = isDriver ? 'Driver' : 'Customer';
+  if (!confirm(`Permanently delete all ${label} accounts and directly owned ${label} data? This cannot be undone. Other role accounts, rides, Admin records, and settings will be preserved.`)) return;
+  const password = prompt('Enter the current Admin password to continue:');
+  if (password === null) return;
+  if (!password) {
+    showToast('Admin password is required.', 'error');
+    return;
+  }
+  const button = document.getElementById(`${isDriver ? 'flush-drivers' : 'flush-customers'}-btn`);
+  const feedback = document.getElementById('data-management-feedback');
+  if (button) { button.disabled = true; button.textContent = `Flushing ${label} data…`; }
+  if (feedback) { feedback.textContent = `Flushing ${label} data…`; feedback.style.color = '#f59e0b'; }
+  try {
+    const endpoint = isDriver ? '/api/admin/data/flush-drivers' : '/api/admin/data/flush-customers';
+    const data = await api(endpoint, 'POST', { password });
+    const count = Number(data.counts?.users || 0);
+    if (feedback) {
+      feedback.textContent = `${data.message} Related records removed: ${Object.entries(data.counts || {}).filter(([key]) => key !== 'users').map(([key, value]) => `${key}: ${value}`).join(', ') || 'none'}.`;
+      feedback.style.color = '#22c55e';
+    }
+    showToast(`${label} data flush complete: ${count} account${count === 1 ? '' : 's'} removed ✓`, 'success');
+  } catch (error) {
+    if (feedback) { feedback.textContent = error.message; feedback.style.color = '#ef4444'; }
+    showToast(error.message || `Could not flush ${label} data`, 'error');
+  } finally {
+    if (button) { button.disabled = false; button.textContent = `Flush ${label} Data`; }
   }
 }
 
@@ -4950,6 +5002,8 @@ function applyPermissions() {
   if (deleteNav) deleteNav.style.display = isSuperAdmin ? '' : 'none';
   const retentionNav = document.querySelector('[data-sec="ride-retention"]');
   if (retentionNav) retentionNav.style.display = isSuperAdmin ? '' : 'none';
+  const dataManagementNav = document.querySelector('[data-sec="data-management"]');
+  if (dataManagementNav) dataManagementNav.style.display = isSuperAdmin ? '' : 'none';
   const searchPanel = document.getElementById('admin-search');
   if (searchPanel) searchPanel.style.display = (isSuperAdmin || hasPermission('viewCustomers') || hasPermission('viewDrivers')) ? '' : 'none';
   ['bulk-trial-btn', 'waiver-btn', 'remind-btn'].forEach(id => {
