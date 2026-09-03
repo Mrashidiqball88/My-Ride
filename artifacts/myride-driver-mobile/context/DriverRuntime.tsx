@@ -103,6 +103,7 @@ type RuntimeContext = {
   acceptRide(): Promise<void>;
   acceptingRide: boolean;
   dismissRide(): void;
+  emergencyClearRide(): void;
   clearError(): void;
 };
 const DriverContext = createContext<RuntimeContext | null>(null);
@@ -231,6 +232,8 @@ export function DriverRuntimeProvider({ children }: { children: ReactNode }) {
   const localRideNotificationIds = useRef(new Map<string, string>());
   const receivedRideEvents = useRef(new Map<string, number>());
   const pendingNotificationRideId = useRef<string | null>(null);
+  const locallyClearedRideIds = useRef(new Set<string>());
+  const emergencyClearGeneration = useRef(0);
   const lastHeartbeatAckAt = useRef(0);
   const locationServiceMode = useRef<'stopped' | 'availability' | 'active-ride'>('stopped');
   const locationServiceTransition = useRef<Promise<void>>(Promise.resolve());
@@ -265,7 +268,8 @@ export function DriverRuntimeProvider({ children }: { children: ReactNode }) {
     try {
       const rides = await api('/api/rides/available', tokenRef.current, sessionRef.current || undefined);
       const liveRides = Array.isArray(rides)
-        ? rides.map(ride => normalizeRideRequest(ride as RideRequest & { _id?: string })).filter(isRideOfferLive)
+        ? rides.map(ride => normalizeRideRequest(ride as RideRequest & { _id?: string }))
+          .filter(ride => isRideOfferLive(ride) && !locallyClearedRideIds.current.has(ride.id))
         : [];
       const sentOfferId = sentOfferRef.current?.id;
       const nextRide = requestedRideId
@@ -286,6 +290,11 @@ export function DriverRuntimeProvider({ children }: { children: ReactNode }) {
       const ride = response?.ride
         ? normalizeRideRequest(response.ride as RideRequest & { _id?: string })
         : null;
+      if (ride?.id && locallyClearedRideIds.current.has(ride.id)) {
+        setActiveRide(null);
+        setActiveRideId(null);
+        return false;
+      }
       setActiveRide(ride);
       setActiveRideId(ride?.id || null);
       if (ride?.id) {
@@ -303,7 +312,8 @@ export function DriverRuntimeProvider({ children }: { children: ReactNode }) {
   const handleRideOffer = useCallback((ride: RideRequest, { fromPush = false } = {}) => {
     const nextRide = normalizeRideRequest(ride);
     if (!isOnlineRef.current || activeRideIdRef.current || !isRideOfferLive(nextRide)
-      || sentOfferRef.current?.id === nextRide.id) return;
+      || sentOfferRef.current?.id === nextRide.id
+      || locallyClearedRideIds.current.has(nextRide.id)) return;
     const previousEventAt = receivedRideEvents.current.get(nextRide.id) || 0;
     if (Date.now() - previousEventAt < 120_000) return;
     const receivedAt = Date.now();
@@ -913,9 +923,38 @@ export function DriverRuntimeProvider({ children }: { children: ReactNode }) {
     setAlertReadiness(current => ({ ...current, ready: false, lockScreenConfirmed: false, foregroundServiceReady: false }));
   }, [setOnlineState]);
 
+  const emergencyClearRide = useCallback(() => {
+    const rideIds = new Set([
+      pendingRide?.id,
+      sentOffer?.id,
+      activeRide?.id,
+      activeRideId,
+    ].filter(Boolean).map(String));
+
+    rideIds.forEach(rideId => {
+      locallyClearedRideIds.current.add(rideId);
+      socket.current?.emit('ride:leave', rideId);
+    });
+
+    emergencyClearGeneration.current += 1;
+    clearAllRideAlerts();
+    receivedRideEvents.current.clear();
+    pendingNotificationRideId.current = null;
+    sentOfferRef.current = null;
+    activeRideIdRef.current = null;
+    setPendingRide(null);
+    setSentOffer(null);
+    setActiveRide(null);
+    setActiveRideId(null);
+    setAcceptingRide(false);
+    setError(null);
+    void SecureStore.deleteItemAsync(ACTIVE_RIDE_KEY);
+  }, [activeRide, activeRideId, clearAllRideAlerts, pendingRide, sentOffer]);
+
   const acceptRide = useCallback(async () => {
     if (!pendingRide || !tokenRef.current || acceptingRide) return;
     const offer = pendingRide;
+    const clearGeneration = emergencyClearGeneration.current;
     if (!isRideOfferLive(offer)) {
       setPendingRide(null);
       throw new Error('This ride request has expired.');
@@ -925,6 +964,7 @@ export function DriverRuntimeProvider({ children }: { children: ReactNode }) {
       const response = await apiWithTimeout(`/api/rides/${offer.id}/accept`, tokenRef.current, sessionRef.current || undefined, {
         method: 'PATCH', body: JSON.stringify({}),
       });
+      if (clearGeneration !== emergencyClearGeneration.current) return;
       const ride = normalizeRideRequest(response as RideRequest & { _id?: string });
       socket.current?.emit('ride:join', offer.id);
       clearRideAlert(offer.id);
@@ -958,8 +998,8 @@ export function DriverRuntimeProvider({ children }: { children: ReactNode }) {
   const value = useMemo<RuntimeContext>(() => ({
     ready, user, isOnline, connection, pendingRide, sentOffer, activeRide, activeRideId, driverLocation, error, longRange, alertReadiness,
     acceptingRide, signIn, signOut, setOnline: setOnlineState, prepareAlertReadiness, confirmLockScreenAlerts, openAlertSetting, setLongRange, acceptRide,
-    dismissRide: () => setPendingRide(null), clearError: () => setError(null),
-  }), [acceptRide, acceptingRide, activeRide, activeRideId, alertReadiness, confirmLockScreenAlerts, driverLocation, error, isOnline, openAlertSetting, pendingRide, prepareAlertReadiness, ready, sentOffer, setOnlineState, setLongRange, signIn, signOut, user, connection, longRange]);
+    dismissRide: () => setPendingRide(null), emergencyClearRide, clearError: () => setError(null),
+  }), [acceptRide, acceptingRide, activeRide, activeRideId, alertReadiness, confirmLockScreenAlerts, driverLocation, emergencyClearRide, error, isOnline, openAlertSetting, pendingRide, prepareAlertReadiness, ready, sentOffer, setOnlineState, setLongRange, signIn, signOut, user, connection, longRange]);
   return <DriverContext.Provider value={value}>{children}</DriverContext.Provider>;
 }
 

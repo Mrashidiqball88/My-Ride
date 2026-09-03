@@ -1455,6 +1455,16 @@ const userSchema = new mongoose.Schema({
 
 const customerSchema = userSchema.clone();
 customerSchema.path('role').default('customer');
+customerSchema.path('email').options.required = false;
+customerSchema.path('email').options.unique = false;
+customerSchema.index(
+  { email: 1 },
+  {
+    unique: true,
+    name: 'customer_email_unique',
+    partialFilterExpression: { email: { $type: 'string' } }
+  }
+);
 customerSchema.remove('isAdmin');
 const driverSchema = userSchema.clone();
 driverSchema.path('role').default('driver');
@@ -1927,6 +1937,20 @@ async function migrateLegacyUserData() {
   }
   if (migrated) console.log(`✓ Migrated ${migrated} legacy Customer/Driver record(s) into isolated collections`);
   return migrated;
+}
+
+async function removeCustomerEmailIndex() {
+  if (mongoose.connection.readyState !== 1) return;
+  try {
+    const customersCollection = mongoose.connection.collection('customers');
+    const indexes = await customersCollection.indexes();
+    if (indexes.some(index => index.name === 'email_1')) {
+      await customersCollection.dropIndex('email_1');
+      console.log('✓ Removed invalid customers.email_1 index');
+    }
+  } catch (error) {
+    console.warn('Customer email index cleanup skipped:', error.message);
+  }
 }
 
 const CUSTOMER_LOCATION_ALIASES_KEY = 'customer_location_aliases';
@@ -8528,6 +8552,7 @@ async function connectDatabase() {
       await mongoose.connect(demoMongo.getUri(), getMongoConnectionOptions());
       dbConnected = true;
       global._demoMongoServer = demoMongo;
+      await removeCustomerEmailIndex();
       await migrateLegacyUserData();
       await initializeAdminSecurity();
       await seedDemoAccounts();
@@ -8546,6 +8571,7 @@ async function connectDatabase() {
     dbConnected = true;
     console.log('✓ MongoDB Atlas connected');
 
+    await removeCustomerEmailIndex();
     await migrateLegacyUserData();
     await initializeAdminSecurity();
 

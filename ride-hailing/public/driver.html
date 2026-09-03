@@ -864,7 +864,11 @@ body{font-family:'DM Sans','Segoe UI',sans-serif;background:var(--dc-night);colo
   <div class="rr-offer-sent" id="rr-offer-sent">✓ Offer sent — waiting for customer to choose…</div>
 
   <div class="rr-actions" id="rr-actions">
-    <button class="btn-reject" onclick="rejectRide()">✗ Reject</button>
+    <button class="btn-reject"
+            onpointerdown="startEmergencyRideClearHold(event)"
+            onpointerup="finishEmergencyRideClearHold(event)"
+            onpointercancel="finishEmergencyRideClearHold(event)"
+            onclick="handleEmergencyRideButtonClick(event, rejectRide)">✗ Reject</button>
     <button class="btn-counter" onclick="sendCounter()">⇄ Counter</button>
     <button class="btn-accept" onclick="acceptRide()">Accept</button>
   </div>
@@ -917,6 +921,8 @@ let sentOffer     = null;   // { rideId } after driver sends an offer, before cu
 let acceptRideInFlight = false;
 let activeRide    = null;   // accepted ride
 let requestTimer  = null;
+let emergencyRideClearHoldTimer = null;
+let emergencyRideClearIgnoreClickUntil = 0;
 let locationWatch = null;
 let todayRides    = 0;
 let todayEarnings = 0;
@@ -2873,6 +2879,73 @@ function stopRideAlert() {
   }
 }
 
+function startEmergencyRideClearHold(event) {
+  if (event?.pointerType === 'mouse' && event.button !== 0) return;
+  clearTimeout(emergencyRideClearHoldTimer);
+  emergencyRideClearIgnoreClickUntil = 0;
+  event.currentTarget?.setPointerCapture?.(event.pointerId);
+  emergencyRideClearHoldTimer = setTimeout(() => {
+    emergencyRideClearHoldTimer = null;
+    emergencyRideClearIgnoreClickUntil = Date.now() + 1000;
+    if (navigator.vibrate) navigator.vibrate([180, 80, 180]);
+    emergencyClearRideLocally();
+  }, 5000);
+}
+
+function finishEmergencyRideClearHold(event) {
+  clearTimeout(emergencyRideClearHoldTimer);
+  emergencyRideClearHoldTimer = null;
+  if (event?.pointerId !== undefined) {
+    event.currentTarget?.releasePointerCapture?.(event.pointerId);
+  }
+}
+
+function handleEmergencyRideButtonClick(event, fallback) {
+  if (Date.now() < emergencyRideClearIgnoreClickUntil) {
+    event.preventDefault();
+    return false;
+  }
+  fallback();
+  return false;
+}
+
+function emergencyClearRideLocally() {
+  const rideIds = new Set([
+    activeRide?._id || activeRide?.id,
+    pendingRide?._id || pendingRide?.id,
+    sentOffer?.rideId
+  ].filter(Boolean).map(String));
+
+  rideIds.forEach(rideId => {
+    socket?.emit('ride:leave', rideId);
+  });
+
+  stopActiveRideLocationSync();
+  clearInterval(requestTimer);
+  requestTimer = null;
+  stopRideAlert();
+
+  pendingRide = null;
+  sentOffer = null;
+  activeRide = null;
+  acceptRideInFlight = false;
+  loadingAcceptedRideId = null;
+  navigationRoute = null;
+  navigationRouteRequest++;
+  navigationRouteInFlight = false;
+  navigationFollowing = true;
+  driverMapAutoCenter = true;
+
+  hideRideRequest();
+  const activePanel = document.getElementById('active-panel');
+  if (activePanel) activePanel.style.display = 'none';
+  document.getElementById('app')?.classList.remove('navigation-active');
+  clearRideMap();
+  renderAvailabilityState();
+  requestAnimationFrame(() => map?.resize());
+  showToast('Ride cleared locally. Driver dashboard is available.', 'info');
+}
+
 function rejectRide() {
   hideRideRequest();
   clearRideMap();
@@ -3003,7 +3076,7 @@ function renderActiveButtons(status) {
     'in-progress': `<button class="ap-btn complete" onclick="updateStatus('completed')">🏁 Complete Ride</button>`
   };
   btns.innerHTML = (map[status] || '') +
-    (status !== 'in-progress' ? `<button class="ap-btn cancel" onclick="cancelActiveRide()">✗ Cancel Ride</button>` : '');
+    (status !== 'in-progress' ? `<button class="ap-btn cancel" onpointerdown="startEmergencyRideClearHold(event)" onpointerup="finishEmergencyRideClearHold(event)" onpointercancel="finishEmergencyRideClearHold(event)" onclick="handleEmergencyRideButtonClick(event, cancelActiveRide)">✗ Cancel Ride</button>` : '');
 }
 
 async function updateStatus(status) {

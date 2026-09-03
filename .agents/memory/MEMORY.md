@@ -13,6 +13,8 @@
 - [PWA shell updates](customer-pwa-shell-updates.md) — bump the Service Worker cache version when repairing cached Customer or Driver HTML and inline JavaScript.
 - [Mobile location search focus](mobile-location-search-focus.md) — restoring focus after moving a live location input into its search sheet prevents mobile keyboard dismissal.
 - [Optional unique identity fields](optional-unique-identity-fields.md) — sparse unique fields must be omitted for inapplicable roles, never persisted as empty strings.
+- [Customer email index policy](customer-email-index-policy.md) — Customer email uniqueness must exclude null values and remove legacy non-sparse email indexes.
+- [Driver emergency ride clear](driver-emergency-ride-clear.md) — a five-second hold may reset local Driver ride state without waiting for a backend cancellation response.
 - [Ride offer expiry authority](ride-offer-expiry-authority.md) — offer windows are persisted server timestamps, never client-only countdowns.
 - [Mockup preview routing](mockup-preview-routing.md) — sandbox previews need the artifact base path and component registry to avoid blank or fallback frames.
 - [Preview database persistence](preview-database-persistence.md) — without MONGO_URI, preview users live in the workflow's in-memory MongoDB and must be seeded on startup.
