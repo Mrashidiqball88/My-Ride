@@ -2581,35 +2581,36 @@ async function resolveRideLocationAddress(location) {
 }
 
 async function syncPickupInputWithPin(lat, lng, requestId) {
-  const label = await reverseLocationLabel(lat, lng);
-  const currentPickup = pickup;
-  if (requestId !== customerPickupReverseRequest
-    || !currentPickup
-    || Math.abs(currentPickup.lat - lat) > 0.000001
-    || Math.abs(currentPickup.lng - lng) > 0.000001) return;
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const label = await reverseLocationLabel(lat, lng);
+    const currentPickup = pickup;
+    if (requestId !== customerPickupReverseRequest
+      || !currentPickup
+      || Math.abs(currentPickup.lat - lat) > 0.000001
+      || Math.abs(currentPickup.lng - lng) > 0.000001) return;
 
-  const resolvedLabel = String(label || '').trim();
-  const input = document.getElementById('pickup-input');
-  if (resolvedLabel) {
-    // Keep the resolved address in the authoritative pickup object and
-    // explicitly mirror it into the live search field. The input may have
-    // been moved into the location sheet while the request was in flight.
-    currentPickup.address = resolvedLabel;
-    if (input) {
-      input.value = resolvedLabel;
-      input.classList.add('has-val');
+    const resolvedLabel = String(label || '').trim();
+    if (resolvedLabel) {
+      // This is the single success binding for GPS and map-pin pickup
+      // selection. Write the resolved text directly to the live input as
+      // well as the payload state, even when the input was reparented into
+      // the mobile search sheet while the request was in flight.
+      currentPickup.address = resolvedLabel;
+      const input = document.getElementById('pickup-input');
+      if (input) {
+        input.value = resolvedLabel;
+        input.classList.add('has-val');
+      }
+      updateClearBtn('pickup');
+      updateBookingSheetSummary();
+      return;
     }
-  } else if (isGenericRideLocationAddress(currentPickup.address)) {
-    // Never show a synthetic city or placeholder when the provider has not
-    // returned a label for the current pin.
-    currentPickup.address = '';
-    if (input) {
-      input.value = '';
-      input.classList.remove('has-val');
-    }
+
+    // Do not erase a pickup that is already visible when a provider request
+    // is transiently empty. A second attempt handles a short-lived provider
+    // or network response without regressing the input to a blank state.
+    if (attempt === 0) await new Promise(resolve => setTimeout(resolve, 350));
   }
-  updateClearBtn('pickup');
-  updateBookingSheetSummary();
 }
 
 function escapeLocationText(value) {
