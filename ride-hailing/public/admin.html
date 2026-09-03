@@ -213,6 +213,21 @@ body{font-family:'Segoe UI',system-ui,sans-serif;background:#06060e;color:#e2e8f
 .btn-blue:hover{background:#0a0a2a}
 .btn-gray{background:#0f0f1e;color:#64748b;border:1px solid #1e1e2e}
 .btn-gray:hover{border-color:#334155;color:#94a3b8}
+.driver-row-actions{display:flex;align-items:center;gap:.4rem;flex-wrap:wrap;min-width:245px}
+.driver-row-action{width:34px;height:34px;min-width:34px;padding:0;justify-content:center;border-radius:10px;font-size:.95rem;line-height:1;box-shadow:0 2px 7px rgba(0,0,0,.2);transition:transform .15s,background .15s,border-color .15s,box-shadow .15s}
+.driver-row-action:hover{opacity:1;transform:translateY(-1px);box-shadow:0 5px 12px rgba(0,0,0,.28)}
+.driver-row-action:active{transform:translateY(0) scale(.94)}
+.driver-row-action:focus-visible{outline:2px solid #f5c518;outline-offset:2px}
+#sec-drivers .driver-row-action.btn-blue{background:#172554;color:#bfdbfe;border-color:#2563eb}
+#sec-drivers .driver-row-action.btn-blue:hover{background:#1e3a8a}
+#sec-drivers .driver-row-action.btn-gray{background:#1e293b;color:#e2e8f0;border-color:#475569}
+#sec-drivers .driver-row-action.btn-gray:hover{background:#334155;border-color:#94a3b8}
+#sec-drivers .driver-row-action.btn-yellow{background:#422006;color:#fde68a;border-color:#d97706}
+#sec-drivers .driver-row-action.btn-yellow:hover{background:#78350f}
+#sec-drivers .driver-row-action.btn-green{background:#064e3b;color:#a7f3d0;border-color:#10b981}
+#sec-drivers .driver-row-action.btn-green:hover{background:#047857}
+#sec-drivers .driver-row-action.btn-red{background:#450a0a;color:#fecaca;border-color:#ef4444}
+#sec-drivers .driver-row-action.btn-red:hover{background:#7f1d1d}
 .btn-primary{background:#f5c518;color:#06060e;border:none}
 .btn-primary:hover{opacity:.9}
 
@@ -2377,21 +2392,21 @@ async function loadDrivers(status = 'all') {
         <td>${badgeHtml(d.accountStatus||'active')}</td>
          <td><div style="display:flex;align-items:center;gap:.35rem;flex-wrap:wrap">
            <span style="font-size:.7rem;font-weight:700;color:${d.deviceBindingEnabled?'#22c55e':'#64748b'}">${d.deviceBindingEnabled?'ON':'OFF'}</span>
-           ${hasPermission('manageDriverStatus') ? `<select aria-label="Device Binding for ${escHtml(d.name)}" class="modal-input" style="width:auto;min-width:58px;padding:.28rem .35rem;font-size:.68rem" onchange="setDriverDeviceBinding('${d._id}', this.value === 'on')"><option value="off" ${d.deviceBindingEnabled?'':'selected'}>OFF</option><option value="on" ${d.deviceBindingEnabled?'selected':''}>ON</option></select>` : ''}
+            ${hasPermission('manageDriverStatus') ? `<select aria-label="Device Binding for ${escHtml(d.name)}" title="Change device binding" class="modal-input" style="width:auto;min-width:58px;padding:.28rem .35rem;font-size:.68rem" onchange="setDriverDeviceBinding('${d._id}', this.value === 'on')"><option value="off" ${d.deviceBindingEnabled?'':'selected'}>OFF</option><option value="on" ${d.deviceBindingEnabled?'selected':''}>ON</option></select>` : ''}
          </div></td>
         <td style="font-size:.72rem;color:#475569">${fmtDate(d.createdAt)}</td>
-        <td><div style="display:flex;gap:.3rem;flex-wrap:wrap">
-          <button class="btn btn-blue"   onclick="viewUser('${d._id}','driver')">👁</button>
-          <button class="btn btn-gray"   onclick="viewDocs('${d._id}')">📄</button>
-          ${hasPermission('manageDriverPasses') ? `<button class="btn btn-yellow" onclick="grantTrial('${d._id}')" title="Credit Wallet Bonus">💰</button>` : ''}
-          ${d.accountStatus==='pending'   && hasPermission('manageDriverApprovals') ? `<button class="btn btn-green"  onclick="userAction('${d._id}','approve','driver')">✓</button>` : ''}
-          ${d.accountStatus==='active'    && hasPermission('manageDriverStatus')   ? `<button class="btn btn-yellow" onclick="userAction('${d._id}','suspend','driver')">⏸</button>
-            <button class="btn btn-red"   onclick="userAction('${d._id}','block','driver')">⛔</button>` : ''}
-          ${d.accountStatus==='suspended' && hasPermission('manageDriverStatus')   ? `<button class="btn btn-green"  onclick="userAction('${d._id}','unblock','driver')">▶</button>
-            <button class="btn btn-red"   onclick="userAction('${d._id}','block','driver')">⛔</button>` : ''}
-          ${d.accountStatus==='blocked'   && hasPermission('manageDriverStatus')   ? `<button class="btn btn-green"  onclick="userAction('${d._id}','unblock','driver')">▶</button>` : ''}
-           ${hasPermission('manageDriverStatus') ? `<select aria-label="Ride preference for ${escHtml(d.name)}" class="modal-input" style="width:auto;min-width:130px;padding:.28rem .4rem;font-size:.68rem" onchange="setDriverRidePreference('${d._id}', this.value)"><option value="Short Range Only" ${d.ridePreference==='Short Range Only'?'selected':''}>Short Range Only</option><option value="Long Range Only" ${d.ridePreference==='Long Range Only'?'selected':''}>Long Range Only</option><option value="Both" ${(!d.ridePreference || d.ridePreference==='Both')?'selected':''}>Both</option></select>` : ''}
-          ${isSuperAdmin ? `<button class="btn btn-red" onclick="openDeleteModal('${d._id}','${d.name.replace(/'/g,"\\'")}','driver')" title="Delete Account">🗑</button>` : ''}
+         <td><div class="driver-row-actions">
+           <button type="button" class="btn btn-blue driver-row-action" onclick="viewUser('${d._id}','driver')" title="View driver profile" aria-label="View driver profile">👁</button>
+           <button type="button" class="btn btn-gray driver-row-action" onclick="viewDocs('${d._id}')" title="View driver documents" aria-label="View driver documents">📄</button>
+           ${hasPermission('manageDriverPasses') ? `<button type="button" class="btn btn-yellow driver-row-action" onclick="grantTrial('${d._id}')" title="Credit wallet bonus" aria-label="Credit wallet bonus">💰</button>` : ''}
+           ${d.accountStatus==='pending'   && hasPermission('manageDriverApprovals') ? `<button type="button" class="btn btn-green driver-row-action" onclick="userAction('${d._id}','approve','driver')" title="Approve driver application" aria-label="Approve driver application">✓</button>` : ''}
+           ${d.accountStatus==='active'    && hasPermission('manageDriverStatus')   ? `<button type="button" class="btn btn-yellow driver-row-action" onclick="userAction('${d._id}','suspend','driver')" title="Temporarily suspend driver" aria-label="Temporarily suspend driver">⏸</button>
+             <button type="button" class="btn btn-red driver-row-action" onclick="userAction('${d._id}','block','driver')" title="Block driver permanently" aria-label="Block driver permanently">⛔</button>` : ''}
+           ${d.accountStatus==='suspended' && hasPermission('manageDriverStatus')   ? `<button type="button" class="btn btn-green driver-row-action" onclick="userAction('${d._id}','unblock','driver')" title="Restore suspended driver" aria-label="Restore suspended driver">▶</button>
+             <button type="button" class="btn btn-red driver-row-action" onclick="userAction('${d._id}','block','driver')" title="Block driver permanently" aria-label="Block driver permanently">⛔</button>` : ''}
+           ${d.accountStatus==='blocked'   && hasPermission('manageDriverStatus')   ? `<button type="button" class="btn btn-green driver-row-action" onclick="userAction('${d._id}','unblock','driver')" title="Restore blocked driver" aria-label="Restore blocked driver">▶</button>` : ''}
+            ${hasPermission('manageDriverStatus') ? `<select aria-label="Ride preference for ${escHtml(d.name)}" title="Change ride preference" class="modal-input" style="width:auto;min-width:130px;padding:.28rem .4rem;font-size:.68rem" onchange="setDriverRidePreference('${d._id}', this.value)"><option value="Short Range Only" ${d.ridePreference==='Short Range Only'?'selected':''}>Short Range Only</option><option value="Long Range Only" ${d.ridePreference==='Long Range Only'?'selected':''}>Long Range Only</option><option value="Both" ${(!d.ridePreference || d.ridePreference==='Both')?'selected':''}>Both</option></select>` : ''}
+           ${isSuperAdmin ? `<button type="button" class="btn btn-red driver-row-action" onclick="openDeleteModal('${d._id}','${d.name.replace(/'/g,"\\'")}','driver')" title="Delete driver account permanently" aria-label="Delete driver account permanently">🗑</button>` : ''}
         </div></td>
       </tr>`;
     }).join('');
