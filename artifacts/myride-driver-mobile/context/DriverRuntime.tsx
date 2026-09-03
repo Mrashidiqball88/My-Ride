@@ -54,6 +54,9 @@ export type DriverUser = {
 export type RideRequest = {
   id: string; fare: number; distance?: number; vehicleType?: string;
   isLongRange?: boolean;
+  status?: 'requested' | 'accepted' | 'arrived' | 'in-progress' | 'completed' | 'cancelled';
+  passenger?: { id?: string; name?: string; phone?: string };
+  verificationPin?: string | null;
   broadcastDurationSeconds?: number;
   broadcastExpiresAt?: string | Date;
   pickupLocation?: { address?: string; lat: number; lng: number };
@@ -103,6 +106,8 @@ type RuntimeContext = {
   setLongRange(next: boolean): Promise<string>;
   acceptRide(): Promise<void>;
   acceptingRide: boolean;
+  updateRideStatus(status: 'arrived' | 'in-progress' | 'completed', pin?: string): Promise<void>;
+  updatingRideStatus: boolean;
   dismissRide(): void;
   emergencyClearRide(): void;
   clearError(): void;
@@ -203,6 +208,7 @@ export function DriverRuntimeProvider({ children }: { children: ReactNode }) {
   const [pendingRide, setPendingRide] = useState<RideRequest | null>(null);
   const [sentOffer, setSentOffer] = useState<RideRequest | null>(null);
   const [acceptingRide, setAcceptingRide] = useState(false);
+  const [updatingRideStatus, setUpdatingRideStatus] = useState(false);
   const [activeRide, setActiveRide] = useState<RideRequest | null>(null);
   const [activeRideId, setActiveRideId] = useState<string | null>(null);
   const [driverLocation, setDriverLocation] = useState<DriverLocation | null>(null);
@@ -1047,6 +1053,40 @@ export function DriverRuntimeProvider({ children }: { children: ReactNode }) {
     }
   }, [acceptingRide, clearRideAlert, hydrateAvailableRides, pendingRide]);
 
+  const updateRideStatus = useCallback(async (
+    status: 'arrived' | 'in-progress' | 'completed',
+    pin?: string,
+  ) => {
+    const rideId = activeRideIdRef.current;
+    if (!rideId || !tokenRef.current || updatingRideStatus) return;
+    setUpdatingRideStatus(true);
+    try {
+      const response = await apiWithTimeout(
+        `/api/rides/${encodeURIComponent(rideId)}/status`,
+        tokenRef.current,
+        sessionRef.current || undefined,
+        {
+          method: 'PATCH',
+          body: JSON.stringify({ status, ...(pin ? { pin } : {}) }),
+        },
+      );
+      const ride = normalizeRideRequest(response as RideRequest & { _id?: string });
+      if (status === 'completed') {
+        activeRideIdRef.current = null;
+        setActiveRide(null);
+        setActiveRideId(null);
+        await SecureStore.deleteItemAsync(ACTIVE_RIDE_KEY);
+        if (isOnlineRef.current && Platform.OS !== 'web') {
+          void startLocationService(false).catch(() => undefined);
+        }
+      } else {
+        setActiveRide(current => current?.id === ride.id ? { ...current, ...ride } : current);
+      }
+    } finally {
+      setUpdatingRideStatus(false);
+    }
+  }, [startLocationService, updatingRideStatus]);
+
   const setLongRange = useCallback(async (enabled: boolean) => {
     if (!tokenRef.current) throw new Error('Sign in is required.');
     const result = await api('/api/driver/long-range', tokenRef.current, sessionRef.current || undefined, {
@@ -1058,9 +1098,9 @@ export function DriverRuntimeProvider({ children }: { children: ReactNode }) {
 
   const value = useMemo<RuntimeContext>(() => ({
     ready, user, isOnline, connection, pendingRide, sentOffer, activeRide, activeRideId, driverLocation, error, longRange, alertReadiness,
-    acceptingRide, requestPhoneOtp, signIn, signOut, setOnline: setOnlineState, prepareAlertReadiness, confirmLockScreenAlerts, openAlertSetting, setLongRange, acceptRide,
+    acceptingRide, updateRideStatus, updatingRideStatus, requestPhoneOtp, signIn, signOut, setOnline: setOnlineState, prepareAlertReadiness, confirmLockScreenAlerts, openAlertSetting, setLongRange, acceptRide,
     dismissRide: () => setPendingRide(null), emergencyClearRide, clearError: () => setError(null),
-  }), [acceptRide, acceptingRide, activeRide, activeRideId, alertReadiness, confirmLockScreenAlerts, driverLocation, emergencyClearRide, error, isOnline, openAlertSetting, pendingRide, prepareAlertReadiness, ready, requestPhoneOtp, sentOffer, setOnlineState, setLongRange, signIn, signOut, user, connection, longRange]);
+  }), [acceptRide, acceptingRide, activeRide, activeRideId, alertReadiness, confirmLockScreenAlerts, driverLocation, emergencyClearRide, error, isOnline, openAlertSetting, pendingRide, prepareAlertReadiness, ready, requestPhoneOtp, sentOffer, setOnlineState, setLongRange, signIn, signOut, updateRideStatus, updatingRideStatus, user, connection, longRange]);
   return <DriverContext.Provider value={value}>{children}</DriverContext.Provider>;
 }
 

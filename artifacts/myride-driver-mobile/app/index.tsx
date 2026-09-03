@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { ActivityIndicator, Alert, Linking, Platform, Pressable, StyleSheet, Switch, Text, TextInput, View } from 'react-native';
+import { ActivityIndicator, Alert, Animated, Linking, PanResponder, Platform, Pressable, ScrollView, StyleSheet, Switch, Text, TextInput, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useColors } from '@/hooks/useColors';
@@ -51,6 +51,214 @@ function DriverNavigationMap({ ride, driverLocation, colors }: {
   colors: ReturnType<typeof useColors>;
 }) {
   return <DriverMapboxWebView ride={ride} driverLocation={driverLocation} colors={colors} />;
+}
+
+type ActiveRideStatus = 'accepted' | 'arrived' | 'in-progress';
+type SheetState = 'expanded' | 'compact' | 'collapsed';
+
+function ActiveRideSheet({
+  ride,
+  driverLocation,
+  colors,
+  updating,
+  onStatusChange,
+  onEmergencyClear,
+}: {
+  ride: RideRequest;
+  driverLocation: DriverLocation | null;
+  colors: ReturnType<typeof useColors>;
+  updating: boolean;
+  onStatusChange: (status: 'arrived' | 'in-progress' | 'completed', pin?: string) => void;
+  onEmergencyClear: () => void;
+}) {
+  const [stageHeight, setStageHeight] = useState(520);
+  const [sheetState, setSheetState] = useState<SheetState>('compact');
+  const [pin, setPin] = useState('');
+  const sheetOffset = useRef(new Animated.Value(0)).current;
+  const offsetRef = useRef(0);
+  const dragStartRef = useRef(0);
+  const sheetStateRef = useRef<SheetState>('compact');
+
+  const sheetHeight = Math.max(340, Math.min(500, stageHeight * 0.82));
+  const compactOffset = Math.max(0, sheetHeight - 224);
+  const collapsedOffset = Math.max(0, sheetHeight - 92);
+  const status: ActiveRideStatus = ride.status === 'arrived' || ride.status === 'in-progress'
+    ? ride.status
+    : 'accepted';
+  const passengerName = ride.passenger?.name || 'Passenger';
+
+  const snapTo = (next: SheetState) => {
+    const target = next === 'expanded' ? 0 : next === 'compact' ? compactOffset : collapsedOffset;
+    sheetStateRef.current = next;
+    setSheetState(next);
+    offsetRef.current = target;
+    Animated.spring(sheetOffset, {
+      toValue: target,
+      useNativeDriver: true,
+      damping: 22,
+      stiffness: 220,
+      mass: 0.8,
+    }).start();
+  };
+
+  useEffect(() => {
+    sheetStateRef.current = 'compact';
+    setSheetState('compact');
+    setPin('');
+    const target = compactOffset;
+    offsetRef.current = target;
+    sheetOffset.setValue(target);
+  }, [compactOffset, ride.id, sheetOffset]);
+
+  useEffect(() => {
+    const target = sheetStateRef.current === 'expanded'
+      ? 0
+      : sheetStateRef.current === 'compact'
+        ? compactOffset
+        : collapsedOffset;
+    offsetRef.current = target;
+    sheetOffset.setValue(target);
+  }, [collapsedOffset, compactOffset, sheetOffset]);
+
+  const panResponder = useMemo(() => PanResponder.create({
+    onStartShouldSetPanResponder: () => true,
+    onMoveShouldSetPanResponder: (_, gestureState) => (
+      Math.abs(gestureState.dy) > 5
+      && Math.abs(gestureState.dy) >= Math.abs(gestureState.dx)
+    ),
+    onPanResponderGrant: () => {
+      sheetOffset.stopAnimation(value => {
+        dragStartRef.current = value;
+        offsetRef.current = value;
+      });
+    },
+    onPanResponderMove: (_, gestureState) => {
+      const next = Math.max(0, Math.min(collapsedOffset, dragStartRef.current + gestureState.dy));
+      offsetRef.current = next;
+      sheetOffset.setValue(next);
+    },
+    onPanResponderRelease: (_, gestureState) => {
+      const projected = offsetRef.current + gestureState.vy * 90;
+      const next = projected > (compactOffset + collapsedOffset) / 2
+        ? 'collapsed'
+        : projected > compactOffset / 2
+          ? 'compact'
+          : 'expanded';
+      snapTo(next);
+    },
+    onPanResponderTerminate: () => snapTo(sheetState),
+    onPanResponderTerminationRequest: () => false,
+  }), [collapsedOffset, compactOffset, sheetOffset, sheetState]);
+
+  return <View
+    style={styles.activeRideStage}
+    onLayout={event => setStageHeight(event.nativeEvent.layout.height)}
+  >
+    <DriverNavigationMap ride={ride} driverLocation={driverLocation} colors={colors} />
+    <Animated.View
+      style={[
+        styles.activeRideSheet,
+        {
+          height: sheetHeight,
+          backgroundColor: colors.card,
+          borderColor: colors.primary,
+          transform: [{ translateY: sheetOffset }],
+        },
+      ]}
+    >
+      <View
+        {...panResponder.panHandlers}
+        accessibilityRole="adjustable"
+        accessibilityLabel="Active ride details panel"
+        accessibilityHint="Swipe up to expand ride details or down to minimize them"
+        style={styles.sheetHandleArea}
+        hitSlop={{ top: 10, bottom: 10, left: 18, right: 18 }}
+      >
+        <View style={[styles.sheetHandle, { backgroundColor: colors.mutedForeground }]} />
+      </View>
+      <View style={[styles.sheetHeader, { borderBottomColor: colors.border }]}>
+        <View style={styles.sheetStatusRow}>
+          <View style={[styles.statusDot, { backgroundColor: colors.primary }]} />
+          <View style={{ flex: 1 }}>
+            <Text style={[styles.sheetTitle, { color: colors.foreground }]}>
+              {status === 'accepted' ? 'On the way to pickup' : status === 'arrived' ? 'At pickup' : 'Ride in progress'}
+            </Text>
+            <Text style={[styles.sheetSubtitle, { color: colors.mutedForeground }]}>
+              {passengerName} · {ride.distance ? `${ride.distance.toFixed(1)} km` : 'Active ride'}
+            </Text>
+          </View>
+          <Pressable
+            accessibilityLabel={sheetState === 'expanded' ? 'Minimize ride details' : 'Expand ride details'}
+            onPress={() => snapTo(sheetState === 'expanded' ? 'compact' : 'expanded')}
+            style={[styles.sheetToggle, { borderColor: colors.border }]}
+          >
+            <Ionicons name={sheetState === 'expanded' ? 'chevron-down' : 'chevron-up'} size={18} color={colors.primary} />
+          </Pressable>
+        </View>
+      </View>
+      <ScrollView
+        style={styles.sheetScroll}
+        contentContainerStyle={styles.sheetContent}
+        nestedScrollEnabled
+        showsVerticalScrollIndicator={false}
+      >
+        <View style={[styles.sheetRouteCard, { backgroundColor: colors.secondary, borderColor: colors.border }]}>
+          <Text style={[styles.sheetLabel, { color: colors.primary }]}>PICKUP</Text>
+          <Text style={[styles.sheetAddress, { color: colors.foreground }]} numberOfLines={2}>{ride.pickupLocation?.address || 'Pickup location shared'}</Text>
+          <View style={[styles.sheetDivider, { backgroundColor: colors.border }]} />
+          <Text style={[styles.sheetLabel, { color: colors.destructive }]}>DROP-OFF</Text>
+          <Text style={[styles.sheetAddress, { color: colors.foreground }]} numberOfLines={2}>{ride.dropoffLocation?.address || 'Drop-off location'}</Text>
+        </View>
+
+        {status === 'accepted' && <Pressable
+          disabled={updating}
+          onPress={() => onStatusChange('arrived')}
+          style={({ pressed }) => [styles.sheetPrimaryButton, { backgroundColor: colors.primary, borderRadius: colors.radius, opacity: updating || pressed ? .7 : 1 }]}
+        >
+          {updating ? <ActivityIndicator color={colors.primaryForeground} /> : <Text style={[styles.buttonText, { color: colors.primaryForeground }]}>Arrived at pickup</Text>}
+        </Pressable>}
+
+        {status === 'arrived' && <View style={[styles.pinCard, { backgroundColor: colors.secondary, borderColor: colors.primary }]}>
+          <Text style={[styles.sheetLabel, { color: colors.primary }]}>PASSENGER VERIFICATION</Text>
+          <Text style={[styles.pinHint, { color: colors.mutedForeground }]}>Ask the passenger for their 4-digit PIN before starting.</Text>
+          <TextInput
+            accessibilityLabel="Passenger verification PIN"
+            value={pin}
+            onChangeText={value => setPin(value.replace(/\D/g, '').slice(0, 4))}
+            keyboardType="number-pad"
+            maxLength={4}
+            placeholder="4-digit PIN"
+            placeholderTextColor={colors.mutedForeground}
+            style={[styles.pinInput, { color: colors.foreground, borderColor: colors.input, backgroundColor: colors.card }]}
+          />
+          <Pressable
+            disabled={updating || pin.length !== 4}
+            onPress={() => onStatusChange('in-progress', pin)}
+            style={({ pressed }) => [styles.sheetPrimaryButton, { backgroundColor: colors.primary, borderRadius: colors.radius, opacity: updating || pin.length !== 4 || pressed ? .55 : 1 }]}
+          >
+            {updating ? <ActivityIndicator color={colors.primaryForeground} /> : <Text style={[styles.buttonText, { color: colors.primaryForeground }]}>Start ride</Text>}
+          </Pressable>
+        </View>}
+
+        {status === 'in-progress' && <Pressable
+          disabled={updating}
+          onPress={() => onStatusChange('completed')}
+          style={({ pressed }) => [styles.sheetPrimaryButton, { backgroundColor: colors.primary, borderRadius: colors.radius, opacity: updating || pressed ? .7 : 1 }]}
+        >
+          {updating ? <ActivityIndicator color={colors.primaryForeground} /> : <Text style={[styles.buttonText, { color: colors.primaryForeground }]}>Complete ride</Text>}
+        </Pressable>}
+
+        <Pressable
+          onLongPress={onEmergencyClear}
+          delayLongPress={5000}
+          accessibilityHint="Hold for 5 seconds to emergency-cancel this active ride"
+          style={[styles.sheetCancelButton, { borderColor: colors.destructive }]}
+        >
+          <Text style={{ color: colors.destructive }}>Hold 5s to emergency-cancel</Text>
+        </Pressable>
+      </ScrollView>
+    </Animated.View>
+  </View>;
 }
 
 function DriverHome() {
@@ -133,6 +341,10 @@ function DriverHome() {
   const openSettings = () => {
     void Linking.openSettings().catch(() => report('Open your device Settings and enable My Ride notifications and lock-screen alerts.'));
   };
+  const updateRideStatus = async (status: 'arrived' | 'in-progress' | 'completed', pin?: string) => {
+    try { await runtime.updateRideStatus(status, pin); }
+    catch (error) { report(error instanceof Error ? error.message : 'Unable to update ride status'); }
+  };
 
   if (!runtime.ready) return <View style={[styles.center, { backgroundColor: colors.background }]}><ActivityIndicator color={colors.primary} /></View>;
   if (!runtime.user) {
@@ -162,7 +374,12 @@ function DriverHome() {
     </View>;
   }
   const onlineTone = runtime.isOnline ? colors.primary : colors.mutedForeground;
-  return <View style={[styles.app, { backgroundColor: colors.background, paddingTop: isWeb ? 67 : insets.top, paddingBottom: isWeb ? 34 : insets.bottom }]}>
+  return <ScrollView
+    style={[styles.app, { backgroundColor: colors.background }]}
+    contentContainerStyle={{ paddingTop: isWeb ? 67 : insets.top, paddingBottom: (isWeb ? 34 : insets.bottom) + 28 }}
+    nestedScrollEnabled
+    keyboardShouldPersistTaps="handled"
+  >
     <View style={styles.header}>
       <View><Text style={[styles.eyebrow, { color: colors.mutedForeground }]}>MY RIDE DRIVER</Text><Text style={[styles.name, { color: colors.foreground }, isRtlText(userName) && styles.rtlText]}>{userName}</Text></View>
       <Pressable testID="driver-sign-out" onPress={() => void runtime.signOut()}><Ionicons name="log-out-outline" size={25} color={colors.mutedForeground} /></Pressable>
@@ -204,11 +421,19 @@ function DriverHome() {
       <View style={styles.statusRow}><Ionicons name="map-outline" size={20} color={colors.primary} /><View style={{ flex: 1 }}><Text style={[styles.longRangeTitle, { color: colors.foreground }]}>Long Range Rides</Text><Text style={[styles.statusCopy, { color: colors.mutedForeground }]}>{runtime.longRange.settings?.enabled ? `Receive trips from ${Number(runtime.longRange.settings.distanceCutoffKm || 0).toLocaleString()} km+ · ${longRangeVehicle} wallet minimum Rs ${longRangeMinimum.toLocaleString()}` : 'Long Range rides are currently disabled by Admin.'}</Text></View><Switch testID="driver-long-range-toggle" value={runtime.longRange.enabled} onValueChange={toggleLongRange} disabled={busy || !runtime.longRange.settings?.enabled} trackColor={{ false: colors.muted, true: colors.primary }} thumbColor={colors.primaryForeground} /></View>
        {runtime.longRange.enabled && <View testID="long-range-responsibility-banner" style={[styles.longRangeReminder, { backgroundColor: colors.secondary, borderColor: colors.border }]}><Ionicons name="warning-outline" size={16} color={colors.primary} /><Text style={[styles.longRangeReminderText, { color: colors.secondaryForeground }]}>Reminder: Tolls, taxes, and challans are driver responsibility.</Text></View>}
     </View>}
-    {!isWeb && (runtime.activeRideId || runtime.pendingRide) && <DriverNavigationMap
-      ride={runtime.activeRide || runtime.pendingRide}
-      driverLocation={runtime.driverLocation}
-      colors={colors}
-    />}
+     {!isWeb && runtime.activeRide && <ActiveRideSheet
+       ride={runtime.activeRide}
+       driverLocation={runtime.driverLocation}
+       colors={colors}
+       updating={runtime.updatingRideStatus}
+       onStatusChange={updateRideStatus}
+       onEmergencyClear={runtime.emergencyClearRide}
+     />}
+     {!isWeb && !runtime.activeRide && runtime.pendingRide && <DriverNavigationMap
+       ride={runtime.pendingRide}
+       driverLocation={runtime.driverLocation}
+       colors={colors}
+     />}
     {runtime.pendingRide ? <View style={[styles.rideCard, { backgroundColor: colors.card, borderColor: colors.primary, borderRadius: colors.radius + 12 }]}>
       <View style={styles.rideHeader}><Text style={[styles.rideLabel, { color: colors.primary }]}>{runtime.pendingRide.isLongRange ? 'LONG RANGE RIDE' : 'NEW RIDE'}</Text><Text style={[styles.fare, { color: colors.foreground }]}>Rs {Number(runtime.pendingRide.fare).toLocaleString()}</Text></View>
       <View style={[styles.offerTimer, { backgroundColor: colors.secondary, borderColor: colors.border }]}><Ionicons name="time-outline" size={15} color={colors.primary} /><Text style={[styles.offerTimerText, { color: colors.secondaryForeground }]}>Reply within {remainingOfferSeconds}s</Text></View>
@@ -219,7 +444,7 @@ function DriverHome() {
      <View style={[styles.info, { backgroundColor: colors.secondary, borderRadius: colors.radius }]}><Ionicons name="information-circle-outline" size={18} color={colors.mutedForeground} /><Text style={[styles.infoText, { color: colors.secondaryForeground }]}>Keep location access set to “Allow all the time.” Android may also ask you to allow the My Ride foreground-service notification. These Android settings are required because OEM battery policies can otherwise stop locked-screen ride alerts.</Text></View>
     {runtime.error && <Pressable onPress={runtime.clearError} style={[styles.error, { backgroundColor: colors.destructive, borderRadius: colors.radius }]}><Text style={{ color: colors.destructiveForeground }}>{runtime.error}</Text></Pressable>}
     {isWeb && <Pressable onPress={() => void Linking.openURL('https://expo.dev')}><Text style={[styles.webNote, { color: colors.mutedForeground }]}>Background tracking is available only in the installed native app.</Text></Pressable>}
-  </View>;
+   </ScrollView>;
 }
 
 export default function Index() { return <DriverHome />; }
@@ -236,7 +461,8 @@ const styles = StyleSheet.create({
   longRangeCard: { borderWidth: 1, padding: 16, marginTop: 12 }, longRangeTitle: { fontFamily: 'Inter_700Bold', fontSize: 15 }, longRangeReminder: { flexDirection: 'row', alignItems: 'flex-start', gap: 7, borderWidth: 1, padding: 10, marginTop: 14, borderRadius: 10 }, longRangeReminderText: { flex: 1, fontFamily: 'Inter_600SemiBold', fontSize: 12, lineHeight: 17 },
   serviceLine: { borderTopWidth: 1, flexDirection: 'row', gap: 8, alignItems: 'center', marginTop: 15, paddingTop: 14 }, serviceText: { fontFamily: 'Inter_500Medium', fontSize: 12 },
   vehicleCard: { marginTop: 12, borderWidth: 1, flexDirection: 'row', alignItems: 'center', gap: 10, padding: 13 }, vehicleLabel: { fontFamily: 'Inter_700Bold', fontSize: 10, letterSpacing: .8 }, vehicleName: { fontFamily: 'Inter_600SemiBold', fontSize: 14, marginTop: 2 },
-  navigationCard: { marginTop: 18, borderWidth: 1, padding: 12, overflow: 'hidden' }, navigationHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 3, paddingBottom: 10 }, navigationTitle: { fontFamily: 'Inter_700Bold', fontSize: 15 }, navigationSubtitle: { fontFamily: 'Inter_400Regular', fontSize: 11, marginTop: 2 }, recenterButton: { width: 38, height: 38, borderWidth: 1, borderRadius: 19, alignItems: 'center', justifyContent: 'center' }, navigationMapFrame: { height: 310, overflow: 'hidden', borderRadius: 10, position: 'relative' }, navigationMap: { flex: 1 }, fixedDriverMarker: { position: 'absolute', top: '50%', left: '50%', width: 44, height: 54, marginLeft: -22, marginTop: -27, alignItems: 'center', justifyContent: 'center' }, fixedDriverMarkerHalo: { position: 'absolute', width: 38, height: 38, borderRadius: 19, borderWidth: 2, opacity: .28 }, fixedDriverMarkerDot: { width: 18, height: 18, borderRadius: 9, borderWidth: 3, zIndex: 2 }, fixedDriverMarkerArrow: { position: 'absolute', bottom: 3, width: 0, height: 0, borderLeftWidth: 6, borderRightWidth: 6, borderBottomWidth: 11, borderLeftColor: 'transparent', borderRightColor: 'transparent', zIndex: 1 }, gpsStatus: { position: 'absolute', left: 12, bottom: 12, flexDirection: 'row', alignItems: 'center', gap: 5, paddingHorizontal: 9, paddingVertical: 7, borderRadius: 15, opacity: .95 }, gpsStatusText: { fontFamily: 'Inter_600SemiBold', fontSize: 11 }, pausedBadge: { position: 'absolute', top: 12, left: 12, paddingHorizontal: 9, paddingVertical: 7, borderRadius: 15, opacity: .95 },
+   navigationCard: { marginTop: 18, borderWidth: 1, padding: 12, overflow: 'hidden' }, navigationHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 3, paddingBottom: 10 }, navigationTitle: { fontFamily: 'Inter_700Bold', fontSize: 15 }, navigationSubtitle: { fontFamily: 'Inter_400Regular', fontSize: 11, marginTop: 2 }, recenterButton: { width: 38, height: 38, borderWidth: 1, borderRadius: 19, alignItems: 'center', justifyContent: 'center' }, navigationMapFrame: { height: 310, overflow: 'hidden', borderRadius: 10, position: 'relative' }, navigationMap: { flex: 1 }, fixedDriverMarker: { position: 'absolute', top: '50%', left: '50%', width: 44, height: 54, marginLeft: -22, marginTop: -27, alignItems: 'center', justifyContent: 'center' }, fixedDriverMarkerHalo: { position: 'absolute', width: 38, height: 38, borderRadius: 19, borderWidth: 2, opacity: .28 }, fixedDriverMarkerDot: { width: 18, height: 18, borderRadius: 9, borderWidth: 3, zIndex: 2 }, fixedDriverMarkerArrow: { position: 'absolute', bottom: 3, width: 0, height: 0, borderLeftWidth: 6, borderRightWidth: 6, borderBottomWidth: 11, borderLeftColor: 'transparent', borderRightColor: 'transparent', zIndex: 1 }, gpsStatus: { position: 'absolute', left: 12, bottom: 12, flexDirection: 'row', alignItems: 'center', gap: 5, paddingHorizontal: 9, paddingVertical: 7, borderRadius: 15, opacity: .95 }, gpsStatusText: { fontFamily: 'Inter_600SemiBold', fontSize: 11 }, pausedBadge: { position: 'absolute', top: 12, left: 12, paddingHorizontal: 9, paddingVertical: 7, borderRadius: 15, opacity: .95 },
+   activeRideStage: { height: 520, marginTop: 18, position: 'relative' }, activeRideSheet: { position: 'absolute', left: 0, right: 0, bottom: 0, borderWidth: 1, borderRadius: 24, overflow: 'hidden', elevation: 12, shadowColor: '#000', shadowOpacity: .3, shadowRadius: 18, shadowOffset: { width: 0, height: -6 } }, sheetHandleArea: { height: 42, alignItems: 'center', justifyContent: 'center' }, sheetHandle: { width: 48, height: 5, borderRadius: 3, opacity: .7 }, sheetHeader: { paddingHorizontal: 15, paddingBottom: 12, borderBottomWidth: 1 }, sheetStatusRow: { flexDirection: 'row', alignItems: 'center', gap: 10 }, sheetTitle: { fontFamily: 'Inter_700Bold', fontSize: 15 }, sheetSubtitle: { fontFamily: 'Inter_400Regular', fontSize: 12, marginTop: 3 }, sheetToggle: { width: 36, height: 36, borderWidth: 1, borderRadius: 18, alignItems: 'center', justifyContent: 'center' }, sheetScroll: { flex: 1 }, sheetContent: { padding: 14, gap: 12, paddingBottom: 24 }, sheetRouteCard: { borderWidth: 1, borderRadius: 13, padding: 12 }, sheetLabel: { fontFamily: 'Inter_700Bold', fontSize: 10, letterSpacing: 1 }, sheetAddress: { fontFamily: 'Inter_500Medium', fontSize: 14, lineHeight: 19, marginTop: 4 }, sheetDivider: { height: 1, marginVertical: 11 }, sheetPrimaryButton: { minHeight: 50, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 16 }, pinCard: { borderWidth: 1, borderRadius: 13, padding: 12, gap: 9 }, pinHint: { fontFamily: 'Inter_400Regular', fontSize: 12, lineHeight: 17 }, pinInput: { height: 50, borderWidth: 1, borderRadius: 11, paddingHorizontal: 14, fontFamily: 'Inter_700Bold', fontSize: 20, letterSpacing: 5 }, sheetCancelButton: { minHeight: 46, borderWidth: 1, borderRadius: 12, alignItems: 'center', justifyContent: 'center' },
   rideCard: { marginTop: 18, borderWidth: 1, padding: 18 }, rideHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'baseline' }, rideLabel: { fontFamily: 'Inter_700Bold', letterSpacing: 1.1, fontSize: 12 }, fare: { fontFamily: 'Inter_700Bold', fontSize: 23 },
   offerTimer: { flexDirection: 'row', alignItems: 'center', gap: 6, alignSelf: 'flex-start', borderWidth: 1, borderRadius: 9, paddingHorizontal: 9, paddingVertical: 6, marginTop: 11 }, offerTimerText: { fontFamily: 'Inter_700Bold', fontSize: 12 },
   location: { fontFamily: 'Inter_600SemiBold', fontSize: 16, marginTop: 15 }, route: { fontFamily: 'Inter_400Regular', fontSize: 13, marginTop: 6 }, rideActions: { flexDirection: 'row', gap: 10, marginTop: 18 }, secondaryButton: { flex: 1, height: 46, borderWidth: 1, alignItems: 'center', justifyContent: 'center' }, acceptButton: { flex: 1, height: 46, alignItems: 'center', justifyContent: 'center' },
