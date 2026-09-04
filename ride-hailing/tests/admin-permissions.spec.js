@@ -42,10 +42,35 @@ async function stubAdminData(page) {
     let body = [];
     if (path === '/api/admin/stats') body = {};
     else if (path === '/api/admin/drivers') {
-      body = [{
-        _id: 'driver-1', name: 'Pending Driver', phone: '+923001234567',
-        vehicleType: 'Car Mini', accountStatus: 'pending', createdAt: '2026-01-01T00:00:00Z'
-      }];
+      const records = [
+        {
+          _id: 'driver-1', name: 'Active Driver', phone: '+923001234567',
+          vehicleType: 'Car Mini', accountStatus: 'active', createdAt: '2026-01-01T00:00:00Z'
+        },
+        {
+          _id: 'driver-2', name: 'Pending Driver', phone: '+923001234568',
+          vehicleType: 'Car Mini', accountStatus: 'pending', createdAt: '2026-01-02T00:00:00Z'
+        }
+      ];
+      body = url.searchParams.get('includeCounts') === 'true'
+        ? { records, counts: { all: 4, active: 2, pending: 1, suspended: 1, blocked: 0 } }
+        : url.searchParams.get('status') === 'pending'
+          ? records.filter(record => record.accountStatus === 'pending')
+          : records;
+    } else if (path === '/api/admin/passengers') {
+      const records = [
+        {
+          _id: 'customer-1', name: 'Active Customer', phone: '+923001234569',
+          accountStatus: 'active', createdAt: '2026-01-03T00:00:00Z'
+        },
+        {
+          _id: 'customer-2', name: 'Blocked Customer', phone: '+923001234570',
+          accountStatus: 'blocked', createdAt: '2026-01-04T00:00:00Z'
+        }
+      ];
+      body = url.searchParams.get('includeCounts') === 'true'
+        ? { records, counts: { all: 5, active: 3, pending: 0, suspended: 0, blocked: 2 } }
+        : records;
     } else if (path === '/api/admin/payments') {
       body = [{
         _id: 'payment-1', driver: { name: 'Driver One', phone: '+923001234567' },
@@ -72,7 +97,8 @@ test.describe('scoped Sub-Admin browser permissions', () => {
     await models.SubAdmin.create([
       { username: 'ops-scope', password, permissions: permissionSet('viewOverview', 'viewDrivers', 'manageDriverApprovals', 'viewPayments') },
       { username: 'config-scope', password, permissions: permissionSet('manageRideSettings', 'manageFareSettings') },
-      { username: 'proof-scope', password, permissions: permissionSet('viewPayments', 'viewPaymentProofs', 'approveWalletTopups') }
+      { username: 'proof-scope', password, permissions: permissionSet('viewPayments', 'viewPaymentProofs', 'approveWalletTopups') },
+      { username: 'management-scope', password, permissions: permissionSet('viewDrivers', 'viewCustomers') }
     ]);
     await new Promise(resolve => server.listen(0, resolve));
     baseURL = `http://127.0.0.1:${server.address().port}`;
@@ -103,6 +129,27 @@ test.describe('scoped Sub-Admin browser permissions', () => {
     await expect(page.locator('#pay-list')).toContainText('TRX-1');
     await expect(page.locator('#pay-list a', { hasText: 'View Proof' })).toHaveCount(0);
     await expect(page.locator('#pay-list button', { hasText: 'Approve' })).toHaveCount(0);
+  });
+
+  test('management filters show live state counts and serial numbers in both panels', async ({ page }) => {
+    await stubAdminData(page);
+    await login(page, 'management-scope');
+
+    await page.locator('[data-sec="drivers"]').click();
+    await expect(page.locator('#driver-count-all')).toHaveText('4');
+    await expect(page.locator('#driver-count-active')).toHaveText('2');
+    await expect(page.locator('#driver-count-pending')).toHaveText('1');
+    await expect(page.locator('#driver-count-suspended')).toHaveText('1');
+    await expect(page.locator('#driver-count-blocked')).toHaveText('0');
+    await expect(page.locator('#drivers-tbody .table-serial')).toHaveText(['1', '2']);
+
+    await page.locator('[data-sec="passengers"]').click();
+    await expect(page.locator('#customer-count-all')).toHaveText('5');
+    await expect(page.locator('#customer-count-active')).toHaveText('3');
+    await expect(page.locator('#customer-count-pending')).toHaveText('0');
+    await expect(page.locator('#customer-count-suspended')).toHaveText('0');
+    await expect(page.locator('#customer-count-blocked')).toHaveText('2');
+    await expect(page.locator('#pass-tbody .table-serial')).toHaveText(['1', '2']);
   });
 
   test('configuration role sees only granted settings cards', async ({ page }) => {
