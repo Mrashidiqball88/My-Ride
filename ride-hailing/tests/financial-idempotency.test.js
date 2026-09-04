@@ -608,6 +608,63 @@ test('approved Driver recharges are shown as advance deposits and excluded from 
   }
 });
 
+test('Admin Driver list separates real wallet, bonus credit, and current advance deposit', async () => {
+  const driver = await createParticipant('driver', 'admin-balances');
+  await models.Wallet.create({
+    user: driver._id,
+    balance: 720,
+    realCashAvailable: 220,
+    bonusAvailable: 500
+  });
+  await models.Admin.create({ _id: 'super-admin', email: 'admin-balances@example.test', sessionVersion: 0 });
+
+  const adminServer = app.listen(0);
+  try {
+    const token = jwt.sign({ isAdmin: true, username: 'admin-balances' }, 'ride-hailing-secret-fallback');
+    const headers = { authorization: `Bearer ${token}` };
+    const [driversResponse, revenueResponse, statsResponse] = await Promise.all([
+      fetch(`http://127.0.0.1:${adminServer.address().port}/api/admin/drivers?status=all&includeCounts=true`, { headers }),
+      fetch(`http://127.0.0.1:${adminServer.address().port}/api/admin/revenue?days=7`, { headers }),
+      fetch(`http://127.0.0.1:${adminServer.address().port}/api/admin/stats`, { headers })
+    ]);
+    assert.equal(driversResponse.status, 200);
+    assert.equal(revenueResponse.status, 200);
+    assert.equal(statsResponse.status, 200);
+
+    const drivers = await driversResponse.json();
+    const record = drivers.records.find(item => String(item._id) === String(driver._id));
+    assert.equal(record.realWalletBalance, 220);
+    assert.equal(record.bonusCreditBalance, 500);
+    assert.equal(record.advanceDeposit, 220);
+
+    const revenue = await revenueResponse.json();
+    const stats = await statsResponse.json();
+    assert.equal(revenue.currentAdvanceDeposits, 220);
+    assert.equal(stats.currentAdvanceDeposits, 220);
+
+    const deduction = await chargeDailyFeeForOnlineDriver(
+      driver._id,
+      driver,
+      { 'Car Sedan': 220 }
+    );
+    assert.equal(deduction.fundingSource, 'real');
+    assert.equal(deduction.realAmount, 220);
+
+    const refreshedRevenueResponse = await fetch(
+      `http://127.0.0.1:${adminServer.address().port}/api/admin/revenue?days=7`,
+      { headers }
+    );
+    const refreshedStatsResponse = await fetch(
+      `http://127.0.0.1:${adminServer.address().port}/api/admin/stats`,
+      { headers }
+    );
+    assert.equal((await refreshedRevenueResponse.json()).currentAdvanceDeposits, 0);
+    assert.equal((await refreshedStatsResponse.json()).currentAdvanceDeposits, 0);
+  } finally {
+    await new Promise(resolve => adminServer.close(resolve));
+  }
+});
+
 test('Long Range commission records bonus funding without treating it as real revenue', async () => {
   const driver = await createParticipant('driver', 'long-range-bonus');
   const passenger = await createParticipant('customer', 'long-range-bonus');

@@ -55,3 +55,4 @@
 - [Wallet source accounting](wallet-source-accounting.md) — only real-funded fee portions and ride commissions are platform revenue; legacy fee debits stay unclassified.
 - [Admin active ride semantics](admin-active-ride-semantics.md) — Overview counts assigned ongoing trips, not unassigned booking offers, and refreshes on ride lifecycle changes.
 - [Admin revenue consistency](admin-revenue-consistency.md) — Overview revenue widgets and detailed schedules must share one trend; approved recharge payments are excluded operating revenue.
+- [Model facade query support](model-facade-query-support.md) — use supported facade query chains instead of assuming every native Mongoose helper exists.

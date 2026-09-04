@@ -933,6 +933,7 @@ button,input,select,textarea{
           <div class="stat-card blue"><div class="stat-label">Active Rides</div><div class="stat-val" id="s-rides">—</div><div class="stat-sub">Right now</div></div>
           <div class="stat-card"><div class="stat-label">Total Drivers</div><div class="stat-val" id="s-drivers">—</div><div class="stat-sub" id="s-drivers-sub">— pending</div></div>
           <div class="stat-card"><div class="stat-label">Passengers</div><div class="stat-val" id="s-pass">—</div><div class="stat-sub" id="s-pass-sub">— blocked</div></div>
+          <div class="stat-card green"><div class="stat-label">Advance Deposits Held</div><div class="stat-val" id="s-advance">—</div><div class="stat-sub">Positive Driver real-wallet balances</div></div>
           <div class="stat-card red"><div class="stat-label">Unresolved SOS</div><div class="stat-val" id="s-sos">—</div><div class="stat-sub">Emergency alerts</div></div>
         </div>
         <!-- Daily income strip -->
@@ -1118,9 +1119,9 @@ button,input,select,textarea{
           <thead><tr>
             <th class="table-serial">#</th>
             <th style="width:32px"><input type="checkbox" id="select-all-chk" onchange="toggleSelectAll(this.checked)" style="cursor:pointer"></th>
-            <th>Driver</th><th>Phone</th><th>Vehicle</th><th>Daily Fee</th><th>Rating</th><th>Status</th><th>Device Binding</th><th>Joined</th><th>Actions</th>
+            <th>Driver</th><th>Phone</th><th>Vehicle</th><th>Daily Fee</th><th>Real Wallet Balance</th><th>Bonus Credit Balance</th><th>Rating</th><th>Status</th><th>Device Binding</th><th>Joined</th><th>Actions</th>
           </tr></thead>
-          <tbody id="drivers-tbody"><tr><td colspan="11" class="loading-row">Loading…</td></tr></tbody>
+          <tbody id="drivers-tbody"><tr><td colspan="13" class="loading-row">Loading…</td></tr></tbody>
         </table></div>
       </div>
 
@@ -2669,6 +2670,7 @@ async function loadStats() {
     document.getElementById('s-drivers-sub').textContent= `${s.pendingDrivers||0} pending · ${s.suspendedDrivers||0} suspended`;
     document.getElementById('s-pass').textContent       = s.totalPassengers || 0;
     document.getElementById('s-pass-sub').textContent   = `${s.blockedPassengers||0} blocked`;
+    document.getElementById('s-advance').textContent    = `Rs ${Number(s.currentAdvanceDeposits || 0).toLocaleString('en-PK', { maximumFractionDigits: 2 })}`;
     document.getElementById('s-sos').textContent        = s.unresolvedSOS || 0;
     // Header badges
     document.getElementById('hb-rides').textContent   = `● ${activeRideCount} active`;
@@ -2829,6 +2831,16 @@ function renderRevenueAnalytics(data) {
       breakdown: [
         ['Bonus-funded deductions', period.bonusNonRevenueEarnings, allTime.bonusNonRevenueEarnings],
         ['Bonus credits granted', period.bonusCredits, allTime.bonusCredits]
+      ]
+    },
+    {
+      label: 'Advance Deposits Held',
+      value: data.currentAdvanceDeposits,
+      total: data.currentAdvanceDeposits,
+      detail: 'Current positive real-wallet balances held from Drivers',
+      tone: 'revenue-kpi-green',
+      breakdown: [
+        ['Excluded from profit', data.currentAdvanceDeposits, data.currentAdvanceDeposits]
       ]
     }
   ];
@@ -2996,7 +3008,7 @@ function normalizeManagementResponse(payload, statuses) {
 async function loadDrivers(status = 'all') {
   currentDriverStatus = status;
   const tbody = document.getElementById('drivers-tbody');
-  tbody.innerHTML = '<tr><td colspan="11" class="loading-row">Loading…</td></tr>';
+  tbody.innerHTML = '<tr><td colspan="13" class="loading-row">Loading…</td></tr>';
   try {
     const [driverResponse, dailyFees] = await Promise.all([
       api(`/api/admin/drivers?status=${encodeURIComponent(status)}&includeCounts=true`),
@@ -3008,7 +3020,7 @@ async function loadDrivers(status = 'all') {
     );
     updateManagementFilterCounts('driver', counts, ['all', 'active', 'pending', 'suspended', 'blocked']);
     dailyFeeSettingsState = dailyFees;
-    if (!drivers.length) { tbody.innerHTML = '<tr><td colspan="11" class="empty-state"><span class="empty-icon">🚗</span>No drivers found</td></tr>'; return; }
+     if (!drivers.length) { tbody.innerHTML = '<tr><td colspan="13" class="empty-state"><span class="empty-icon">🚗</span>No drivers found</td></tr>'; return; }
     document.getElementById('select-all-chk').checked = false;
     selectedDriverIds.clear(); updateBulkGrantBtn();
     tbody.innerHTML = drivers.map((d, index) => {
@@ -3042,6 +3054,8 @@ async function loadDrivers(status = 'all') {
         <td>${d.phone||'—'}</td>
          <td><div style="font-size:.75rem">${d.vehicleType||'—'}<br><span style="color:#475569">${d.vehicleModel||''} ${d.vehiclePlate||''}</span><br><span style="color:#38bdf8">${d.ridePreference || 'Both'}</span></div></td>
         <td>${feeCell}</td>
+         <td><div style="font-size:.75rem;font-weight:800;color:#4ade9a">${revenueAmount(d.realWalletBalance)}</div><span style="font-size:.64rem;color:#64748b">Advance held</span></td>
+         <td><div style="font-size:.75rem;font-weight:800;color:#aebaff">${revenueAmount(d.bonusCreditBalance)}</div><span style="font-size:.64rem;color:#64748b">Promotional</span></td>
         <td style="${lowRating?'color:#ef4444':''};font-weight:${lowRating?'700':'400'}">⭐ ${(d.rating||5).toFixed(1)}</td>
         <td>${badgeHtml(d.accountStatus||'active')}</td>
          <td><div style="display:flex;align-items:center;gap:.35rem;flex-wrap:wrap">
@@ -3065,7 +3079,7 @@ async function loadDrivers(status = 'all') {
       </tr>`;
     }).join('');
     refreshFeePassTimers();
-  } catch (e) { tbody.innerHTML = `<tr><td colspan="11" style="text-align:center;color:#ef4444;padding:1rem">${e.message}</td></tr>`; }
+   } catch (e) { tbody.innerHTML = `<tr><td colspan="13" style="text-align:center;color:#ef4444;padding:1rem">${e.message}</td></tr>`; }
 }
 
 function refreshFeePassTimers() {

@@ -785,6 +785,34 @@ function getWalletSourceBalances(wallet) {
   };
 }
 
+const ADMIN_WALLET_BALANCE_FIELDS = 'user balance realCashWallet bonusWallet realCashAvailable bonusAvailable transactions';
+
+function getAdminWalletBalances(wallet) {
+  const sourceBalances = getWalletSourceBalances(wallet);
+  const realWalletBalance = roundWalletAmount(Math.max(0, sourceBalances.realCashAvailable));
+  const bonusCreditBalance = roundWalletAmount(Math.max(0, sourceBalances.bonusAvailable));
+  return {
+    realWalletBalance,
+    bonusCreditBalance,
+    advanceDeposit: realWalletBalance
+  };
+}
+
+async function getDriverWalletSnapshots(driverIds = null) {
+  const ids = driverIds || (await User.find({ role: 'driver' }).select('_id').lean()).map(driver => driver._id);
+  if (!ids.length) return [];
+  return Wallet.find({ user: { $in: ids } })
+    .select(ADMIN_WALLET_BALANCE_FIELDS)
+    .lean();
+}
+
+async function getCurrentDriverAdvanceDeposits() {
+  const wallets = await getDriverWalletSnapshots();
+  return Number(wallets.reduce((total, wallet) => (
+    total + getAdminWalletBalances(wallet).advanceDeposit
+  ), 0).toFixed(2));
+}
+
 function allocateWalletDebit(wallet, amount) {
   const total = Math.max(0, roundWalletAmount(amount));
   const sourceBalances = getWalletSourceBalances(wallet);
@@ -7186,14 +7214,18 @@ app.get('/api/admin/stats', adminJwt, requirePerm('viewOverview'), async (req, r
         Payment.countDocuments({ status: 'pending' }),
         SOS.countDocuments({ resolved: false })
       ]);
-    const earningsAgg = await Payment.aggregate([
+    const [earningsAgg, currentAdvanceDeposits] = await Promise.all([
+      Payment.aggregate([
       { $match: { status: 'approved', updatedAt: { $gte: today } } },
       { $group: { _id: null, total: { $sum: '$amount' } } }
+      ]),
+      getCurrentDriverAdvanceDeposits()
     ]);
     res.json({
       totalDrivers, pendingDrivers, suspendedDrivers, totalPassengers,
       blockedPassengers, activeRides, pendingPayments, unresolvedSOS,
-      todayEarnings: earningsAgg[0]?.total || 0
+      todayEarnings: earningsAgg[0]?.total || 0,
+      currentAdvanceDeposits
     });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
@@ -7368,6 +7400,8 @@ app.get('/api/admin/drivers', adminJwt, requirePerm('viewDrivers'), async (req, 
           }))
         : null
     ]);
+    const wallets = await getDriverWalletSnapshots(drivers.map(driver => driver._id));
+    const walletsByDriver = new Map(wallets.map(wallet => [String(wallet.user), wallet]));
     // Keep private document filenames out of list/search payloads. The Admin
     // document route below exposes bytes only after an authenticated check.
     const records = drivers.map(driver => {
@@ -7377,7 +7411,8 @@ app.get('/api/admin/drivers', adminJwt, requirePerm('viewDrivers'), async (req, 
         cnicFront: !!value.cnicFront,
         cnicBack: !!value.cnicBack,
         licensePhoto: !!value.licensePhoto,
-        vehicleRegPhoto: !!value.vehicleRegPhoto
+        vehicleRegPhoto: !!value.vehicleRegPhoto,
+        ...getAdminWalletBalances(walletsByDriver.get(String(value._id)))
       };
     });
     res.json(includeCounts ? { records, counts } : records);
@@ -8889,7 +8924,7 @@ async function getAdminRevenueAnalytics(days) {
     const walletPeriodMatch = { 'transactions.createdAt': { $gte: since } };
     const paymentRevenueMatch = { status: 'approved' };
 
-    const [walletFacets, paymentFacets] = await Promise.all([
+    const [walletFacets, paymentFacets, currentAdvanceDeposits] = await Promise.all([
       Wallet.aggregate([
         { $unwind: '$transactions' },
         {
@@ -8928,7 +8963,8 @@ async function getAdminRevenueAnalytics(days) {
             ]
           }
         }
-      ])
+      ]),
+      getCurrentDriverAdvanceDeposits()
     ]);
 
     const wallet = walletFacets[0] || {};
@@ -8956,6 +8992,7 @@ async function getAdminRevenueAnalytics(days) {
       periodEnd: new Date().toISOString(),
       allTime,
       period,
+      currentAdvanceDeposits,
       trend
     };
 }
