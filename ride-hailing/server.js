@@ -760,8 +760,8 @@ function getWalletSourceBalances(wallet) {
 function allocateWalletDebit(wallet, amount) {
   const total = Math.max(0, roundWalletAmount(amount));
   const sourceBalances = getWalletSourceBalances(wallet);
-  const bonusAmount = Math.min(total, sourceBalances.bonusAvailable);
-  const realAmount = total - bonusAmount;
+  const realAmount = Math.min(total, sourceBalances.realCashAvailable);
+  const bonusAmount = total - realAmount;
   const fundingSource = bonusAmount > 0 && realAmount > 0
     ? WALLET_FUNDING_SOURCES.MIXED
     : bonusAmount > 0

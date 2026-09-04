@@ -203,7 +203,7 @@ test('Driver payment approval rolls back the wallet when the Driver update fails
   assert.equal(wallet.transactions.length, 0);
 });
 
-test('wallet debits consume bonus credits first and record mixed funding precisely', async () => {
+test('wallet debits consume real cash first, then bonus, and record mixed funding precisely', async () => {
   const bonusOnly = allocateWalletDebit({ balance: 270, realCashAvailable: 0, bonusAvailable: 270 }, 270);
   assert.equal(bonusOnly.fundingSource, 'bonus');
   assert.equal(bonusOnly.realAmount, 0);
@@ -211,10 +211,61 @@ test('wallet debits consume bonus credits first and record mixed funding precise
 
   const mixed = allocateWalletDebit({ balance: 300, realCashAvailable: 100, bonusAvailable: 200 }, 270);
   assert.equal(mixed.fundingSource, 'mixed');
-  assert.equal(mixed.realAmount, 70);
-  assert.equal(mixed.bonusAmount, 200);
-  assert.equal(mixed.remainingReal, 30);
-  assert.equal(mixed.remainingBonus, 0);
+  assert.equal(mixed.realAmount, 100);
+  assert.equal(mixed.bonusAmount, 170);
+  assert.equal(mixed.remainingReal, 0);
+  assert.equal(mixed.remainingBonus, 30);
+
+  const realOnly = allocateWalletDebit({ balance: 400, realCashAvailable: 400, bonusAvailable: 200 }, 270);
+  assert.equal(realOnly.fundingSource, 'real');
+  assert.equal(realOnly.realAmount, 270);
+  assert.equal(realOnly.bonusAmount, 0);
+  assert.equal(realOnly.remainingReal, 130);
+  assert.equal(realOnly.remainingBonus, 200);
+});
+
+test('daily fees use bonus only for the amount not covered by real cash and block insufficient combined funds', async () => {
+  const driver = await createParticipant('driver', 'fee-priority');
+  await models.Wallet.create({
+    user: driver._id,
+    balance: 300,
+    realCashAvailable: 100,
+    bonusAvailable: 200
+  });
+
+  const charged = await chargeDailyFeeForOnlineDriver(
+    driver._id,
+    driver,
+    { 'Car Sedan': 270 }
+  );
+
+  assert.equal(charged.allowed, true);
+  assert.equal(charged.charged, true);
+  assert.equal(charged.fundingSource, 'mixed');
+  assert.equal(charged.realAmount, 100);
+  assert.equal(charged.bonusAmount, 170);
+  const chargedWallet = await models.Wallet.findOne({ user: driver._id }).lean();
+  assert.equal(chargedWallet.balance, 30);
+  assert.equal(chargedWallet.realCashAvailable, 0);
+  assert.equal(chargedWallet.bonusAvailable, 30);
+
+  const blockedDriver = await createParticipant('driver', 'fee-insufficient');
+  await models.Wallet.create({
+    user: blockedDriver._id,
+    balance: 200,
+    realCashAvailable: 0,
+    bonusAvailable: 200
+  });
+  const blocked = await chargeDailyFeeForOnlineDriver(
+    blockedDriver._id,
+    blockedDriver,
+    { 'Car Sedan': 270 }
+  );
+  assert.equal(blocked.allowed, false);
+  assert.equal(blocked.charged, false);
+  const blockedWallet = await models.Wallet.findOne({ user: blockedDriver._id }).lean();
+  assert.equal(blockedWallet.balance, 200);
+  assert.equal(blockedWallet.transactions.length, 0);
 });
 
 test('bonus-funded daily fees are excluded from real Admin revenue', async () => {
@@ -374,6 +425,35 @@ test('Long Range commission records bonus funding without treating it as real re
   assert.equal(commission.fundingSource, 'bonus');
   assert.equal(commission.realAmount, 0);
   assert.equal(commission.bonusAmount, 100);
+});
+
+test('Long Range commission spends real cash before falling back to bonus', async () => {
+  const driver = await createParticipant('driver', 'long-range-mixed');
+  const passenger = await createParticipant('customer', 'long-range-mixed');
+  const ride = await createRide(driver, passenger, 'long-range-mixed');
+  ride.isLongRange = true;
+  await ride.save();
+  await models.Wallet.create({
+    user: driver._id,
+    balance: 150,
+    realCashAvailable: 40,
+    bonusAvailable: 110
+  });
+
+  const result = await chargeLongRangeCommission(
+    ride,
+    driver._id,
+    'on-request',
+    { commissionTiming: 'on-request', commissionPercent: 10 }
+  );
+
+  assert.equal(result.fundingSource, 'mixed');
+  assert.equal(result.realAmount, 40);
+  assert.equal(result.bonusAmount, 60);
+  const wallet = await models.Wallet.findOne({ user: driver._id }).lean();
+  assert.equal(wallet.balance, 50);
+  assert.equal(wallet.realCashAvailable, 0);
+  assert.equal(wallet.bonusAvailable, 50);
 });
 
 test('legacy wallet transactions remain conservative and unclassified', () => {

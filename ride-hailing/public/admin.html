@@ -298,11 +298,14 @@ body{font-family:'Segoe UI',system-ui,sans-serif;background:#06060e;color:#e2e8f
 .revenue-period-control label{font-size:.67rem;color:#64748b;font-weight:800;text-transform:uppercase;letter-spacing:.06em}
 .revenue-period-select{background:#06060e;border:1px solid #1e1e2e;border-radius:8px;padding:.42rem .6rem;color:#cbd5e1;font-size:.75rem;outline:none}
 .revenue-period-select:focus{border-color:#45d5f5;box-shadow:0 0 0 3px rgba(69,213,245,.1)}
-.revenue-kpi-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(165px,1fr));gap:.7rem;margin:1rem 0}
+.revenue-kpi-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:.7rem;margin:1rem 0}
 .revenue-kpi{background:#0a1421;border:1px solid #1e1e2e;border-radius:11px;padding:.8rem .9rem;min-width:0}
 .revenue-kpi-label{font-size:.64rem;color:#64778d;text-transform:uppercase;letter-spacing:.06em;font-weight:800}
 .revenue-kpi-value{margin-top:.35rem;font-size:1.22rem;font-weight:850;color:#e2e8f0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .revenue-kpi-meta{margin-top:.28rem;font-size:.67rem;color:#475569;line-height:1.35}
+.revenue-kpi-breakdown{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:.35rem .7rem;margin-top:.75rem;padding-top:.65rem;border-top:1px solid rgba(148,163,184,.12)}
+.revenue-kpi-breakdown-item{display:flex;justify-content:space-between;gap:.45rem;font-size:.68rem;color:#94a3b8;line-height:1.3}
+.revenue-kpi-breakdown-item strong{color:#dbe5ef;white-space:nowrap}
 .revenue-kpi-cyan{border-color:#18556a}.revenue-kpi-cyan .revenue-kpi-value{color:#45d5f5}
 .revenue-kpi-gold{border-color:#574615}.revenue-kpi-gold .revenue-kpi-value{color:#f5c95a}
 .revenue-kpi-green{border-color:#174a3b}.revenue-kpi-green .revenue-kpi-value{color:#4ade9a}
@@ -786,6 +789,7 @@ button,input,select,textarea{
   .revenue-kpi-grid{grid-template-columns:repeat(2,minmax(0,1fr));gap:.55rem}
   .revenue-kpi{padding:.72rem .7rem}
   .revenue-kpi-value{font-size:1rem}
+  .revenue-kpi-breakdown{grid-template-columns:1fr}
 }
 </style>
 </head>
@@ -2670,21 +2674,44 @@ function renderRevenueAnalytics(data) {
   if (periodLabel) periodLabel.textContent = `Last ${data.days || 30} days · all-time comparison below`;
 
   const cards = [
-    ['Real Platform Revenue', period.netRevenue, allTime.netRevenue, 'Cash-funded fees + ride commissions', 'revenue-kpi-cyan'],
-    ['Real Daily Fee Collections', period.dailyFeeCollections, allTime.dailyFeeCollections, 'Bonus-funded fees excluded', 'revenue-kpi-gold'],
-    ['Ride Commission', period.rideCommissions, allTime.rideCommissions, 'Settled customer fare margin', 'revenue-kpi-green'],
-    ['Real Long-Range Commission', period.longRangeCommissions, allTime.longRangeCommissions, 'Bonus-funded commission excluded', 'revenue-kpi-purple'],
-    ['Bonus / Non-Revenue Earnings', period.bonusNonRevenueEarnings, allTime.bonusNonRevenueEarnings, 'Fees paid from bonus credits', 'revenue-kpi-red'],
-    ['Bonus Credits Granted', period.bonusCredits, allTime.bonusCredits, 'Promotional wallet credits', 'revenue-kpi-red'],
-    ['Advance Deposits / Driver Recharges', period.advanceDeposits ?? period.approvedWalletFunding, allTime.advanceDeposits ?? allTime.approvedWalletFunding, 'Funding credit · excluded from platform revenue', 'revenue-kpi']
+    {
+      label: 'Real Platform Revenue',
+      value: period.netRevenue,
+      total: allTime.netRevenue,
+      detail: 'Cash-funded fees and settled ride commissions',
+      tone: 'revenue-kpi-cyan',
+      breakdown: [
+        ['Daily fees', period.dailyFeeCollections, allTime.dailyFeeCollections],
+        ['Ride commission', period.rideCommissions, allTime.rideCommissions],
+        ['Long Range commission', period.longRangeCommissions, allTime.longRangeCommissions],
+        ['Advance deposits · excluded', period.advanceDeposits ?? period.approvedWalletFunding, allTime.advanceDeposits ?? allTime.approvedWalletFunding]
+      ]
+    },
+    {
+      label: 'Bonus / Non-Revenue Earnings',
+      value: period.bonusNonRevenueEarnings,
+      total: allTime.bonusNonRevenueEarnings,
+      detail: 'Bonus-funded deductions stay outside real earnings',
+      tone: 'revenue-kpi-red',
+      breakdown: [
+        ['Bonus-funded deductions', period.bonusNonRevenueEarnings, allTime.bonusNonRevenueEarnings],
+        ['Bonus credits granted', period.bonusCredits, allTime.bonusCredits]
+      ]
+    }
   ];
   const kpis = document.getElementById('revenue-kpis');
   if (kpis) {
-    kpis.innerHTML = cards.map(([label, value, total, detail, tone]) => `
-      <div class="revenue-kpi ${tone}">
-        <div class="revenue-kpi-label">${label}</div>
-        <div class="revenue-kpi-value">${revenueAmount(value)}</div>
-        <div class="revenue-kpi-meta">${detail} · All time: ${revenueAmount(total)}</div>
+    kpis.innerHTML = cards.map(card => `
+      <div class="revenue-kpi ${card.tone}">
+        <div class="revenue-kpi-label">${card.label}</div>
+        <div class="revenue-kpi-value">${revenueAmount(card.value)}</div>
+        <div class="revenue-kpi-meta">${card.detail} · All time: ${revenueAmount(card.total)}</div>
+        <div class="revenue-kpi-breakdown">
+          ${card.breakdown.map(([label, value, total]) => `
+            <div class="revenue-kpi-breakdown-item" title="All time: ${revenueAmount(total)}">
+              <span>${label}</span><strong>${revenueAmount(value)}</strong>
+            </div>`).join('')}
+        </div>
       </div>`).join('');
   }
 
