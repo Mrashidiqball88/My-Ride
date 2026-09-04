@@ -80,6 +80,7 @@ export type DriverWalletSummary = {
   advanceDeposits?: number;
   realCashRecharges?: number;
   realCashWallet?: number;
+  realCashAvailable?: number;
   bonusAvailable?: number;
   bonusWallet?: number;
 };

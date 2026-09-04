@@ -98,9 +98,11 @@ test('concurrent ride completion settles once and returns an idempotent replay',
   assert.equal(driverWallet.transactions.filter(tx => tx.operationId === `ride:${ride._id}:settlement`).length, 1);
   assert.equal(passengerWallet.transactions.filter(tx => tx.operationId === `ride:${ride._id}:settlement`).length, 1);
   const driverSettlement = driverWallet.transactions.find(tx => tx.operationId === `ride:${ride._id}:settlement`);
-  assert.equal(driverSettlement.fundingSource, 'real');
-  assert.equal(driverSettlement.realAmount, 850);
+  assert.equal(driverSettlement.fundingSource, 'earnings');
+  assert.equal(driverSettlement.realAmount, 0);
   assert.equal(driverSettlement.bonusAmount, 0);
+  assert.equal(driverWallet.balance, 0);
+  assert.equal(driverWallet.realCashAvailable, 0);
   assert.equal((await models.User.findById(driver._id).lean()).totalRides, 1);
   assert.equal((await models.User.findById(passenger._id).lean()).totalRides, 1);
 });
@@ -222,6 +224,41 @@ test('wallet debits consume real cash first, then bonus, and record mixed fundin
   assert.equal(realOnly.bonusAmount, 0);
   assert.equal(realOnly.remainingReal, 130);
   assert.equal(realOnly.remainingBonus, 200);
+});
+
+test('ride earnings ledger entries stay outside spendable cash and advance deposits', () => {
+  const balances = getWalletSourceBalances({
+    balance: 2000,
+    realCashAvailable: 2000,
+    bonusAvailable: 0,
+    transactions: [
+      {
+        amount: 1000,
+        type: 'credit',
+        description: 'Approved driver recharge (TRX EARNINGS-1)',
+        fundingSource: 'real',
+        realAmount: 1000,
+        bonusAmount: 0
+      },
+      {
+        amount: 850,
+        type: 'credit',
+        description: 'Ride earnings',
+        fundingSource: 'real',
+        realAmount: 850,
+        bonusAmount: 0
+      }
+    ]
+  });
+
+  assert.equal(balances.realCashAvailable, 1000);
+  assert.equal(balances.bonusAvailable, 0);
+  assert.equal(walletAdvanceDepositTotal({
+    transactions: [
+      { amount: 1000, type: 'credit', description: 'Approved driver recharge (TRX EARNINGS-1)', realAmount: 1000 },
+      { amount: 850, type: 'credit', description: 'Ride earnings', realAmount: 850 }
+    ]
+  }), 1000);
 });
 
 test('daily fees use bonus only for the amount not covered by real cash and block insufficient combined funds', async () => {
@@ -357,6 +394,89 @@ test('Driver financial summary uses settled payouts and separates real cash from
   assert.equal(sourceBalances.realCashAvailable, 900);
   assert.equal(sourceBalances.bonusAvailable, 500);
   assert.equal(walletAdvanceDepositTotal(wallet), 1200);
+});
+
+test('wallet summary exposes recharge cash separately from ride income', async () => {
+  const driver = await createParticipant('driver', 'summary-isolation');
+  const passenger = await createParticipant('customer', 'summary-isolation');
+  driver.activeSessionToken = 'summary-isolation-session';
+  await driver.save();
+  await models.Ride.create({
+    passenger: passenger._id,
+    driver: driver._id,
+    status: 'completed',
+    settlementStatus: 'settled',
+    settledFare: 2000,
+    settledDriverEarnings: 1700,
+    settledAt: new Date(),
+    fare: 2000,
+    pickupLocation: { lat: 31.52, lng: 74.35 },
+    dropoffLocation: { lat: 31.53, lng: 74.36 }
+  });
+  await models.Wallet.create({
+    user: driver._id,
+    balance: 2950,
+    realCashAvailable: 2750,
+    bonusAvailable: 200,
+    transactions: [
+      {
+        amount: 1500,
+        type: 'credit',
+        description: 'Approved driver recharge (TRX SUMMARY-ISOLATION)',
+        fundingSource: 'real',
+        realAmount: 1500,
+        bonusAmount: 0
+      },
+      {
+        amount: 1700,
+        type: 'credit',
+        description: 'Ride earnings',
+        fundingSource: 'real',
+        realAmount: 1700,
+        bonusAmount: 0
+      },
+      {
+        amount: 500,
+        type: 'debit',
+        description: 'Automatic daily fee for going online (Car Sedan)',
+        fundingSource: 'real',
+        realAmount: 500,
+        bonusAmount: 0
+      },
+      {
+        amount: 200,
+        type: 'credit',
+        description: 'Admin Wallet Bonus Credit',
+        fundingSource: 'bonus',
+        realAmount: 0,
+        bonusAmount: 200
+      }
+    ]
+  });
+
+  const token = jwt.sign({ id: String(driver._id), role: 'driver' }, 'ride-hailing-secret-fallback');
+  const financialServer = app.listen(0);
+  try {
+    const headers = {
+      authorization: `Bearer ${token}`,
+      'x-session-token': 'summary-isolation-session'
+    };
+    const summaryResponse = await fetch(`http://127.0.0.1:${financialServer.address().port}/api/wallet/summary`, { headers });
+    assert.equal(summaryResponse.status, 200);
+    const summary = await summaryResponse.json();
+    assert.equal(summary.currentWalletBalance, 1000);
+    assert.equal(summary.realCashAvailable, 1000);
+    assert.equal(summary.advanceDeposits, 1500);
+    assert.equal(summary.todayIncome, 1700);
+    assert.equal(summary.balance, 1200);
+
+    const statusResponse = await fetch(`http://127.0.0.1:${financialServer.address().port}/api/wallet/status`, { headers });
+    assert.equal(statusResponse.status, 200);
+    const status = await statusResponse.json();
+    assert.equal(status.todayRideEarnings, 1700);
+  } finally {
+    await new Promise(resolve => financialServer.close(resolve));
+  }
 });
 
 test('approved Driver recharges are shown as advance deposits and excluded from revenue', async () => {

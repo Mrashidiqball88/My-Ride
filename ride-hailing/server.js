@@ -675,6 +675,7 @@ const WALLET_FUNDING_SOURCES = Object.freeze({
   REAL: 'real',
   BONUS: 'bonus',
   MIXED: 'mixed',
+  EARNINGS: 'earnings',
   UNKNOWN: 'unknown'
 });
 
@@ -686,16 +687,28 @@ function isBonusTransactionDescription(description = '') {
   return /bonus|trial|promotional/i.test(String(description));
 }
 
+function isRideEarningsTransaction(transaction) {
+  return String(transaction?.fundingSource || '').toLowerCase() === WALLET_FUNDING_SOURCES.EARNINGS
+    || String(transaction?.description || '').trim().toLowerCase() === 'ride earnings';
+}
+
+function isLegacyRideEarningsTransaction(transaction) {
+  return isRideEarningsTransaction(transaction)
+    && String(transaction?.fundingSource || '').toLowerCase() !== WALLET_FUNDING_SOURCES.EARNINGS;
+}
+
 function getWalletSourceBalances(wallet) {
   const trackedReal = Number(wallet?.realCashAvailable);
   const trackedBonus = Number(wallet?.bonusAvailable);
   const transactions = Array.isArray(wallet?.transactions) ? wallet.transactions : [];
+  const hasLegacyRideEarningsTransactions = transactions.some(isLegacyRideEarningsTransaction);
   const hasLegacyTransactions = transactions.some(transaction => {
+    if (isRideEarningsTransaction(transaction)) return false;
     const source = String(transaction.fundingSource || '').toLowerCase();
     return ![WALLET_FUNDING_SOURCES.REAL, WALLET_FUNDING_SOURCES.BONUS, WALLET_FUNDING_SOURCES.MIXED].includes(source);
   });
 
-  if (Number.isFinite(trackedReal) && Number.isFinite(trackedBonus) && !hasLegacyTransactions) {
+  if (Number.isFinite(trackedReal) && Number.isFinite(trackedBonus) && !hasLegacyTransactions && !hasLegacyRideEarningsTransactions) {
     // Some old test/manual wallets contain an aggregate balance but no ledger
     // credits. Treat that unclassified balance as real rather than allowing a
     // zero-valued default source bucket to misclassify a new fee as bonus.
@@ -713,6 +726,7 @@ function getWalletSourceBalances(wallet) {
   let bonusAvailable = 0;
   let hasCreditLedger = false;
   for (const transaction of transactions) {
+    if (isRideEarningsTransaction(transaction)) continue;
     const amount = Math.max(0, roundWalletAmount(transaction.amount));
     const source = String(transaction.fundingSource || '').toLowerCase();
     if (transaction.type === 'credit') {
@@ -740,6 +754,20 @@ function getWalletSourceBalances(wallet) {
     const legacyBonusDebit = Math.min(bonusAvailable, amount);
     bonusAvailable -= legacyBonusDebit;
     realCashAvailable = Math.max(0, realCashAvailable - (amount - legacyBonusDebit));
+  }
+
+  if (!hasCreditLedger && hasLegacyRideEarningsTransactions
+    && Number.isFinite(trackedReal) && Number.isFinite(trackedBonus)) {
+    // Old settlements were mislabeled as real wallet credits. If there is no
+    // credit ledger to reconstruct from, remove those historical earnings from
+    // the tracked real-cash bucket while preserving later debit effects.
+    const legacyEarnings = transactions
+      .filter(isLegacyRideEarningsTransaction)
+      .reduce((sum, transaction) => sum + Math.max(0, roundWalletAmount(transaction.amount)), 0);
+    return {
+      realCashAvailable: Math.max(0, roundWalletAmount(trackedReal - legacyEarnings)),
+      bonusAvailable: Math.max(0, roundWalletAmount(trackedBonus))
+    };
   }
 
   if (!hasCreditLedger && !transactions.length) {
@@ -787,9 +815,12 @@ async function ensureWalletSourceBalances(userId, { session } = {}) {
   if (!wallet) return null;
 
   const balances = getWalletSourceBalances(wallet);
+  const hasLegacyRideEarningsTransactions = wallet.transactions?.some(isLegacyRideEarningsTransaction);
   const hasTrackedFields = Number.isFinite(Number(wallet.realCashAvailable))
     && Number.isFinite(Number(wallet.bonusAvailable))
+    && !hasLegacyRideEarningsTransactions
     && !wallet.transactions?.some(transaction => {
+      if (isRideEarningsTransaction(transaction)) return false;
       const source = String(transaction.fundingSource || '').toLowerCase();
       return ![WALLET_FUNDING_SOURCES.REAL, WALLET_FUNDING_SOURCES.BONUS, WALLET_FUNDING_SOURCES.MIXED].includes(source);
     });
@@ -804,6 +835,7 @@ async function ensureWalletSourceBalances(userId, { session } = {}) {
       { _id: wallet._id },
       {
         $set: {
+          balance: roundWalletAmount(balances.realCashAvailable + balances.bonusAvailable),
           realCashAvailable: balances.realCashAvailable,
           bonusAvailable: balances.bonusAvailable
         }
@@ -843,6 +875,9 @@ async function chargeDailyFeeForOnlineDriver(driverId, driver, dailyFeeSettings 
   }
 
   const allocation = allocateWalletDebit(walletSnapshot, rate);
+  if (allocation.realCashAvailable + allocation.bonusAvailable < rate) {
+    return { allowed: false, charged: false, rate, reason: 'Wallet balance is insufficient for today’s Daily Fee.' };
+  }
   const wallet = await Wallet.findOneAndUpdate(
     {
       user: driverId,
@@ -854,8 +889,8 @@ async function chargeDailyFeeForOnlineDriver(driverId, driver, dailyFeeSettings 
       ]
     },
     {
-      $inc: { balance: -rate },
       $set: {
+        balance: roundWalletAmount(allocation.remainingReal + allocation.remainingBonus),
         fee_paid_at: now,
         dailyFeeChargedDate: todayUTC(),
         realCashAvailable: allocation.remainingReal,
@@ -1781,8 +1816,8 @@ rideSchema.index({ 'pickupLocation.lat': 1, 'pickupLocation.lng': 1 });
 
 const walletSchema = new mongoose.Schema({
   user:           { type: mongoose.Schema.Types.ObjectId, ref: 'Driver', unique: true },
-  balance:        { type: Number, default: 0 },             // net spendable (all credits − debits)
-  realCashWallet: { type: Number, default: 0 },             // deposits + ride earnings only
+  balance:        { type: Number, default: 0 },             // current spendable wallet total (recharge cash + bonus)
+  realCashWallet: { type: Number, default: 0 },             // legacy cumulative real-cash funding marker
   bonusWallet:    { type: Number, default: 0 },             // promotional bonuses only
   realCashAvailable: { type: Number, default: 0 },           // current spendable real-cash bucket
   bonusAvailable: { type: Number, default: 0 },              // current spendable bonus bucket
@@ -2962,14 +2997,15 @@ async function completeRideFinancialSettlement(rideId, driverId, waitingRateSett
       throw financialError('Customer wallet is unavailable; the ride was not completed.', 503, 'CUSTOMER_WALLET_UNAVAILABLE');
     }
 
-    await ensureWalletSourceBalances(ride.driver, { session });
     const driverWallet = await Wallet.findOneAndUpdate(
       { user: ride.driver },
       {
-        $inc: {
-          balance: earnings,
-          realCashWallet: earnings,
-          realCashAvailable: earnings
+        $setOnInsert: {
+          balance: 0,
+          realCashWallet: 0,
+          bonusWallet: 0,
+          realCashAvailable: 0,
+          bonusAvailable: 0
         },
         $push: {
           transactions: {
@@ -2977,10 +3013,10 @@ async function completeRideFinancialSettlement(rideId, driverId, waitingRateSett
             type: 'credit',
             description: 'Ride earnings',
             rideId: String(ride._id),
-              operationId,
-              fundingSource: WALLET_FUNDING_SOURCES.REAL,
-              realAmount: earnings,
-              bonusAmount: 0
+            operationId,
+            fundingSource: WALLET_FUNDING_SOURCES.EARNINGS,
+            realAmount: 0,
+            bonusAmount: 0
           }
         }
       },
@@ -5765,23 +5801,9 @@ app.get('/api/wallet/status', authMiddleware, async (req, res) => {
     ]);
     const totalApproved = result[0]?.totalApproved || 0;
 
-    // Today's ride earnings: sum of 'Ride earnings' wallet credits for the current UTC day
-    const todayStart = new Date();
-    todayStart.setUTCHours(0, 0, 0, 0);
-    const todayEnd = new Date();
-    todayEnd.setUTCHours(23, 59, 59, 999);
-
-    const wallet = await Wallet.findOne({ user: req.user.id });
-    const todayRideEarnings = wallet
-      ? wallet.transactions
-          .filter(t =>
-            t.type === 'credit' &&
-            t.description === 'Ride earnings' &&
-            t.createdAt >= todayStart &&
-            t.createdAt <= todayEnd
-          )
-          .reduce((sum, t) => sum + t.amount, 0)
-      : 0;
+    // Ride income is independent from the Driver's spendable wallet. Read it
+    // from settled Ride records instead of wallet credits.
+    const { todayIncome: todayRideEarnings } = await getDriverTodayIncome(req.user.id);
 
     const remaining = Math.max(0, target - totalApproved - todayRideEarnings);
 
@@ -7839,7 +7861,6 @@ app.get('/api/wallet/summary', authMiddleware, async (req, res) => {
     const vehicleType = normalizeFareVehicle(driver?.vehicleType || 'Car Mini Non-AC');
 
     const wallet = await Wallet.findOne({ user: req.user.id });
-    const balance      = wallet?.balance || 0;
     const transactions = wallet?.transactions || [];
 
     const sourceBalances = getWalletSourceBalances(wallet);
@@ -7856,8 +7877,9 @@ app.get('/api/wallet/summary', authMiddleware, async (req, res) => {
 
     const currentWalletBalance = sourceBalances.realCashAvailable;
     const bonusWalletAmt = sourceBalances.bonusAvailable;
+    const spendableBalance = roundWalletAmount(currentWalletBalance + bonusWalletAmt);
     res.json({
-      balance,
+      balance: spendableBalance,
       totalBonus: bonusWalletAmt,
       currentWalletBalance,
       currentBonus: bonusWalletAmt,

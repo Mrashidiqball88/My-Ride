@@ -148,7 +148,7 @@ test('daily fee is charged from the wallet only when a driver goes online, and i
     const online = await request(server, '/api/driver/availability', { isOnline: true });
     assert.equal(online.response.status, 200);
     assert.equal(charges.length, 1);
-    assert.equal(charges[0].$inc.balance, -100);
+    assert.equal(charges[0].$set.balance, 400);
     assert.match(charges[0].$push.transactions.description, /going online/);
     assert.ok(updates.some(update => update.paidUntilDate));
 
@@ -231,7 +231,7 @@ test('an expired custom paid-until date returns to normal wallet fee charging', 
   assert.equal(result.allowed, true);
   assert.equal(result.charged, true);
   assert.equal(charges.length, 1);
-  assert.equal(charges[0].$inc.balance, -100);
+  assert.equal(charges[0].$set.balance, 400);
 });
 
 test('an Admin paid-until grant is immediately usable by the online availability endpoint', async () => {
@@ -489,8 +489,8 @@ test('Long Range Only drivers are exempt from Daily Fees while Short Range Only 
   let deducted = 0;
   models.Wallet.findOne = () => ({ select: () => ({ lean: async () => ({ balance: 5000, fee_paid_at: null }) }) });
   models.Wallet.findOneAndUpdate = async (_query, update) => {
-    deducted += -update.$inc.balance;
-    return { balance: 4900 };
+    deducted += 5000 - update.$set.balance;
+    return { balance: update.$set.balance };
   };
   models.User.updateOne = async () => ({ acknowledged: true });
   const settings = { 'Car Sedan': 100 };

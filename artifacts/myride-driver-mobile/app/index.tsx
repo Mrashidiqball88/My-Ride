@@ -384,7 +384,7 @@ function DriverPaymentsPanel({
   loading: boolean;
   onRefresh: () => void;
 }) {
-  const currentWallet = Number(summary?.currentWalletBalance ?? summary?.realCashWallet ?? 0);
+  const currentWallet = Number(summary?.realCashAvailable ?? summary?.currentWalletBalance ?? summary?.realCashWallet ?? 0);
   const bonus = Number(summary?.currentBonus ?? summary?.bonusAvailable ?? summary?.bonusWallet ?? 0);
   const todayIncome = Number(summary?.todayIncome ?? 0);
   const advanceDeposits = Number(summary?.advanceDeposits ?? summary?.realCashRecharges ?? 0);
@@ -393,7 +393,7 @@ function DriverPaymentsPanel({
     <View style={styles.destinationHeader}>
       <View style={{ flex: 1 }}>
         <Text style={[styles.destinationTitle, { color: colors.foreground }]}>Payments</Text>
-        <Text style={[styles.destinationSubtitle, { color: colors.mutedForeground }]}>Wallet balance and recharge submissions</Text>
+        <Text style={[styles.destinationSubtitle, { color: colors.mutedForeground }]}>Recharge cash only; ride earnings are tracked separately</Text>
       </View>
       <Pressable
         accessibilityLabel="Refresh payments"

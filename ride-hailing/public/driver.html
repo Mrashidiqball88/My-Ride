@@ -183,6 +183,7 @@ body{font-family:'Segoe UI',sans-serif;background:#0a0a0f;color:#fff;height:100d
 .wsum-breakdown-val{font-size:.88rem;font-weight:700}
 .wsum-breakdown-val.real-cash{color:#4caf50}
 .wsum-breakdown-val.bonus-credit{color:#f5c518}
+.wsum-separation-note{margin:.55rem 0 .7rem;padding:.55rem .7rem;border:1px solid #26384a;border-radius:9px;background:#0a1421;color:#91a3b7;font-size:.72rem;line-height:1.45}
 .wsum-ledger-hdr{font-size:.68rem;color:#334155;font-weight:700;text-transform:uppercase;letter-spacing:.05em;margin-bottom:.4rem;padding-top:.1rem;border-top:1px solid #0f1520}
 .ledger-empty{font-size:.78rem;color:#334155;text-align:center;padding:.5rem}
 .ledger-item{display:flex;align-items:center;gap:.4rem;padding:.4rem 0;border-bottom:1px solid #0f1520;font-size:.78rem}
@@ -1001,6 +1002,7 @@ body{font-family:'DM Sans','Segoe UI',sans-serif;background:var(--dc-night);colo
           <div class="wsum-lbl">Today's Income (Rs)</div>
         </div>
       </div>
+      <div class="wsum-separation-note">Recharge/deposit cash is reserved for wallet dues. Ride earnings are tracked separately as income and never added to spendable wallet cash.</div>
       <!-- Source-aware balance context: income and advance funding are separate -->
       <div class="wsum-breakdown">
         <div class="wsum-breakdown-row">
@@ -3744,7 +3746,7 @@ async function loadWalletSummary() {
     const data = await apiCall('/api/wallet/summary');
     // Keep the three Driver financial cards source-aware. Aggregate balance
     // includes bonus and is intentionally not shown as the wallet balance.
-    const currentWallet = Number(data.currentWalletBalance ?? data.realCashWallet ?? 0);
+    const currentWallet = Number(data.realCashAvailable ?? data.currentWalletBalance ?? data.realCashWallet ?? 0);
     const bonusCred = Number(data.bonusAvailable ?? data.bonusWallet ?? 0);
     const todayIncome = Number(data.todayIncome || 0);
     const advanceDeposits = Number(data.advanceDeposits ?? data.realCashRecharges ?? 0);
