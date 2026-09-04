@@ -160,6 +160,44 @@ test.describe('scoped Sub-Admin browser permissions', () => {
     await expect(page.locator('#hb-rides')).toHaveText('● 0 active');
   });
 
+  test('revenue over time stays collapsed until opened and can be closed or dragged', async ({ page }) => {
+    await stubAdminData(page);
+    await login(page, 'ops-scope');
+
+    const panel = page.locator('#revenue-trend');
+    const toggle = page.locator('#revenue-trend-toggle');
+    const content = page.locator('#revenue-trend-content');
+    const close = page.locator('#revenue-trend-close');
+    const scrollRegion = page.locator('#revenue-trend-scroll');
+
+    await expect(panel).toHaveClass(/is-collapsed/);
+    await expect(toggle).toHaveAttribute('aria-expanded', 'false');
+    await expect(content).toBeHidden();
+    await expect(close).toBeHidden();
+
+    await toggle.click();
+    await expect(panel).toHaveClass(/is-expanded/);
+    await expect(toggle).toHaveAttribute('aria-expanded', 'true');
+    await expect(content).toBeVisible();
+    await expect(close).toBeVisible();
+    await expect(scrollRegion).toHaveCSS('overflow-y', 'auto');
+
+    const handle = page.locator('#revenue-trend-drag-handle');
+    const beforeTransform = await panel.evaluate(element => getComputedStyle(element).transform);
+    const box = await handle.boundingBox();
+    if (!box) throw new Error('Revenue trend drag handle is not measurable');
+    await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+    await page.mouse.down();
+    await page.mouse.move(box.x + box.width / 2 + 36, box.y + box.height / 2 + 18);
+    await page.mouse.up();
+    await expect.poll(() => panel.evaluate(element => getComputedStyle(element).transform)).not.toBe(beforeTransform);
+
+    await close.click();
+    await expect(toggle).toHaveAttribute('aria-expanded', 'false');
+    await expect(content).toBeHidden();
+    await expect(close).toBeHidden();
+  });
+
   test('configuration role sees only granted settings cards', async ({ page }) => {
     await stubAdminData(page);
     await login(page, 'config-scope');
