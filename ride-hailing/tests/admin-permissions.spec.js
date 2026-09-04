@@ -31,7 +31,7 @@ function display(page, selector) {
   return page.locator(selector).evaluate(el => getComputedStyle(el).display);
 }
 
-async function stubAdminData(page) {
+async function stubAdminData(page, stats = {}) {
   await page.route('**/api/admin/**', async route => {
     const url = new URL(route.request().url());
     const path = url.pathname;
@@ -40,7 +40,7 @@ async function stubAdminData(page) {
       return;
     }
     let body = [];
-    if (path === '/api/admin/stats') body = {};
+    if (path === '/api/admin/stats') body = stats;
     else if (path === '/api/admin/drivers') {
       const records = [
         {
@@ -150,6 +150,14 @@ test.describe('scoped Sub-Admin browser permissions', () => {
     await expect(page.locator('#customer-count-suspended')).toHaveText('0');
     await expect(page.locator('#customer-count-blocked')).toHaveText('2');
     await expect(page.locator('#pass-tbody .table-serial')).toHaveText(['1', '2']);
+  });
+
+  test('overview renders the live active ride count in both dashboard targets', async ({ page }) => {
+    await stubAdminData(page, { activeRides: 0 });
+    await login(page, 'ops-scope');
+
+    await expect(page.locator('#s-rides')).toHaveText('0');
+    await expect(page.locator('#hb-rides')).toHaveText('● 0 active');
   });
 
   test('configuration role sees only granted settings cards', async ({ page }) => {

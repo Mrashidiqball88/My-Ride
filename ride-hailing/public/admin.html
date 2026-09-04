@@ -315,10 +315,24 @@ body{font-family:'Segoe UI',system-ui,sans-serif;background:#06060e;color:#e2e8f
 .revenue-kpi-red{border-color:#522a35}.revenue-kpi-red .revenue-kpi-value{color:#ff9da7}
 .revenue-accounting-note{margin:.1rem 0 .9rem;color:#91a3b7;font-size:.7rem;line-height:1.5}
 .revenue-accounting-note strong{color:#d5dfeb}
-.revenue-trend{border-top:1px solid #1e1e2e;padding-top:.85rem}
-.revenue-trend-header{display:flex;align-items:center;justify-content:space-between;gap:.75rem;flex-wrap:wrap;margin-bottom:.6rem}
+.revenue-trend{position:relative;border-top:1px solid #1e1e2e;padding-top:.85rem;transition:box-shadow .18s ease,transform .18s ease}
+.revenue-trend.is-collapsed{padding-bottom:.05rem}
+.revenue-trend-header{display:flex;align-items:center;justify-content:space-between;gap:.75rem;flex-wrap:wrap;margin-bottom:0}
+.revenue-trend.is-expanded .revenue-trend-header{margin-bottom:.6rem}
+.revenue-trend-toggle{display:flex;align-items:center;gap:.55rem;flex:1;min-width:220px;padding:0;border:0;background:transparent;color:inherit;text-align:left;cursor:pointer}
+.revenue-trend-toggle:focus-visible,.revenue-trend-close:focus-visible,.revenue-trend-drag-handle:focus-visible{outline:2px solid #45d5f5;outline-offset:3px}
+.revenue-trend-toggle-icon{display:grid;place-items:center;width:1.45rem;height:1.45rem;border:1px solid #2d3a4a;border-radius:7px;color:#45d5f5;font-size:.9rem;line-height:1;transition:transform .18s ease,background .18s ease}
+.revenue-trend.is-expanded .revenue-trend-toggle-icon{transform:rotate(180deg);background:rgba(69,213,245,.08)}
+.revenue-trend-toggle-copy{display:flex;align-items:center;gap:.55rem;min-width:0;flex-wrap:wrap}
 .revenue-trend-header h3{font-size:.78rem;color:#e2e8f0}
 .revenue-trend-header span{font-size:.68rem;color:#64748b}
+.revenue-trend-actions{display:flex;align-items:center;gap:.45rem}
+.revenue-trend-drag-handle,.revenue-trend-close{display:grid;place-items:center;width:1.8rem;height:1.8rem;padding:0;border:1px solid #2d3a4a;border-radius:7px;background:#0a1421;color:#94a3b8;cursor:pointer;font-size:.9rem;line-height:1}
+.revenue-trend-drag-handle{cursor:grab;touch-action:none;user-select:none}
+.revenue-trend-drag-handle:active{cursor:grabbing}
+.revenue-trend-close{color:#ff9da7;border-color:#522a35;font-size:1.05rem}
+.revenue-trend.is-dragging{z-index:20;box-shadow:0 18px 45px rgba(0,0,0,.35)}
+.revenue-trend-scroll{max-height:min(48vh,430px);overflow:auto;overscroll-behavior:contain;border:1px solid rgba(148,163,184,.12);border-radius:10px;scrollbar-width:thin;scrollbar-color:#334155 transparent}
 .revenue-trend .table-wrap{margin:0}
 .revenue-trend .data-table{min-width:760px}
 .revenue-trend .data-table td,.revenue-trend .data-table th{white-space:nowrap}
@@ -942,16 +956,27 @@ button,input,select,textarea{
           <p class="revenue-accounting-note">
             <strong>Accounting note:</strong> Real Platform Revenue = real-cash daily fees + ride commissions + real-cash Long Range commissions. Bonus-funded deductions are Bonus / Non-Revenue Earnings; approved Driver recharges are wallet funding, not revenue.
           </p>
-          <div class="revenue-trend">
+          <div class="revenue-trend is-collapsed" id="revenue-trend">
             <div class="revenue-trend-header">
-              <h3>Revenue over time</h3>
-              <span id="revenue-period-label">Loading period…</span>
+              <button class="revenue-trend-toggle" id="revenue-trend-toggle" type="button" aria-expanded="false" aria-controls="revenue-trend-content" onclick="toggleRevenueTrend()">
+                <span class="revenue-trend-toggle-icon" aria-hidden="true">⌄</span>
+                <span class="revenue-trend-toggle-copy">
+                  <h3>Revenue over time</h3>
+                  <span id="revenue-period-label">Loading period…</span>
+                </span>
+              </button>
+              <div class="revenue-trend-actions">
+                <button class="revenue-trend-drag-handle" id="revenue-trend-drag-handle" type="button" aria-label="Drag Revenue over time panel" title="Drag panel">⠿</button>
+                <button class="revenue-trend-close" id="revenue-trend-close" type="button" aria-label="Close Revenue over time panel" title="Close panel" onclick="closeRevenueTrend(event)" hidden>×</button>
+              </div>
             </div>
-            <div class="table-wrap">
-              <table class="data-table">
-                <thead><tr><th>Date</th><th>Real Daily Fees</th><th>Ride Commission</th><th>Real Long Range</th><th>Real Revenue</th><th>Bonus / Non-Revenue</th><th>Bonus Credits</th></tr></thead>
-                <tbody id="revenue-trend-body"><tr><td colspan="7" class="loading-row">Loading…</td></tr></tbody>
-              </table>
+            <div class="revenue-trend-content" id="revenue-trend-content" hidden>
+              <div class="revenue-trend-scroll table-wrap" id="revenue-trend-scroll">
+                <table class="data-table">
+                  <thead><tr><th>Date</th><th>Real Daily Fees</th><th>Ride Commission</th><th>Real Long Range</th><th>Real Revenue</th><th>Bonus / Non-Revenue</th><th>Bonus Credits</th></tr></thead>
+                  <tbody id="revenue-trend-body"><tr><td colspan="7" class="loading-row">Loading…</td></tr></tbody>
+                </table>
+              </div>
             </div>
           </div>
         </div>
@@ -2437,6 +2462,7 @@ function connectSocket() {
   });
 
   socket.on('ride:new', () => { loadStats(); });
+  socket.on('admin:stats:refresh', () => { loadStats(); });
   socket.on('support:new', ({ role, subject }) => {
     loadStats();
     if (document.getElementById('sec-support')?.classList.contains('active')) {
@@ -2628,16 +2654,19 @@ function setFTab(el) {
 async function loadStats() {
   try {
     const s = await api('/api/admin/stats');
+    const activeRideCount = Number.isFinite(Number(s.activeRides)) && Number(s.activeRides) >= 0
+      ? Math.trunc(Number(s.activeRides))
+      : 0;
     document.getElementById('s-earn').textContent       = `Rs ${(s.todayEarnings||0).toLocaleString()}`;
     document.getElementById('s-pend').textContent       = (s.pendingPayments||0) + (s.pendingDrivers||0);
-    document.getElementById('s-rides').textContent      = s.activeRides || 0;
+    document.getElementById('s-rides').textContent      = activeRideCount;
     document.getElementById('s-drivers').textContent    = s.totalDrivers || 0;
     document.getElementById('s-drivers-sub').textContent= `${s.pendingDrivers||0} pending · ${s.suspendedDrivers||0} suspended`;
     document.getElementById('s-pass').textContent       = s.totalPassengers || 0;
     document.getElementById('s-pass-sub').textContent   = `${s.blockedPassengers||0} blocked`;
     document.getElementById('s-sos').textContent        = s.unresolvedSOS || 0;
     // Header badges
-    document.getElementById('hb-rides').textContent   = `● ${s.activeRides||0} active`;
+    document.getElementById('hb-rides').textContent   = `● ${activeRideCount} active`;
     document.getElementById('hb-pending').textContent  = `⏳ ${(s.pendingPayments||0)+(s.pendingDrivers||0)} pending`;
     // Sidebar badges
     const pc = s.pendingPayments||0;

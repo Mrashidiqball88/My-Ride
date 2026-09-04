@@ -3174,6 +3174,10 @@ function emitRideLifecycle(ride, event, detail = {}, { notifyVehicleDrivers = fa
   });
   if (notifyVehicleDrivers) rooms.push(`drivers:${normalizeFareVehicle(ride.vehicleType || 'Car Mini Non-AC')}`);
   io.to([...new Set(rooms)]).emit(event, payload);
+  // The Admin dashboard does not join individual ride rooms. Give it a
+  // lightweight invalidation event so its database-backed overview counters
+  // stay current for accept, arrival, start, completion, and cancellation.
+  io.sockets.to('admin-room').emit('admin:stats:refresh', { reason: event, rideId: payload.rideId });
   return payload;
 }
 
@@ -7094,6 +7098,11 @@ app.delete('/api/admin/sub-users/delete/:id', adminJwt, requireSuperAdmin, async
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
+// A requested ride is still an open booking offer, not an ongoing trip. The
+// Overview "Active Rides" metric follows the same assigned/ongoing states used
+// by the Customer and Driver active-ride surfaces.
+const ADMIN_ACTIVE_RIDE_STATUSES = ['accepted', 'arrived', 'in-progress'];
+
 // GET /api/admin/stats — overview dashboard numbers
 app.get('/api/admin/stats', adminJwt, requirePerm('viewOverview'), async (req, res) => {
   try {
@@ -7106,7 +7115,7 @@ app.get('/api/admin/stats', adminJwt, requirePerm('viewOverview'), async (req, r
         User.countDocuments({ role: 'driver', accountStatus: 'suspended' }),
         User.countDocuments({ role: 'customer' }),
         User.countDocuments({ role: 'customer', accountStatus: 'blocked' }),
-        Ride.countDocuments({ status: { $in: ['requested','accepted','arrived','in-progress'] } }),
+        Ride.countDocuments({ status: { $in: ADMIN_ACTIVE_RIDE_STATUSES } }),
         Payment.countDocuments({ status: 'pending' }),
         SOS.countDocuments({ resolved: false })
       ]);
@@ -9921,6 +9930,7 @@ module.exports = {
   getAvailableRidesForDriver,
   driverRidePayload,
   emitRideLifecycle,
+  ADMIN_ACTIVE_RIDE_STATUSES,
   chargeLongRangeCommission,
   completeRideFinancialSettlement,
   approveDriverPayment,

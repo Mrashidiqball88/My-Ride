@@ -8,7 +8,7 @@
     "dev": "node server.js",
     "test": "playwright test",
     "test:ui": "playwright test --ui",
-    "test:unit": "node --test tests/backfill-paid-until.test.js tests/fare-flow.test.js tests/student-feature.test.js tests/driver-lifecycle.test.js tests/driver-alert-reliability.test.js tests/native-driver-alert-contract.test.js tests/ride-preference-audit.test.js tests/financial-idempotency.test.js tests/geocode-api.test.js tests/urdu-rendering.test.js tests/mongo-connection.test.js tests/user-isolation.test.js tests/redis-acceleration.test.js"
+    "test:unit": "node --test tests/backfill-paid-until.test.js tests/fare-flow.test.js tests/student-feature.test.js tests/driver-lifecycle.test.js tests/driver-alert-reliability.test.js tests/native-driver-alert-contract.test.js tests/ride-preference-audit.test.js tests/financial-idempotency.test.js tests/geocode-api.test.js tests/urdu-rendering.test.js tests/mongo-connection.test.js tests/user-isolation.test.js tests/redis-acceleration.test.js tests/admin-stats.test.js"
   },
   "dependencies": {
     "bcryptjs": "^2.4.3",

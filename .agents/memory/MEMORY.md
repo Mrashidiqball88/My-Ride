@@ -53,3 +53,4 @@
 - [Driver Metro build port](driver-metro-build-port.md) — native static builds need a dedicated default port because the shared mockup preview owns 8081.
 - [Partitioned user role queries](partitioned-user-role-queries.md) — role-scoped facade queries must not require a legacy role field absent from split collections.
 - [Wallet source accounting](wallet-source-accounting.md) — only real-funded fee portions and ride commissions are platform revenue; legacy fee debits stay unclassified.
+- [Admin active ride semantics](admin-active-ride-semantics.md) — Overview counts assigned ongoing trips, not unassigned booking offers, and refreshes on ride lifecycle changes.
