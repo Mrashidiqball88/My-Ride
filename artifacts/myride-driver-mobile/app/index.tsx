@@ -272,6 +272,14 @@ function formatDriverDate(value?: string | Date) {
   return date.toLocaleDateString('en-PK', { day: 'numeric', month: 'short', year: 'numeric' });
 }
 
+function formatDriverDateTime(value?: string | Date) {
+  const date = new Date(value || 0);
+  if (Number.isNaN(date.getTime())) return 'Date unavailable';
+  const datePart = date.toLocaleDateString('en-PK', { day: 'numeric', month: 'short', year: 'numeric' });
+  const timePart = date.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: true });
+  return `${datePart}, ${timePart}`;
+}
+
 function driverHistoryStatus(status?: string) {
   const labels: Record<string, string> = {
     requested: 'Requested',
@@ -354,7 +362,7 @@ function DriverHistoryPanel({
               <View style={styles.historyMeta}>
                 <Text style={[styles.historyStatus, { color: status === 'cancelled' ? colors.destructive : colors.primary, backgroundColor: colors.secondary }]}>{driverHistoryStatus(status)}</Text>
                 <Text numberOfLines={1} style={[styles.historyPassenger, { color: colors.mutedForeground }]}>{ride.passenger?.name || 'Customer'}</Text>
-                <Text style={[styles.historyDate, { color: colors.mutedForeground }]}>{formatDriverDate(ride.createdAt)}</Text>
+                <Text style={[styles.historyDate, { color: colors.mutedForeground }]}>{formatDriverDateTime(ride.createdAt)}</Text>
                 <Text style={[styles.historyFare, { color: colors.primary }]}>Rs {fare.toLocaleString('en-PK', { maximumFractionDigits: 0 })}</Text>
               </View>
             </View>;
