@@ -8694,22 +8694,6 @@ app.patch('/api/admin/settings', adminJwt, requirePerm('managePaymentSettings'),
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-// GET /api/admin/daily-income — last 30 days grouped by date
-app.get('/api/admin/daily-income', adminJwt, requirePerm('viewOverview'), async (req, res) => {
-  try {
-    const since = new Date(); since.setDate(since.getDate() - 30); since.setUTCHours(0,0,0,0);
-    const payments = await Payment.find({ status: 'approved', updatedAt: { $gte: since } })
-      .populate('driver', 'name vehicleType');
-    const byDate = {};
-    payments.forEach(p => {
-      const d = (p.updatedAt || p.createdAt).toISOString().slice(0,10);
-      if (!byDate[d]) byDate[d] = { date: d, total: 0, count: 0 };
-      byDate[d].total += p.amount; byDate[d].count++;
-    });
-    res.json(Object.values(byDate).sort((a, b) => b.date.localeCompare(a.date)));
-  } catch (err) { res.status(500).json({ error: err.message }); }
-});
-
 const ADMIN_REVENUE_PERIODS = new Set([7, 30, 90, 365]);
 const ADMIN_REVENUE_FIELDS = [
   'dailyFeeCollections',
@@ -8854,10 +8838,7 @@ function adminPaymentRevenueTrendGroup() {
   };
 }
 
-// GET /api/admin/revenue — persisted platform revenue and funding analytics
-app.get('/api/admin/revenue', adminJwt, requirePerm('viewOverview'), async (req, res) => {
-  try {
-    const days = normalizeAdminRevenueDays(req.query.days);
+async function getAdminRevenueAnalytics(days) {
     const todayStart = new Date();
     todayStart.setUTCHours(0, 0, 0, 0);
     const since = new Date(todayStart);
@@ -8973,7 +8954,7 @@ app.get('/api/admin/revenue', adminJwt, requirePerm('viewOverview'), async (req,
       });
     }
 
-    res.json({
+    return {
       asOf: new Date().toISOString(),
       days,
       periodStart: since.toISOString(),
@@ -8981,7 +8962,28 @@ app.get('/api/admin/revenue', adminJwt, requirePerm('viewOverview'), async (req,
       allTime,
       period,
       trend
-    });
+    };
+}
+
+// GET /api/admin/revenue — persisted platform revenue and funding analytics
+app.get('/api/admin/revenue', adminJwt, requirePerm('viewOverview'), async (req, res) => {
+  try {
+    res.json(await getAdminRevenueAnalytics(normalizeAdminRevenueDays(req.query.days)));
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Legacy compatibility endpoint. It now exposes the same platform-revenue
+// trend as /api/admin/revenue instead of approved recharge payments, which
+// were never operating income.
+app.get('/api/admin/daily-income', adminJwt, requirePerm('viewOverview'), async (_req, res) => {
+  try {
+    const revenue = await getAdminRevenueAnalytics(30);
+    res.json(revenue.trend.map(day => ({
+      date: day.date,
+      total: day.netRevenue
+    })));
   } catch (err) {
     res.status(500).json({ error: err.message });
   }

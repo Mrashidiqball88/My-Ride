@@ -54,3 +54,4 @@
 - [Partitioned user role queries](partitioned-user-role-queries.md) — role-scoped facade queries must not require a legacy role field absent from split collections.
 - [Wallet source accounting](wallet-source-accounting.md) — only real-funded fee portions and ride commissions are platform revenue; legacy fee debits stay unclassified.
 - [Admin active ride semantics](admin-active-ride-semantics.md) — Overview counts assigned ongoing trips, not unassigned booking offers, and refreshes on ride lifecycle changes.
+- [Admin revenue consistency](admin-revenue-consistency.md) — Overview revenue widgets and detailed schedules must share one trend; approved recharge payments are excluded operating revenue.

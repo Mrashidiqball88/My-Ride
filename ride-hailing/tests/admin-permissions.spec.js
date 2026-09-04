@@ -77,6 +77,21 @@ async function stubAdminData(page, stats = {}) {
         amount: 500, trxId: 'TRX-1', paymentType: 'jazzcash', status: 'pending',
         proofScreenshot: 'data:image/png;base64,proof', createdAt: '2026-01-01T00:00:00Z'
       }];
+    } else if (path === '/api/admin/revenue') {
+      body = {
+        days: Number(url.searchParams.get('days') || 30),
+        period: { netRevenue: 120, bonusNonRevenueEarnings: 0, advanceDeposits: 500 },
+        allTime: { netRevenue: 120, bonusNonRevenueEarnings: 0, advanceDeposits: 500 },
+        trend: Array.from({ length: 7 }, (_, index) => ({
+          date: `2026-09-${String(index + 1).padStart(2, '0')}`,
+          netRevenue: index === 6 ? 120 : 0,
+          dailyFeeCollections: index === 6 ? 120 : 0,
+          rideCommissions: 0,
+          longRangeCommissions: 0,
+          bonusNonRevenueEarnings: 0,
+          bonusCredits: 0
+        }))
+      };
     } else if (path === '/api/admin/settings' || path === '/api/admin/ride-settings' ||
                path === '/api/admin/fare-settings' || path === '/api/admin/per-km-rates' ||
                path === '/api/admin/daily-fee-settings') {
@@ -129,6 +144,16 @@ test.describe('scoped Sub-Admin browser permissions', () => {
     await expect(page.locator('#pay-list')).toContainText('TRX-1');
     await expect(page.locator('#pay-list a', { hasText: 'View Proof' })).toHaveCount(0);
     await expect(page.locator('#pay-list button', { hasText: 'Approve' })).toHaveCount(0);
+  });
+
+  test('Overview platform revenue matches the detailed schedule instead of recharge amounts', async ({ page }) => {
+    await stubAdminData(page);
+    await login(page, 'ops-scope');
+
+    await expect(page.locator('.income-section h2')).toContainText('Last 7 Days Platform Revenue');
+    await expect(page.locator('#income-strip')).toContainText('Rs 120');
+    await expect(page.locator('#income-strip')).toContainText('platform revenue');
+    await expect(page.locator('#income-strip')).not.toContainText('Rs 500');
   });
 
   test('management filters show live state counts and serial numbers in both panels', async ({ page }) => {

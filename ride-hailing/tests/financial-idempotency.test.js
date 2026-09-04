@@ -350,6 +350,60 @@ test('bonus-funded daily fees are excluded from real Admin revenue', async () =>
   }
 });
 
+test('legacy daily-income endpoint matches revenue trend and excludes approved recharge amounts', async () => {
+  const driverId = new mongoose.Types.ObjectId();
+  const now = new Date();
+  const today = now.toISOString().slice(0, 10);
+  await models.Wallet.create({
+    user: driverId,
+    balance: 270,
+    realCashAvailable: 270,
+    transactions: [{
+      amount: 270,
+      type: 'debit',
+      description: 'Automatic daily fee for going online (Car Sedan)',
+      fundingSource: 'real',
+      realAmount: 270,
+      bonusAmount: 0,
+      createdAt: now
+    }]
+  });
+  await models.Payment.create({
+    driver: driverId,
+    trxId: 'DAILY-INCOME-DEPOSIT-1',
+    amount: 500,
+    vehicleCategory: 'Car Sedan',
+    paymentType: 'jazzcash',
+    proofScreenshot: 'data:image/png;base64,AA==',
+    submittedDate: today,
+    status: 'approved',
+    approvedAt: now,
+    walletCreditedAt: now
+  });
+
+  const adminServer = app.listen(0);
+  try {
+    const token = jwt.sign({ isAdmin: true, username: 'finance-admin' }, 'ride-hailing-secret-fallback');
+    const headers = { authorization: `Bearer ${token}` };
+    const [revenueResponse, dailyIncomeResponse] = await Promise.all([
+      fetch(`http://127.0.0.1:${adminServer.address().port}/api/admin/revenue?days=7`, { headers }),
+      fetch(`http://127.0.0.1:${adminServer.address().port}/api/admin/daily-income`, { headers })
+    ]);
+    assert.equal(revenueResponse.status, 200);
+    assert.equal(dailyIncomeResponse.status, 200);
+    const revenue = await revenueResponse.json();
+    const dailyIncome = await dailyIncomeResponse.json();
+    const trendDay = revenue.trend.find(day => day.date === today);
+    const legacyDay = dailyIncome.find(day => day.date === today);
+    assert.equal(trendDay.netRevenue, 270);
+    assert.equal(trendDay.advanceDeposits, 500);
+    assert.deepEqual(legacyDay, { date: today, total: trendDay.netRevenue });
+    assert.notEqual(legacyDay.total, 500);
+  } finally {
+    await new Promise(resolve => adminServer.close(resolve));
+  }
+});
+
 test('Driver financial summary uses settled payouts and separates real cash from bonus', async () => {
   const driver = await createParticipant('driver', 'summary');
   const passenger = await createParticipant('customer', 'summary');

@@ -937,7 +937,7 @@ button,input,select,textarea{
         </div>
         <!-- Daily income strip -->
         <div class="income-section">
-          <div class="sec-hdr"><h2>💰 Last 7 Days Income</h2><button class="btn-refresh" onclick="loadOverview()">↻ Refresh</button></div>
+          <div class="sec-hdr"><h2>💰 Last 7 Days Platform Revenue</h2><button class="btn-refresh" onclick="loadOverview()">↻ Refresh</button></div>
           <div id="income-strip"><div class="loading-row">Loading…</div></div>
         </div>
         <div class="revenue-section" id="admin-revenue-section">
@@ -2697,27 +2697,30 @@ async function loadOverview() {
   scheduleAdminLiveMapInit();
   startAdminCityDetection();
   updateAdminPlaceCityLabel();
-  await Promise.all([loadStats(), loadRevenueAnalytics()]);
-  try {
-    const income = await api('/api/admin/daily-income');
-    const last7  = income.slice(0, 7);
-    maxIncome = Math.max(...last7.map(d => d.total), 1);
-    const strip = document.getElementById('income-strip');
-    if (!last7.length) {
-      strip.innerHTML = '<div class="empty-state"><span class="empty-icon">📭</span>No approved payments in last 30 days</div>';
-    } else {
-      strip.innerHTML = last7.map(d => {
-        const pct = Math.round((d.total / maxIncome) * 100);
-        return `<div class="income-day">
-          <div class="income-date">📅 ${d.date}</div>
-          <div class="income-bar"><div class="income-bar-fill" style="width:${pct}%"></div></div>
-          <div class="income-total">Rs ${d.total.toLocaleString()}</div>
-          <div style="font-size:.68rem;color:#334155;min-width:50px">${d.count} pay${d.count!==1?'s':''}</div>
-        </div>`;
-      }).join('');
-    }
-  } catch {}
+  const [, revenue] = await Promise.all([loadStats(), loadRevenueAnalytics()]);
+  renderOverviewRevenue(revenue);
   await loadAdminLiveLocations();
+}
+
+function renderOverviewRevenue(data) {
+  const strip = document.getElementById('income-strip');
+  if (!strip) return;
+  const last7 = Array.isArray(data?.trend) ? [...data.trend].slice(-7).reverse() : [];
+  maxIncome = Math.max(...last7.map(day => Number(day.netRevenue) || 0), 1);
+  if (!last7.length) {
+    strip.innerHTML = '<div class="empty-state"><span class="empty-icon">📭</span>No platform revenue in the selected period</div>';
+    return;
+  }
+  strip.innerHTML = last7.map(day => {
+    const total = Number(day.netRevenue) || 0;
+    const pct = Math.round((total / maxIncome) * 100);
+    return `<div class="income-day">
+      <div class="income-date">📅 ${escHtml(day.date)}</div>
+      <div class="income-bar"><div class="income-bar-fill" style="width:${pct}%"></div></div>
+      <div class="income-total">Rs ${total.toLocaleString()}</div>
+      <div style="font-size:.68rem;color:#334155;min-width:80px">platform revenue</div>
+    </div>`;
+  }).join('');
 }
 
 function revenueAmount(value) {
@@ -2877,9 +2880,11 @@ async function loadRevenueAnalytics() {
   try {
     const data = await api(`/api/admin/revenue?days=${encodeURIComponent(days)}`);
     renderRevenueAnalytics(data);
+    return data;
   } catch (e) {
     if (kpis) kpis.innerHTML = `<div class="empty-state" style="color:#ff7280">Unable to load revenue analytics: ${escHtml(e.message)}</div>`;
     if (trendBody) trendBody.innerHTML = '<tr><td colspan="7"><div class="empty-state" style="color:#ff7280">Revenue trend unavailable</div></td></tr>';
+    return null;
   }
 }
 
