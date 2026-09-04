@@ -306,6 +306,49 @@ test('daily fees use bonus only for the amount not covered by real cash and bloc
   assert.equal(blockedWallet.transactions.length, 0);
 });
 
+test('regular recharged wallet pays the daily fee first and becomes real platform revenue', async () => {
+  const driver = await createParticipant('driver', 'fee-real-priority');
+  await models.Wallet.create({
+    user: driver._id,
+    balance: 770,
+    realCashAvailable: 270,
+    bonusAvailable: 500
+  });
+
+  const charged = await chargeDailyFeeForOnlineDriver(
+    driver._id,
+    driver,
+    { 'Car Sedan': 270 }
+  );
+
+  assert.equal(charged.allowed, true);
+  assert.equal(charged.charged, true);
+  assert.equal(charged.fundingSource, 'real');
+  assert.equal(charged.realAmount, 270);
+  assert.equal(charged.bonusAmount, 0);
+
+  const wallet = await models.Wallet.findOne({ user: driver._id }).lean();
+  assert.equal(wallet.balance, 500);
+  assert.equal(wallet.realCashAvailable, 0);
+  assert.equal(wallet.bonusAvailable, 500);
+
+  await models.Admin.create({ _id: 'super-admin', email: 'fee-real-admin@example.test', sessionVersion: 0 });
+  const adminServer = app.listen(0);
+  try {
+    const token = jwt.sign({ isAdmin: true, username: 'fee-real-admin' }, 'ride-hailing-secret-fallback');
+    const response = await fetch(`http://127.0.0.1:${adminServer.address().port}/api/admin/revenue?days=7`, {
+      headers: { authorization: `Bearer ${token}` }
+    });
+    assert.equal(response.status, 200);
+    const body = await response.json();
+    assert.equal(body.period.dailyFeeCollections, 270);
+    assert.equal(body.period.bonusFundedDailyFees, 0);
+    assert.equal(body.period.netRevenue, 270);
+  } finally {
+    await new Promise(resolve => adminServer.close(resolve));
+  }
+});
+
 test('bonus-funded daily fees are excluded from real Admin revenue', async () => {
   const adminId = new mongoose.Types.ObjectId();
   await models.Admin.create({ _id: 'super-admin', email: 'finance-admin@example.test', sessionVersion: 0 });
