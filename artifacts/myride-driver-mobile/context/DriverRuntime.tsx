@@ -50,10 +50,19 @@ export const DRIVER_VEHICLE_CATEGORIES = [
 export type DriverUser = {
   id: string; name: string; role: 'driver'; accountStatus: string;
   vehicleType?: string; vehicleModel?: string; vehiclePlate?: string; rating?: number;
+  paidUntilDate?: string | Date | null; dailyFeeRate?: number | null;
+};
+export type RideAcceptanceEligibility = {
+  allowed: boolean;
+  reason?: string | null;
+  dailyFeeDue?: boolean;
+  dailyFeeRate?: number | null;
+  longRangeCommissionAmount?: number;
 };
 export type RideRequest = {
   id: string; fare: number; distance?: number; vehicleType?: string; createdAt?: string | Date;
   isLongRange?: boolean;
+  acceptanceEligibility?: RideAcceptanceEligibility;
   status?: 'requested' | 'accepted' | 'arrived' | 'in-progress' | 'completed' | 'cancelled';
   passenger?: { id?: string; name?: string; phone?: string };
   verificationPin?: string | null;
@@ -93,7 +102,7 @@ export type DriverLocation = {
 };
 export type LongRangeState = {
   enabled: boolean; walletBalance: number; vehicleType?: string; ridePreference?: string;
-  settings: { enabled?: boolean; distanceCutoffKm?: number; minimumWalletBalances?: Record<string, number> };
+  settings: { enabled?: boolean; distanceCutoffKm?: number; minimumWalletBalances?: Record<string, number>; manualCommissionAmounts?: Record<string, number> };
 };
 
 export type AlertReadiness = {
@@ -115,6 +124,7 @@ export type AlertReadiness = {
 type RuntimeContext = {
   ready: boolean; user: DriverUser | null; isOnline: boolean; connection: 'connected' | 'connecting' | 'offline';
   pendingRide: RideRequest | null; sentOffer: RideRequest | null; activeRide: RideRequest | null; activeRideId: string | null;
+  pendingRideAcceptable: boolean; pendingRideBlockReason: string | null;
   driverLocation: DriverLocation | null; error: string | null;
   longRange: LongRangeState | null;
   alertReadiness: AlertReadiness;
@@ -388,6 +398,35 @@ export function DriverRuntimeProvider({ children }: { children: ReactNode }) {
     const data = await api('/api/driver/long-range', tokenRef.current, sessionRef.current || undefined);
     setLongRangeState(data as LongRangeState);
   }, []);
+
+  const getRideAcceptability = useCallback((ride: RideRequest | null) => {
+    if (!ride) return { allowed: false, reason: 'Ride request is no longer available.' };
+    if (ride.acceptanceEligibility?.allowed === false) {
+      return { allowed: false, reason: ride.acceptanceEligibility.reason || 'This ride cannot be accepted yet.' };
+    }
+    if (ride.isLongRange) {
+      const category = ride.vehicleType || longRange?.vehicleType || user?.vehicleType || 'Car Mini Non-AC';
+      const minimum = Number(longRange?.settings?.minimumWalletBalances?.[category] || 0);
+      const commission = Number(longRange?.settings?.manualCommissionAmounts?.[category] || 0);
+      const required = Math.max(minimum, commission);
+      if (!longRange?.settings?.enabled || !longRange.enabled) {
+        return { allowed: false, reason: 'Long Range mode is not enabled for this Driver.' };
+      }
+      if (commission <= 0) {
+        return { allowed: false, reason: 'A manual Long Range charge is not configured for this vehicle.' };
+      }
+      if (Number(longRange.walletBalance || 0) < required) {
+        return { allowed: false, reason: `Wallet balance must cover the Long Range charge of Rs ${commission.toLocaleString()}.` };
+      }
+    } else if (user?.dailyFeeRate) {
+      const paidUntil = user.paidUntilDate ? new Date(user.paidUntilDate) : null;
+      const feeCurrent = paidUntil && !Number.isNaN(paidUntil.getTime()) && paidUntil >= new Date();
+      if (!feeCurrent) {
+        return { allowed: false, reason: `Pay today's Daily Fee of Rs ${Number(user.dailyFeeRate).toLocaleString()} before accepting rides.` };
+      }
+    }
+    return { allowed: true, reason: null };
+  }, [longRange, user]);
 
   const refreshRideHistory = useCallback(async () => {
     if (!tokenRef.current) return;
@@ -1086,6 +1125,11 @@ export function DriverRuntimeProvider({ children }: { children: ReactNode }) {
   const acceptRide = useCallback(async () => {
     if (!pendingRide || !tokenRef.current || acceptingRide) return;
     const offer = pendingRide;
+    const eligibility = getRideAcceptability(offer);
+    if (!eligibility.allowed) {
+      setError(eligibility.reason || 'This ride cannot be accepted yet.');
+      return;
+    }
     const clearGeneration = emergencyClearGeneration.current;
     if (!isRideOfferLive(offer)) {
       setPendingRide(null);
@@ -1116,7 +1160,7 @@ export function DriverRuntimeProvider({ children }: { children: ReactNode }) {
     } finally {
       setAcceptingRide(false);
     }
-  }, [acceptingRide, clearRideAlert, hydrateAvailableRides, pendingRide]);
+  }, [acceptingRide, clearRideAlert, getRideAcceptability, hydrateAvailableRides, pendingRide]);
 
   const updateRideStatus = useCallback(async (
     status: 'arrived' | 'in-progress' | 'completed',
@@ -1164,12 +1208,16 @@ export function DriverRuntimeProvider({ children }: { children: ReactNode }) {
     return String(result.message || '');
   }, []);
 
+  const pendingRideAcceptability = getRideAcceptability(pendingRide);
   const value = useMemo<RuntimeContext>(() => ({
-    ready, user, isOnline, connection, pendingRide, sentOffer, activeRide, activeRideId, driverLocation, error, longRange, alertReadiness,
+    ready, user, isOnline, connection, pendingRide,
+    pendingRideAcceptable: pendingRideAcceptability.allowed,
+    pendingRideBlockReason: pendingRideAcceptability.reason || null,
+    sentOffer, activeRide, activeRideId, driverLocation, error, longRange, alertReadiness,
     rideHistory, rideHistoryLoading, walletSummary, paymentHistory, paymentsLoading,
     acceptingRide, updateRideStatus, updatingRideStatus, requestPhoneOtp, signIn, signOut, setOnline: setOnlineState, prepareAlertReadiness, confirmLockScreenAlerts, openAlertSetting, setLongRange, refreshRideHistory, refreshPayments, acceptRide,
     dismissRide: () => setPendingRide(null), emergencyClearRide, clearError: () => setError(null),
-  }), [acceptRide, acceptingRide, activeRide, activeRideId, alertReadiness, confirmLockScreenAlerts, driverLocation, emergencyClearRide, error, isOnline, openAlertSetting, pendingRide, paymentHistory, paymentsLoading, prepareAlertReadiness, ready, refreshPayments, refreshRideHistory, requestPhoneOtp, rideHistory, rideHistoryLoading, sentOffer, setOnlineState, setLongRange, signIn, signOut, updateRideStatus, updatingRideStatus, user, connection, longRange, walletSummary]);
+  }), [acceptRide, acceptingRide, activeRide, activeRideId, alertReadiness, confirmLockScreenAlerts, driverLocation, emergencyClearRide, error, getRideAcceptability, isOnline, openAlertSetting, pendingRide, pendingRideAcceptability.allowed, pendingRideAcceptability.reason, paymentHistory, paymentsLoading, prepareAlertReadiness, ready, refreshPayments, refreshRideHistory, requestPhoneOtp, rideHistory, rideHistoryLoading, sentOffer, setOnlineState, setLongRange, signIn, signOut, updateRideStatus, updatingRideStatus, user, connection, longRange, walletSummary]);
   return <DriverContext.Provider value={value}>{children}</DriverContext.Provider>;
 }
 

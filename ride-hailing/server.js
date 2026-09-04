@@ -939,6 +939,22 @@ async function chargeDailyFeeForOnlineDriver(driverId, driver, dailyFeeSettings 
   };
 }
 
+async function getDriverDailyFeeEligibility(driver) {
+  if (isLongRangeOnlyDriver(driver)) {
+    return { allowed: true, exempt: true, rate: null, reason: null };
+  }
+  const rate = await getDailyFeeForVehicle(driver?.vehicleType);
+  const paidUntilDate = driver?.paidUntilDate ? new Date(driver.paidUntilDate) : null;
+  const paid = paidUntilDate && !Number.isNaN(paidUntilDate.getTime()) && paidUntilDate >= new Date();
+  return {
+    allowed: Boolean(paid) || !Number.isFinite(rate) || rate <= 0,
+    rate: Number.isFinite(rate) && rate > 0 ? rate : null,
+    reason: paid ? null : Number.isFinite(rate) && rate > 0
+      ? `Pay today's Daily Fee of Rs ${rate.toLocaleString()} before accepting rides.`
+      : 'Daily Fee is not configured; contact Admin.'
+  };
+}
+
 const DEFAULT_PER_KM_RATES = {
   Bike: 30,
   Riksha: 40,
@@ -1261,8 +1277,9 @@ const DEFAULT_LONG_RANGE_SETTINGS = Object.freeze({
   distanceCutoffKm: 50,
   minimumWalletBalances: DEFAULT_LONG_RANGE_MINIMUM_WALLET_BALANCES,
   broadcastRadiusKm: 30,
-  commissionPercent: 10,
-  commissionTiming: 'completed',
+  // Long Range platform charges are fixed amounts configured by Admin for
+  // each vehicle category. There is deliberately no percentage fallback.
+  manualCommissionAmounts: Object.fromEntries(FARE_VEHICLE_CATEGORIES.map(category => [category, 0])),
   perKmRates: Object.fromEntries(FARE_VEHICLE_CATEGORIES.map(category => [category, null]))
 });
 
@@ -1282,10 +1299,11 @@ function normalizeLongRangeSettings(input = {}) {
       return [category, numberInRange(configuredMinimum, DEFAULT_LONG_RANGE_MINIMUM_WALLET_BALANCES[category], 0, 1000000)];
     })),
     broadcastRadiusKm: numberInRange(source.broadcastRadiusKm, DEFAULT_LONG_RANGE_SETTINGS.broadcastRadiusKm, 0.5, 500),
-    commissionPercent: numberInRange(source.commissionPercent, DEFAULT_LONG_RANGE_SETTINGS.commissionPercent, 0, 100),
-    // A Long Range commission is only earned when the ride successfully
-    // finishes. Older accepted/started settings migrate to this policy.
-    commissionTiming: 'completed',
+    manualCommissionAmounts: Object.fromEntries(FARE_VEHICLE_CATEGORIES.map(category => {
+      const amount = source.manualCommissionAmounts?.[category] ??
+        legacyCarMiniSetting(source.manualCommissionAmounts, category);
+      return [category, numberInRange(amount, 0, 0, 1000000)];
+    })),
     perKmRates: Object.fromEntries(FARE_VEHICLE_CATEGORIES.map(category => {
       const rate = Number(source.perKmRates?.[category] ?? legacyCarMiniSetting(source.perKmRates, category));
       return [category, Number.isFinite(rate) && rate > 0 ? Number(rate.toFixed(2)) : null];
@@ -1299,6 +1317,9 @@ function validateLongRangeSettings(input) {
   if (input?.enabled === true) {
     for (const category of FARE_VEHICLE_CATEGORIES) {
       if (!settings.perKmRates[category]) errors.push(`${category}: Long Range /km rate must be greater than zero`);
+      if (!Number.isFinite(settings.manualCommissionAmounts[category]) || settings.manualCommissionAmounts[category] <= 0) {
+        errors.push(`${category}: Manual Long Range commission amount must be greater than zero`);
+      }
       if (!Number.isFinite(settings.minimumWalletBalances[category]) || settings.minimumWalletBalances[category] < 0) {
         errors.push(`${category}: Minimum Wallet Balance must be zero or greater`);
       }
@@ -1395,6 +1416,18 @@ function isLongRangeDistance(distanceKm, settings) {
 function getLongRangeMinimumWalletBalance(settings, vehicleType) {
   const category = normalizeFareVehicle(vehicleType || 'Car Mini Non-AC');
   return Number(settings?.minimumWalletBalances?.[category] ?? DEFAULT_LONG_RANGE_MINIMUM_WALLET_BALANCES[category] ?? 0);
+}
+
+function getLongRangeCommissionAmount(settings, vehicleType) {
+  const category = normalizeFareVehicle(vehicleType || 'Car Mini Non-AC');
+  return Number(settings?.manualCommissionAmounts?.[category] || 0);
+}
+
+function getLongRangeRequiredWalletBalance(settings, vehicleType) {
+  return Math.max(
+    getLongRangeMinimumWalletBalance(settings, vehicleType),
+    getLongRangeCommissionAmount(settings, vehicleType)
+  );
 }
 
 function calculateRideFare(
@@ -1831,6 +1864,7 @@ const walletSchema = new mongoose.Schema({
     mobileAccount: { type: String, default: '' },
     rideId: { type: String, default: '' },
     operationId: { type: String, default: '' },
+    revenueCategory: { type: String, default: '' },
     fundingSource: { type: String, enum: Object.values(WALLET_FUNDING_SOURCES), default: WALLET_FUNDING_SOURCES.UNKNOWN },
     realAmount: { type: Number, default: 0 },
     bonusAmount: { type: Number, default: 0 },
@@ -2787,13 +2821,8 @@ async function findLongRangeBroadcastDrivers(pickupLocation, vehicleType, longRa
     'currentLocation.lat': { $ne: 0 }, 'currentLocation.lng': { $ne: 0 },
     ...locationFilter
   }).select('_id currentLocation expoPushToken longRangeEnabled').lean();
-  const eligibleWallets = await Wallet.find({
-    user: { $in: candidates.map(driver => driver._id) },
-    balance: { $gte: getLongRangeMinimumWalletBalance(longRangeSettings, vehicleType) }
-  }).select('user').lean();
-  const eligibleIds = new Set(eligibleWallets.map(wallet => String(wallet.user)));
   const drivers = candidates.filter(driver => driver.longRangeEnabled === true
-      && eligibleIds.has(String(driver._id)) && hasValidCoordinates(driver.currentLocation))
+      && hasValidCoordinates(driver.currentLocation))
     .map(driver => ({ ...driver, distanceFromPickupKm: haversineKm(
       Number(pickupLocation.lat), Number(pickupLocation.lng),
       Number(driver.currentLocation.lat), Number(driver.currentLocation.lng)
@@ -2801,19 +2830,13 @@ async function findLongRangeBroadcastDrivers(pickupLocation, vehicleType, longRa
   return { drivers, radiusKm };
 }
 
-async function chargeLongRangeCommission(ride, driverId, timing, longRangeSettings, { session } = {}) {
-  if (!ride.isLongRange || longRangeSettings.commissionTiming !== timing || ride.longRangeCommissionChargedAt) {
+async function chargeLongRangeCommission(ride, driverId, longRangeSettings, { session } = {}) {
+  if (!ride.isLongRange || ride.longRangeCommissionChargedAt) {
     return { ok: true, alreadyCharged: !!ride.longRangeCommissionChargedAt };
   }
-  const amount = Number((Number(ride.fare) * longRangeSettings.commissionPercent / 100).toFixed(2));
+  const amount = getLongRangeCommissionAmount(longRangeSettings, ride.vehicleType);
   if (!amount) {
-    const chargedAt = new Date();
-    await Ride.updateOne(
-      { _id: ride._id, longRangeCommissionChargedAt: null },
-      { $set: { longRangeCommissionAmount: 0, longRangeCommissionChargedAt: chargedAt } },
-      session ? { session } : undefined
-    );
-    return { ok: true, charged: true, amount: 0, chargedAt };
+    return { ok: false, error: 'A manual Long Range commission amount is not configured for this vehicle category.' };
   }
   const walletSnapshot = await ensureWalletSourceBalances(driverId, { session });
   const allocation = allocateWalletDebit(walletSnapshot, amount);
@@ -2833,6 +2856,7 @@ async function chargeLongRangeCommission(ride, driverId, timing, longRangeSettin
         description: 'Long Range commission',
         rideId: String(ride._id),
         operationId: `ride:${ride._id}:long-range-commission`,
+        revenueCategory: 'manual-long-range',
         fundingSource: allocation.fundingSource,
         realAmount: allocation.realAmount,
         bonusAmount: allocation.bonusAmount
@@ -2956,23 +2980,11 @@ async function completeRideFinancialSettlement(rideId, driverId, waitingRateSett
       }
     }
 
-    const commission = await chargeLongRangeCommission(
-      ride,
-      driverId,
-      'completed',
-      await getLongRangeSettings(),
-      { session }
-    );
-    if (!commission.ok) {
-      throw financialError(commission.error, 403, 'LONG_RANGE_COMMISSION_FAILED');
-    }
-    if (commission.charged) {
-      ride.longRangeCommissionAmount = commission.amount;
-      ride.longRangeCommissionChargedAt = commission.chargedAt;
-    }
-
     const fare = Number(ride.fare);
-    const earnings = +(fare * 0.85).toFixed(2);
+    // Daily Fees are the normal platform revenue. Ordinary ride fares are
+    // paid to the Driver in full; only the separately charged fixed Long
+    // Range amount is a platform ride charge.
+    const earnings = fare;
     const operationId = `ride:${ride._id}:settlement`;
     const customerWallet = await Wallet.findOneAndUpdate(
       { user: ride.passenger },
@@ -3059,7 +3071,7 @@ async function validateLongRangeDriverEligibility(driverId, settings) {
     Wallet.findOne({ user: driverId }).select('balance').lean()
   ]);
   return !!(settings.enabled && driver?.accountStatus === 'active' && driver.longRangeEnabled
-    && Number(wallet?.balance || 0) >= getLongRangeMinimumWalletBalance(settings, driver.vehicleType));
+    && Number(wallet?.balance || 0) >= getLongRangeRequiredWalletBalance(settings, driver.vehicleType));
 }
 
 function emitRideRequestToDrivers(drivers, payload) {
@@ -3083,7 +3095,8 @@ function driverRidePayload(ride) {
     isLongRange: !!ride.isLongRange,
     broadcastExpiresAt: ride.broadcastExpiresAt,
     offerExpiresAt: ride.offerExpiresAt,
-    passenger: ride.passenger
+    passenger: ride.passenger,
+    acceptanceEligibility: ride.acceptanceEligibility || undefined
   };
 }
 
@@ -3111,20 +3124,37 @@ async function getAvailableRidesForDriver(driver) {
   const wallet = hasLongRangeRides
     ? await Wallet.findOne({ user: driver._id }).select('balance').lean()
     : null;
+  const feeState = await getDriverDailyFeeEligibility(driver);
 
   return rides.filter(ride => hasValidCoordinates(ride.pickupLocation)
     && canDriverReceiveRideForPreference(driver.ridePreference, ride.isLongRange)
-    && (!ride.isLongRange || (
-      longRangeSettings.enabled &&
-      driver.longRangeEnabled &&
-      Number(wallet?.balance || 0) >= getLongRangeMinimumWalletBalance(longRangeSettings, driver.vehicleType)
-    ))
+    && (!ride.isLongRange || (longRangeSettings.enabled && driver.longRangeEnabled))
     && haversineKm(
       Number(driver.currentLocation.lat),
       Number(driver.currentLocation.lng),
       Number(ride.pickupLocation.lat),
       Number(ride.pickupLocation.lng)
-    ) <= (ride.isLongRange ? longRangeSettings.broadcastRadiusKm : radiusKm));
+     ) <= (ride.isLongRange ? longRangeSettings.broadcastRadiusKm : radiusKm))
+    .map(ride => ({
+      ...(typeof ride.toObject === 'function' ? ride.toObject() : ride),
+      acceptanceEligibility: {
+        allowed: feeState.allowed && (!ride.isLongRange || (
+          longRangeSettings.enabled
+          && driver.longRangeEnabled
+          && Number(wallet?.balance || 0) >= getLongRangeRequiredWalletBalance(longRangeSettings, driver.vehicleType)
+        )),
+        reason: !feeState.allowed
+          ? feeState.reason
+          : ride.isLongRange && Number(wallet?.balance || 0) < getLongRangeRequiredWalletBalance(longRangeSettings, driver.vehicleType)
+            ? `Wallet balance must cover the Long Range commission of Rs ${getLongRangeCommissionAmount(longRangeSettings, driver.vehicleType).toLocaleString()}.`
+            : null,
+        dailyFeeDue: !feeState.allowed,
+        dailyFeeRate: feeState.rate,
+        longRangeCommissionAmount: ride.isLongRange
+          ? getLongRangeCommissionAmount(longRangeSettings, driver.vehicleType)
+          : 0
+      }
+    }));
 }
 
 async function rehydrateDriverSocket(socket, driverId, { replayOffers = true } = {}) {
@@ -3138,7 +3168,7 @@ async function rehydrateDriverSocket(socket, driverId, { replayOffers = true } =
   const recovery = (async () => {
     const [driver, activeRide] = await Promise.all([
       User.findById(driverId)
-        .select('isOnline accountStatus vehicleType ridePreference longRangeEnabled lastOnlineHeartbeat currentLocation')
+        .select('isOnline accountStatus vehicleType ridePreference longRangeEnabled lastOnlineHeartbeat currentLocation paidUntilDate lastDailyFeePaidAt')
         .lean()
         .catch(() => null),
       Ride.findOne({ driver: driverId, status: { $in: ['accepted', 'arrived', 'in-progress'] } })
@@ -4782,7 +4812,7 @@ app.post('/api/rides', authMiddleware, customerOnly, customerCanBook, async (req
 
 app.get('/api/rides/available', authMiddleware, driverOnly, async (req, res) => {
   try {
-    const driver = await User.findById(req.user.id).select('vehicleType ridePreference accountStatus isOnline longRangeEnabled lastOnlineHeartbeat currentLocation').lean();
+    const driver = await User.findById(req.user.id).select('vehicleType ridePreference accountStatus isOnline longRangeEnabled lastOnlineHeartbeat currentLocation paidUntilDate lastDailyFeePaidAt').lean();
     const rides = await getAvailableRidesForDriver(driver);
     const hasFreshHeartbeat = driver?.lastOnlineHeartbeat &&
       new Date(driver.lastOnlineHeartbeat).getTime() >= Date.now() - DRIVER_HEARTBEAT_MAX_AGE_MS;
@@ -4963,9 +4993,13 @@ app.patch('/api/rides/:id/accept', authMiddleware, async (req, res) => {
       _id: req.user.id,
       accountStatus: 'active',
       isOnline: true
-    }).select('name phone vehicleType vehicleModel vehiclePlate rating profilePhoto');
+    }).select('name phone vehicleType vehicleModel vehiclePlate rating profilePhoto paidUntilDate lastDailyFeePaidAt ridePreference longRangeEnabled');
     if (!driverUser) {
       return res.status(403).json({ error: 'Only active online drivers can accept rides' });
+    }
+    const dailyFee = await getDriverDailyFeeEligibility(driverUser);
+    if (!dailyFee.allowed) {
+      return res.status(403).json({ error: dailyFee.reason, code: 'DAILY_FEE_REQUIRED', dailyFee });
     }
     const ride = await Ride.findOneAndUpdate(
       {
@@ -4989,7 +5023,7 @@ app.patch('/api/rides/:id/accept', authMiddleware, async (req, res) => {
         await Ride.updateOne({ _id: ride._id, driver: req.user.id, status: 'accepted' }, { $set: { driver: null, status: 'requested' } });
         return res.status(403).json({ error: 'You are not currently eligible for Long Range rides.' });
       }
-      const commission = await chargeLongRangeCommission(ride, req.user.id, 'accepted', settings);
+      const commission = await chargeLongRangeCommission(ride, req.user.id, settings);
       if (!commission.ok) {
         await Ride.updateOne({ _id: ride._id, driver: req.user.id, status: 'accepted' }, { $set: { driver: null, status: 'requested' } });
         return res.status(403).json({ error: commission.error });
@@ -5329,6 +5363,17 @@ app.patch('/api/rides/:id/accept-driver', authMiddleware, customerOnly, customer
     // Find the agreed price from the offer
     const offer = ride.counterOffers.find(o => String(o.driver) === String(driverId));
     if (!offer) return res.status(409).json({ error: 'That Driver has not offered this ride' });
+    const selectedDriver = await User.findById(driverId)
+      .select('vehicleType accountStatus isOnline paidUntilDate lastDailyFeePaidAt ridePreference longRangeEnabled')
+      .lean();
+    const dailyFee = await getDriverDailyFeeEligibility(selectedDriver);
+    if (!dailyFee.allowed) {
+      await Ride.updateOne(
+        { _id: ride._id, driver: driverId, status: 'accepted' },
+        { $set: { driver: null, status: 'requested', verificationPin: null } }
+      );
+      return res.status(403).json({ error: dailyFee.reason, code: 'DAILY_FEE_REQUIRED', dailyFee });
+    }
     if (offer.price && offer.price !== ride.fare) {
       ride.fare = offer.price;
     }
@@ -5344,7 +5389,7 @@ app.patch('/api/rides/:id/accept-driver', authMiddleware, customerOnly, customer
         await Ride.updateOne({ _id: ride._id, driver: driverId, status: 'accepted' }, { $set: { driver: null, status: 'requested', verificationPin: null } });
         return res.status(403).json({ error: 'Selected Driver is no longer eligible for Long Range rides.' });
       }
-      const commission = await chargeLongRangeCommission(ride, driverId, 'accepted', settings);
+      const commission = await chargeLongRangeCommission(ride, driverId, settings);
       if (!commission.ok) {
         await Ride.updateOne({ _id: ride._id, driver: driverId, status: 'accepted' }, { $set: { driver: null, status: 'requested', verificationPin: null } });
         return res.status(403).json({ error: commission.error });
@@ -7827,10 +7872,7 @@ async function getDriverTodayIncome(driverId, day = new Date()) {
       $addFields: {
         payoutDate: { $ifNull: ['$settledAt', { $ifNull: ['$updatedAt', '$createdAt'] }] },
         payoutAmount: {
-          $ifNull: [
-            '$settledDriverEarnings',
-            { $multiply: [{ $ifNull: ['$settledFare', '$fare'] }, 0.85] }
-          ]
+          $ifNull: ['$settledDriverEarnings', { $ifNull: ['$settledFare', '$fare'] }]
         }
       }
     },
@@ -8698,7 +8740,6 @@ const ADMIN_REVENUE_PERIODS = new Set([7, 30, 90, 365]);
 const ADMIN_REVENUE_FIELDS = [
   'dailyFeeCollections',
   'bonusFundedDailyFees',
-  'rideCommissions',
   'longRangeCommissions',
   'bonusFundedLongRangeCommissions',
   'bonusCredits',
@@ -8716,7 +8757,7 @@ function adminRevenueTotals(bucket = {}) {
     field,
     Number((Number(bucket[field]) || 0).toFixed(2))
   ]));
-  const grossRevenue = totals.dailyFeeCollections + totals.rideCommissions + totals.longRangeCommissions;
+  const grossRevenue = totals.dailyFeeCollections + totals.longRangeCommissions;
   const bonusNonRevenueEarnings = totals.bonusFundedDailyFees + totals.bonusFundedLongRangeCommissions;
   return {
     ...totals,
@@ -8769,7 +8810,15 @@ function adminWalletRevenueGroup() {
   const isLongRangeCommission = {
     $and: [
       { $eq: ['$transactions.type', 'debit'] },
-      { $eq: [description, 'Long Range commission'] }
+      { $eq: [description, 'Long Range commission'] },
+      { $eq: ['$transactions.revenueCategory', 'manual-long-range'] }
+    ]
+  };
+  const isLegacyLongRangeCommission = {
+    $and: [
+      { $eq: ['$transactions.type', 'debit'] },
+      { $eq: [description, 'Long Range commission'] },
+      { $ne: ['$transactions.revenueCategory', 'manual-long-range'] }
     ]
   };
   const isBonus = {
@@ -8792,10 +8841,14 @@ function adminWalletRevenueGroup() {
     ]
   };
   const isLegacyFee = {
-    $and: [
-      { $eq: ['$transactions.type', 'debit'] },
-      { $or: [isDailyFee, isLongRangeCommission] },
-      { $not: [hasTrackedSource] }
+    $or: [
+      {
+        $and: [
+          isDailyFee,
+          { $not: [hasTrackedSource] }
+        ]
+      },
+      isLegacyLongRangeCommission
     ]
   };
   return {
@@ -8813,17 +8866,6 @@ function adminRevenueTrendGroup() {
   return {
     ...adminWalletRevenueGroup(),
     _id: { $dateToString: { format: '%Y-%m-%d', date: '$transactions.createdAt', timezone: 'UTC' } }
-  };
-}
-
-function adminRideRevenueGroup() {
-  return { _id: null, rideCommissions: { $sum: '$_platformCommission' } };
-}
-
-function adminRideRevenueTrendGroup() {
-  return {
-    _id: { $dateToString: { format: '%Y-%m-%d', date: '$_revenueDate', timezone: 'UTC' } },
-    rideCommissions: { $sum: '$_platformCommission' }
   };
 }
 
@@ -8845,19 +8887,9 @@ async function getAdminRevenueAnalytics(days) {
     since.setUTCDate(since.getUTCDate() - (days - 1));
 
     const walletPeriodMatch = { 'transactions.createdAt': { $gte: since } };
-    const rideRevenueMatch = {
-      status: 'completed',
-      settlementStatus: 'settled'
-    };
     const paymentRevenueMatch = { status: 'approved' };
 
-    const settledFare = { $ifNull: ['$settledFare', '$fare'] };
-    const settledDriverEarnings = {
-      $ifNull: ['$settledDriverEarnings', { $multiply: [settledFare, 0.85] }]
-    };
-    const commissionDifference = { $subtract: [settledFare, settledDriverEarnings] };
-
-    const [walletFacets, rideFacets, paymentFacets] = await Promise.all([
+    const [walletFacets, paymentFacets] = await Promise.all([
       Wallet.aggregate([
         { $unwind: '$transactions' },
         {
@@ -8870,41 +8902,6 @@ async function getAdminRevenueAnalytics(days) {
             trend: [
               { $match: walletPeriodMatch },
               { $group: adminRevenueTrendGroup() },
-              { $sort: { _id: 1 } }
-            ]
-          }
-        }
-      ]),
-      Ride.aggregate([
-        { $match: rideRevenueMatch },
-        {
-          $addFields: {
-            _settledFareValue: settledFare,
-            _settledDriverEarningsValue: settledDriverEarnings,
-            _revenueDate: { $ifNull: ['$settledAt', { $ifNull: ['$updatedAt', '$createdAt'] }] }
-          }
-        },
-        {
-          $addFields: {
-            _platformCommission: {
-              $cond: [
-                { $gt: [commissionDifference, 0] },
-                commissionDifference,
-                0
-              ]
-            }
-          }
-        },
-        {
-          $facet: {
-            allTime: [{ $group: adminRideRevenueGroup() }],
-            period: [
-              { $match: { _revenueDate: { $gte: since } } },
-              { $group: adminRideRevenueGroup() }
-            ],
-            trend: [
-              { $match: { _revenueDate: { $gte: since } } },
-              { $group: adminRideRevenueTrendGroup() },
               { $sort: { _id: 1 } }
             ]
           }
@@ -8935,12 +8932,10 @@ async function getAdminRevenueAnalytics(days) {
     ]);
 
     const wallet = walletFacets[0] || {};
-    const rides = rideFacets[0] || {};
     const payments = paymentFacets[0] || {};
-    const allTime = mergeAdminRevenueBuckets(wallet.allTime?.[0], rides.allTime?.[0], payments.allTime?.[0]);
-    const period = mergeAdminRevenueBuckets(wallet.period?.[0], rides.period?.[0], payments.period?.[0]);
+    const allTime = mergeAdminRevenueBuckets(wallet.allTime?.[0], payments.allTime?.[0]);
+    const period = mergeAdminRevenueBuckets(wallet.period?.[0], payments.period?.[0]);
     const walletTrend = Object.fromEntries((wallet.trend || []).map(row => [row._id, row]));
-    const rideTrend = Object.fromEntries((rides.trend || []).map(row => [row._id, row]));
     const paymentTrend = Object.fromEntries((payments.trend || []).map(row => [row._id, row]));
     const trend = [];
 
@@ -8950,7 +8945,7 @@ async function getAdminRevenueAnalytics(days) {
       const dateKey = date.toISOString().slice(0, 10);
       trend.push({
         date: dateKey,
-        ...mergeAdminRevenueBuckets(walletTrend[dateKey], rideTrend[dateKey], paymentTrend[dateKey])
+        ...mergeAdminRevenueBuckets(walletTrend[dateKey], paymentTrend[dateKey])
       });
     }
 

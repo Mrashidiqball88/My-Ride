@@ -944,7 +944,7 @@ button,input,select,textarea{
           <div class="sec-hdr">
             <div class="revenue-header-copy">
               <h2>📈 Admin Earnings / Platform Revenue</h2>
-              <p>Real Platform Revenue includes only cash-funded fees and settled ride commissions. Bonus-funded fees and promotional credits stay outside real earnings.</p>
+               <p>Real Platform Revenue includes Daily Fees and manually configured Long Range charges only. Bonus-funded deductions and Driver recharges stay outside real earnings.</p>
             </div>
             <div class="revenue-period-control">
               <label for="revenue-period-select">Period</label>
@@ -961,7 +961,7 @@ button,input,select,textarea{
             <div class="loading-row">Loading platform revenue…</div>
           </div>
           <p class="revenue-accounting-note">
-            <strong>Accounting note:</strong> Real Platform Revenue = real-cash daily fees + ride commissions + real-cash Long Range commissions. Bonus-funded deductions are Bonus / Non-Revenue Earnings; approved Driver recharges are wallet funding, not revenue.
+             <strong>Accounting note:</strong> Real Platform Revenue = real-cash Daily Fees + real-cash manually configured Long Range charges. Ordinary rides have no percentage commission. Bonus-funded deductions are Bonus / Non-Revenue Earnings; approved Driver recharges are wallet funding, not revenue.
           </p>
           <div class="revenue-trend is-collapsed" id="revenue-trend">
             <div class="revenue-trend-header">
@@ -980,8 +980,8 @@ button,input,select,textarea{
             <div class="revenue-trend-content" id="revenue-trend-content" hidden>
               <div class="revenue-trend-scroll table-wrap" id="revenue-trend-scroll">
                 <table class="data-table">
-                  <thead><tr><th>Date</th><th>Real Daily Fees</th><th>Ride Commission</th><th>Real Long Range</th><th>Real Revenue</th><th>Bonus / Non-Revenue</th><th>Bonus Credits</th></tr></thead>
-                  <tbody id="revenue-trend-body"><tr><td colspan="7" class="loading-row">Loading…</td></tr></tbody>
+                   <thead><tr><th>Date</th><th>Real Daily Fees</th><th>Manual Long Range</th><th>Real Revenue</th><th>Bonus / Non-Revenue</th><th>Bonus Credits</th></tr></thead>
+                   <tbody id="revenue-trend-body"><tr><td colspan="6" class="loading-row">Loading…</td></tr></tbody>
                 </table>
               </div>
             </div>
@@ -1563,7 +1563,7 @@ button,input,select,textarea{
           <article class="settings-card" id="long-range-settings-card">
             <div class="settings-icon">🛣️</div>
             <h3>Long Range Rides</h3>
-            <p>Set the opt-in distance cutoff, Driver eligibility, dispatch radius, pricing, and commission.</p>
+            <p>Set the opt-in distance cutoff, Driver eligibility, dispatch radius, pricing, and fixed manual charge.</p>
             <button class="btn btn-primary" onclick="showSection('long-range-settings')">Manage Long Range</button>
           </article>
           <article class="settings-card" id="payment-settings-card">
@@ -1700,10 +1700,8 @@ button,input,select,textarea{
            </div>
           <div class="field-row">
             <div class="field-item"><div class="field-label">Long Range broadcast radius (km)</div><input class="modal-input" id="lr-radius" type="number" min=".5" step=".1"></div>
-            <div class="field-item"><div class="field-label">Commission (%)</div><input class="modal-input" id="lr-commission" type="number" min="0" max="100" step=".1"></div>
           </div>
-          <div class="field-item" style="max-width:360px"><div class="field-label">Deduct commission</div><select class="modal-input" id="lr-timing"><option value="completed">When ride is completed</option></select></div>
-           <div class="field-label" style="margin-top:1rem">Long Range rate and minimum wallet balance by vehicle</div><div id="lr-rates" class="field-row"></div>
+            <div class="field-label" style="margin-top:1rem">Long Range rate, manual charge, and minimum wallet balance by vehicle</div><div id="lr-rates" class="field-row"></div>
         </div>
         <div id="long-range-settings-feedback" style="min-height:1.25rem;font-size:.8rem;margin:.8rem 0"></div>
         <button class="btn btn-primary" style="padding:.75rem 2rem;font-size:.9rem" onclick="saveLongRangeSettings()">💾 Save Long Range Settings</button>
@@ -2814,12 +2812,11 @@ function renderRevenueAnalytics(data) {
       label: 'Real Platform Revenue',
       value: period.netRevenue,
       total: allTime.netRevenue,
-      detail: 'Cash-funded fees and settled ride commissions',
+       detail: 'Cash-funded Daily Fees and manual Long Range charges',
       tone: 'revenue-kpi-cyan',
       breakdown: [
         ['Daily fees', period.dailyFeeCollections, allTime.dailyFeeCollections],
-        ['Ride commission', period.rideCommissions, allTime.rideCommissions],
-        ['Long Range commission', period.longRangeCommissions, allTime.longRangeCommissions],
+        ['Manual Long Range charges', period.longRangeCommissions, allTime.longRangeCommissions],
         ['Advance deposits · excluded', period.advanceDeposits ?? period.approvedWalletFunding, allTime.advanceDeposits ?? allTime.approvedWalletFunding]
       ]
     },
@@ -2855,14 +2852,13 @@ function renderRevenueAnalytics(data) {
   const trend = Array.isArray(data.trend) ? [...data.trend].reverse() : [];
   if (!trendBody) return;
   if (!trend.length) {
-    trendBody.innerHTML = '<tr><td colspan="7"><div class="empty-state"><span class="empty-icon">📊</span>No revenue activity in this period</div></td></tr>';
+     trendBody.innerHTML = '<tr><td colspan="6"><div class="empty-state"><span class="empty-icon">📊</span>No revenue activity in this period</div></td></tr>';
     return;
   }
   trendBody.innerHTML = trend.map(day => `
     <tr>
       <td>${escHtml(day.date)}</td>
       <td style="color:#f5c95a;font-weight:700">${revenueAmount(day.dailyFeeCollections)}</td>
-      <td style="color:#4ade9a;font-weight:700">${revenueAmount(day.rideCommissions)}</td>
       <td style="color:#aebaff;font-weight:700">${revenueAmount(day.longRangeCommissions)}</td>
       <td style="font-weight:800;color:#45d5f5">${revenueAmount(day.netRevenue)}</td>
       <td style="color:#ff9da7">${revenueAmount(day.bonusNonRevenueEarnings)}</td>
@@ -2876,14 +2872,14 @@ async function loadRevenueAnalytics() {
   const trendBody = document.getElementById('revenue-trend-body');
   const days = selector?.value || '30';
   if (kpis) kpis.innerHTML = '<div class="loading-row">Loading platform revenue…</div>';
-  if (trendBody) trendBody.innerHTML = '<tr><td colspan="7" class="loading-row">Loading…</td></tr>';
+   if (trendBody) trendBody.innerHTML = '<tr><td colspan="6" class="loading-row">Loading…</td></tr>';
   try {
     const data = await api(`/api/admin/revenue?days=${encodeURIComponent(days)}`);
     renderRevenueAnalytics(data);
     return data;
   } catch (e) {
     if (kpis) kpis.innerHTML = `<div class="empty-state" style="color:#ff7280">Unable to load revenue analytics: ${escHtml(e.message)}</div>`;
-    if (trendBody) trendBody.innerHTML = '<tr><td colspan="7"><div class="empty-state" style="color:#ff7280">Revenue trend unavailable</div></td></tr>';
+    if (trendBody) trendBody.innerHTML = '<tr><td colspan="6"><div class="empty-state" style="color:#ff7280">Revenue trend unavailable</div></td></tr>';
     return null;
   }
 }
@@ -5520,9 +5516,9 @@ async function saveWaitingRateSettings() {
 }
 
 const LONG_RANGE_CATEGORIES = ['Car Sedan', 'Car Mini AC', 'Car Mini Non-AC', 'Riksha', 'Bike', 'Car SUV', 'Van Seven Seats', 'Cary Dibba', 'Toyota Highroof', 'Toyota Saloon Coaster', 'Old Cars', 'Off-Road Dalla (Pickup)', 'Toyota Land Cruiser V8', 'Electric Scooty'];
-function renderLongRangeRates(rates = {}, minimumWalletBalances = {}) {
+function renderLongRangeRates(rates = {}, minimumWalletBalances = {}, manualCommissionAmounts = {}) {
   document.getElementById('lr-rates').innerHTML = LONG_RANGE_CATEGORIES.map(category =>
-    `<div class="field-item" style="min-width:220px"><div class="field-label">${category} (Rs /km)</div><input class="modal-input lr-rate" data-category="${category}" type="number" min=".01" step=".01" value="${rates[category] ?? ''}"><div class="field-label" style="margin-top:.45rem">Minimum Wallet Balance (Rs)</div><input class="modal-input lr-min-wallet" data-category="${category}" type="number" min="0" step="1" value="${minimumWalletBalances[category] ?? 500}"></div>`
+    `<div class="field-item" style="min-width:220px"><div class="field-label">${category} (Rs /km)</div><input class="modal-input lr-rate" data-category="${category}" type="number" min=".01" step=".01" value="${rates[category] ?? ''}"><div class="field-label" style="margin-top:.45rem">Manual Long Range charge (Rs / ride)</div><input class="modal-input lr-commission" data-category="${category}" type="number" min="0" step="1" value="${manualCommissionAmounts[category] ?? ''}"><div class="field-label" style="margin-top:.45rem">Minimum Wallet Balance (Rs)</div><input class="modal-input lr-min-wallet" data-category="${category}" type="number" min="0" step="1" value="${minimumWalletBalances[category] ?? 500}"></div>`
   ).join('');
 }
 async function loadLongRangeSettings() {
@@ -5533,30 +5529,28 @@ async function loadLongRangeSettings() {
     document.getElementById('lr-enabled').checked = !!settings.enabled;
     document.getElementById('lr-cutoff').value = settings.distanceCutoffKm;
     document.getElementById('lr-radius').value = settings.broadcastRadiusKm;
-    document.getElementById('lr-commission').value = settings.commissionPercent;
-    document.getElementById('lr-timing').value = 'completed';
-    renderLongRangeRates(settings.perKmRates, settings.minimumWalletBalances);
+    renderLongRangeRates(settings.perKmRates, settings.minimumWalletBalances, settings.manualCommissionAmounts);
     feedback.textContent = '';
   } catch (e) { feedback.textContent = `⚠ ${e.message}`; feedback.style.color = '#ef4444'; }
 }
 async function saveLongRangeSettings() {
   const feedback = document.getElementById('long-range-settings-feedback');
   const perKmRates = Object.fromEntries([...document.querySelectorAll('.lr-rate')].map(input => [input.dataset.category, input.value]));
+  const manualCommissionAmounts = Object.fromEntries([...document.querySelectorAll('.lr-commission')].map(input => [input.dataset.category, input.value]));
   const minimumWalletBalances = Object.fromEntries([...document.querySelectorAll('.lr-min-wallet')].map(input => [input.dataset.category, input.value]));
   const longRangeSettings = {
     enabled: document.getElementById('lr-enabled').checked,
     distanceCutoffKm: document.getElementById('lr-cutoff').value,
     minimumWalletBalances,
     broadcastRadiusKm: document.getElementById('lr-radius').value,
-    commissionPercent: document.getElementById('lr-commission').value,
-    commissionTiming: document.getElementById('lr-timing').value,
+    manualCommissionAmounts,
     perKmRates
   };
   feedback.textContent = 'Saving Long Range settings…'; feedback.style.color = '#64748b';
   try {
     const result = await api('/api/admin/long-range-settings', 'PATCH', { longRangeSettings });
     feedback.textContent = '✓ Long Range Ride settings saved and broadcast to Drivers.'; feedback.style.color = '#22c55e';
-    renderLongRangeRates(result.settings.perKmRates, result.settings.minimumWalletBalances); showToast('Long Range settings saved ✓', 'success');
+    renderLongRangeRates(result.settings.perKmRates, result.settings.minimumWalletBalances, result.settings.manualCommissionAmounts); showToast('Long Range settings saved ✓', 'success');
   } catch (e) {
     const details = Array.isArray(e?.errors) ? `: ${e.errors.join('; ')}` : '';
     feedback.textContent = `✕ ${e.message || 'Could not save Long Range settings'}${details}`; feedback.style.color = '#ef4444';

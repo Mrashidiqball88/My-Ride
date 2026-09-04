@@ -2979,6 +2979,48 @@ function remainingRideOfferSeconds(ride) {
   return Number.isFinite(expiresAt) ? Math.max(0, Math.ceil((expiresAt - Date.now()) / 1000)) : 0;
 }
 
+function getRideRequestAcceptability(ride) {
+  if (ride?.acceptanceEligibility?.allowed === false) {
+    return {
+      allowed: false,
+      reason: ride.acceptanceEligibility.reason || 'This ride cannot be accepted yet.',
+      dailyFeeDue: !!ride.acceptanceEligibility.dailyFeeDue
+    };
+  }
+  if (dailyFeeDue && !ride?.isLongRange) {
+    const rate = getCurrentDailyFeeRate();
+    return {
+      allowed: false,
+      reason: rate
+        ? `Pay today's Daily Fee of Rs ${rate.toLocaleString()} before accepting rides.`
+        : 'Daily Fee is not configured — contact Admin.',
+      dailyFeeDue: true
+    };
+  }
+  return { allowed: true, reason: null, dailyFeeDue: false };
+}
+
+function updateRideRequestAcceptButton(ride) {
+  const acceptBtn = document.querySelector('.btn-accept');
+  if (!acceptBtn) return;
+  const eligibility = getRideRequestAcceptability(ride);
+  if (!eligibility.allowed) {
+    acceptBtn.disabled = true;
+    acceptBtn.textContent = eligibility.dailyFeeDue ? 'Daily Fee required' : 'Payment required';
+    acceptBtn.title = eligibility.reason || 'Payment is required before accepting this ride.';
+    acceptBtn.style.opacity = '0.55';
+    acceptBtn.style.cursor = 'not-allowed';
+    acceptBtn.onclick = null;
+    return;
+  }
+  acceptBtn.disabled = false;
+  acceptBtn.textContent = 'Accept';
+  acceptBtn.title = '';
+  acceptBtn.style.opacity = '';
+  acceptBtn.style.cursor = '';
+  acceptBtn.onclick = () => acceptRide();
+}
+
 function showRideRequest(ride, { suppressAlert = false } = {}) {
   if (!rideOfferIsLive(ride)) {
     hideRideRequest();
@@ -3044,26 +3086,7 @@ function showRideRequest(ride, { suppressAlert = false } = {}) {
   showRideOnMap(ride);
   if (!suppressAlert) startRideAlert(ride);
 
-  // Grey out Accept button if today's platform fee is not yet paid
-  const acceptBtn = document.querySelector('.btn-accept');
-  if (acceptBtn) {
-    if (dailyFeeDue) {
-      const _rate = getCurrentDailyFeeRate();
-      acceptBtn.disabled = false; // keep clickable so tapping redirects to Payments
-      acceptBtn.textContent = _rate
-        ? `Pay Rs ${_rate.toLocaleString()} Daily Fee to Accept`
-        : 'Daily Fee not configured — contact Admin';
-      acceptBtn.style.opacity = '0.6';
-      acceptBtn.style.cursor  = 'pointer';
-      acceptBtn.onclick = (e) => { e.stopPropagation(); goToPayFee(_rate); };
-    } else {
-      acceptBtn.disabled = false;
-      acceptBtn.textContent = 'Accept';
-      acceptBtn.style.opacity = '';
-      acceptBtn.style.cursor  = '';
-      acceptBtn.onclick = () => acceptRide();
-    }
-  }
+  updateRideRequestAcceptButton(ride);
 }
 
 function hideRideRequest() {
@@ -3263,6 +3286,12 @@ function rejectRide() {
 async function acceptRide() {
   const rideRequest = pendingRide;
   if (!rideRequest || acceptRideInFlight) return;
+  const eligibility = getRideRequestAcceptability(rideRequest);
+  if (!eligibility.allowed) {
+    showToast(eligibility.reason || 'Payment is required before accepting this ride.', 'error');
+    updateRideRequestAcceptButton(rideRequest);
+    return;
+  }
   acceptRideInFlight = true;
   const rideId = String(rideRequest.id || rideRequest._id || '');
   if (!rideId) {
@@ -3292,10 +3321,7 @@ async function acceptRide() {
     showToast(e.message || 'Could not accept ride — try again', 'error');
   } finally {
     acceptRideInFlight = false;
-    if (acceptBtn) {
-      acceptBtn.disabled = false;
-      acceptBtn.textContent = 'Accept';
-    }
+    updateRideRequestAcceptButton(rideRequest);
   }
 }
 
@@ -4272,14 +4298,7 @@ function checkDailyFee() {
 function unlockAcceptButton() {
   dailyFeeDue = false;
   checkDailyFee();
-  const acceptBtn = document.querySelector('.btn-accept');
-  if (acceptBtn && pendingRide) {
-    acceptBtn.disabled      = false;
-    acceptBtn.textContent   = 'Accept';
-    acceptBtn.style.opacity = '';
-    acceptBtn.style.cursor  = '';
-    acceptBtn.onclick = () => acceptRide();
-  }
+  if (pendingRide) updateRideRequestAcceptButton(pendingRide);
   // Dismiss the daily fee banner
   const banner = document.getElementById('daily-fee-banner');
   if (banner) banner.style.display = 'none';

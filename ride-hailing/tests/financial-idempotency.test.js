@@ -98,6 +98,7 @@ test('concurrent ride completion settles once and returns an idempotent replay',
   assert.equal(driverWallet.transactions.filter(tx => tx.operationId === `ride:${ride._id}:settlement`).length, 1);
   assert.equal(passengerWallet.transactions.filter(tx => tx.operationId === `ride:${ride._id}:settlement`).length, 1);
   const driverSettlement = driverWallet.transactions.find(tx => tx.operationId === `ride:${ride._id}:settlement`);
+  assert.equal(driverSettlement.amount, 1000, 'ordinary rides pay the Driver the full fare');
   assert.equal(driverSettlement.fundingSource, 'earnings');
   assert.equal(driverSettlement.realAmount, 0);
   assert.equal(driverSettlement.bonusAmount, 0);
@@ -558,6 +559,7 @@ test('approved Driver recharges are shown as advance deposits and excluded from 
     assert.equal(body.period.advanceDeposits, 3000);
     assert.equal(body.period.approvedWalletFunding, 3000);
     assert.equal(body.period.netRevenue, 0);
+    assert.equal(body.period.rideCommissions, undefined);
   } finally {
     await new Promise(resolve => adminServer.close(resolve));
   }
@@ -587,8 +589,7 @@ test('Long Range commission records bonus funding without treating it as real re
   const result = await chargeLongRangeCommission(
     ride,
     driver._id,
-    'on-request',
-    { commissionTiming: 'on-request', commissionPercent: 10 }
+    { manualCommissionAmounts: { 'Car Sedan': 100 } }
   );
 
   assert.equal(result.fundingSource, 'bonus');
@@ -597,6 +598,7 @@ test('Long Range commission records bonus funding without treating it as real re
   const wallet = await models.Wallet.findOne({ user: driver._id }).lean();
   const commission = wallet.transactions.find(tx => tx.description === 'Long Range commission');
   assert.equal(commission.fundingSource, 'bonus');
+   assert.equal(commission.revenueCategory, 'manual-long-range');
   assert.equal(commission.realAmount, 0);
   assert.equal(commission.bonusAmount, 100);
 });
@@ -617,8 +619,7 @@ test('Long Range commission spends real cash before falling back to bonus', asyn
   const result = await chargeLongRangeCommission(
     ride,
     driver._id,
-    'on-request',
-    { commissionTiming: 'on-request', commissionPercent: 10 }
+    { manualCommissionAmounts: { 'Car Sedan': 100 } }
   );
 
   assert.equal(result.fundingSource, 'mixed');
@@ -628,6 +629,38 @@ test('Long Range commission spends real cash before falling back to bonus', asyn
   assert.equal(wallet.balance, 50);
   assert.equal(wallet.realCashAvailable, 0);
   assert.equal(wallet.bonusAvailable, 50);
+});
+
+test('legacy Long Range commission debits stay outside real revenue analytics', async () => {
+  const driverId = new mongoose.Types.ObjectId();
+  const now = new Date();
+  await models.Wallet.create({
+    user: driverId,
+    balance: 0,
+    transactions: [{
+      amount: 150,
+      type: 'debit',
+      description: 'Long Range commission',
+      fundingSource: 'real',
+      realAmount: 150,
+      createdAt: now
+    }]
+  });
+
+  const adminServer = app.listen(0);
+  try {
+    const token = jwt.sign({ isAdmin: true, username: 'finance-admin' }, 'ride-hailing-secret-fallback');
+    const response = await fetch(`http://127.0.0.1:${adminServer.address().port}/api/admin/revenue?days=7`, {
+      headers: { authorization: `Bearer ${token}` }
+    });
+    assert.equal(response.status, 200);
+    const body = await response.json();
+    assert.equal(body.period.longRangeCommissions, 0);
+    assert.equal(body.period.netRevenue, 0);
+    assert.equal(body.period.unclassifiedFeeDeductions, 150);
+  } finally {
+    await new Promise(resolve => adminServer.close(resolve));
+  }
 });
 
 test('legacy wallet transactions remain conservative and unclassified', () => {

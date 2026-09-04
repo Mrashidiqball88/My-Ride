@@ -205,7 +205,7 @@ test('Customer and Driver terms stay independent and publish role-specific reads
 test('Long Range fares begin at the configured cutoff and use vehicle-specific rates', () => {
   const longRange = normalizeLongRangeSettings({
     enabled: true, distanceCutoffKm: 50, minimumWalletBalance: 750, broadcastRadiusKm: 35,
-    commissionPercent: 12.5, commissionTiming: 'started',
+     manualCommissionAmounts: Object.fromEntries(FARE_VEHICLE_CATEGORIES.map(category => [category, 125])),
     perKmRates: Object.fromEntries(FARE_VEHICLE_CATEGORIES.map(category => [category, 210]))
   });
   assert.equal(validateLongRangeSettings(longRange).errors.length, 0);
@@ -225,7 +225,7 @@ test('Long Range fares begin at the configured cutoff and use vehicle-specific r
   assert.equal(long.longRangeRatePerKm, 210);
   assert.equal(long.totalFare, 10500);
   const invalid = validateLongRangeSettings({ enabled: true, perKmRates: {} });
-  assert.equal(invalid.errors.length, FARE_VEHICLE_CATEGORIES.length);
+  assert.equal(invalid.errors.length, FARE_VEHICLE_CATEGORIES.length * 2);
 });
 
 test('Waiting rates stay independent from travel-time rates and honor disabled, zero-rate, and grace settings', () => {
@@ -448,7 +448,7 @@ test('Customer fare quote uses active Long Range rates without daily fare slabs'
   }
 });
 
-test('Long Range commission is charged once only after a completed ride', async () => {
+test('Long Range commission is a fixed amount charged once at acceptance', async () => {
   const updates = [];
   let debitAttempt = 0;
   models.Wallet.findOneAndUpdate = async () => {
@@ -458,11 +458,10 @@ test('Long Range commission is charged once only after a completed ride', async 
   models.Wallet.exists = async () => debitAttempt > 1;
   models.Ride.updateOne = async (_query, update) => { updates.push(update); };
   const ride = { _id: 'long-range-ride', isLongRange: true, fare: 1000, longRangeCommissionChargedAt: null };
-  const settings = { commissionTiming: 'completed', commissionPercent: 10 };
-  assert.equal((await chargeLongRangeCommission(ride, 'driver-1', 'accepted', settings)).ok, true);
-  assert.equal(debitAttempt, 0, 'accepting must not charge a completion-timed commission');
-  assert.equal((await chargeLongRangeCommission(ride, 'driver-1', 'completed', settings)).ok, true);
-  assert.equal((await chargeLongRangeCommission(ride, 'driver-1', 'completed', settings)).ok, true);
+  const settings = { manualCommissionAmounts: { 'Car Mini Non-AC': 100 } };
+  ride.vehicleType = 'Car Mini Non-AC';
+  assert.equal((await chargeLongRangeCommission(ride, 'driver-1', settings)).ok, true);
+  assert.equal((await chargeLongRangeCommission(ride, 'driver-1', settings)).ok, true);
   assert.equal(debitAttempt, 2);
   assert.equal(updates.length, 2);
   assert.equal(updates[0].$set.longRangeCommissionAmount, 100);
@@ -947,7 +946,9 @@ test('available-rides recovery uses the same radius so reconnecting drivers cann
   models.Settings.findOne = ({ key }) => ({
     lean: async () => key === 'ride_broadcast_settings'
       ? { value: { maximumRideBroadcastRadiusKm: 5 } }
-      : null
+      : key === 'daily_fee_settings'
+        ? { value: { 'Car Mini': 100 } }
+        : null
   });
   models.User.findById = () => ({
     select: () => ({
@@ -955,6 +956,7 @@ test('available-rides recovery uses the same radius so reconnecting drivers cann
         vehicleType: 'Car Mini',
         accountStatus: 'active',
         isOnline: true,
+         paidUntilDate: new Date(Date.now() - 60_000),
         lastOnlineHeartbeat: new Date(),
         currentLocation: { lat: 31.5204, lng: 74.3587 },
         activeSessionToken: TEST_SESSION
@@ -976,6 +978,9 @@ test('available-rides recovery uses the same radius so reconnecting drivers cann
     });
     assert.equal(result.response.status, 200);
     assert.deepEqual(result.body.map(ride => ride._id), ['near-ride']);
+   assert.equal(result.body[0].acceptanceEligibility.allowed, false);
+   assert.equal(result.body[0].acceptanceEligibility.dailyFeeDue, true);
+   assert.match(result.body[0].acceptanceEligibility.reason, /Daily Fee/);
   } finally {
     await new Promise(resolve => server.close(resolve));
   }

@@ -86,7 +86,6 @@ async function stubAdminData(page, stats = {}) {
           date: `2026-09-${String(index + 1).padStart(2, '0')}`,
           netRevenue: index === 6 ? 120 : 0,
           dailyFeeCollections: index === 6 ? 120 : 0,
-          rideCommissions: 0,
           longRangeCommissions: 0,
           bonusNonRevenueEarnings: 0,
           bonusCredits: 0
@@ -213,6 +212,7 @@ test.describe('scoped Sub-Admin browser permissions', () => {
     if (!box) throw new Error('Revenue trend drag handle is not measurable');
     await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
     await page.mouse.down();
+    await expect(panel).toHaveClass(/is-dragging/);
     await page.mouse.move(box.x + box.width / 2 + 36, box.y + box.height / 2 + 18);
     await page.mouse.up();
     await expect.poll(() => panel.evaluate(element => getComputedStyle(element).transform)).not.toBe(beforeTransform);

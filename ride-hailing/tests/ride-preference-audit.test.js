@@ -28,8 +28,7 @@ function longRangeSettings() {
     enabled: true,
     distanceCutoffKm: 50,
     broadcastRadiusKm: 30,
-    commissionPercent: 12.5,
-    commissionTiming: 'completed',
+    manualCommissionAmounts: Object.fromEntries(FARE_VEHICLE_CATEGORIES.map(category => [category, 125])),
     minimumWalletBalances,
     perKmRates: Object.fromEntries(FARE_VEHICLE_CATEGORIES.map(category => [category, 100]))
   };
@@ -179,7 +178,7 @@ test('audits registration, scheduled fees, wallet gates, completion commission, 
   });
   assert.equal(started.response.status, 200);
   const afterStart = await models.Wallet.findOne({ user: driverB._id }).lean();
-  assert.equal(afterStart.transactions.filter(tx => tx.description === 'Long Range commission').length, 0, 'commission must not be charged at acceptance or ride start');
+  assert.equal(afterStart.transactions.filter(tx => tx.description === 'Long Range commission').length, 1, 'manual commission is charged at acceptance');
   const completed = await json(`/api/rides/${longRangeRide._id}/status`, {
     token: driverToken(driverB), method: 'PATCH', body: { status: 'completed' }
   });
