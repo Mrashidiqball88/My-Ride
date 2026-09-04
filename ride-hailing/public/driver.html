@@ -532,7 +532,7 @@ body{font-family:'DM Sans','Segoe UI',sans-serif;background:var(--dc-night);colo
   left:10px;
   right:10px;
   bottom:152px;
-  z-index:13;
+  z-index:100;
   padding:15px;
   max-height:calc(100vh - 245px);
   overflow-y:auto;
@@ -624,6 +624,13 @@ body{font-family:'DM Sans','Segoe UI',sans-serif;background:var(--dc-night);colo
 }
 .driver-history-error{color:var(--dc-coral)}
 #app.navigation-active #ride-history-panel{display:none!important}
+#app.history-active .driver-ops-control,
+#app.history-active .stats-strip{
+  opacity:0;
+  visibility:hidden;
+  pointer-events:none;
+}
+#app.history-active #ride-history-panel{z-index:100}
 @media (min-width:800px){
   #ride-history-panel{
     left:50%;
@@ -841,7 +848,6 @@ body{font-family:'DM Sans','Segoe UI',sans-serif;background:var(--dc-night);colo
       <span>My <span style="color:#38bdf8">Ride</span> <small class="brand-role">DRIVER</small></span>
     </div>
     <div class="header-right">
-      <div class="earnings-badge">💰 Rs <span id="earnings-val">0</span></div>
       <div class="dots-menu-wrap">
         <button class="btn-dots" id="driver-dots-btn" onclick="toggleDriverMenu(event)" aria-label="Menu">⋮
         </button>
@@ -3489,6 +3495,7 @@ function switchBottomTab(tab) {
   const isHistory = tab === 'history';
   const app = document.getElementById('app');
   if (app) app.classList.toggle('payments-active', !isHome && !isHistory);
+  if (app) app.classList.toggle('history-active', isHistory);
   document.getElementById('tab-history-btn').classList.toggle('active', isHistory);
   document.getElementById('tab-home-btn').classList.toggle('active', isHome);
   document.getElementById('tab-payments-btn').classList.toggle('active', !isHome && !isHistory);
@@ -3542,11 +3549,17 @@ function formatDriverHistoryStatus(status) {
 function formatDriverHistoryDate(value) {
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return 'Date unavailable';
-  return date.toLocaleDateString('en-PK', {
+  const datePart = date.toLocaleDateString('en-PK', {
     day: 'numeric',
     month: 'short',
     year: 'numeric'
   });
+  const timePart = date.toLocaleTimeString('en-US', {
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: true
+  });
+  return `${datePart}, ${timePart}`;
 }
 
 function renderDriverRideHistory(rides) {
