@@ -237,8 +237,10 @@ body{font-family:'Segoe UI',system-ui,sans-serif;background:#06060e;color:#e2e8f
 .data-table td{padding:.65rem .85rem;border-bottom:1px solid #0f0f18;vertical-align:middle;color:#cbd5e1}
 .data-table tr:hover td{background:#0a0a14}
 .table-wrap{background:#0f0f1e;border:1px solid #1e1e2e;border-radius:14px;overflow:hidden}
-#sec-drivers .table-wrap{overflow-x:auto}
+#sec-drivers .table-wrap,#sec-passengers .table-wrap{overflow-x:auto}
 #sec-drivers .data-table{min-width:900px}
+#sec-passengers .data-table{min-width:720px}
+.table-serial{width:42px;text-align:center;color:#64748b!important;font-variant-numeric:tabular-nums;font-weight:700}
 
 /* ── Status badges ── */
 .badge{display:inline-flex;align-items:center;gap:.25rem;font-size:.65rem;font-weight:700;padding:.2rem .55rem;border-radius:100px;white-space:nowrap}
@@ -647,7 +649,23 @@ button,input,select,textarea{
   color:var(--admin-muted);
   font-weight:700;
 }
+.ftab-count{
+  display:inline-flex;
+  align-items:center;
+  justify-content:center;
+  min-width:1.15rem;
+  height:1.15rem;
+  padding:0 .22rem;
+  margin-left:.25rem;
+  border-radius:999px;
+  background:rgba(148,163,184,.12);
+  color:var(--admin-text-soft);
+  font-size:.66rem;
+  line-height:1;
+  font-variant-numeric:tabular-nums;
+}
 .ftab.active{background:var(--admin-cyan-dim);border-color:#18758d;color:var(--admin-cyan)}
+.ftab.active .ftab-count{background:rgba(69,213,245,.16);color:var(--admin-cyan)}
 .ftab:hover:not(.active){border-color:var(--admin-line-strong);color:var(--admin-text-soft)}
 
 .btn{
@@ -1031,11 +1049,11 @@ button,input,select,textarea{
           <h2>🚗 Driver Management</h2>
           <div class="sec-hdr-actions">
             <div class="filter-tabs">
-              <div class="ftab active" onclick="loadDrivers('all');setFTab(this)">All</div>
-              <div class="ftab" onclick="loadDrivers('active');setFTab(this)">Active</div>
-              <div class="ftab" onclick="loadDrivers('pending');setFTab(this)">Pending</div>
-              <div class="ftab" onclick="loadDrivers('suspended');setFTab(this)">Suspended</div>
-              <div class="ftab" onclick="loadDrivers('blocked');setFTab(this)">Blocked</div>
+              <div class="ftab active" onclick="loadDrivers('all');setFTab(this)">All <span class="ftab-count" id="driver-count-all">0</span></div>
+              <div class="ftab" onclick="loadDrivers('active');setFTab(this)">Active <span class="ftab-count" id="driver-count-active">0</span></div>
+              <div class="ftab" onclick="loadDrivers('pending');setFTab(this)">Pending <span class="ftab-count" id="driver-count-pending">0</span></div>
+              <div class="ftab" onclick="loadDrivers('suspended');setFTab(this)">Suspended <span class="ftab-count" id="driver-count-suspended">0</span></div>
+              <div class="ftab" onclick="loadDrivers('blocked');setFTab(this)">Blocked <span class="ftab-count" id="driver-count-blocked">0</span></div>
             </div>
             <button id="bulk-trial-btn" class="btn btn-yellow" onclick="grantBulkTrial()" disabled>💰 Grant Wallet Bonus</button>
             <div id="fee-period-controls" style="display:flex;align-items:center;gap:.35rem;flex-wrap:wrap">
@@ -1066,10 +1084,11 @@ button,input,select,textarea{
         </div>
         <div class="table-wrap"><table class="data-table">
           <thead><tr>
+            <th class="table-serial">#</th>
             <th style="width:32px"><input type="checkbox" id="select-all-chk" onchange="toggleSelectAll(this.checked)" style="cursor:pointer"></th>
             <th>Driver</th><th>Phone</th><th>Vehicle</th><th>Daily Fee</th><th>Rating</th><th>Status</th><th>Device Binding</th><th>Joined</th><th>Actions</th>
           </tr></thead>
-          <tbody id="drivers-tbody"><tr><td colspan="10" class="loading-row">Loading…</td></tr></tbody>
+          <tbody id="drivers-tbody"><tr><td colspan="11" class="loading-row">Loading…</td></tr></tbody>
         </table></div>
       </div>
 
@@ -1079,9 +1098,11 @@ button,input,select,textarea{
           <h2>👥 Customer Management</h2>
           <div class="sec-hdr-actions">
             <div class="filter-tabs">
-              <div class="ftab active" onclick="loadPassengers('all');setFTab(this)">All</div>
-              <div class="ftab" onclick="loadPassengers('active');setFTab(this)">Active</div>
-              <div class="ftab" onclick="loadPassengers('blocked');setFTab(this)">Blocked</div>
+              <div class="ftab active" onclick="loadPassengers('all');setFTab(this)">All <span class="ftab-count" id="customer-count-all">0</span></div>
+              <div class="ftab" onclick="loadPassengers('active');setFTab(this)">Active <span class="ftab-count" id="customer-count-active">0</span></div>
+              <div class="ftab" onclick="loadPassengers('pending');setFTab(this)">Pending <span class="ftab-count" id="customer-count-pending">0</span></div>
+              <div class="ftab" onclick="loadPassengers('suspended');setFTab(this)">Suspended <span class="ftab-count" id="customer-count-suspended">0</span></div>
+              <div class="ftab" onclick="loadPassengers('blocked');setFTab(this)">Blocked <span class="ftab-count" id="customer-count-blocked">0</span></div>
             </div>
             <button class="btn-refresh" onclick="loadPassengers(currentPassStatus)">↻</button>
           </div>
@@ -1091,8 +1112,8 @@ button,input,select,textarea{
           <button class="management-shortcut" onclick="loadPassengers('all')"><strong>Customer accounts & verification</strong><span>Open a customer record to see the current CNIC and identity outcome.</span></button>
         </div>
         <div class="table-wrap"><table class="data-table">
-          <thead><tr><th>Passenger</th><th>Phone</th><th>CNIC</th><th>Rides</th><th>Status</th><th>Joined</th><th>Actions</th></tr></thead>
-          <tbody id="pass-tbody"><tr><td colspan="7" class="loading-row">Loading…</td></tr></tbody>
+          <thead><tr><th class="table-serial">#</th><th>Passenger</th><th>Phone</th><th>CNIC</th><th>Rides</th><th>Status</th><th>Joined</th><th>Actions</th></tr></thead>
+          <tbody id="pass-tbody"><tr><td colspan="8" class="loading-row">Loading…</td></tr></tbody>
         </table></div>
       </div>
 
@@ -2838,20 +2859,46 @@ async function loadAuditLogs() {
 }
 
 // ── 3. DRIVERS ────────────────────────────────────────────────────────────────
+function updateManagementFilterCounts(prefix, counts, statuses) {
+  statuses.forEach(status => {
+    const badge = document.getElementById(`${prefix}-count-${status}`);
+    if (badge) badge.textContent = Number(counts?.[status] || 0).toLocaleString('en-PK');
+  });
+}
+
+function normalizeManagementResponse(payload, statuses) {
+  const records = Array.isArray(payload) ? payload : (Array.isArray(payload?.records) ? payload.records : []);
+  const fallbackCounts = Object.fromEntries(statuses.map(status => [
+    status,
+    status === 'all'
+      ? records.length
+      : records.filter(record => String(record.accountStatus || 'active') === status).length
+  ]));
+  return {
+    records,
+    counts: { ...fallbackCounts, ...(payload?.counts || {}) }
+  };
+}
+
 async function loadDrivers(status = 'all') {
   currentDriverStatus = status;
   const tbody = document.getElementById('drivers-tbody');
-  tbody.innerHTML = '<tr><td colspan="10" class="loading-row">Loading…</td></tr>';
+  tbody.innerHTML = '<tr><td colspan="11" class="loading-row">Loading…</td></tr>';
   try {
-    const [drivers, dailyFees] = await Promise.all([
-      api(`/api/admin/drivers?status=${status}`),
+    const [driverResponse, dailyFees] = await Promise.all([
+      api(`/api/admin/drivers?status=${encodeURIComponent(status)}&includeCounts=true`),
       api('/api/admin/daily-fee-settings')
     ]);
+    const { records: drivers, counts } = normalizeManagementResponse(
+      driverResponse,
+      ['all', 'active', 'pending', 'suspended', 'blocked']
+    );
+    updateManagementFilterCounts('driver', counts, ['all', 'active', 'pending', 'suspended', 'blocked']);
     dailyFeeSettingsState = dailyFees;
-    if (!drivers.length) { tbody.innerHTML = '<tr><td colspan="10" class="empty-state"><span class="empty-icon">🚗</span>No drivers found</td></tr>'; return; }
+    if (!drivers.length) { tbody.innerHTML = '<tr><td colspan="11" class="empty-state"><span class="empty-icon">🚗</span>No drivers found</td></tr>'; return; }
     document.getElementById('select-all-chk').checked = false;
     selectedDriverIds.clear(); updateBulkGrantBtn();
-    tbody.innerHTML = drivers.map(d => {
+    tbody.innerHTML = drivers.map((d, index) => {
       const lowRating  = (d.rating||5) < 3;
       const hasPhoto   = d.profilePhoto && d.profilePhoto.startsWith('data:');
       const avatarHtml = hasPhoto
@@ -2876,6 +2923,7 @@ async function loadDrivers(status = 'all') {
         feeCell = `<div style="font-size:.73rem"><span class="fee-pass-expired">Pass Expired / Unpaid</span><br><span style="color:#64748b;font-size:.65rem">(${feeLabel})</span></div>`;
       }
       return `<tr>
+         <td class="table-serial">${index + 1}</td>
         <td><input type="checkbox" class="driver-chk" value="${d._id}" style="cursor:pointer" onchange="toggleDriverSelect('${d._id}',this.checked)"></td>
         <td><div style="display:flex;align-items:center">${avatarHtml}<div><div style="font-weight:700;color:#e2e8f0">${d.name}</div></div></div></td>
         <td>${d.phone||'—'}</td>
@@ -2904,7 +2952,7 @@ async function loadDrivers(status = 'all') {
       </tr>`;
     }).join('');
     refreshFeePassTimers();
-  } catch (e) { tbody.innerHTML = `<tr><td colspan="10" style="text-align:center;color:#ef4444;padding:1rem">${e.message}</td></tr>`; }
+  } catch (e) { tbody.innerHTML = `<tr><td colspan="11" style="text-align:center;color:#ef4444;padding:1rem">${e.message}</td></tr>`; }
 }
 
 function refreshFeePassTimers() {
@@ -2934,11 +2982,17 @@ setInterval(() => {
 async function loadPassengers(status = 'all') {
   currentPassStatus = status;
   const tbody = document.getElementById('pass-tbody');
-  tbody.innerHTML = '<tr><td colspan="7" class="loading-row">Loading…</td></tr>';
+  tbody.innerHTML = '<tr><td colspan="8" class="loading-row">Loading…</td></tr>';
   try {
-    const passengers = await api(`/api/admin/passengers?status=${status}`);
-    if (!passengers.length) { tbody.innerHTML = '<tr><td colspan="7" class="empty-state"><span class="empty-icon">👥</span>No passengers found</td></tr>'; return; }
-    tbody.innerHTML = passengers.map(p => `<tr>
+    const passengerResponse = await api(`/api/admin/passengers?status=${encodeURIComponent(status)}&includeCounts=true`);
+    const { records: passengers, counts } = normalizeManagementResponse(
+      passengerResponse,
+      ['all', 'active', 'pending', 'suspended', 'blocked']
+    );
+    updateManagementFilterCounts('customer', counts, ['all', 'active', 'pending', 'suspended', 'blocked']);
+    if (!passengers.length) { tbody.innerHTML = '<tr><td colspan="8" class="empty-state"><span class="empty-icon">👥</span>No passengers found</td></tr>'; return; }
+    tbody.innerHTML = passengers.map((p, index) => `<tr>
+       <td class="table-serial">${index + 1}</td>
       <td><div style="font-weight:700;color:#e2e8f0">${p.name}</div></td>
       <td>${p.phone||p.email||'—'}</td>
       <td style="font-size:.75rem;color:#94a3b8;font-family:monospace">${p.nationalIdLast4 ? `••••${p.nationalIdLast4}` : '—'}</td>
@@ -2958,7 +3012,7 @@ async function loadPassengers(status = 'all') {
         ${isSuperAdmin ? `<button class="btn btn-red" onclick="openDeleteModal('${p._id}','${p.name.replace(/'/g,"\\'")}','customer')" title="Delete Account">🗑</button>` : ''}
       </div></td>
     </tr>`).join('');
-  } catch (e) { tbody.innerHTML = `<tr><td colspan="7" style="text-align:center;color:#ef4444;padding:1rem">${escHtml(e.message)}</td></tr>`; }
+  } catch (e) { tbody.innerHTML = `<tr><td colspan="8" style="text-align:center;color:#ef4444;padding:1rem">${escHtml(e.message)}</td></tr>`; }
 }
 
 // ── 5. NEW REQUESTS ───────────────────────────────────────────────────────────

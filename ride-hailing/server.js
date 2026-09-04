@@ -7274,12 +7274,27 @@ app.get('/api/admin/drivers', adminJwt, requirePerm('viewDrivers'), async (req, 
     const { status } = req.query;
     const filter = { role: 'driver' };
     if (status && status !== 'all') filter.accountStatus = status;
-    const drivers = await User.find(filter)
+    const driverQuery = User.find(filter)
       .select('-password -otpCode -otpExpiry')
       .sort('-createdAt').limit(200);
+    const includeCounts = req.query.includeCounts === 'true';
+    const [drivers, counts] = await Promise.all([
+      driverQuery,
+      includeCounts
+        ? Promise.all([
+            User.countDocuments({ role: 'driver' }),
+            User.countDocuments({ role: 'driver', accountStatus: 'active' }),
+            User.countDocuments({ role: 'driver', accountStatus: 'pending' }),
+            User.countDocuments({ role: 'driver', accountStatus: 'suspended' }),
+            User.countDocuments({ role: 'driver', accountStatus: 'blocked' })
+          ]).then(([all, active, pending, suspended, blocked]) => ({
+            all, active, pending, suspended, blocked
+          }))
+        : null
+    ]);
     // Keep private document filenames out of list/search payloads. The Admin
     // document route below exposes bytes only after an authenticated check.
-    res.json(drivers.map(driver => {
+    const records = drivers.map(driver => {
       const value = driver.toObject();
       return {
         ...value,
@@ -7288,7 +7303,8 @@ app.get('/api/admin/drivers', adminJwt, requirePerm('viewDrivers'), async (req, 
         licensePhoto: !!value.licensePhoto,
         vehicleRegPhoto: !!value.vehicleRegPhoto
       };
-    }));
+    });
+    res.json(includeCounts ? { records, counts } : records);
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
@@ -7372,17 +7388,32 @@ app.get('/api/admin/passengers', adminJwt, requirePerm('viewCustomers'), async (
     const { status } = req.query;
     const filter = { role: 'customer' };
     if (['pending', 'active', 'blocked', 'suspended'].includes(status)) filter.accountStatus = status;
-    const passengers = await User.find(filter)
+    const passengerQuery = User.find(filter)
       // Keep the projection exclusion-only. Mixing inclusion fields with
       // exclusions makes Mongoose reject the query before it reaches MongoDB.
       .select('-password -otpCode -otpExpiry')
       .sort('-createdAt').limit(200);
+    const includeCounts = req.query.includeCounts === 'true';
+    const [passengers, counts] = await Promise.all([
+      passengerQuery,
+      includeCounts
+        ? Promise.all([
+            User.countDocuments({ role: 'customer' }),
+            User.countDocuments({ role: 'customer', accountStatus: 'active' }),
+            User.countDocuments({ role: 'customer', accountStatus: 'pending' }),
+            User.countDocuments({ role: 'customer', accountStatus: 'suspended' }),
+            User.countDocuments({ role: 'customer', accountStatus: 'blocked' })
+          ]).then(([all, active, pending, suspended, blocked]) => ({
+            all, active, pending, suspended, blocked
+          }))
+        : null
+    ]);
     // Attach ride count to each passenger
     const withCounts = await Promise.all(passengers.map(async p => {
       const rideCount = await Ride.countDocuments({ passenger: p._id });
       return { ...p.toObject(), rideCount };
     }));
-    res.json(withCounts);
+    res.json(includeCounts ? { records: withCounts, counts } : withCounts);
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
