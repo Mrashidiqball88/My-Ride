@@ -74,6 +74,11 @@ export type DriverPayment = {
 export type DriverWalletSummary = {
   balance?: number;
   currentWalletBalance?: number;
+  currentBonus?: number;
+  todayIncome?: number;
+  todayCompletedRides?: number;
+  advanceDeposits?: number;
+  realCashRecharges?: number;
   realCashWallet?: number;
   bonusAvailable?: number;
   bonusWallet?: number;
@@ -1135,6 +1140,9 @@ export function DriverRuntimeProvider({ children }: { children: ReactNode }) {
         setActiveRide(null);
         setActiveRideId(null);
         await SecureStore.deleteItemAsync(ACTIVE_RIDE_KEY);
+        // Refresh the server-authoritative payout and completed-ride count
+        // immediately so Home and Payments converge after settlement.
+        void refreshPayments().catch(() => undefined);
         if (isOnlineRef.current && Platform.OS !== 'web') {
           void startLocationService(false).catch(() => undefined);
         }
@@ -1144,7 +1152,7 @@ export function DriverRuntimeProvider({ children }: { children: ReactNode }) {
     } finally {
       setUpdatingRideStatus(false);
     }
-  }, [startLocationService, updatingRideStatus]);
+  }, [refreshPayments, startLocationService, updatingRideStatus]);
 
   const setLongRange = useCallback(async (enabled: boolean) => {
     if (!tokenRef.current) throw new Error('Sign in is required.');

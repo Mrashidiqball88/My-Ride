@@ -376,9 +376,11 @@ function DriverPaymentsPanel({
   loading: boolean;
   onRefresh: () => void;
 }) {
-  const balance = Number(summary?.balance ?? 0);
   const currentWallet = Number(summary?.currentWalletBalance ?? summary?.realCashWallet ?? 0);
-  const bonus = Number(summary?.bonusAvailable ?? summary?.bonusWallet ?? 0);
+  const bonus = Number(summary?.currentBonus ?? summary?.bonusAvailable ?? summary?.bonusWallet ?? 0);
+  const todayIncome = Number(summary?.todayIncome ?? 0);
+  const advanceDeposits = Number(summary?.advanceDeposits ?? summary?.realCashRecharges ?? 0);
+  const amount = (value: number) => `Rs ${value.toLocaleString('en-PK', { maximumFractionDigits: 0 })}`;
   return <View style={styles.destinationPanel}>
     <View style={styles.destinationHeader}>
       <View style={{ flex: 1 }}>
@@ -397,13 +399,22 @@ function DriverPaymentsPanel({
     {loading && !summary
       ? <View style={styles.destinationEmpty}><ActivityIndicator color={colors.primary} /><Text style={[styles.destinationEmptyText, { color: colors.mutedForeground }]}>Loading payments…</Text></View>
       : <>
-        <View style={[styles.walletCard, { backgroundColor: colors.secondary, borderColor: colors.border }]}>
-          <Text style={[styles.walletLabel, { color: colors.mutedForeground }]}>CURRENT WALLET BALANCE</Text>
-          <Text style={[styles.walletBalance, { color: colors.primary }]}>Rs {balance.toLocaleString('en-PK', { maximumFractionDigits: 0 })}</Text>
-          <View style={styles.walletBreakdown}>
-            <Text style={[styles.walletBreakdownText, { color: colors.mutedForeground }]}>Current wallet Rs {currentWallet.toLocaleString('en-PK', { maximumFractionDigits: 0 })}</Text>
-            <Text style={[styles.walletBreakdownText, { color: colors.primary }]}>Bonus Rs {bonus.toLocaleString('en-PK', { maximumFractionDigits: 0 })}</Text>
-          </View>
+        <View style={styles.walletCards}>
+          {[
+            ['CURRENT WALLET BALANCE', amount(currentWallet), 'Spendable real cash', 'walletBalance'],
+            ['CURRENT BONUS', amount(bonus), 'Promotional balance', 'walletBonus'],
+            ["TODAY'S INCOME", amount(todayIncome), 'Completed ride payouts', 'walletIncome'],
+          ].map(([label, value, detail, tone]) => (
+            <View key={label} style={[styles.walletCard, { backgroundColor: colors.secondary, borderColor: colors.border }]}>
+              <Text style={[styles.walletLabel, { color: colors.mutedForeground }]}>{label}</Text>
+              <Text style={[styles.walletBalance, { color: tone === 'walletBonus' ? colors.secondaryForeground : colors.primary }]}>{value}</Text>
+              <Text style={[styles.walletBreakdownText, { color: colors.mutedForeground }]}>{detail}</Text>
+            </View>
+          ))}
+        </View>
+        <View style={[styles.walletSourceNote, { backgroundColor: colors.card, borderColor: colors.border }]}>
+          <Text style={[styles.walletBreakdownText, { color: colors.mutedForeground }]}>Advance deposits / recharges</Text>
+          <Text style={[styles.walletBreakdownText, { color: colors.foreground }]}>{amount(advanceDeposits)}</Text>
         </View>
         <Text style={[styles.sectionLabel, { color: colors.mutedForeground }]}>PAYMENT SUBMISSIONS</Text>
         {!payments.length
@@ -481,11 +492,11 @@ function DriverHome() {
       ride.status === 'completed' && new Date(ride.createdAt || 0).toDateString() === today
     ));
     return {
-      rides: completedToday.length,
-      earnings: completedToday.reduce((total, ride) => total + Number(ride.fare || 0) * .85, 0),
+      rides: runtime.walletSummary?.todayCompletedRides ?? completedToday.length,
+      earnings: Number(runtime.walletSummary?.todayIncome ?? 0),
       rating: Number.isFinite(Number(runtime.user?.rating)) ? Number(runtime.user?.rating) : 5,
     };
-  }, [runtime.rideHistory, runtime.user?.rating]);
+  }, [runtime.rideHistory, runtime.user?.rating, runtime.walletSummary]);
   const remainingOfferSeconds = runtime.pendingRide
     ? Math.max(0, Math.ceil((new Date(runtime.pendingRide.broadcastExpiresAt || 0).getTime() - Date.now()) / 1000))
     : 0;
@@ -496,7 +507,8 @@ function DriverHome() {
   }, [runtime.pendingRide]);
   useEffect(() => {
     if (runtime.user && runtime.rideHistory === null) void runtime.refreshRideHistory().catch(() => undefined);
-  }, [runtime.refreshRideHistory, runtime.rideHistory, runtime.user]);
+    if (runtime.user && runtime.walletSummary === null) void runtime.refreshPayments().catch(() => undefined);
+  }, [runtime.refreshPayments, runtime.refreshRideHistory, runtime.rideHistory, runtime.user, runtime.walletSummary]);
 
   const signIn = async () => {
     setBusy(true);
@@ -726,7 +738,9 @@ const styles = StyleSheet.create({
   historyPassenger: { flexShrink: 1, fontFamily: 'Inter_400Regular', fontSize: 11 },
   historyDate: { fontFamily: 'Inter_400Regular', fontSize: 10 },
   historyFare: { marginLeft: 'auto', fontFamily: 'Inter_700Bold', fontSize: 11 },
-  walletCard: { borderWidth: 1, borderRadius: 14, padding: 14, marginBottom: 20 },
+  walletCards: { gap: 8, marginBottom: 12 },
+  walletCard: { borderWidth: 1, borderRadius: 14, padding: 14 },
+  walletSourceNote: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', borderWidth: 1, borderRadius: 12, padding: 11, marginBottom: 20 },
   walletLabel: { fontFamily: 'Inter_700Bold', fontSize: 10, letterSpacing: .75 },
   walletBalance: { fontFamily: 'Inter_700Bold', fontSize: 27, marginTop: 4 },
   walletBreakdown: { flexDirection: 'row', flexWrap: 'wrap', gap: 10, marginTop: 10 },

@@ -2676,7 +2676,7 @@ function renderRevenueAnalytics(data) {
     ['Real Long-Range Commission', period.longRangeCommissions, allTime.longRangeCommissions, 'Bonus-funded commission excluded', 'revenue-kpi-purple'],
     ['Bonus / Non-Revenue Earnings', period.bonusNonRevenueEarnings, allTime.bonusNonRevenueEarnings, 'Fees paid from bonus credits', 'revenue-kpi-red'],
     ['Bonus Credits Granted', period.bonusCredits, allTime.bonusCredits, 'Promotional wallet credits', 'revenue-kpi-red'],
-    ['Approved Wallet Funding', period.approvedWalletFunding, allTime.approvedWalletFunding, 'Not platform revenue', 'revenue-kpi']
+    ['Advance Deposits / Driver Recharges', period.advanceDeposits ?? period.approvedWalletFunding, allTime.advanceDeposits ?? allTime.approvedWalletFunding, 'Funding credit · excluded from platform revenue', 'revenue-kpi']
   ];
   const kpis = document.getElementById('revenue-kpis');
   if (kpis) {

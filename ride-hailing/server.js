@@ -7731,7 +7731,67 @@ app.patch('/api/support/my/read', authMiddleware, async (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-// GET /api/wallet/summary — driver's wallet balance, bonus credits, ledger
+function utcDayBounds(date = new Date()) {
+  const start = new Date(date);
+  start.setUTCHours(0, 0, 0, 0);
+  const end = new Date(start);
+  end.setUTCDate(end.getUTCDate() + 1);
+  return { start, end };
+}
+
+function walletAdvanceDepositTotal(wallet) {
+  return (wallet?.transactions || []).reduce((total, transaction) => {
+    const description = String(transaction.description || '');
+    const isRecharge = transaction.type === 'credit'
+      && /^Approved driver recharge\b/i.test(description);
+    const amount = Number(transaction.amount || 0);
+    const realAmount = Number(transaction.realAmount || 0);
+    return total + (isRecharge ? (realAmount > 0 ? realAmount : amount) : 0);
+  }, 0);
+}
+
+async function getDriverTodayIncome(driverId, day = new Date()) {
+  const { start, end } = utcDayBounds(day);
+  const driverObjectId = new mongoose.Types.ObjectId(String(driverId));
+  const result = await Ride.aggregate([
+    {
+      $match: {
+        driver: driverObjectId,
+        status: 'completed',
+        settlementStatus: 'settled'
+      }
+    },
+    {
+      $addFields: {
+        payoutDate: { $ifNull: ['$settledAt', { $ifNull: ['$updatedAt', '$createdAt'] }] },
+        payoutAmount: {
+          $ifNull: [
+            '$settledDriverEarnings',
+            { $multiply: [{ $ifNull: ['$settledFare', '$fare'] }, 0.85] }
+          ]
+        }
+      }
+    },
+    {
+      $match: {
+        payoutDate: { $gte: start, $lt: end }
+      }
+    },
+    {
+      $group: {
+        _id: null,
+        todayIncome: { $sum: '$payoutAmount' },
+        todayCompletedRides: { $sum: 1 }
+      }
+    }
+  ]);
+  return {
+    todayIncome: Number((result[0]?.todayIncome || 0).toFixed(2)),
+    todayCompletedRides: Number(result[0]?.todayCompletedRides || 0)
+  };
+}
+
+// GET /api/wallet/summary — driver's source-aware financial dashboard
 app.get('/api/wallet/summary', authMiddleware, async (req, res) => {
   try {
     if (req.user.role !== 'driver') return res.status(403).json({ error: 'Drivers only' });
@@ -7743,6 +7803,8 @@ app.get('/api/wallet/summary', authMiddleware, async (req, res) => {
     const transactions = wallet?.transactions || [];
 
     const sourceBalances = getWalletSourceBalances(wallet);
+    const { todayIncome, todayCompletedRides } = await getDriverTodayIncome(req.user.id);
+    const advanceDeposits = Number(walletAdvanceDepositTotal(wallet).toFixed(2));
 
     // Recent ledger — last 40 entries newest first
     const ledger = [...transactions].reverse().slice(0, 40).map(t => ({
@@ -7758,6 +7820,11 @@ app.get('/api/wallet/summary', authMiddleware, async (req, res) => {
       balance,
       totalBonus: bonusWalletAmt,
       currentWalletBalance,
+      currentBonus: bonusWalletAmt,
+      todayIncome,
+      todayCompletedRides,
+      advanceDeposits,
+      realCashRecharges: advanceDeposits,
       vehicleType,
       ledger,
       todayPayment: todayPayment || null,
@@ -8589,7 +8656,7 @@ const ADMIN_REVENUE_FIELDS = [
   'longRangeCommissions',
   'bonusFundedLongRangeCommissions',
   'bonusCredits',
-  'approvedWalletFunding',
+  'advanceDeposits',
   'unclassifiedFeeDeductions'
 ];
 
@@ -8607,6 +8674,8 @@ function adminRevenueTotals(bucket = {}) {
   const bonusNonRevenueEarnings = totals.bonusFundedDailyFees + totals.bonusFundedLongRangeCommissions;
   return {
     ...totals,
+    // Approved Driver recharges are advance deposits, not operating revenue.
+    approvedWalletFunding: totals.advanceDeposits,
     grossRevenue: Number(grossRevenue.toFixed(2)),
     netRevenue: Number(grossRevenue.toFixed(2)),
     bonusNonRevenueEarnings: Number(bonusNonRevenueEarnings.toFixed(2))
@@ -8713,13 +8782,13 @@ function adminRideRevenueTrendGroup() {
 }
 
 function adminPaymentRevenueGroup() {
-  return { _id: null, approvedWalletFunding: { $sum: '$amount' } };
+  return { _id: null, advanceDeposits: { $sum: '$amount' } };
 }
 
 function adminPaymentRevenueTrendGroup() {
   return {
     _id: { $dateToString: { format: '%Y-%m-%d', date: '$_revenueDate', timezone: 'UTC' } },
-    approvedWalletFunding: { $sum: '$amount' }
+    advanceDeposits: { $sum: '$amount' }
   };
 }
 
@@ -9794,6 +9863,8 @@ module.exports = {
   canDriverReceiveRideForPreference,
   chargeDailyFeeForOnlineDriver,
   getWalletSourceBalances,
+  walletAdvanceDepositTotal,
+  getDriverTodayIncome,
   allocateWalletDebit,
   runDailyDeduction,
   normalizeRideBroadcastSettings,

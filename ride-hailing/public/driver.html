@@ -985,23 +985,32 @@ body{font-family:'DM Sans','Segoe UI',sans-serif;background:var(--dc-night);colo
         <div class="wsum-card balance-card">
           <div class="wsum-icon">💰</div>
           <div class="wsum-val" id="wsum-balance">—</div>
-          <div class="wsum-lbl">Total Balance (Rs)</div>
+          <div class="wsum-lbl">Current Wallet Balance (Rs)</div>
         </div>
         <div class="wsum-card bonus-card">
           <div class="wsum-icon">🎁</div>
           <div class="wsum-val" id="wsum-bonus">0</div>
-          <div class="wsum-lbl">Bonus Credits (Rs)</div>
+          <div class="wsum-lbl">Current Bonus (Rs)</div>
+        </div>
+        <div class="wsum-card income-card">
+          <div class="wsum-icon">📈</div>
+          <div class="wsum-val" id="wsum-income">0</div>
+          <div class="wsum-lbl">Today's Income (Rs)</div>
         </div>
       </div>
-      <!-- Balance breakdown: current wallet balance vs bonus credit -->
+      <!-- Source-aware balance context: income and advance funding are separate -->
       <div class="wsum-breakdown">
         <div class="wsum-breakdown-row">
-          <span class="wsum-breakdown-lbl">💵 Current Wallet Balance</span>
+          <span class="wsum-breakdown-lbl">💵 Spendable real cash</span>
           <span class="wsum-breakdown-val real-cash" id="wsum-real-cash">Rs —</span>
         </div>
         <div class="wsum-breakdown-row">
-          <span class="wsum-breakdown-lbl">🎁 Bonus Credit Portion</span>
+          <span class="wsum-breakdown-lbl">🎁 Spendable bonus</span>
           <span class="wsum-breakdown-val bonus-credit" id="wsum-bonus-credit">Rs —</span>
+        </div>
+        <div class="wsum-breakdown-row">
+          <span class="wsum-breakdown-lbl">↗ Advance deposits / recharges</span>
+          <span class="wsum-breakdown-val real-cash" id="wsum-advance-deposits">Rs —</span>
         </div>
       </div>
       <div class="wsum-ledger-hdr">Recent Transactions</div>
@@ -3381,10 +3390,10 @@ async function updateStatus(status) {
     document.getElementById('ap-status-text').textContent = labels[status] || status;
     if (status === 'completed') {
       const completedRide = activeRide;
-      todayRides++; todayEarnings += +(activeRide.fare * 0.85).toFixed(2);
-      document.getElementById('stat-rides').textContent   = todayRides;
-      document.getElementById('stat-earning').textContent = `Rs ${todayEarnings.toLocaleString()}`;
-      document.getElementById('earnings-val').textContent = todayEarnings.toLocaleString();
+      // Settlement can add waiting charges or be rejected by a financial
+      // guard, so refresh the server-authoritative payout instead of
+      // estimating from the requested fare in the browser.
+      void Promise.all([loadStats(), loadWalletSummary()]);
       endActiveRide();
       showToast('Ride completed! 🎉 Rate your passenger', 'success');
       setTimeout(() => showDriverRatingModal(completedRide), 300);
@@ -3723,17 +3732,21 @@ function formatRsAmount(amount) {
 async function loadWalletSummary() {
   try {
     const data = await apiCall('/api/wallet/summary');
-    // Total Balance is the authoritative spendable amount. The breakdown
-    // shows the current real-cash and bonus portions separately.
+    // Keep the three Driver financial cards source-aware. Aggregate balance
+    // includes bonus and is intentionally not shown as the wallet balance.
     const currentWallet = Number(data.currentWalletBalance ?? data.realCashWallet ?? 0);
     const bonusCred = Number(data.bonusAvailable ?? data.bonusWallet ?? 0);
-    const total = Number(data.balance ?? (currentWallet + bonusCred));
-    document.getElementById('wsum-balance').textContent = formatRsAmount(total);
-    document.getElementById('wsum-balance').style.color = total < 0 ? '#ef4444' : '#4caf50';
+    const todayIncome = Number(data.todayIncome || 0);
+    const advanceDeposits = Number(data.advanceDeposits ?? data.realCashRecharges ?? 0);
+    document.getElementById('wsum-balance').textContent = formatRsAmount(currentWallet);
+    document.getElementById('wsum-balance').style.color = currentWallet < 0 ? '#ef4444' : '#4caf50';
     document.getElementById('wsum-bonus').textContent = formatRsAmount(bonusCred);
+    document.getElementById('wsum-income').textContent = formatRsAmount(todayIncome);
     // Breakdown rows
     document.getElementById('wsum-real-cash').textContent    = formatRsAmount(currentWallet);
     document.getElementById('wsum-bonus-credit').textContent = formatRsAmount(bonusCred);
+    document.getElementById('wsum-advance-deposits').textContent = formatRsAmount(advanceDeposits);
+    document.getElementById('stat-earning').textContent = formatRsAmount(todayIncome);
 
     // Transaction ledger
     const ledgerEl = document.getElementById('wsum-ledger');
@@ -3902,17 +3915,12 @@ async function submitSupportTicket() {
 // ── Stats ──────────────────────────────────────────────────────────────────
 async function loadStats() {
   try {
-    const w = await apiCall('/api/wallet');
-    const bal = +(w.balance || 0);
-    document.getElementById('earnings-val').textContent  = bal.toLocaleString();
-    document.getElementById('stat-earning').textContent  = `Rs ${bal.toLocaleString()}`;
-
-    const rides = await apiCall('/api/rides/my');
-    const today = new Date().toDateString();
-    const todayCompleted = rides.filter(r => r.status === 'completed' && new Date(r.createdAt).toDateString() === today);
-    todayRides    = todayCompleted.length;
-    todayEarnings = todayCompleted.reduce((s, r) => s + r.fare * 0.85, 0);
+    const data = await apiCall('/api/wallet/summary');
+    const todayIncome = Number(data.todayIncome || 0);
+    todayRides = Number(data.todayCompletedRides || 0);
+    todayEarnings = todayIncome;
     document.getElementById('stat-rides').textContent   = todayRides;
+    document.getElementById('stat-earning').textContent = formatRsAmount(todayIncome);
     document.getElementById('stat-rating').textContent  = (user.rating || 5.0).toFixed(1) + ' ⭐';
   } catch {}
 }

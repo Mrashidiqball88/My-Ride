@@ -13,6 +13,9 @@ const {
   chargeDailyFeeForOnlineDriver,
   chargeLongRangeCommission,
   allocateWalletDebit,
+  getWalletSourceBalances,
+  walletAdvanceDepositTotal,
+  getDriverTodayIncome,
   completeRideFinancialSettlement,
   approveDriverPayment,
 } = service;
@@ -256,6 +259,82 @@ test('bonus-funded daily fees are excluded from real Admin revenue', async () =>
     assert.equal(body.period.netRevenue, 270);
   } finally {
     await new Promise(resolve => server.close(resolve));
+  }
+});
+
+test('Driver financial summary uses settled payouts and separates real cash from bonus', async () => {
+  const driver = await createParticipant('driver', 'summary');
+  const passenger = await createParticipant('customer', 'summary');
+  const { start } = (() => {
+    const value = new Date();
+    value.setUTCHours(0, 0, 0, 0);
+    return { start: value };
+  })();
+  await models.Ride.create([
+    {
+      passenger: passenger._id, driver: driver._id, status: 'completed',
+      settlementStatus: 'settled', fare: 2000, settledFare: 2000,
+      settledDriverEarnings: 1700, settledAt: new Date(start.getTime() + 60 * 60 * 1000),
+      pickupLocation: { lat: 31.52, lng: 74.35 }, dropoffLocation: { lat: 31.53, lng: 74.36 }
+    },
+    {
+      passenger: passenger._id, driver: driver._id, status: 'completed',
+      settlementStatus: 'pending', fare: 900,
+      pickupLocation: { lat: 31.52, lng: 74.35 }, dropoffLocation: { lat: 31.53, lng: 74.36 }
+    }
+  ]);
+  const wallet = await models.Wallet.create({
+    user: driver._id,
+    balance: 1400,
+    realCashAvailable: 900,
+    bonusAvailable: 500,
+    transactions: [
+      {
+        amount: 1200, type: 'credit', description: 'Approved driver recharge (TRX SUMMARY-1)',
+        fundingSource: 'real', realAmount: 1200, bonusAmount: 0
+      },
+      {
+        amount: 500, type: 'credit', description: 'Admin Wallet Bonus Credit',
+        fundingSource: 'bonus', realAmount: 0, bonusAmount: 500
+      }
+    ]
+  });
+
+  const income = await getDriverTodayIncome(driver._id, new Date());
+  assert.deepEqual(income, { todayIncome: 1700, todayCompletedRides: 1 });
+  const sourceBalances = getWalletSourceBalances(wallet);
+  assert.equal(sourceBalances.realCashAvailable, 900);
+  assert.equal(sourceBalances.bonusAvailable, 500);
+  assert.equal(walletAdvanceDepositTotal(wallet), 1200);
+});
+
+test('approved Driver recharges are shown as advance deposits and excluded from revenue', async () => {
+  const driver = await createParticipant('driver', 'advance');
+  await models.Payment.create({
+    driver: driver._id,
+    trxId: 'ADVANCE-DEPOSIT-1',
+    amount: 3000,
+    vehicleCategory: 'Car Sedan',
+    paymentType: 'jazzcash',
+    proofScreenshot: 'data:image/png;base64,AA==',
+    submittedDate: '2026-09-04',
+    status: 'approved',
+    approvedAt: new Date(),
+    walletCreditedAt: new Date()
+  });
+  const adminServer = app.listen(0);
+  try {
+    const token = jwt.sign({ isAdmin: true, username: 'finance-admin' }, 'ride-hailing-secret-fallback');
+    const response = await fetch(`http://127.0.0.1:${adminServer.address().port}/api/admin/revenue?days=7`, {
+      headers: { authorization: `Bearer ${token}` }
+    });
+    assert.equal(response.status, 200);
+    const body = await response.json();
+    assert.equal(body.period.advanceDeposits, 3000);
+    assert.equal(body.period.approvedWalletFunding, 3000);
+    assert.equal(body.period.netRevenue, 0);
+  } finally {
+    await new Promise(resolve => adminServer.close(resolve));
   }
 });
 
