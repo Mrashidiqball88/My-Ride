@@ -464,6 +464,178 @@ body{font-family:'DM Sans','Segoe UI',sans-serif;background:var(--dc-night);colo
   .driver-ops-control{top:78px}
   #ride-request{left:8px;right:8px;border-radius:20px}
 }
+
+/* ── Driver home summary + three-way navigation ── */
+.stats-strip{
+  bottom:80px;
+  width:min(386px,calc(100% - 24px));
+  padding:6px;
+  gap:6px;
+}
+.stat-item{
+  min-height:56px;
+  display:flex;
+  flex-direction:column;
+  justify-content:center;
+  gap:3px;
+  padding:7px 4px;
+  border:1px solid rgba(116,224,209,.09);
+}
+.stat-val{
+  font-size:.78rem;
+  line-height:1.15;
+}
+.stat-label{
+  color:var(--dc-muted);
+  font-size:.54rem;
+  letter-spacing:.065em;
+}
+.bottom-tabs{
+  height:72px;
+  padding:6px max(8px, env(safe-area-inset-left)) max(6px, env(safe-area-inset-bottom));
+  gap:6px;
+  align-items:stretch;
+}
+.bottom-tab{
+  min-height:56px;
+  position:relative;
+  justify-content:center;
+  gap:3px;
+  border-radius:13px;
+  font-size:.68rem;
+  font-weight:800;
+  letter-spacing:.01em;
+}
+.bottom-tab:hover,.bottom-tab:focus-visible{background:rgba(116,224,209,.07);outline:none}
+.bottom-tab.active{
+  border-bottom:0;
+  background:rgba(116,224,209,.1);
+}
+.bottom-tab.active::after{
+  content:'';
+  position:absolute;
+  left:25%;
+  right:25%;
+  bottom:4px;
+  height:2px;
+  border-radius:999px;
+  background:var(--dc-cyan);
+}
+.bottom-tab-icon{font-size:1.05rem;line-height:1}
+#ride-history-panel{
+  display:none;
+  position:absolute;
+  left:10px;
+  right:10px;
+  bottom:152px;
+  z-index:13;
+  padding:15px;
+  max-height:calc(100vh - 245px);
+  overflow-y:auto;
+  border:1px solid rgba(116,224,209,.14);
+  border-radius:22px;
+  background:rgba(24,32,34,.98);
+  box-shadow:0 18px 42px rgba(0,0,0,.34);
+  backdrop-filter:blur(16px);
+}
+.driver-history-header{
+  display:flex;
+  align-items:flex-start;
+  justify-content:space-between;
+  gap:12px;
+  margin-bottom:12px;
+}
+.driver-history-title{
+  margin:0;
+  color:var(--dc-ink);
+  font-size:1rem;
+  font-weight:800;
+}
+.driver-history-subtitle{
+  margin:.25rem 0 0;
+  color:var(--dc-muted);
+  font-size:.7rem;
+  line-height:1.4;
+}
+.driver-history-refresh{
+  flex:none;
+  border:1px solid rgba(116,224,209,.22);
+  border-radius:10px;
+  padding:.5rem .65rem;
+  background:rgba(116,224,209,.08);
+  color:var(--dc-cyan);
+  font-size:.7rem;
+  font-weight:800;
+  cursor:pointer;
+}
+.driver-history-refresh:disabled{opacity:.55;cursor:wait}
+.driver-history-list{display:grid;gap:8px}
+.driver-history-item{
+  padding:11px 12px;
+  border:1px solid var(--dc-line);
+  border-left:3px solid var(--dc-cyan);
+  border-radius:14px;
+  background:#111819;
+}
+.driver-history-item.cancelled{border-left-color:var(--dc-coral)}
+.driver-history-item.requested,.driver-history-item.accepted,.driver-history-item.arrived,.driver-history-item.in-progress{border-left-color:var(--dc-yellow)}
+.driver-history-route{
+  display:grid;
+  grid-template-columns:minmax(0,1fr) auto minmax(0,1fr);
+  align-items:start;
+  gap:7px;
+  color:var(--dc-ink);
+  font-size:.77rem;
+  font-weight:700;
+  line-height:1.35;
+}
+.driver-history-location{min-width:0;overflow-wrap:anywhere}
+.driver-history-location:last-child{text-align:right}
+.driver-history-arrow{color:var(--dc-cyan);font-size:.9rem}
+.driver-history-meta{
+  display:flex;
+  flex-wrap:wrap;
+  align-items:center;
+  gap:7px;
+  margin-top:9px;
+  color:var(--dc-muted);
+  font-size:.66rem;
+}
+.driver-history-status{
+  padding:.25rem .48rem;
+  border-radius:999px;
+  background:rgba(116,224,209,.1);
+  color:var(--dc-cyan);
+  font-weight:800;
+  text-transform:capitalize;
+}
+.driver-history-status.cancelled{background:rgba(255,142,120,.1);color:var(--dc-coral)}
+.driver-history-fare{margin-left:auto;color:var(--dc-yellow);font-family:'Space Mono',monospace;font-weight:700}
+.driver-history-empty,.driver-history-error{
+  padding:28px 12px;
+  text-align:center;
+  color:var(--dc-muted);
+  font-size:.78rem;
+  line-height:1.5;
+}
+.driver-history-error{color:var(--dc-coral)}
+#app.navigation-active #ride-history-panel{display:none!important}
+@media (min-width:800px){
+  #ride-history-panel{
+    left:50%;
+    right:auto;
+    width:min(560px,calc(100% - 32px));
+    transform:translateX(-50%);
+  }
+}
+@media (max-width:430px){
+  .stats-strip{bottom:80px;width:calc(100% - 20px)}
+  .stat-item{min-height:54px;padding-left:2px;padding-right:2px}
+  .stat-val{font-size:.72rem}
+  .bottom-tabs{padding-left:max(5px,env(safe-area-inset-left));padding-right:max(5px,env(safe-area-inset-right))}
+  .bottom-tab{font-size:.63rem}
+  #ride-history-panel{left:8px;right:8px;bottom:152px;padding:13px;border-radius:20px}
+}
 </style>
 </head>
 <body>
@@ -736,8 +908,11 @@ body{font-family:'DM Sans','Segoe UI',sans-serif;background:var(--dc-night);colo
 
   <!-- Bottom Tabs -->
   <div class="bottom-tabs">
+    <button class="bottom-tab" id="tab-history-btn" onclick="switchBottomTab('history')">
+      <span class="bottom-tab-icon">🧾</span>Total Ride History
+    </button>
     <button class="bottom-tab active" id="tab-home-btn" onclick="switchBottomTab('home')">
-      <span class="bottom-tab-icon">🏠</span>Home
+      <span class="bottom-tab-icon">⌂</span>Home
     </button>
     <button class="bottom-tab" id="tab-payments-btn" onclick="switchBottomTab('payments')">
       <span class="bottom-tab-icon">💳</span>Payments
@@ -746,6 +921,20 @@ body{font-family:'DM Sans','Segoe UI',sans-serif;background:var(--dc-night);colo
 
   <!-- Info Panel (idle) -->
   <div id="info-panel" style="display:none" aria-hidden="true"></div>
+
+  <!-- Total Ride History Panel -->
+  <div id="ride-history-panel" aria-hidden="true">
+    <div class="driver-history-header">
+      <div>
+        <h2 class="driver-history-title">Total Ride History</h2>
+        <p class="driver-history-subtitle">Your completed, active, and cancelled rides</p>
+      </div>
+      <button type="button" class="driver-history-refresh" id="driver-history-refresh" onclick="loadDriverRideHistory()">↻ Refresh</button>
+    </div>
+    <div class="driver-history-list" id="driver-ride-history-list">
+      <div class="driver-history-empty">Select Total Ride History to load your rides.</div>
+    </div>
+  </div>
 
   <!-- Active Ride Panel -->
   <div id="active-panel">
@@ -3284,8 +3473,15 @@ async function refreshDashboard() {
 // ── Bottom Tab Navigation ──────────────────────────────────────────────────
 function switchBottomTab(tab) {
   const isHome = tab === 'home';
+  const isHistory = tab === 'history';
+  document.getElementById('tab-history-btn').classList.toggle('active', isHistory);
   document.getElementById('tab-home-btn').classList.toggle('active', isHome);
-  document.getElementById('tab-payments-btn').classList.toggle('active', !isHome);
+  document.getElementById('tab-payments-btn').classList.toggle('active', !isHome && !isHistory);
+  const historyPanel = document.getElementById('ride-history-panel');
+  if (historyPanel) {
+    historyPanel.style.display = isHistory ? 'block' : 'none';
+    historyPanel.setAttribute('aria-hidden', String(!isHistory));
+  }
 
   if (isHome) {
     // Show home panels (info or active ride), hide payments
@@ -3297,6 +3493,12 @@ function switchBottomTab(tab) {
       hideIdleInfoPanel();
       document.getElementById('active-panel').style.display = 'none';
     }
+  } else if (isHistory) {
+    // Show ride history, hide home and payments panels
+    document.getElementById('info-panel').style.display = 'none';
+    document.getElementById('active-panel').style.display = 'none';
+    document.getElementById('payments-panel').style.display = 'none';
+    loadDriverRideHistory();
   } else {
     // Show payments panel, hide home panels
     document.getElementById('info-panel').style.display    = 'none';
@@ -3307,6 +3509,86 @@ function switchBottomTab(tab) {
   }
   // Repaint map tiles after panel reflow (50 ms is too short for iOS)
   setTimeout(() => map?.resize(), 150);
+}
+
+// ── Total Ride History ──────────────────────────────────────────────────────
+function formatDriverHistoryStatus(status) {
+  const labels = {
+    requested: 'Requested',
+    accepted: 'Accepted',
+    arrived: 'Arrived',
+    'in-progress': 'In progress',
+    completed: 'Completed',
+    cancelled: 'Cancelled'
+  };
+  return labels[status] || 'Requested';
+}
+
+function formatDriverHistoryDate(value) {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return 'Date unavailable';
+  return date.toLocaleDateString('en-PK', {
+    day: 'numeric',
+    month: 'short',
+    year: 'numeric'
+  });
+}
+
+function renderDriverRideHistory(rides) {
+  const el = document.getElementById('driver-ride-history-list');
+  if (!el) return;
+  if (!Array.isArray(rides) || !rides.length) {
+    el.innerHTML = '<div class="driver-history-empty">No rides yet. Accepted rides will appear here.</div>';
+    return;
+  }
+
+  el.innerHTML = rides.map(ride => {
+    const status = ['requested', 'accepted', 'arrived', 'in-progress', 'completed', 'cancelled'].includes(ride.status)
+      ? ride.status
+      : 'requested';
+    const pickup = escapeDriverText(ride.pickupLocation?.address || 'Pickup');
+    const dropoff = escapeDriverText(ride.dropoffLocation?.address || 'Dropoff');
+    const fareValue = Number(ride.fare);
+    const fare = Number.isFinite(fareValue)
+      ? fareValue.toLocaleString('en-PK', { maximumFractionDigits: 0 })
+      : '0';
+    const passenger = escapeDriverText(ride.passenger?.name || 'Customer');
+    return `<article class="driver-history-item ${status}">
+      <div class="driver-history-route">
+        <span class="driver-history-location" dir="auto">${pickup}</span>
+        <span class="driver-history-arrow" aria-hidden="true">→</span>
+        <span class="driver-history-location" dir="auto">${dropoff}</span>
+      </div>
+      <div class="driver-history-meta">
+        <span class="driver-history-status ${status}">${formatDriverHistoryStatus(status)}</span>
+        <span>${passenger}</span>
+        <span>${formatDriverHistoryDate(ride.createdAt)}</span>
+        <span class="driver-history-fare">Rs ${fare}</span>
+      </div>
+    </article>`;
+  }).join('');
+}
+
+async function loadDriverRideHistory() {
+  const el = document.getElementById('driver-ride-history-list');
+  const btn = document.getElementById('driver-history-refresh');
+  if (!el) return;
+  if (btn) {
+    btn.disabled = true;
+    btn.textContent = 'Loading…';
+  }
+  el.innerHTML = '<div class="driver-history-empty">Loading your ride history…</div>';
+  try {
+    const rides = await apiCall('/api/rides/my');
+    renderDriverRideHistory(rides);
+  } catch (error) {
+    el.innerHTML = `<div class="driver-history-error">${escapeDriverText(error.message || 'Could not load ride history. Please try again.')}</div>`;
+  } finally {
+    if (btn) {
+      btn.disabled = false;
+      btn.textContent = '↻ Refresh';
+    }
+  }
 }
 
 // ── Payments ───────────────────────────────────────────────────────────────

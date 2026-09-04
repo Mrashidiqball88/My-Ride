@@ -49,10 +49,10 @@ export const DRIVER_VEHICLE_CATEGORIES = [
 
 export type DriverUser = {
   id: string; name: string; role: 'driver'; accountStatus: string;
-  vehicleType?: string; vehicleModel?: string; vehiclePlate?: string;
+  vehicleType?: string; vehicleModel?: string; vehiclePlate?: string; rating?: number;
 };
 export type RideRequest = {
-  id: string; fare: number; distance?: number; vehicleType?: string;
+  id: string; fare: number; distance?: number; vehicleType?: string; createdAt?: string | Date;
   isLongRange?: boolean;
   status?: 'requested' | 'accepted' | 'arrived' | 'in-progress' | 'completed' | 'cancelled';
   passenger?: { id?: string; name?: string; phone?: string };
@@ -61,6 +61,22 @@ export type RideRequest = {
   broadcastExpiresAt?: string | Date;
   pickupLocation?: { address?: string; lat: number; lng: number };
   dropoffLocation?: { address?: string; lat: number; lng: number };
+};
+export type DriverPayment = {
+  _id?: string;
+  trxId?: string;
+  amount?: number;
+  status?: string;
+  vehicleCategory?: string;
+  adminNote?: string;
+  createdAt?: string | Date;
+};
+export type DriverWalletSummary = {
+  balance?: number;
+  currentWalletBalance?: number;
+  realCashWallet?: number;
+  bonusAvailable?: number;
+  bonusWallet?: number;
 };
 export type DriverLocation = {
   latitude: number;
@@ -96,6 +112,11 @@ type RuntimeContext = {
   driverLocation: DriverLocation | null; error: string | null;
   longRange: LongRangeState | null;
   alertReadiness: AlertReadiness;
+  rideHistory: RideRequest[] | null;
+  rideHistoryLoading: boolean;
+  walletSummary: DriverWalletSummary | null;
+  paymentHistory: DriverPayment[];
+  paymentsLoading: boolean;
   requestPhoneOtp(phone: string, purpose?: 'login' | 'signup'): Promise<string>;
   signIn(identifier: string, password: string, otp?: string): Promise<void>;
   signOut(): Promise<void>;
@@ -104,6 +125,8 @@ type RuntimeContext = {
   confirmLockScreenAlerts(): Promise<void>;
   openAlertSetting(setting: AndroidAlertSetting): Promise<void>;
   setLongRange(next: boolean): Promise<string>;
+  refreshRideHistory(): Promise<void>;
+  refreshPayments(): Promise<void>;
   acceptRide(): Promise<void>;
   acceptingRide: boolean;
   updateRideStatus(status: 'arrived' | 'in-progress' | 'completed', pin?: string): Promise<void>;
@@ -214,6 +237,11 @@ export function DriverRuntimeProvider({ children }: { children: ReactNode }) {
   const [driverLocation, setDriverLocation] = useState<DriverLocation | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [longRange, setLongRangeState] = useState<LongRangeState | null>(null);
+  const [rideHistory, setRideHistory] = useState<RideRequest[] | null>(null);
+  const [rideHistoryLoading, setRideHistoryLoading] = useState(false);
+  const [walletSummary, setWalletSummary] = useState<DriverWalletSummary | null>(null);
+  const [paymentHistory, setPaymentHistory] = useState<DriverPayment[]>([]);
+  const [paymentsLoading, setPaymentsLoading] = useState(false);
   const [alertReadiness, setAlertReadiness] = useState<AlertReadiness>({
     checking: Platform.OS !== 'web',
     ready: Platform.OS === 'web',
@@ -353,6 +381,34 @@ export function DriverRuntimeProvider({ children }: { children: ReactNode }) {
     if (!tokenRef.current) return;
     const data = await api('/api/driver/long-range', tokenRef.current, sessionRef.current || undefined);
     setLongRangeState(data as LongRangeState);
+  }, []);
+
+  const refreshRideHistory = useCallback(async () => {
+    if (!tokenRef.current) return;
+    setRideHistoryLoading(true);
+    try {
+      const rides = await api('/api/rides/my', tokenRef.current, sessionRef.current || undefined);
+      setRideHistory(Array.isArray(rides)
+        ? rides.map(ride => normalizeRideRequest(ride as RideRequest & { _id?: string }))
+        : []);
+    } finally {
+      setRideHistoryLoading(false);
+    }
+  }, []);
+
+  const refreshPayments = useCallback(async () => {
+    if (!tokenRef.current) return;
+    setPaymentsLoading(true);
+    try {
+      const [summary, payments] = await Promise.all([
+        api('/api/wallet/summary', tokenRef.current, sessionRef.current || undefined),
+        api('/api/payments/my', tokenRef.current, sessionRef.current || undefined),
+      ]);
+      setWalletSummary(summary as DriverWalletSummary);
+      setPaymentHistory(Array.isArray(payments) ? payments as DriverPayment[] : []);
+    } finally {
+      setPaymentsLoading(false);
+    }
   }, []);
 
   const connectSocket = useCallback(() => {
@@ -551,6 +607,9 @@ export function DriverRuntimeProvider({ children }: { children: ReactNode }) {
     setActiveRideId(null);
     setDriverLocation(null);
     setLongRangeState(null);
+    setRideHistory(null);
+    setWalletSummary(null);
+    setPaymentHistory([]);
     setConnection('offline');
     setAlertReadiness(current => ({ ...current, ready: false, lockScreenConfirmed: false, foregroundServiceReady: false }));
     setError('Your account was signed in on another device. Please sign in again.');
@@ -982,7 +1041,7 @@ export function DriverRuntimeProvider({ children }: { children: ReactNode }) {
     socket.current?.disconnect(); socket.current = null;
     tokenRef.current = null; sessionRef.current = null;
     await Promise.all([TOKEN_KEY, SESSION_KEY, USER_KEY, ONLINE_KEY, ACTIVE_RIDE_KEY, LOCK_SCREEN_ACK_KEY, PUSH_TOKEN_KEY].map(key => SecureStore.deleteItemAsync(key)));
-    setUser(null); setPendingRide(null); setSentOffer(null); sentOfferRef.current = null; setActiveRide(null); setActiveRideId(null); setDriverLocation(null); setConnection('offline');
+    setUser(null); setPendingRide(null); setSentOffer(null); sentOfferRef.current = null; setActiveRide(null); setActiveRideId(null); setDriverLocation(null); setRideHistory(null); setWalletSummary(null); setPaymentHistory([]); setConnection('offline');
     setAlertReadiness(current => ({ ...current, ready: false, lockScreenConfirmed: false, foregroundServiceReady: false }));
   }, [setOnlineState]);
 
@@ -1098,9 +1157,10 @@ export function DriverRuntimeProvider({ children }: { children: ReactNode }) {
 
   const value = useMemo<RuntimeContext>(() => ({
     ready, user, isOnline, connection, pendingRide, sentOffer, activeRide, activeRideId, driverLocation, error, longRange, alertReadiness,
-    acceptingRide, updateRideStatus, updatingRideStatus, requestPhoneOtp, signIn, signOut, setOnline: setOnlineState, prepareAlertReadiness, confirmLockScreenAlerts, openAlertSetting, setLongRange, acceptRide,
+    rideHistory, rideHistoryLoading, walletSummary, paymentHistory, paymentsLoading,
+    acceptingRide, updateRideStatus, updatingRideStatus, requestPhoneOtp, signIn, signOut, setOnline: setOnlineState, prepareAlertReadiness, confirmLockScreenAlerts, openAlertSetting, setLongRange, refreshRideHistory, refreshPayments, acceptRide,
     dismissRide: () => setPendingRide(null), emergencyClearRide, clearError: () => setError(null),
-  }), [acceptRide, acceptingRide, activeRide, activeRideId, alertReadiness, confirmLockScreenAlerts, driverLocation, emergencyClearRide, error, isOnline, openAlertSetting, pendingRide, prepareAlertReadiness, ready, requestPhoneOtp, sentOffer, setOnlineState, setLongRange, signIn, signOut, updateRideStatus, updatingRideStatus, user, connection, longRange]);
+  }), [acceptRide, acceptingRide, activeRide, activeRideId, alertReadiness, confirmLockScreenAlerts, driverLocation, emergencyClearRide, error, isOnline, openAlertSetting, pendingRide, paymentHistory, paymentsLoading, prepareAlertReadiness, ready, refreshPayments, refreshRideHistory, requestPhoneOtp, rideHistory, rideHistoryLoading, sentOffer, setOnlineState, setLongRange, signIn, signOut, updateRideStatus, updatingRideStatus, user, connection, longRange, walletSummary]);
   return <DriverContext.Provider value={value}>{children}</DriverContext.Provider>;
 }
 

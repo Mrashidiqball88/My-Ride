@@ -3,7 +3,7 @@ import { ActivityIndicator, Alert, Animated, Linking, PanResponder, Platform, Pr
 import { Ionicons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useColors } from '@/hooks/useColors';
-import { DriverLocation, RideRequest, useDriverRuntime } from '@/context/DriverRuntime';
+import { DriverLocation, DriverPayment, DriverWalletSummary, RideRequest, useDriverRuntime } from '@/context/DriverRuntime';
 import { DriverMapboxWebView } from '@/components/DriverMapboxWebView';
 
 const RTL_TEXT_PATTERN = /[\u0590-\u08ff]/;
@@ -261,6 +261,201 @@ function ActiveRideSheet({
   </View>;
 }
 
+type DriverTab = 'history' | 'home' | 'payments';
+type DriverColors = ReturnType<typeof useColors>;
+
+function formatDriverDate(value?: string | Date) {
+  const date = new Date(value || 0);
+  if (Number.isNaN(date.getTime())) return 'Date unavailable';
+  return date.toLocaleDateString('en-PK', { day: 'numeric', month: 'short', year: 'numeric' });
+}
+
+function driverHistoryStatus(status?: string) {
+  const labels: Record<string, string> = {
+    requested: 'Requested',
+    accepted: 'Accepted',
+    arrived: 'Arrived',
+    'in-progress': 'In progress',
+    completed: 'Completed',
+    cancelled: 'Cancelled',
+  };
+  return labels[status || ''] || 'Requested';
+}
+
+function DriverStats({
+  colors,
+  ridesToday,
+  earnings,
+  rating,
+}: {
+  colors: DriverColors;
+  ridesToday: number;
+  earnings: number;
+  rating: number;
+}) {
+  return <View style={[styles.statsStrip, { backgroundColor: colors.card, borderColor: colors.border }]}>
+    <View style={[styles.statCard, { backgroundColor: colors.secondary, borderColor: colors.border }]}>
+      <Text style={[styles.statValue, { color: colors.primary }]}>{ridesToday}</Text>
+      <Text style={[styles.statLabel, { color: colors.mutedForeground }]}>RIDES TODAY</Text>
+    </View>
+    <View style={[styles.statCard, { backgroundColor: colors.secondary, borderColor: colors.border }]}>
+      <Text style={[styles.statValue, { color: colors.primary }]}>Rs {earnings.toLocaleString('en-PK', { maximumFractionDigits: 0 })}</Text>
+      <Text style={[styles.statLabel, { color: colors.mutedForeground }]}>EARNINGS</Text>
+    </View>
+    <View style={[styles.statCard, { backgroundColor: colors.secondary, borderColor: colors.border }]}>
+      <Text style={[styles.statValue, { color: colors.primary }]}>{rating.toFixed(1)} ★</Text>
+      <Text style={[styles.statLabel, { color: colors.mutedForeground }]}>RATING</Text>
+    </View>
+  </View>;
+}
+
+function DriverHistoryPanel({
+  colors,
+  rides,
+  loading,
+  onRefresh,
+}: {
+  colors: DriverColors;
+  rides: RideRequest[] | null;
+  loading: boolean;
+  onRefresh: () => void;
+}) {
+  return <View style={styles.destinationPanel}>
+    <View style={styles.destinationHeader}>
+      <View style={{ flex: 1 }}>
+        <Text style={[styles.destinationTitle, { color: colors.foreground }]}>Total Ride History</Text>
+        <Text style={[styles.destinationSubtitle, { color: colors.mutedForeground }]}>Your completed, active, and cancelled rides</Text>
+      </View>
+      <Pressable
+        accessibilityLabel="Refresh total ride history"
+        disabled={loading}
+        onPress={onRefresh}
+        style={[styles.refreshButton, { backgroundColor: colors.secondary, borderColor: colors.border, opacity: loading ? .6 : 1 }]}
+      >
+        <Ionicons name="refresh-outline" size={17} color={colors.primary} />
+      </Pressable>
+    </View>
+    {loading && !rides
+      ? <View style={styles.destinationEmpty}><ActivityIndicator color={colors.primary} /><Text style={[styles.destinationEmptyText, { color: colors.mutedForeground }]}>Loading your ride history…</Text></View>
+      : !rides?.length
+        ? <View style={styles.destinationEmpty}><Ionicons name="receipt-outline" size={28} color={colors.mutedForeground} /><Text style={[styles.destinationEmptyText, { color: colors.mutedForeground }]}>No rides yet. Accepted rides will appear here.</Text></View>
+        : <View style={styles.historyList}>
+          {rides.map(ride => {
+            const status = ride.status || 'requested';
+            const fare = Number.isFinite(Number(ride.fare)) ? Number(ride.fare) : 0;
+            return <View key={ride.id} style={[styles.historyItem, { backgroundColor: colors.card, borderColor: colors.border, borderLeftColor: status === 'cancelled' ? colors.destructive : colors.primary }]}>
+              <View style={styles.historyRoute}>
+                <Text numberOfLines={2} style={[styles.historyLocation, { color: colors.foreground }, isRtlText(ride.pickupLocation?.address) && styles.rtlText]}>{ride.pickupLocation?.address || 'Pickup'}</Text>
+                <Ionicons name="arrow-forward" size={15} color={colors.primary} />
+                <Text numberOfLines={2} style={[styles.historyLocation, styles.historyDropoff, { color: colors.foreground }, isRtlText(ride.dropoffLocation?.address) && styles.rtlText]}>{ride.dropoffLocation?.address || 'Drop-off'}</Text>
+              </View>
+              <View style={styles.historyMeta}>
+                <Text style={[styles.historyStatus, { color: status === 'cancelled' ? colors.destructive : colors.primary, backgroundColor: colors.secondary }]}>{driverHistoryStatus(status)}</Text>
+                <Text numberOfLines={1} style={[styles.historyPassenger, { color: colors.mutedForeground }]}>{ride.passenger?.name || 'Customer'}</Text>
+                <Text style={[styles.historyDate, { color: colors.mutedForeground }]}>{formatDriverDate(ride.createdAt)}</Text>
+                <Text style={[styles.historyFare, { color: colors.primary }]}>Rs {fare.toLocaleString('en-PK', { maximumFractionDigits: 0 })}</Text>
+              </View>
+            </View>;
+          })}
+        </View>}
+  </View>;
+}
+
+function DriverPaymentsPanel({
+  colors,
+  summary,
+  payments,
+  loading,
+  onRefresh,
+}: {
+  colors: DriverColors;
+  summary: DriverWalletSummary | null;
+  payments: DriverPayment[];
+  loading: boolean;
+  onRefresh: () => void;
+}) {
+  const balance = Number(summary?.balance ?? 0);
+  const currentWallet = Number(summary?.currentWalletBalance ?? summary?.realCashWallet ?? 0);
+  const bonus = Number(summary?.bonusAvailable ?? summary?.bonusWallet ?? 0);
+  return <View style={styles.destinationPanel}>
+    <View style={styles.destinationHeader}>
+      <View style={{ flex: 1 }}>
+        <Text style={[styles.destinationTitle, { color: colors.foreground }]}>Payments</Text>
+        <Text style={[styles.destinationSubtitle, { color: colors.mutedForeground }]}>Wallet balance and recharge submissions</Text>
+      </View>
+      <Pressable
+        accessibilityLabel="Refresh payments"
+        disabled={loading}
+        onPress={onRefresh}
+        style={[styles.refreshButton, { backgroundColor: colors.secondary, borderColor: colors.border, opacity: loading ? .6 : 1 }]}
+      >
+        <Ionicons name="refresh-outline" size={17} color={colors.primary} />
+      </Pressable>
+    </View>
+    {loading && !summary
+      ? <View style={styles.destinationEmpty}><ActivityIndicator color={colors.primary} /><Text style={[styles.destinationEmptyText, { color: colors.mutedForeground }]}>Loading payments…</Text></View>
+      : <>
+        <View style={[styles.walletCard, { backgroundColor: colors.secondary, borderColor: colors.border }]}>
+          <Text style={[styles.walletLabel, { color: colors.mutedForeground }]}>CURRENT WALLET BALANCE</Text>
+          <Text style={[styles.walletBalance, { color: colors.primary }]}>Rs {balance.toLocaleString('en-PK', { maximumFractionDigits: 0 })}</Text>
+          <View style={styles.walletBreakdown}>
+            <Text style={[styles.walletBreakdownText, { color: colors.mutedForeground }]}>Current wallet Rs {currentWallet.toLocaleString('en-PK', { maximumFractionDigits: 0 })}</Text>
+            <Text style={[styles.walletBreakdownText, { color: colors.primary }]}>Bonus Rs {bonus.toLocaleString('en-PK', { maximumFractionDigits: 0 })}</Text>
+          </View>
+        </View>
+        <Text style={[styles.sectionLabel, { color: colors.mutedForeground }]}>PAYMENT SUBMISSIONS</Text>
+        {!payments.length
+          ? <Text style={[styles.destinationEmptyText, { color: colors.mutedForeground }]}>No payment submissions yet.</Text>
+          : <View style={styles.historyList}>{payments.slice(0, 20).map(payment => (
+            <View key={payment._id || `${payment.trxId}-${payment.createdAt}`} style={[styles.paymentItem, { backgroundColor: colors.card, borderColor: colors.border }]}>
+              <View style={styles.paymentItemTop}>
+                <Text style={[styles.paymentTrx, { color: colors.foreground }]}>{payment.trxId || 'Reference unavailable'}</Text>
+                <Text style={[styles.historyFare, { color: colors.primary }]}>Rs {Number(payment.amount || 0).toLocaleString('en-PK', { maximumFractionDigits: 0 })}</Text>
+              </View>
+              <View style={styles.paymentItemTop}>
+                <Text style={[styles.historyDate, { color: colors.mutedForeground }]}>{formatDriverDate(payment.createdAt)}</Text>
+                <Text style={[styles.paymentStatus, { color: colors.mutedForeground }]}>{payment.status || 'Pending'}</Text>
+              </View>
+            </View>
+          ))}</View>}
+      </>}
+  </View>;
+}
+
+function DriverBottomNavigation({
+  colors,
+  activeTab,
+  bottomInset,
+  onSelect,
+}: {
+  colors: DriverColors;
+  activeTab: DriverTab;
+  bottomInset: number;
+  onSelect: (tab: DriverTab) => void;
+}) {
+  const items: Array<{ tab: DriverTab; label: string; icon: keyof typeof Ionicons.glyphMap }> = [
+    { tab: 'history', label: 'Total Ride History', icon: 'receipt-outline' },
+    { tab: 'home', label: 'Home', icon: 'home-outline' },
+    { tab: 'payments', label: 'Payments', icon: 'card-outline' },
+  ];
+  return <View style={[styles.bottomNavigation, { backgroundColor: colors.card, borderTopColor: colors.border, paddingBottom: Math.max(7, bottomInset) }]}>
+    {items.map(item => {
+      const active = activeTab === item.tab;
+      return <Pressable
+        key={item.tab}
+        accessibilityRole="tab"
+        accessibilityState={{ selected: active }}
+        accessibilityLabel={item.label}
+        onPress={() => onSelect(item.tab)}
+        style={({ pressed }) => [styles.bottomNavigationItem, { backgroundColor: active ? colors.secondary : 'transparent', opacity: pressed ? .7 : 1 }]}
+      >
+        <Ionicons name={item.icon} size={21} color={active ? colors.primary : colors.mutedForeground} />
+        <Text style={[styles.bottomNavigationLabel, { color: active ? colors.primary : colors.mutedForeground }]}>{item.label}</Text>
+      </Pressable>;
+    })}
+  </View>;
+}
+
 function DriverHome() {
   const colors = useColors();
   const insets = useSafeAreaInsets();
@@ -271,12 +466,24 @@ function DriverHome() {
   const [authMode, setAuthMode] = useState<'password' | 'otp'>('password');
   const [otpMessage, setOtpMessage] = useState('');
   const [busy, setBusy] = useState(false);
+  const [activeTab, setActiveTab] = useState<DriverTab>('home');
   const [, setClock] = useState(Date.now());
   const isWeb = Platform.OS === 'web';
   const report = (message: string) => Alert.alert('My Ride Driver', message);
   const longRangeVehicle = runtime.longRange?.vehicleType || runtime.user?.vehicleType || 'Car Mini Non-AC';
   const longRangeMinimum = Number(runtime.longRange?.settings?.minimumWalletBalances?.[longRangeVehicle] || 0);
   const userName = runtime.user?.name || '';
+  const todayStats = useMemo(() => {
+    const today = new Date().toDateString();
+    const completedToday = (runtime.rideHistory || []).filter(ride => (
+      ride.status === 'completed' && new Date(ride.createdAt || 0).toDateString() === today
+    ));
+    return {
+      rides: completedToday.length,
+      earnings: completedToday.reduce((total, ride) => total + Number(ride.fare || 0) * .85, 0),
+      rating: Number.isFinite(Number(runtime.user?.rating)) ? Number(runtime.user?.rating) : 5,
+    };
+  }, [runtime.rideHistory, runtime.user?.rating]);
   const remainingOfferSeconds = runtime.pendingRide
     ? Math.max(0, Math.ceil((new Date(runtime.pendingRide.broadcastExpiresAt || 0).getTime() - Date.now()) / 1000))
     : 0;
@@ -285,6 +492,9 @@ function DriverHome() {
     const interval = setInterval(() => setClock(Date.now()), 1000);
     return () => clearInterval(interval);
   }, [runtime.pendingRide]);
+  useEffect(() => {
+    if (runtime.user && runtime.rideHistory === null) void runtime.refreshRideHistory().catch(() => undefined);
+  }, [runtime.refreshRideHistory, runtime.rideHistory, runtime.user]);
 
   const signIn = async () => {
     setBusy(true);
@@ -345,6 +555,11 @@ function DriverHome() {
     try { await runtime.updateRideStatus(status, pin); }
     catch (error) { report(error instanceof Error ? error.message : 'Unable to update ride status'); }
   };
+  const selectTab = (tab: DriverTab) => {
+    setActiveTab(tab);
+    if (tab === 'history') void runtime.refreshRideHistory().catch(() => undefined);
+    if (tab === 'payments') void runtime.refreshPayments().catch(() => undefined);
+  };
 
   if (!runtime.ready) return <View style={[styles.center, { backgroundColor: colors.background }]}><ActivityIndicator color={colors.primary} /></View>;
   if (!runtime.user) {
@@ -374,12 +589,14 @@ function DriverHome() {
     </View>;
   }
   const onlineTone = runtime.isOnline ? colors.primary : colors.mutedForeground;
-  return <ScrollView
+  return <View style={[styles.appShell, { backgroundColor: colors.background }]}>
+   <ScrollView
     style={[styles.app, { backgroundColor: colors.background }]}
-    contentContainerStyle={{ paddingTop: isWeb ? 67 : insets.top, paddingBottom: (isWeb ? 34 : insets.bottom) + 28 }}
+    contentContainerStyle={{ paddingTop: isWeb ? 67 : insets.top, paddingBottom: (isWeb ? 34 : insets.bottom) + 112 }}
     nestedScrollEnabled
     keyboardShouldPersistTaps="handled"
-  >
+   >
+    {activeTab === 'home' ? <>
     <View style={styles.header}>
       <View><Text style={[styles.eyebrow, { color: colors.mutedForeground }]}>MY RIDE DRIVER</Text><Text style={[styles.name, { color: colors.foreground }, isRtlText(userName) && styles.rtlText]}>{userName}</Text></View>
       <Pressable testID="driver-sign-out" onPress={() => void runtime.signOut()}><Ionicons name="log-out-outline" size={25} color={colors.mutedForeground} /></Pressable>
@@ -441,16 +658,34 @@ function DriverHome() {
        <Text style={[styles.route, { color: colors.mutedForeground }, isRtlText(runtime.pendingRide.dropoffLocation?.address) && styles.rtlText]} numberOfLines={1}>To {runtime.pendingRide.dropoffLocation?.address || 'Drop-off location'} · {runtime.pendingRide.distance?.toFixed(1) || '—'} km</Text>
         <View style={styles.rideActions}><Pressable onPress={runtime.dismissRide} onLongPress={runtime.emergencyClearRide} delayLongPress={5000} accessibilityHint="Hold for 5 seconds to clear a stuck ride locally" disabled={runtime.acceptingRide} style={[styles.secondaryButton, { borderColor: colors.border, borderRadius: colors.radius, opacity: runtime.acceptingRide ? .6 : 1 }]}><Text style={{ color: colors.mutedForeground }}>Dismiss</Text></Pressable><Pressable testID="driver-accept-ride" onPress={() => void runtime.acceptRide()} disabled={runtime.acceptingRide} style={[styles.acceptButton, { backgroundColor: colors.primary, borderRadius: colors.radius, opacity: runtime.acceptingRide ? .7 : 1 }]}>{runtime.acceptingRide ? <ActivityIndicator color={colors.primaryForeground} /> : <Text style={[styles.buttonText, { color: colors.primaryForeground }]}>Accept</Text>}</Pressable></View>
      </View> : runtime.sentOffer ? <View style={[styles.waiting, { borderColor: colors.primary, borderRadius: colors.radius + 12 }]}><Ionicons name="paper-plane-outline" size={32} color={colors.primary} /><Text style={[styles.waitingTitle, { color: colors.foreground }]}>Offer sent</Text><Text style={[styles.waitingCopy, { color: colors.mutedForeground }]}>The Customer is reviewing your offer. This screen will switch to the active ride after the Customer confirms you.</Text></View> : <View style={[styles.waiting, { borderColor: colors.border, borderRadius: colors.radius + 12 }]}><Ionicons name={runtime.isOnline ? 'radio-outline' : 'power-outline'} size={32} color={onlineTone} /><Text style={[styles.waitingTitle, { color: colors.foreground }]}>{runtime.isOnline ? 'Waiting for rides' : 'Ready when you are'}</Text><Text style={[styles.waitingCopy, { color: colors.mutedForeground }]}>{runtime.isOnline ? 'Ride alerts will appear here and in your device notifications.' : 'Turn on availability to start receiving ride requests.'}</Text></View>}
+     <DriverStats colors={colors} ridesToday={todayStats.rides} earnings={todayStats.earnings} rating={todayStats.rating} />
      <View style={[styles.info, { backgroundColor: colors.secondary, borderRadius: colors.radius }]}><Ionicons name="information-circle-outline" size={18} color={colors.mutedForeground} /><Text style={[styles.infoText, { color: colors.secondaryForeground }]}>Keep location access set to “Allow all the time.” Android may also ask you to allow the My Ride foreground-service notification. These Android settings are required because OEM battery policies can otherwise stop locked-screen ride alerts.</Text></View>
     {runtime.error && <Pressable onPress={runtime.clearError} style={[styles.error, { backgroundColor: colors.destructive, borderRadius: colors.radius }]}><Text style={{ color: colors.destructiveForeground }}>{runtime.error}</Text></Pressable>}
     {isWeb && <Pressable onPress={() => void Linking.openURL('https://expo.dev')}><Text style={[styles.webNote, { color: colors.mutedForeground }]}>Background tracking is available only in the installed native app.</Text></Pressable>}
-   </ScrollView>;
+    </> : activeTab === 'history'
+      ? <DriverHistoryPanel
+        colors={colors}
+        rides={runtime.rideHistory}
+        loading={runtime.rideHistoryLoading}
+        onRefresh={() => void runtime.refreshRideHistory().catch(() => undefined)}
+      />
+      : <DriverPaymentsPanel
+        colors={colors}
+        summary={runtime.walletSummary}
+        payments={runtime.paymentHistory}
+        loading={runtime.paymentsLoading}
+        onRefresh={() => void runtime.refreshPayments().catch(() => undefined)}
+      />}
+   </ScrollView>
+   <DriverBottomNavigation colors={colors} activeTab={activeTab} bottomInset={isWeb ? 0 : insets.bottom} onSelect={selectTab} />
+  </View>;
 }
 
 export default function Index() { return <DriverHome />; }
 
 const styles = StyleSheet.create({
   center: { flex: 1, alignItems: 'center', justifyContent: 'center' },
+  appShell: { flex: 1 },
   auth: { flex: 1, paddingHorizontal: 24, alignItems: 'center' }, brandMark: { width: 62, height: 62, borderRadius: 21, alignItems: 'center', justifyContent: 'center', marginBottom: 18 },
   brand: { fontSize: 30, fontFamily: 'Inter_700Bold' }, subtle: { fontSize: 15, marginTop: 6 }, authCard: { width: '100%', borderWidth: 1, padding: 20, marginTop: 34, gap: 12 },
   cardTitle: { fontFamily: 'Inter_700Bold', fontSize: 19, marginBottom: 5 }, input: { borderWidth: 1, borderRadius: 12, paddingHorizontal: 14, paddingVertical: 14, fontFamily: 'Inter_400Regular', fontSize: 16 },
@@ -468,5 +703,39 @@ const styles = StyleSheet.create({
   location: { fontFamily: 'Inter_600SemiBold', fontSize: 16, marginTop: 15 }, route: { fontFamily: 'Inter_400Regular', fontSize: 13, marginTop: 6 }, rideActions: { flexDirection: 'row', gap: 10, marginTop: 18 }, secondaryButton: { flex: 1, height: 46, borderWidth: 1, alignItems: 'center', justifyContent: 'center' }, acceptButton: { flex: 1, height: 46, alignItems: 'center', justifyContent: 'center' },
   waiting: { marginTop: 18, borderWidth: 1, borderStyle: 'dashed', padding: 30, alignItems: 'center' }, waitingTitle: { fontFamily: 'Inter_700Bold', fontSize: 18, marginTop: 12 }, waitingCopy: { fontFamily: 'Inter_400Regular', textAlign: 'center', fontSize: 13, lineHeight: 20, marginTop: 7 },
   info: { flexDirection: 'row', gap: 9, padding: 14, marginTop: 18, alignItems: 'flex-start' }, infoText: { flex: 1, fontFamily: 'Inter_400Regular', fontSize: 12, lineHeight: 18 }, error: { padding: 12, marginTop: 14 }, webNote: { textAlign: 'center', fontSize: 12, marginTop: 16 },
+  statsStrip: { flexDirection: 'row', gap: 6, padding: 6, marginTop: 18, borderWidth: 1, borderRadius: 17 },
+  statCard: { flex: 1, minHeight: 56, borderWidth: 1, borderRadius: 12, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 3, paddingVertical: 7 },
+  statValue: { fontFamily: 'Inter_700Bold', fontSize: 13, lineHeight: 17, textAlign: 'center' },
+  statLabel: { fontFamily: 'Inter_700Bold', fontSize: 8, letterSpacing: .45, marginTop: 3, textAlign: 'center' },
+  destinationPanel: { flex: 1, padding: 14 },
+  destinationHeader: { flexDirection: 'row', alignItems: 'flex-start', gap: 12, marginBottom: 14 },
+  destinationTitle: { fontFamily: 'Inter_700Bold', fontSize: 21 },
+  destinationSubtitle: { fontFamily: 'Inter_400Regular', fontSize: 12, lineHeight: 17, marginTop: 4 },
+  refreshButton: { width: 42, height: 42, borderWidth: 1, borderRadius: 12, alignItems: 'center', justifyContent: 'center' },
+  destinationEmpty: { alignItems: 'center', justifyContent: 'center', paddingVertical: 54, gap: 10 },
+  destinationEmptyText: { fontFamily: 'Inter_400Regular', fontSize: 13, lineHeight: 19, textAlign: 'center' },
+  historyList: { gap: 8 },
+  historyItem: { borderWidth: 1, borderLeftWidth: 3, borderRadius: 14, padding: 11 },
+  historyRoute: { flexDirection: 'row', alignItems: 'flex-start', gap: 7 },
+  historyLocation: { flex: 1, fontFamily: 'Inter_600SemiBold', fontSize: 13, lineHeight: 18 },
+  historyDropoff: { textAlign: 'right' },
+  historyMeta: { flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap', gap: 7, marginTop: 9 },
+  historyStatus: { fontFamily: 'Inter_700Bold', fontSize: 10, borderRadius: 999, paddingHorizontal: 7, paddingVertical: 4 },
+  historyPassenger: { flexShrink: 1, fontFamily: 'Inter_400Regular', fontSize: 11 },
+  historyDate: { fontFamily: 'Inter_400Regular', fontSize: 10 },
+  historyFare: { marginLeft: 'auto', fontFamily: 'Inter_700Bold', fontSize: 11 },
+  walletCard: { borderWidth: 1, borderRadius: 14, padding: 14, marginBottom: 20 },
+  walletLabel: { fontFamily: 'Inter_700Bold', fontSize: 10, letterSpacing: .75 },
+  walletBalance: { fontFamily: 'Inter_700Bold', fontSize: 27, marginTop: 4 },
+  walletBreakdown: { flexDirection: 'row', flexWrap: 'wrap', gap: 10, marginTop: 10 },
+  walletBreakdownText: { fontFamily: 'Inter_400Regular', fontSize: 11 },
+  sectionLabel: { fontFamily: 'Inter_700Bold', fontSize: 10, letterSpacing: .8, marginBottom: 9 },
+  paymentItem: { borderWidth: 1, borderRadius: 13, padding: 11 },
+  paymentItemTop: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 10 },
+  paymentTrx: { flex: 1, fontFamily: 'Inter_600SemiBold', fontSize: 12 },
+  paymentStatus: { fontFamily: 'Inter_600SemiBold', fontSize: 11, textTransform: 'capitalize' },
+  bottomNavigation: { flexDirection: 'row', alignItems: 'stretch', gap: 6, borderTopWidth: 1, paddingHorizontal: 6, paddingTop: 7 },
+  bottomNavigationItem: { flex: 1, minHeight: 58, borderRadius: 13, alignItems: 'center', justifyContent: 'center', gap: 3, paddingHorizontal: 3 },
+  bottomNavigationLabel: { fontFamily: 'Inter_700Bold', fontSize: 9, lineHeight: 12, textAlign: 'center' },
   rtlText: { fontFamily: 'NotoNaskhArabic_400Regular', writingDirection: 'rtl', textAlign: 'right' },
 });
