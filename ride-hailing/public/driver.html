@@ -3375,8 +3375,15 @@ function requestEmergencyRideCancellation(rideId) {
 }
 
 function rejectRide() {
+  const ride = pendingRide;
+  const rideId = ride?.id || ride?._id;
   hideRideRequest();
   clearRideMap();
+  if (ride?.isStudentRide && rideId) {
+    apiCall(`/api/rides/${encodeURIComponent(rideId)}/student-response`, 'POST', {
+      responseType: 'rejected'
+    }).catch(error => console.warn('Student ride rejection log failed:', error.message));
+  }
   showToast('Ride rejected', 'info');
 }
 

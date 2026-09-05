@@ -8,6 +8,7 @@ const jwt = require('jsonwebtoken');
 const feature = require('../server');
 const {
   app, models, normalizeStudentDiscountSettings,
+  normalizeStudentFairQuotaSettings, selectFairStudentRideDrivers,
   applyStudentDiscountToFareQuote, customerRegistrationAccountStatus,
   getVerifiedStudentDiscountPercent,
   FARE_VEHICLE_CATEGORIES
@@ -22,6 +23,9 @@ const originalUserFind = models.User.find;
 const originalUserFindOneAndUpdate = models.User.findOneAndUpdate;
 const originalUserFindByIdAndUpdate = models.User.findByIdAndUpdate;
 const originalRideCountDocuments = models.Ride.countDocuments;
+const originalRideAggregate = models.Ride.aggregate;
+const originalUserUpdateMany = models.User.updateMany;
+const originalStudentRideLogFindOneAndUpdate = models.StudentRideResponseLog.findOneAndUpdate;
 
 afterEach(() => {
   models.Settings.findOne = originalSettingsFindOne;
@@ -32,6 +36,9 @@ afterEach(() => {
   models.User.findOneAndUpdate = originalUserFindOneAndUpdate;
   models.User.findByIdAndUpdate = originalUserFindByIdAndUpdate;
   models.Ride.countDocuments = originalRideCountDocuments;
+  models.Ride.aggregate = originalRideAggregate;
+  models.User.updateMany = originalUserUpdateMany;
+  models.StudentRideResponseLog.findOneAndUpdate = originalStudentRideLogFindOneAndUpdate;
 });
 
 function adminToken() {
@@ -168,6 +175,96 @@ test('Admin student discount setting accepts valid values and rejects out-of-ran
   } finally {
     await new Promise(resolve => server.close(resolve));
   }
+});
+
+test('Student fair quota normalization and Admin persistence are bounded', async () => {
+  assert.deepEqual(normalizeStudentFairQuotaSettings({ dailyQuota: -4 }), { dailyQuota: 0 });
+  assert.deepEqual(normalizeStudentFairQuotaSettings({ dailyQuota: 999 }), { dailyQuota: 100 });
+  assert.deepEqual(normalizeStudentFairQuotaSettings({ dailyQuota: 'not-a-number' }), { dailyQuota: 2 });
+
+  let stored = null;
+  models.Admin.findById = () => ({ lean: async () => ({ email: 'admin@example.test', sessionVersion: 0 }) });
+  models.Settings.findOne = () => ({ lean: async () => stored ? { value: stored } : null });
+  models.Settings.findOneAndUpdate = async (_query, update) => {
+    stored = update.value;
+    return { value: stored };
+  };
+  const server = app.listen(0);
+  try {
+    const saved = await request(server, '/api/admin/student-fair-quota-settings', {
+      method: 'PATCH',
+      headers: { authorization: `Bearer ${adminToken()}` },
+      body: JSON.stringify({ dailyQuota: 3 })
+    });
+    assert.equal(saved.response.status, 200);
+    assert.deepEqual(saved.body.settings, { dailyQuota: 3 });
+
+    const rejected = await request(server, '/api/admin/student-fair-quota-settings', {
+      method: 'PATCH',
+      headers: { authorization: `Bearer ${adminToken()}` },
+      body: JSON.stringify({ dailyQuota: 1.5 })
+    });
+    assert.equal(rejected.response.status, 422);
+  } finally {
+    await new Promise(resolve => server.close(resolve));
+  }
+});
+
+test('fair Student rotation prioritizes Drivers below quota and rotates ties', async () => {
+  const assigned = [];
+  models.Settings.findOne = () => ({ lean: async () => ({ value: { dailyQuota: 2 } }) });
+  models.Ride.aggregate = async () => [
+    { _id: 'driver-a', count: 1 },
+    { _id: 'driver-b', count: 0 },
+    { _id: 'driver-c', count: 2 },
+    { _id: 'driver-d', count: 0 }
+  ];
+  models.User.updateMany = async (_query, update) => {
+    assigned.push(update.$set.studentRideLastAssignedAt);
+  };
+  const selected = await selectFairStudentRideDrivers([
+    { _id: 'driver-a', studentRideLastAssignedAt: new Date('2026-09-05T00:00:00Z') },
+    { _id: 'driver-b', studentRideLastAssignedAt: new Date('2026-09-05T02:00:00Z') },
+    { _id: 'driver-c', studentRideLastAssignedAt: new Date('2026-09-05T01:00:00Z') },
+    { _id: 'driver-d', studentRideLastAssignedAt: new Date('2026-09-05T01:00:00Z') }
+  ]);
+  assert.deepEqual(selected.map(driver => driver._id), ['driver-d', 'driver-b', 'driver-a']);
+  assert.equal(assigned.length, 1);
+});
+
+test('Student response logging preserves Driver details, distance, and response type', async () => {
+  models.User.findById = () => ({
+    select() { return this; },
+    lean: async () => ({ name: 'Driver Example', phone: '03001234567' })
+  });
+  let updateQuery = null;
+  let updatePayload = null;
+  models.StudentRideResponseLog.findOneAndUpdate = (query, update) => {
+    updateQuery = query;
+    updatePayload = update;
+    return {
+      lean: async () => ({
+        _id: 'log-1',
+        responseType: update.$setOnInsert.responseType,
+        occurredAt: update.$setOnInsert.occurredAt
+      })
+    };
+  };
+  const responseLog = await feature.recordStudentRideResponse({
+    _id: 'ride-1',
+    isStudentRide: true,
+    pickupLocation: { lat: 33.6844, lng: 73.0479, address: 'Islamabad pickup' },
+    studentRideOfferRecipients: [{
+      driver: 'driver-1',
+      distanceFromPickupKm: 2.75
+    }]
+  }, 'driver-1', 'timeout');
+  assert.equal(responseLog.responseType, 'timeout');
+  assert.deepEqual(updateQuery, { ride: 'ride-1', driver: 'driver-1' });
+  assert.equal(updatePayload.$setOnInsert.driverName, 'Driver Example');
+  assert.equal(updatePayload.$setOnInsert.driverPhone, '03001234567');
+  assert.equal(updatePayload.$setOnInsert.distanceFromPickupKm, 2.75);
+  assert.equal(updatePayload.$setOnInsert.pickupLocation.address, 'Islamabad pickup');
 });
 
 test('student discount honors the UTC time window and completed daily ride limit', async () => {
@@ -444,4 +541,9 @@ test('Customer and Admin surfaces include student verification and fare breakdow
   assert.match(admin, /id="student-discount-daily-limit"/);
   assert.match(admin, /id="student-discount-start-time"/);
   assert.match(admin, /id="student-discount-end-time"/);
+  assert.match(admin, /id="sec-student-ride-operations"/);
+  assert.match(admin, /Student Ride Rejection &amp; Missed Log|Student Ride Rejection & Missed Log/);
+  assert.match(admin, /id="student-fair-daily-quota"/);
+  assert.match(admin, /id="student-ride-quota-tbody"/);
+  assert.match(admin, /id="student-ride-log-tbody"/);
 });

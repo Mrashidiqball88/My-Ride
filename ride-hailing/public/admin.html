@@ -892,6 +892,7 @@ button,input,select,textarea{
       <div class="sb-group-label">Customer Management</div>
       <div class="sb-item"        onclick="showSection('passengers')"   data-sec="passengers">  <span class="sb-icon">👥</span> Customer Accounts & IDs</div>
       <div class="sb-item"        onclick="showSection('student-approvals')" data-sec="student-approvals"><span class="sb-icon">🎓</span> Student Approvals</div>
+      <div class="sb-item"        onclick="showSection('student-ride-operations')" data-sec="student-ride-operations"><span class="sb-icon">🔁</span> Student Ride Operations</div>
       <div class="sb-item"        onclick="showSection('blk-pass')"     data-sec="blk-pass">    <span class="sb-icon">🚫</span> Blocked Customers</div>
       <div class="sb-group-label">System & Pricing</div>
       <div class="sb-item"        onclick="showSection('app-settings')" data-sec="app-settings"><span class="sb-icon">⚙️</span> App Settings / Pricing</div>
@@ -1180,6 +1181,44 @@ button,input,select,textarea{
         <div class="table-wrap"><table class="data-table">
           <thead><tr><th>Student</th><th>CNIC</th><th>Student ID</th><th>Institution</th><th>Status</th><th>Documents</th><th>Actions</th></tr></thead>
           <tbody id="student-approvals-tbody"><tr><td colspan="7" class="loading-row">Loading…</td></tr></tbody>
+        </table></div>
+      </div>
+
+      <!-- ════ 6B. STUDENT RIDE OPERATIONS ════ -->
+      <div class="section-panel" id="sec-student-ride-operations">
+        <div class="sec-hdr">
+          <h2>🔁 Student Ride Operations</h2>
+          <div class="sec-hdr-actions">
+            <button class="btn-refresh" onclick="loadStudentRideOperations()">↻ Refresh</button>
+          </div>
+        </div>
+        <p style="font-size:.8rem;color:#64748b;margin-bottom:1rem">
+          Rotate verified Student ride requests toward active Drivers with the fewest completed Student rides today. Rejections and expired offers remain in the permanent response history below.
+        </p>
+        <div class="settings-card" style="max-width:520px;margin-bottom:1.25rem">
+          <div class="settings-icon">🎯</div>
+          <h3>Fair Rotation & Daily Student Ride Quota</h3>
+          <p>Drivers below this completed-ride target receive priority. A small fallback group keeps requests serviceable when a Driver ignores an offer.</p>
+          <label class="field-label" for="student-fair-daily-quota">Mandatory Student rides per Driver per UTC day</label>
+          <input class="modal-input" id="student-fair-daily-quota" type="number" min="0" max="100" step="1" style="max-width:180px;margin-top:.45rem">
+          <div id="student-fair-quota-feedback" style="min-height:1.25rem;font-size:.8rem;margin:.8rem 0"></div>
+          <button class="btn btn-primary" onclick="saveStudentFairQuotaSettings()">💾 Save quota</button>
+        </div>
+        <div class="sec-hdr" style="margin-top:1rem">
+          <h3 style="margin:0">Today’s Completed Student Rides by Driver</h3>
+          <span style="font-size:.72rem;color:#64748b">UTC calendar day</span>
+        </div>
+        <div class="table-wrap"><table class="data-table">
+          <thead><tr><th>Driver</th><th>Phone</th><th>Status</th><th>Completed Student Rides</th><th>Quota Remaining</th><th>Driver ID</th></tr></thead>
+          <tbody id="student-ride-quota-tbody"><tr><td colspan="6" class="loading-row">Loading…</td></tr></tbody>
+        </table></div>
+        <div class="sec-hdr" style="margin-top:1rem">
+          <h3 style="margin:0">Student Ride Rejection & Missed Log</h3>
+          <span style="font-size:.72rem;color:#64748b">Explicit Reject vs Timeout / Ignored</span>
+        </div>
+        <div class="table-wrap"><table class="data-table">
+          <thead><tr><th>Time</th><th>Driver</th><th>Phone</th><th>Driver ID</th><th>Distance to Pickup</th><th>Response</th><th>Ride ID</th></tr></thead>
+          <tbody id="student-ride-log-tbody"><tr><td colspan="7" class="loading-row">Loading…</td></tr></tbody>
         </table></div>
       </div>
 
@@ -1560,6 +1599,12 @@ button,input,select,textarea{
             <h3>Student Discount</h3>
             <p>Enable or disable Student registration and set the percentage for approved student Customers.</p>
             <button class="btn btn-primary" onclick="showSection('student-discount-settings')">Manage student discount</button>
+          </article>
+          <article class="settings-card" id="student-fair-quota-settings-card">
+            <div class="settings-icon">🔁</div>
+            <h3>Fair Student Ride Rotation</h3>
+            <p>Set the daily completed Student ride target and review Driver rejection or missed-offer history.</p>
+            <button class="btn btn-primary" onclick="showSection('student-ride-operations')">Manage Student operations</button>
           </article>
           <article class="settings-card" id="long-range-settings-card">
             <div class="settings-icon">🛣️</div>
@@ -2117,7 +2162,7 @@ const SENSITIVE_PERMISSION_KEYS = new Set(['viewPaymentProofs', 'approveWalletTo
 const SECTION_PERMISSION = {
   overview: 'viewOverview', payments: 'viewPayments', drivers: 'viewDrivers',
   'new-requests': 'manageDriverApprovals', 'fee-compliance': 'viewDriverPasses',
-  'temp-blocked': 'manageDriverStatus', passengers: 'viewCustomers', 'student-approvals': 'manageCustomers',
+   'temp-blocked': 'manageDriverStatus', passengers: 'viewCustomers', 'student-approvals': 'manageCustomers', 'student-ride-operations': 'manageFareSettings',
   'blk-pass': 'manageCustomers', 'live-rides': 'viewRides', sos: 'viewSOS',
   ratings: 'viewRatings', support: 'viewSupport', 'audit-logs': 'viewAuditLogs',
   'ride-settings': 'manageRideSettings', 'fare-settings': 'manageFareSettings', 'waiting-rate-settings': 'manageFareSettings', 'customer-fare-display-settings': 'manageFareSettings', 'student-discount-settings': 'manageFareSettings', 'long-range-settings': 'manageFareSettings', 'terms-settings': 'manageFareSettings', 'location-aliases': 'manageLocationAliases',
@@ -2482,6 +2527,17 @@ function connectSocket() {
 
   socket.on('ride:new', () => { loadStats(); });
   socket.on('admin:stats:refresh', () => { loadStats(); });
+  socket.on('student-ride-log:updated', () => {
+    if (document.getElementById('sec-student-ride-operations')?.classList.contains('active')) {
+      loadStudentRideOperations();
+    }
+    showToast('Student ride response log updated', 'info');
+  });
+  socket.on('student-fair-quota-settings:updated', ({ settings } = {}) => {
+    if (settings && document.getElementById('student-fair-daily-quota')) {
+      document.getElementById('student-fair-daily-quota').value = settings.dailyQuota;
+    }
+  });
   socket.on('support:new', ({ role, subject }) => {
     loadStats();
     if (document.getElementById('sec-support')?.classList.contains('active')) {
@@ -2521,7 +2577,7 @@ const SECTION_TITLES = {
   'temp-blocked':'Driver Status', 'blk-pass':'Blocked Customers',
   'live-rides':'Live Rides & History', sos:'SOS Alert Monitor',
   'fee-compliance':'Driver Wallets & Daily Fees',
-  'app-settings':'App Settings / Pricing', 'terms-settings':'Terms & Conditions Settings', 'location-aliases':'Customer Location Aliases',
+  'app-settings':'App Settings / Pricing', 'student-ride-operations':'Student Ride Operations', 'terms-settings':'Terms & Conditions Settings', 'location-aliases':'Customer Location Aliases',
   'ride-settings':'Ride Settings', 'fare-settings':'Daily Fare Settings', 'waiting-rate-settings':'Per-Minute Waiting / Stop Rates', 'customer-fare-display-settings':'Customer Fare Display', 'student-discount-settings':'Student Discount', 'long-range-settings':'Long Range Ride Settings', 'pay-settings':'Payment Settings', 'ride-retention':'Rides Data Retention', 'data-management':'Data Management', ratings:'Ratings & Feedback', support:'Support Tickets', 'audit-logs':'Payment & Pass Audit Logs',
     deletions:'Account Deletion Requests', 'sub-admins':'Sub-Admin User Management'
 };
@@ -2649,7 +2705,7 @@ function showSection(name) {
   const loaders = {
     overview: loadOverview, payments: () => loadPayments(currentPayStatus),
     drivers: () => loadDrivers(currentDriverStatus), passengers: () => loadPassengers(currentPassStatus),
-    'new-requests': loadNewRequests, 'student-approvals': () => loadStudentApprovals(currentStudentStatus), 'temp-blocked': loadTempBlocked,
+    'new-requests': loadNewRequests, 'student-approvals': () => loadStudentApprovals(currentStudentStatus), 'student-ride-operations': loadStudentRideOperations, 'temp-blocked': loadTempBlocked,
     'blk-pass': loadBlockedPass, 'live-rides': () => loadRides(currentRideStatus),
      'ride-retention': loadRideRetention, 'data-management': () => undefined,
     sos: () => loadSOS(currentSOSFilter), 'ride-settings': loadRideSettings, 'fare-settings': loadFareSettings, 'customer-fare-display-settings': loadCustomerFareDisplaySettings, 'student-discount-settings': loadStudentDiscountSettings, 'long-range-settings': loadLongRangeSettings, 'terms-settings': loadTermsSettings, 'location-aliases': loadLocationAliases, 'pay-settings': loadPaymentSettings,
@@ -5240,6 +5296,78 @@ async function saveStudentDiscountSettings() {
     document.getElementById('student-discount-end-time').value = result.settings.endTime;
     feedback.textContent = '✓ Student discount saved and published live.'; feedback.style.color = '#22c55e';
     showToast('Student discount updated ✓', 'success');
+  } catch (e) {
+    feedback.textContent = `✕ ${e.message}`; feedback.style.color = '#ef4444';
+    showToast(e.message, 'error');
+  }
+}
+
+async function loadStudentRideOperations() {
+  const quotaFeedback = document.getElementById('student-fair-quota-feedback');
+  const quotaBody = document.getElementById('student-ride-quota-tbody');
+  const tbody = document.getElementById('student-ride-log-tbody');
+  try {
+    quotaFeedback.textContent = 'Loading…'; quotaFeedback.style.color = '#64748b';
+    const [settings, quotaStatus, logs] = await Promise.all([
+      api('/api/admin/student-fair-quota-settings'),
+      api('/api/admin/student-ride-quota-status'),
+      api('/api/admin/student-ride-logs')
+    ]);
+    document.getElementById('student-fair-daily-quota').value = settings.dailyQuota;
+    quotaFeedback.textContent = '';
+    quotaBody.innerHTML = quotaStatus.drivers.length
+      ? quotaStatus.drivers.map(driver => `<tr>
+          <td>${escHtml(driver.name || '—')}</td>
+          <td>${escHtml(driver.phone || '—')}</td>
+          <td style="color:${driver.isOnline ? '#22c55e' : '#64748b'}">${driver.isOnline ? 'Online' : 'Offline'}</td>
+          <td style="font-weight:700">${Number(driver.completedStudentRides || 0)}</td>
+          <td>${driver.remaining === null ? '—' : Number(driver.remaining)}</td>
+          <td><code>${escHtml(driver.driverId || '—')}</code></td>
+        </tr>`).join('')
+      : '<tr><td colspan="6" class="empty-state">No active Driver accounts found.</td></tr>';
+    if (!logs.length) {
+      tbody.innerHTML = '<tr><td colspan="7" class="empty-state">No Student rejection or missed responses recorded yet.</td></tr>';
+      return;
+    }
+    tbody.innerHTML = logs.map(log => {
+      const responseLabel = log.responseType === 'rejected' ? 'Rejected' : 'Timeout / Ignored';
+      const responseColor = log.responseType === 'rejected' ? '#f59e0b' : '#ef4444';
+      const occurredAt = log.occurredAt ? new Date(log.occurredAt).toLocaleString() : '—';
+      const distance = Number.isFinite(Number(log.distanceFromPickupKm))
+        ? `${Number(log.distanceFromPickupKm).toFixed(2)} km`
+        : '—';
+      return `<tr>
+        <td>${escHtml(occurredAt)}</td>
+        <td>${escHtml(log.driverName || '—')}</td>
+        <td>${escHtml(log.driverPhone || '—')}</td>
+        <td><code>${escHtml(log.driverId || '—')}</code></td>
+        <td>${escHtml(distance)}</td>
+        <td style="color:${responseColor};font-weight:700">${responseLabel}</td>
+        <td><code>${escHtml(log.rideId || '—')}</code></td>
+      </tr>`;
+    }).join('');
+  } catch (e) {
+    quotaFeedback.textContent = `⚠ ${e.message}`; quotaFeedback.style.color = '#ef4444';
+    if (quotaBody) quotaBody.innerHTML = `<tr><td colspan="6" class="empty-state">${escHtml(e.message)}</td></tr>`;
+    if (tbody) tbody.innerHTML = `<tr><td colspan="7" class="empty-state">${escHtml(e.message)}</td></tr>`;
+  }
+}
+
+async function saveStudentFairQuotaSettings() {
+  const feedback = document.getElementById('student-fair-quota-feedback');
+  const dailyQuota = Number(document.getElementById('student-fair-daily-quota').value);
+  if (!Number.isInteger(dailyQuota) || dailyQuota < 0 || dailyQuota > 100) {
+    feedback.textContent = 'Enter a whole-number quota from 0 to 100.';
+    feedback.style.color = '#ef4444';
+    return;
+  }
+  try {
+    feedback.textContent = 'Saving…'; feedback.style.color = '#64748b';
+    const result = await api('/api/admin/student-fair-quota-settings', 'PATCH', { dailyQuota });
+    document.getElementById('student-fair-daily-quota').value = result.settings.dailyQuota;
+    feedback.textContent = '✓ Fair Student ride quota saved and published live.';
+    feedback.style.color = '#22c55e';
+    showToast('Fair Student ride quota updated ✓', 'success');
   } catch (e) {
     feedback.textContent = `✕ ${e.message}`; feedback.style.color = '#ef4444';
     showToast(e.message, 'error');

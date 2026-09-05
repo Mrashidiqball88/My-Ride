@@ -1389,6 +1389,8 @@ const DEFAULT_STUDENT_DISCOUNT_SETTINGS = Object.freeze({
   startTime: '06:00',
   endTime: '17:00'
 });
+const STUDENT_FAIR_QUOTA_SETTINGS_KEY = 'student_fair_quota_settings';
+const DEFAULT_STUDENT_FAIR_QUOTA_SETTINGS = Object.freeze({ dailyQuota: 2 });
 
 function customerRegistrationAccountStatus(isStudent, identityVerified) {
   return isStudent ? 'pending' : (identityVerified ? 'active' : 'pending');
@@ -1417,6 +1419,20 @@ function normalizeStudentDiscountSettings(input = {}) {
 async function getStudentDiscountSettings() {
   const doc = await Settings.findOne({ key: STUDENT_DISCOUNT_SETTINGS_KEY }).lean();
   return normalizeStudentDiscountSettings(doc?.value);
+}
+
+function normalizeStudentFairQuotaSettings(input = {}) {
+  const dailyQuota = Number(input?.dailyQuota);
+  return {
+    dailyQuota: Number.isFinite(dailyQuota)
+      ? Math.min(100, Math.max(0, Math.floor(dailyQuota)))
+      : DEFAULT_STUDENT_FAIR_QUOTA_SETTINGS.dailyQuota
+  };
+}
+
+async function getStudentFairQuotaSettings() {
+  const doc = await Settings.findOne({ key: STUDENT_FAIR_QUOTA_SETTINGS_KEY }).lean();
+  return normalizeStudentFairQuotaSettings(doc?.value);
 }
 
 function studentDiscountTimeToMinutes(value) {
@@ -1731,6 +1747,7 @@ const userSchema = new mongoose.Schema({
   // disconnect must not silently make an otherwise approved driver unavailable.
   lastOnlineHeartbeat: { type: Date, default: null },
   onlineStartedAt: { type: Date, default: null },
+  studentRideLastAssignedAt: { type: Date, default: null },
   expoPushToken:       { type: String, default: '' },
   expoPushTokenUpdatedAt: { type: Date, default: null },
   rating:       { type: Number, default: 5.0 },
@@ -1921,6 +1938,12 @@ const rideSchema = new mongoose.Schema({
   // events target these personal rooms too, so a room-membership race cannot
   // leave a delivered offer actionable after it is cancelled or taken.
   notifiedDriverIds: [{ type: mongoose.Schema.Types.ObjectId, ref: 'Driver' }],
+  isStudentRide: { type: Boolean, default: false },
+  studentRideOfferRecipients: [{
+    driver: { type: mongoose.Schema.Types.ObjectId, ref: 'Driver' },
+    distanceFromPickupKm: { type: Number, default: null },
+    notifiedAt: { type: Date, default: Date.now }
+  }],
   // The response window is persisted with each request. This makes expiry
   // authoritative across server restarts and lets reconnecting drivers render
   // the remaining time rather than restarting a local countdown.
@@ -2108,6 +2131,23 @@ const Payment  = mongoose.model('Payment',  paymentSchema);
 const Ticket   = mongoose.model('Ticket',   ticketSchema);
 const Settings = mongoose.model('Settings', settingsSchema);
 const PushSub  = mongoose.model('PushSub',  pushSubSchema);
+const studentRideResponseLogSchema = new mongoose.Schema({
+  ride: { type: mongoose.Schema.Types.ObjectId, ref: 'Ride', required: true },
+  driver: { type: mongoose.Schema.Types.ObjectId, ref: 'Driver', required: true },
+  driverName: { type: String, default: '' },
+  driverPhone: { type: String, default: '' },
+  pickupLocation: {
+    lat: { type: Number, default: null },
+    lng: { type: Number, default: null },
+    address: { type: String, default: '' }
+  },
+  distanceFromPickupKm: { type: Number, default: null },
+  responseType: { type: String, enum: ['rejected', 'timeout'], required: true },
+  occurredAt: { type: Date, default: Date.now }
+}, { timestamps: true });
+studentRideResponseLogSchema.index({ ride: 1, driver: 1 }, { unique: true });
+studentRideResponseLogSchema.index({ occurredAt: -1 });
+const StudentRideResponseLog = mongoose.model('StudentRideResponseLog', studentRideResponseLogSchema);
 const nativeSettingsFindOne = Settings.findOne;
 
 // Compatibility facade for the pre-partition server surface. It deliberately
@@ -2703,6 +2743,120 @@ async function getRideBroadcastSettings() {
   });
 }
 
+function utcDayStart(date = new Date()) {
+  const start = new Date(date);
+  start.setUTCHours(0, 0, 0, 0);
+  return start;
+}
+
+async function selectFairStudentRideDrivers(drivers) {
+  if (!drivers.length) return [];
+  const settings = await getStudentFairQuotaSettings();
+  const driverIds = drivers.map(driver => driver._id);
+  const completedCounts = await getStudentRideCompletedCounts(driverIds);
+  const countByDriver = completedCounts;
+  const ranked = drivers
+    .map(driver => ({
+      driver,
+      completedStudentRides: countByDriver.get(String(driver._id)) || 0,
+      lastAssignedAt: driver.studentRideLastAssignedAt
+        ? new Date(driver.studentRideLastAssignedAt).getTime()
+        : 0
+    }))
+    .sort((a, b) =>
+      a.completedStudentRides - b.completedStudentRides
+      || a.lastAssignedAt - b.lastAssignedAt
+      || String(a.driver._id).localeCompare(String(b.driver._id))
+    );
+
+  // Keep a small fallback group so one ignored request does not strand the
+  // Customer, while still giving the least-served Drivers first opportunity.
+  const underQuota = settings.dailyQuota > 0
+    ? ranked.filter(entry => entry.completedStudentRides < settings.dailyQuota)
+    : ranked;
+  const pool = underQuota.length ? underQuota : ranked;
+  const selected = pool.slice(0, Math.min(3, pool.length)).map(entry => entry.driver);
+  if (selected.length) {
+    await User.updateMany(
+      { _id: { $in: selected.map(driver => driver._id) } },
+      { $set: { studentRideLastAssignedAt: new Date() } }
+    );
+  }
+  return selected;
+}
+
+async function getStudentRideCompletedCounts(driverIds) {
+  if (!driverIds.length) return new Map();
+  const rows = await Ride.aggregate([
+    {
+      $match: {
+        isStudentRide: true,
+        status: 'completed',
+        settledAt: { $gte: utcDayStart() },
+        driver: { $in: driverIds }
+      }
+    },
+    { $group: { _id: '$driver', count: { $sum: 1 } } }
+  ]);
+  return new Map(rows.map(row => [String(row._id), Number(row.count || 0)]));
+}
+
+async function recordStudentRideResponse(ride, driverId, responseType) {
+  if (!ride?.isStudentRide || !['rejected', 'timeout'].includes(responseType)) return null;
+  const recipient = (ride.studentRideOfferRecipients || []).find(
+    entry => String(entry.driver?._id || entry.driver) === String(driverId)
+  );
+  if (!recipient) return null;
+  const driver = await User.findById(driverId).select('name phone').lean();
+  if (!driver) return null;
+
+  const log = await StudentRideResponseLog.findOneAndUpdate(
+    { ride: ride._id, driver: driverId },
+    {
+      $setOnInsert: {
+        ride: ride._id,
+        driver: driverId,
+        driverName: driver.name || '',
+        driverPhone: driver.phone || '',
+        pickupLocation: {
+          lat: Number(ride.pickupLocation?.lat) || null,
+          lng: Number(ride.pickupLocation?.lng) || null,
+          address: ride.pickupLocation?.address || ''
+        },
+        distanceFromPickupKm: Number.isFinite(Number(recipient.distanceFromPickupKm))
+          ? Number(recipient.distanceFromPickupKm)
+          : null,
+        responseType,
+        occurredAt: new Date()
+      }
+    },
+    { upsert: true, new: true, setDefaultsOnInsert: true }
+  ).lean();
+
+  io.to('admin-room').emit('student-ride-log:updated', {
+    id: String(log._id),
+    rideId: String(ride._id),
+    driverId: String(driverId),
+    responseType: log.responseType,
+    occurredAt: log.occurredAt
+  });
+  return log;
+}
+
+async function recordExpiredStudentRideResponses() {
+  const expiredRides = await Ride.find({
+    isStudentRide: true,
+    status: 'requested',
+    broadcastExpiresAt: { $lte: new Date() },
+    'studentRideOfferRecipients.0': { $exists: true }
+  }).select('_id isStudentRide pickupLocation studentRideOfferRecipients').lean();
+  for (const ride of expiredRides) {
+    for (const recipient of ride.studentRideOfferRecipients || []) {
+      await recordStudentRideResponse(ride, recipient.driver, 'timeout');
+    }
+  }
+}
+
 function hasValidCoordinates(location) {
   const lat = Number(location?.lat);
   const lng = Number(location?.lng);
@@ -2838,7 +2992,13 @@ async function rebuildRedisDriverIndex() {
   return rebuilt;
 }
 
-async function findRideBroadcastDrivers(pickupLocation, vehicleType, settings = null, vehicleCategorySettings = null) {
+async function findRideBroadcastDrivers(
+  pickupLocation,
+  vehicleType,
+  settings = null,
+  vehicleCategorySettings = null,
+  { isStudentRide = false } = {}
+) {
   const rideSettings = settings || await getRideBroadcastSettings();
   const radiusKm = rideSettings.maximumRideBroadcastRadiusKm;
   if (!hasValidCoordinates(pickupLocation)) return { drivers: [], radiusKm };
@@ -2865,7 +3025,7 @@ async function findRideBroadcastDrivers(pickupLocation, vehicleType, settings = 
     'currentLocation.lat': { $ne: 0 },
     'currentLocation.lng': { $ne: 0 },
     ...locationFilter
-  }).select('_id currentLocation expoPushToken').lean();
+  }).select('_id currentLocation expoPushToken studentRideLastAssignedAt').lean();
 
   if (!candidates.length) return { drivers: [], radiusKm };
   const candidateIds = candidates.map(driver => driver._id);
@@ -2886,10 +3046,19 @@ async function findRideBroadcastDrivers(pickupLocation, vehicleType, settings = 
       )
     }))
     .filter(driver => driver.distanceFromPickupKm <= radiusKm);
-  return { drivers, radiusKm };
+  const selectedDrivers = isStudentRide
+    ? await selectFairStudentRideDrivers(drivers)
+    : drivers;
+  return { drivers: selectedDrivers, radiusKm };
 }
 
-async function findLongRangeBroadcastDrivers(pickupLocation, vehicleType, longRangeSettings, vehicleCategorySettings = null) {
+async function findLongRangeBroadcastDrivers(
+  pickupLocation,
+  vehicleType,
+  longRangeSettings,
+  vehicleCategorySettings = null,
+  { isStudentRide = false } = {}
+) {
   const radiusKm = longRangeSettings.broadcastRadiusKm;
   if (!hasValidCoordinates(pickupLocation)) return { drivers: [], radiusKm };
   if (!isVehicleCategoryActive(
@@ -2911,14 +3080,17 @@ async function findLongRangeBroadcastDrivers(pickupLocation, vehicleType, longRa
     lastOnlineHeartbeat: { $gte: new Date(Date.now() - DRIVER_HEARTBEAT_MAX_AGE_MS) },
     'currentLocation.lat': { $ne: 0 }, 'currentLocation.lng': { $ne: 0 },
     ...locationFilter
-  }).select('_id currentLocation expoPushToken longRangeEnabled').lean();
+  }).select('_id currentLocation expoPushToken longRangeEnabled studentRideLastAssignedAt').lean();
   const drivers = candidates.filter(driver => driver.longRangeEnabled === true
       && hasValidCoordinates(driver.currentLocation))
     .map(driver => ({ ...driver, distanceFromPickupKm: haversineKm(
       Number(pickupLocation.lat), Number(pickupLocation.lng),
       Number(driver.currentLocation.lat), Number(driver.currentLocation.lng)
     ) })).filter(driver => driver.distanceFromPickupKm <= radiusKm);
-  return { drivers, radiusKm };
+  const selectedDrivers = isStudentRide
+    ? await selectFairStudentRideDrivers(drivers)
+    : drivers;
+  return { drivers: selectedDrivers, radiusKm };
 }
 
 async function chargeLongRangeCommission(ride, driverId, longRangeSettings, { session } = {}) {
@@ -3184,6 +3356,7 @@ function driverRidePayload(ride) {
     paymentMethod: ride.paymentMethod,
     vehicleType: normalizeFareVehicle(ride.vehicleType),
     isLongRange: !!ride.isLongRange,
+    isStudentRide: !!ride.isStudentRide,
     broadcastExpiresAt: ride.broadcastExpiresAt,
     offerExpiresAt: ride.offerExpiresAt,
     passenger: ride.passenger,
@@ -3218,6 +3391,8 @@ async function getAvailableRidesForDriver(driver) {
   const feeState = await getDriverDailyFeeEligibility(driver);
 
   return rides.filter(ride => hasValidCoordinates(ride.pickupLocation)
+    && (!ride.isStudentRide
+      || (ride.notifiedDriverIds || []).some(driverId => String(driverId) === String(driver._id)))
     && canDriverReceiveRideForPreference(driver.ridePreference, ride.isLongRange)
     && (!ride.isLongRange || (longRangeSettings.enabled && driver.longRangeEnabled))
     && haversineKm(
@@ -4785,7 +4960,12 @@ app.post('/api/rides', authMiddleware, customerOnly, customerCanBook, async (req
       normalizeWaitingRateSettings(waitingRateDoc?.value)
     );
     if (fareQuote.error) return res.status(422).json({ error: fareQuote.error });
-    const discountPercent = await getVerifiedStudentDiscountPercent(req.user.id, requestedAt);
+    const [discountPercent, studentProfile] = await Promise.all([
+      getVerifiedStudentDiscountPercent(req.user.id, requestedAt),
+      User.findById(req.user.id).select('isStudent studentVerificationStatus').lean()
+    ]);
+    const isStudentRide = studentProfile?.isStudent === true
+      && studentProfile?.studentVerificationStatus === 'approved';
     const discountedFareQuote = applyStudentDiscountToFareQuote(fareQuote, discountPercent);
     const offerResult = resolveCustomerFareOffer(customerOffer, discountedFareQuote.totalFare, customerFareOffset);
     if (offerResult.error) return res.status(422).json({ error: offerResult.error });
@@ -4812,6 +4992,7 @@ app.post('/api/rides', authMiddleware, customerOnly, customerCanBook, async (req
       notes:         notes         || '',
       paymentMethod: paymentMethod || 'cash',
       mobileAccount: mobileAccount || '',
+      isStudentRide,
       broadcastDurationSeconds: rideBroadcastSettings.broadcastRequestDurationSeconds,
       broadcastExpiresAt
     });
@@ -4825,6 +5006,7 @@ app.post('/api/rides', authMiddleware, customerOnly, customerCanBook, async (req
       distance:         ride.distance,
       fareQuote:        ride.fareQuote,
       isLongRange:      ride.isLongRange,
+      isStudentRide:    ride.isStudentRide,
       vehicleType:      ride.vehicleType,
       paymentMethod:    ride.paymentMethod,
       notes:            ride.notes,
@@ -4841,13 +5023,37 @@ app.post('/api/rides', authMiddleware, customerOnly, customerCanBook, async (req
     const databaseReady = dbConnected || mongoose.connection.readyState === 1;
     const broadcast = databaseReady
       ? (ride.isLongRange
-        ? await findLongRangeBroadcastDrivers(ride.pickupLocation, ride.vehicleType, longRangeSettings, vehicleCategoryDoc?.value)
-        : await findRideBroadcastDrivers(ride.pickupLocation, ride.vehicleType, rideBroadcastSettings, vehicleCategoryDoc?.value))
+        ? await findLongRangeBroadcastDrivers(
+          ride.pickupLocation,
+          ride.vehicleType,
+          longRangeSettings,
+          vehicleCategoryDoc?.value,
+          { isStudentRide: ride.isStudentRide }
+        )
+        : await findRideBroadcastDrivers(
+          ride.pickupLocation,
+          ride.vehicleType,
+          rideBroadcastSettings,
+          vehicleCategoryDoc?.value,
+          { isStudentRide: ride.isStudentRide }
+        ))
       : { drivers: [], radiusKm: DEFAULT_RIDE_BROADCAST_RADIUS_KM };
     ridePayload.broadcastRadiusKm = broadcast.radiusKm;
     ride.notifiedDriverIds = broadcast.drivers.map(driver => driver._id);
+    if (ride.isStudentRide) {
+      ride.studentRideOfferRecipients = broadcast.drivers.map(driver => ({
+        driver: driver._id,
+        distanceFromPickupKm: driver.distanceFromPickupKm,
+        notifiedAt: new Date()
+      }));
+    }
     await ride.save();
     emitRideRequestToDrivers(broadcast.drivers, ridePayload);
+    if (ride.isStudentRide && broadcast.drivers.length) {
+      void recordExpiredStudentRideResponses().catch(err =>
+        console.warn(`[student-ride-log] expiry sweep failed: ${err.message}`)
+      );
+    }
 
     // Also push a Web Push notification to subscribed eligible drivers
     // (handles closed browser tabs).
@@ -4918,6 +5124,24 @@ app.get('/api/rides/available', authMiddleware, driverOnly, async (req, res) => 
       return res.status(403).json({ error: 'You must be an approved online driver to receive rides' });
     }
     res.json(rides);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/rides/:id/student-response', authMiddleware, driverOnly, async (req, res) => {
+  try {
+    if (req.body?.responseType !== 'rejected') {
+      return res.status(422).json({ error: 'responseType must be rejected' });
+    }
+    const ride = await Ride.findOne({
+      _id: req.params.id,
+      isStudentRide: true,
+      notifiedDriverIds: req.user.id
+    }).lean();
+    if (!ride) return res.status(404).json({ error: 'Student ride offer not found' });
+    const log = await recordStudentRideResponse(ride, req.user.id, 'rejected');
+    res.json({ ok: true, logged: !!log });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -8672,6 +8896,69 @@ app.patch('/api/admin/student-discount-settings', adminJwt, requirePerm('manageF
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
+app.get('/api/admin/student-fair-quota-settings', adminJwt, requirePerm('manageFareSettings'), async (_req, res) => {
+  try { res.json(await getStudentFairQuotaSettings()); }
+  catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.patch('/api/admin/student-fair-quota-settings', adminJwt, requirePerm('manageFareSettings'), async (req, res) => {
+  try {
+    const rawQuota = Number(req.body?.dailyQuota);
+    if (!Number.isInteger(rawQuota) || rawQuota < 0 || rawQuota > 100) {
+      return res.status(422).json({ error: 'Daily Student ride quota must be a whole number from 0 to 100' });
+    }
+    const settings = normalizeStudentFairQuotaSettings({ dailyQuota: rawQuota });
+    await Settings.findOneAndUpdate(
+      { key: STUDENT_FAIR_QUOTA_SETTINGS_KEY },
+      { key: STUDENT_FAIR_QUOTA_SETTINGS_KEY, value: settings },
+      { upsert: true, new: true, setDefaultsOnInsert: true }
+    );
+    io.emit('student-fair-quota-settings:updated', { settings });
+    res.json({ success: true, settings });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.get('/api/admin/student-ride-logs', adminJwt, requirePerm('manageFareSettings'), async (_req, res) => {
+  try {
+    const logs = await StudentRideResponseLog.find({})
+      .sort({ occurredAt: -1 })
+      .limit(250)
+      .lean();
+    res.json(logs.map(log => ({
+      ...log,
+      _id: String(log._id),
+      rideId: String(log.ride),
+      driverId: String(log.driver)
+    })));
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.get('/api/admin/student-ride-quota-status', adminJwt, requirePerm('manageFareSettings'), async (_req, res) => {
+  try {
+    const [settings, drivers] = await Promise.all([
+      getStudentFairQuotaSettings(),
+      User.find({ role: 'driver', accountStatus: 'active' })
+        .select('_id name phone isOnline studentRideLastAssignedAt')
+        .sort({ name: 1 })
+        .lean()
+    ]);
+    const completedCounts = await getStudentRideCompletedCounts(drivers.map(driver => driver._id));
+    res.json({
+      dailyQuota: settings.dailyQuota,
+      drivers: drivers.map(driver => ({
+        driverId: String(driver._id),
+        name: driver.name || '',
+        phone: driver.phone || '',
+        isOnline: driver.isOnline === true,
+        completedStudentRides: completedCounts.get(String(driver._id)) || 0,
+        remaining: settings.dailyQuota > 0
+          ? Math.max(0, settings.dailyQuota - (completedCounts.get(String(driver._id)) || 0))
+          : null
+      }))
+    });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
 app.get('/api/admin/per-km-rates', adminJwt, requirePerm('manageFareSettings'), async (req, res) => {
   try {
     const doc = await Settings.findOne({ key: 'per_km_rates' }).lean();
@@ -10043,6 +10330,15 @@ if (require.main === module) (function scheduleMidnightDeduction() {
   console.log(`⏰ Daily deduction scheduled (next run at UTC midnight)`);
 })();
 
+if (require.main === module) {
+  const studentRideLogSweep = setInterval(() => {
+    recordExpiredStudentRideResponses().catch(err =>
+      console.warn(`[student-ride-log] expiry sweep failed: ${err.message}`)
+    );
+  }, 10_000);
+  studentRideLogSweep.unref?.();
+}
+
 module.exports = {
   app,
   server,
@@ -10066,6 +10362,10 @@ module.exports = {
   normalizeCustomerFareDisplaySettings,
   getCustomerFareDisplaySettings,
   normalizeStudentDiscountSettings,
+  normalizeStudentFairQuotaSettings,
+  getStudentFairQuotaSettings,
+  selectFairStudentRideDrivers,
+  recordStudentRideResponse,
   getVerifiedStudentDiscountPercent,
   applyStudentDiscountToFareQuote,
   normalizeLongRangeSettings,
@@ -10124,5 +10424,8 @@ module.exports = {
   getDatabaseStatus,
   connectDatabase,
   migrateLegacyUserData,
-  models: { User, LegacyUser, Customer, Driver, Admin, Ride, Wallet, Payment, Settings, SubAdmin }
+  models: {
+    User, LegacyUser, Customer, Driver, Admin, Ride, Wallet, Payment, Settings,
+    SubAdmin, StudentRideResponseLog
+  }
 };
