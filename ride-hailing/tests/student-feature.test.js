@@ -233,6 +233,9 @@ test('fair Student rotation prioritizes Drivers below quota and rotates ties', a
 });
 
 test('Student response logging preserves Driver details, distance, and response type', async () => {
+  models.Settings.findOne = () => ({
+    lean: async () => ({ value: { enabled: true } })
+  });
   models.User.findById = () => ({
     select() { return this; },
     lean: async () => ({ name: 'Driver Example', phone: '03001234567' })
@@ -265,6 +268,32 @@ test('Student response logging preserves Driver details, distance, and response 
   assert.equal(updatePayload.$setOnInsert.driverPhone, '03001234567');
   assert.equal(updatePayload.$setOnInsert.distanceFromPickupKm, 2.75);
   assert.equal(updatePayload.$setOnInsert.pickupLocation.address, 'Islamabad pickup');
+});
+
+test('Student master switch disables fair rotation and rejection logging', async () => {
+  models.Settings.findOne = () => ({
+    lean: async () => ({ value: { enabled: false } })
+  });
+  let rotationUpdateCalled = false;
+  let driverLookupCalled = false;
+  models.User.updateMany = async () => { rotationUpdateCalled = true; };
+  models.User.findById = () => {
+    driverLookupCalled = true;
+    throw new Error('Driver lookup should not run while Student features are disabled');
+  };
+  const drivers = [
+    { _id: 'driver-a', studentRideLastAssignedAt: new Date('2026-09-05T00:00:00Z') },
+    { _id: 'driver-b', studentRideLastAssignedAt: new Date('2026-09-05T01:00:00Z') }
+  ];
+  assert.deepEqual(await selectFairStudentRideDrivers(drivers), drivers);
+  const log = await feature.recordStudentRideResponse({
+    _id: 'ride-disabled',
+    isStudentRide: true,
+    studentRideOfferRecipients: [{ driver: 'driver-a', distanceFromPickupKm: 1 }]
+  }, 'driver-a', 'rejected');
+  assert.equal(log, null);
+  assert.equal(rotationUpdateCalled, false);
+  assert.equal(driverLookupCalled, false);
 });
 
 test('student discount honors the UTC time window and completed daily ride limit', async () => {

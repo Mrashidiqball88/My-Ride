@@ -1663,6 +1663,7 @@ async function refreshPendingRideFares(settings, perKmRates = null) {
   const currentPerKmRates = perKmRates || await getPerKmRates();
   const longRangeSettings = await getLongRangeSettings();
   const waitingRateSettings = await getWaitingRateSettings();
+  const studentDiscountSettings = await getStudentDiscountSettings();
   const pendingRides = await Ride.find({ status: 'requested' });
   for (const ride of pendingRides) {
     let fareQuote = calculateRideFare(
@@ -1678,7 +1679,9 @@ async function refreshPendingRideFares(settings, perKmRates = null) {
     );
     fareQuote = applyStudentDiscountToFareQuote(
       fareQuote,
-      Number.isFinite(Number(ride.fareQuote?.studentDiscountPercent))
+      !studentDiscountSettings.enabled
+        ? 0
+        : Number.isFinite(Number(ride.fareQuote?.studentDiscountPercent))
         ? Number(ride.fareQuote.studentDiscountPercent)
         : await getVerifiedStudentDiscountPercent(ride.passenger, ride.createdAt)
     );
@@ -2752,6 +2755,8 @@ function utcDayStart(date = new Date()) {
 async function selectFairStudentRideDrivers(drivers) {
   if (!drivers.length) return [];
   const settings = await getStudentFairQuotaSettings();
+  const studentDiscountSettings = await getStudentDiscountSettings();
+  if (!studentDiscountSettings.enabled) return drivers;
   const driverIds = drivers.map(driver => driver._id);
   const completedCounts = await getStudentRideCompletedCounts(driverIds);
   const countByDriver = completedCounts;
@@ -2803,6 +2808,8 @@ async function getStudentRideCompletedCounts(driverIds) {
 
 async function recordStudentRideResponse(ride, driverId, responseType) {
   if (!ride?.isStudentRide || !['rejected', 'timeout'].includes(responseType)) return null;
+  const studentDiscountSettings = await getStudentDiscountSettings();
+  if (!studentDiscountSettings.enabled) return null;
   const recipient = (ride.studentRideOfferRecipients || []).find(
     entry => String(entry.driver?._id || entry.driver) === String(driverId)
   );
@@ -2844,6 +2851,8 @@ async function recordStudentRideResponse(ride, driverId, responseType) {
 }
 
 async function recordExpiredStudentRideResponses() {
+  const studentDiscountSettings = await getStudentDiscountSettings();
+  if (!studentDiscountSettings.enabled) return;
   const expiredRides = await Ride.find({
     isStudentRide: true,
     status: 'requested',
@@ -3375,6 +3384,7 @@ async function getAvailableRidesForDriver(driver) {
     getRideBroadcastSettings(),
     getLongRangeSettings()
   ]);
+  const studentDiscountSettings = await getStudentDiscountSettings();
   const recoveryRadiusKm = Math.max(radiusKm, longRangeSettings.broadcastRadiusKm);
   const rides = await Ride.find({
     status: 'requested',
@@ -3392,6 +3402,7 @@ async function getAvailableRidesForDriver(driver) {
 
   return rides.filter(ride => hasValidCoordinates(ride.pickupLocation)
     && (!ride.isStudentRide
+      || !studentDiscountSettings.enabled
       || (ride.notifiedDriverIds || []).some(driverId => String(driverId) === String(driver._id)))
     && canDriverReceiveRideForPreference(driver.ridePreference, ride.isLongRange)
     && (!ride.isLongRange || (longRangeSettings.enabled && driver.longRangeEnabled))
@@ -4960,11 +4971,13 @@ app.post('/api/rides', authMiddleware, customerOnly, customerCanBook, async (req
       normalizeWaitingRateSettings(waitingRateDoc?.value)
     );
     if (fareQuote.error) return res.status(422).json({ error: fareQuote.error });
-    const [discountPercent, studentProfile] = await Promise.all([
+    const [discountPercent, studentProfile, studentDiscountSettings] = await Promise.all([
       getVerifiedStudentDiscountPercent(req.user.id, requestedAt),
-      User.findById(req.user.id).select('isStudent studentVerificationStatus').lean()
+      User.findById(req.user.id).select('isStudent studentVerificationStatus').lean(),
+      getStudentDiscountSettings()
     ]);
-    const isStudentRide = studentProfile?.isStudent === true
+    const isStudentRide = studentDiscountSettings.enabled
+      && studentProfile?.isStudent === true
       && studentProfile?.studentVerificationStatus === 'approved';
     const discountedFareQuote = applyStudentDiscountToFareQuote(fareQuote, discountPercent);
     const offerResult = resolveCustomerFareOffer(customerOffer, discountedFareQuote.totalFare, customerFareOffset);
