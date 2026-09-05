@@ -40,6 +40,9 @@ body{font-family:'Segoe UI',sans-serif;background:#0a0a0f;color:#fff;height:100d
 .document-source-btn{border:1px solid #333;border-radius:9px;padding:.55rem .45rem;background:#13131a;color:#ddd;font-size:.78rem;font-weight:700;cursor:pointer;transition:border-color .2s,background .2s}
 .document-source-btn:hover,.document-source-btn:focus-visible{border-color:#f5c518;background:#1a180c;outline:none}
 .document-file-input{position:absolute;width:1px;height:1px;opacity:0;pointer-events:none}
+.document-preview-row{display:flex;align-items:center;gap:.5rem;min-height:54px;margin-top:.45rem}
+.document-preview-thumb{display:none;width:54px;height:54px;border-radius:8px;object-fit:cover;border:2px solid #22c55e}
+.document-preview-status{font-size:.7rem;color:#22c55e}
 .btn-primary{width:100%;background:#f5c518;color:#0a0a0f;border:none;border-radius:12px;padding:.85rem;font-size:1rem;font-weight:700;cursor:pointer;margin-top:.5rem;transition:opacity .2s}
 .btn-primary:hover{opacity:.9}
 .btn-primary:disabled{opacity:.5;cursor:not-allowed}
@@ -577,8 +580,10 @@ body{font-family:'DM Sans','Segoe UI',sans-serif;background:var(--lr-paper);colo
           <button class="document-source-btn" type="button" onclick="openDocumentSource('r-cnic-front','camera')">📷 Take Photo</button>
           <button class="document-source-btn" type="button" onclick="openDocumentSource('r-cnic-front','gallery')">🖼️ Choose from Gallery</button>
         </div>
-        <input class="document-file-input" type="file" id="r-cnic-front" accept="image/jpeg,image/png,image/webp" onchange="updateDocumentFileLabel(this,'r-cnic-front-label')">
-        <span id="r-cnic-front-label" style="display:block;color:#888;font-size:.72rem;margin-top:.35rem">No image selected</span>
+        <div class="document-preview-row"><img id="r-cnic-front-preview" class="document-preview-thumb" alt="National ID front preview"><span id="r-cnic-front-label" class="document-preview-status">No image selected</span></div>
+        <input class="document-file-input" type="file" id="r-cnic-front-camera" accept="image/jpeg,image/png,image/webp" capture="environment" onchange="handleDocumentSelection(this,'r-cnic-front','r-cnic-front-preview','r-cnic-front-label')">
+        <input class="document-file-input" type="file" id="r-cnic-front-gallery" accept="image/jpeg,image/png,image/webp" onchange="handleDocumentSelection(this,'r-cnic-front','r-cnic-front-preview','r-cnic-front-label')">
+        <input class="document-file-input" type="file" id="r-cnic-front" accept="image/jpeg,image/png,image/webp" aria-hidden="true" tabindex="-1">
       </div>
       <div class="form-group">
         <label>National ID — Back <span style="color:#f5c518">*</span></label>
@@ -586,8 +591,10 @@ body{font-family:'DM Sans','Segoe UI',sans-serif;background:var(--lr-paper);colo
           <button class="document-source-btn" type="button" onclick="openDocumentSource('r-cnic-back','camera')">📷 Take Photo</button>
           <button class="document-source-btn" type="button" onclick="openDocumentSource('r-cnic-back','gallery')">🖼️ Choose from Gallery</button>
         </div>
-        <input class="document-file-input" type="file" id="r-cnic-back" accept="image/jpeg,image/png,image/webp" onchange="updateDocumentFileLabel(this,'r-cnic-back-label')">
-        <span id="r-cnic-back-label" style="display:block;color:#888;font-size:.72rem;margin-top:.35rem">No image selected</span>
+        <div class="document-preview-row"><img id="r-cnic-back-preview" class="document-preview-thumb" alt="National ID back preview"><span id="r-cnic-back-label" class="document-preview-status">No image selected</span></div>
+        <input class="document-file-input" type="file" id="r-cnic-back-camera" accept="image/jpeg,image/png,image/webp" capture="environment" onchange="handleDocumentSelection(this,'r-cnic-back','r-cnic-back-preview','r-cnic-back-label')">
+        <input class="document-file-input" type="file" id="r-cnic-back-gallery" accept="image/jpeg,image/png,image/webp" onchange="handleDocumentSelection(this,'r-cnic-back','r-cnic-back-preview','r-cnic-back-label')">
+        <input class="document-file-input" type="file" id="r-cnic-back" accept="image/jpeg,image/png,image/webp" aria-hidden="true" tabindex="-1">
       </div>
       <p style="font-size:.7rem;color:#666;margin:-.35rem 0 1rem;line-height:1.4">Your details are matched securely against both ID images before an account is created.</p>
         <label id="student-feature-toggle-row" style="display:none;align-items:center;gap:.55rem;margin:.35rem 0 .8rem;font-weight:700">
@@ -604,8 +611,10 @@ body{font-family:'DM Sans','Segoe UI',sans-serif;background:var(--lr-paper);colo
             <button class="document-source-btn" type="button" onclick="openDocumentSource('r-student-id-image','camera')">📷 Take Photo</button>
             <button class="document-source-btn" type="button" onclick="openDocumentSource('r-student-id-image','gallery')">🖼️ Choose from Gallery</button>
           </div>
-          <input class="document-file-input" type="file" id="r-student-id-image" accept="image/jpeg,image/png,image/webp" onchange="updateDocumentFileLabel(this,'r-student-id-image-label')">
-          <span id="r-student-id-image-label" style="display:block;color:#888;font-size:.72rem;margin-top:.35rem">No image selected</span>
+          <div class="document-preview-row"><img id="r-student-id-image-preview" class="document-preview-thumb" alt="Student ID preview"><span id="r-student-id-image-label" class="document-preview-status">No image selected</span></div>
+          <input class="document-file-input" type="file" id="r-student-id-image-camera" accept="image/jpeg,image/png,image/webp" capture="environment" onchange="handleDocumentSelection(this,'r-student-id-image','r-student-id-image-preview','r-student-id-image-label')">
+          <input class="document-file-input" type="file" id="r-student-id-image-gallery" accept="image/jpeg,image/png,image/webp" onchange="handleDocumentSelection(this,'r-student-id-image','r-student-id-image-preview','r-student-id-image-label')">
+          <input class="document-file-input" type="file" id="r-student-id-image" accept="image/jpeg,image/png,image/webp" aria-hidden="true" tabindex="-1">
         </div>
       </div>
       <div class="form-group"><label>Email <span style="color:#888">(optional)</span></label><input type="email" id="r-email" placeholder="you@email.com (optional)" autocomplete="email"></div>
@@ -1410,17 +1419,42 @@ async function doLogin() {
   } catch (e) { document.getElementById('auth-error').textContent = e.message; }
 }
 
+const _selectedDocumentFiles = {};
+
+function rememberDocumentFile(targetInputId, file) {
+  _selectedDocumentFiles[targetInputId] = file;
+  const target = document.getElementById(targetInputId);
+  if (!target || typeof DataTransfer === 'undefined') return;
+  try {
+    const transfer = new DataTransfer();
+    transfer.items.add(file);
+    target.files = transfer.files;
+  } catch {
+    // doRegister() also reads _selectedDocumentFiles when FileList assignment is unavailable.
+  }
+}
+
 function openDocumentSource(inputId, source) {
-  const input = document.getElementById(inputId);
+  const input = document.getElementById(`${inputId}-${source}`) || document.getElementById(inputId);
   if (!input) return;
   if (source === 'camera') input.setAttribute('capture', 'environment');
   else input.removeAttribute('capture');
   input.click();
 }
 
-function updateDocumentFileLabel(input, labelId) {
+function handleDocumentSelection(input, targetInputId, previewId, labelId) {
+  const file = input.files?.[0];
+  if (!file) return;
+  rememberDocumentFile(targetInputId, file);
   const label = document.getElementById(labelId);
-  if (label) label.textContent = input.files?.[0]?.name || 'No image selected';
+  if (label) label.textContent = `✓ ${file.name} attached`;
+  const preview = document.getElementById(previewId);
+  if (preview) {
+    const objectUrl = URL.createObjectURL(file);
+    preview.onload = () => URL.revokeObjectURL(objectUrl);
+    preview.src = objectUrl;
+    preview.style.display = 'block';
+  }
 }
 
 function toggleStudentRegistrationFields() {
@@ -1459,12 +1493,12 @@ async function doRegister() {
   const cnic  = document.getElementById('r-cnic').value.trim();
   const email = document.getElementById('r-email').value.trim();
   const pass  = document.getElementById('r-pass').value;
-  const frontFile = document.getElementById('r-cnic-front').files[0];
-  const backFile = document.getElementById('r-cnic-back').files[0];
+   const frontFile = _selectedDocumentFiles['r-cnic-front'] || document.getElementById('r-cnic-front').files[0];
+   const backFile = _selectedDocumentFiles['r-cnic-back'] || document.getElementById('r-cnic-back').files[0];
   const isStudent = document.getElementById('r-is-student')?.checked === true;
   const studentIdNumber = document.getElementById('r-student-id')?.value.trim() || '';
   const studentInstitution = document.getElementById('r-student-institution')?.value.trim() || '';
-  const studentIdFile = document.getElementById('r-student-id-image')?.files[0];
+   const studentIdFile = _selectedDocumentFiles['r-student-id-image'] || document.getElementById('r-student-id-image')?.files[0];
   if (!name)  return (document.getElementById('auth-error').textContent = 'Full name is required');
   if (!phone) return (document.getElementById('auth-error').textContent = 'Phone number is required');
   if (!cnic)  return (document.getElementById('auth-error').textContent = 'CNIC / Identity Card Number is required');
