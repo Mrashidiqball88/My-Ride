@@ -55,6 +55,10 @@ export default function CustomerWebViewScreen() {
 
   const allowNavigation = useCallback((request: WebViewNavigation) => {
     if (!allowedOrigin) return false;
+    if (/^tel:/i.test(request.url) || /^https:\/\/wa\.me\//i.test(request.url)) {
+      void openExternalUrl(request.url);
+      return false;
+    }
     let requestedOrigin = '';
     try {
       requestedOrigin = new URL(request.url).origin;

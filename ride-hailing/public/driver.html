@@ -3506,6 +3506,13 @@ async function sendCounter() {
 }
 
 // ── Active Ride Panel ──────────────────────────────────────────────────────
+function openDriverRideContact(event, url) {
+  event?.preventDefault();
+  if (!url) return false;
+  window.location.href = url;
+  return false;
+}
+
 function showActivePanel(ride) {
   activeRide = ride;
   localStorage.setItem(DRIVER_ACTIVE_RIDE_STORAGE_KEY, String(ride._id || ride.id));
@@ -3537,8 +3544,8 @@ function showActivePanel(ride) {
   if (callEl) {
     callEl.innerHTML = telPhone
       ? `<div class="ap-dual-btns">
-           <a class="btn-call-pass" href="tel:${telPhone}">📞 Phone Call</a>
-           <a class="btn-wa-pass"   href="https://wa.me/${waPhone}" target="_blank" rel="noopener">💬 WhatsApp</a>
+           <a class="btn-call-pass" href="tel:${telPhone}" onclick="return openDriverRideContact(event, this.href)">📞 Phone Call</a>
+           <a class="btn-wa-pass"   href="https://wa.me/${waPhone}" onclick="return openDriverRideContact(event, this.href)">💬 WhatsApp</a>
          </div>`
       : '';
   }

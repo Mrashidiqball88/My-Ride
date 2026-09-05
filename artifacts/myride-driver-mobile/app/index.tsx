@@ -55,7 +55,15 @@ function passengerContactUrls(phone?: string | null) {
   };
 }
 
-function openPassengerContact(url: string, action: string) {
+function openPassengerContact(phone: string | null | undefined, action: 'Phone Call' | 'WhatsApp') {
+  const contact = passengerContactUrls(phone);
+  if (!contact) {
+    Alert.alert(`${action} unavailable`, 'The passenger phone number is not available for this ride.');
+    return;
+  }
+  const url = action === 'Phone Call'
+    ? `tel:${contact.tel}`
+    : `https://wa.me/${contact.whatsapp}`;
   void Linking.openURL(url).catch(() => {
     Alert.alert(`${action} unavailable`, `Unable to open ${action.toLowerCase()} on this device.`);
   });
@@ -225,7 +233,7 @@ function ActiveRideSheet({
           <Pressable
             accessibilityRole="button"
             accessibilityLabel={`Phone Call ${passengerName}`}
-            onPress={() => openPassengerContact(`tel:${passengerContact.tel}`, 'Phone Call')}
+            onPress={() => openPassengerContact(ride.passenger?.phone, 'Phone Call')}
             style={({ pressed }) => [styles.contactButton, { backgroundColor: colors.primary, borderColor: colors.primary, opacity: pressed ? .75 : 1 }]}
           >
             <Ionicons name="call-outline" size={18} color={colors.primaryForeground} />
@@ -234,7 +242,7 @@ function ActiveRideSheet({
           <Pressable
             accessibilityRole="button"
             accessibilityLabel={`WhatsApp ${passengerName}`}
-            onPress={() => openPassengerContact(`https://wa.me/${passengerContact.whatsapp}`, 'WhatsApp')}
+            onPress={() => openPassengerContact(ride.passenger?.phone, 'WhatsApp')}
             style={({ pressed }) => [styles.contactButton, { backgroundColor: colors.secondary, borderColor: colors.border, opacity: pressed ? .75 : 1 }]}
           >
             <Ionicons name="logo-whatsapp" size={18} color={colors.primary} />

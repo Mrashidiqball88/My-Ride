@@ -3905,6 +3905,13 @@ function showWaitingPanel(ride) {
 }
 
 // ── Matched Panel (after customer selects a driver) ────────────────────────
+function openCustomerRideContact(event, url) {
+  event?.preventDefault();
+  if (!url) return false;
+  window.location.href = url;
+  return false;
+}
+
 function showMatchedPanel(driver, agreedFare) {
   document.getElementById('active-ride').style.display = 'block';
   document.getElementById('bottom-panel').style.display = 'none';
@@ -3938,8 +3945,8 @@ function showMatchedPanel(driver, agreedFare) {
   const telPhone = digits ? (digits.startsWith('92') ? `+${digits}` : `+92${digits.replace(/^0/, '')}`) : '';
   const waPhone  = digits ? (digits.startsWith('92') ? digits : `92${digits.replace(/^0/, '')}`) : '';
   const contactHtml = telPhone
-    ? `<a class="btn-call"      href="tel:${telPhone}">📞 Phone Call</a>
-       <a class="btn-whatsapp"  href="https://wa.me/${waPhone}" target="_blank" rel="noopener">💬 WhatsApp</a>`
+    ? `<a class="btn-call"      href="tel:${telPhone}" onclick="return openCustomerRideContact(event, this.href)">📞 Phone Call</a>
+       <a class="btn-whatsapp"  href="https://wa.me/${waPhone}" onclick="return openCustomerRideContact(event, this.href)">💬 WhatsApp</a>`
     : `<div style="font-size:.78rem;color:#555;text-align:center;flex:1">Contact details not available</div>`;
   document.getElementById('ar-contact-btns').innerHTML = contactHtml;
   document.getElementById('ar-contact-btns').style.display = 'flex';
