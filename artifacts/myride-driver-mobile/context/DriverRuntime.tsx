@@ -53,6 +53,7 @@ export type DriverUser = {
   ridePreference?: string;
   paidUntilDate?: string | Date | null; dailyFeeRate?: number | null;
   onlineStartedAt?: string | Date | null; nextFeeDeductionAt?: string | Date | null;
+  onlineTimeDate?: string | null; onlineTimeTodaySeconds?: number;
 };
 export type RideAcceptanceEligibility = {
   allowed: boolean;
@@ -856,6 +857,8 @@ export function DriverRuntimeProvider({ children }: { children: ReactNode }) {
       setUser(current => current ? {
         ...current,
         onlineStartedAt: availability.onlineStartedAt || null,
+         onlineTimeDate: availability.onlineTimeDate || current?.onlineTimeDate || '',
+         onlineTimeTodaySeconds: Number(availability.onlineTimeTodaySeconds) || 0,
         nextFeeDeductionAt: availability.nextFeeDeductionAt || availability.paidUntilDate || null,
         ...(availability.paidUntilDate !== undefined ? { paidUntilDate: availability.paidUntilDate } : {}),
       } : current);
@@ -864,6 +867,8 @@ export function DriverRuntimeProvider({ children }: { children: ReactNode }) {
         const nextUser = {
           ...(JSON.parse(storedUser) as DriverUser),
           onlineStartedAt: availability.onlineStartedAt || null,
+           onlineTimeDate: availability.onlineTimeDate || (JSON.parse(storedUser) as DriverUser).onlineTimeDate || '',
+           onlineTimeTodaySeconds: Number(availability.onlineTimeTodaySeconds) || 0,
           nextFeeDeductionAt: availability.nextFeeDeductionAt || availability.paidUntilDate || null,
           ...(availability.paidUntilDate !== undefined ? { paidUntilDate: availability.paidUntilDate } : {}),
         };

@@ -115,6 +115,50 @@ test('native availability persists online state with a heartbeat instead of tyin
   }
 });
 
+test('Driver online time accumulates repeated sessions without restarting an active session', async () => {
+  const today = new Date().toISOString().slice(0, 10);
+  const driver = driverDocument({
+    isOnline: false,
+    paidUntilDate: new Date(Date.now() + 24 * 60 * 60 * 1000),
+    onlineTimeDate: today,
+    onlineTimeTodaySeconds: 0,
+    onlineStartedAt: null
+  });
+  models.Settings.findOne = () => ({ lean: async () => null });
+  models.User.findById = () => ({ select: () => ({ lean: async () => driver }) });
+  models.User.updateOne = async (_query, update) => {
+    Object.assign(driver, update);
+    return { acknowledged: true };
+  };
+
+  const server = app.listen(0);
+  try {
+    for (let session = 0; session < 10; session++) {
+      const online = await request(server, '/api/driver/availability', { isOnline: true });
+      assert.equal(online.response.status, 200);
+      assert.equal(online.body.isOnline, true);
+      const sessionStart = new Date(Date.now() - 60 * 1000);
+      driver.onlineStartedAt = sessionStart;
+
+      const offline = await request(server, '/api/driver/availability', { isOnline: false });
+      assert.equal(offline.response.status, 200);
+      assert.equal(offline.body.isOnline, false);
+      assert.ok(offline.body.onlineTimeTodaySeconds >= (session + 1) * 60);
+    }
+
+    const totalAfterTenSessions = driver.onlineTimeTodaySeconds;
+    const online = await request(server, '/api/driver/availability', { isOnline: true });
+    const activeStart = new Date(online.body.onlineStartedAt).getTime();
+    const duplicateOnline = await request(server, '/api/driver/availability', { isOnline: true });
+
+    assert.ok(totalAfterTenSessions >= 600);
+    assert.equal(duplicateOnline.body.onlineTimeTodaySeconds, totalAfterTenSessions);
+    assert.equal(new Date(duplicateOnline.body.onlineStartedAt).getTime(), activeStart);
+  } finally {
+    await new Promise(resolve => server.close(resolve));
+  }
+});
+
 test('daily fee is charged from the wallet only when a driver goes online, and insufficient balance blocks activation', async () => {
   const updates = [];
   const charges = [];

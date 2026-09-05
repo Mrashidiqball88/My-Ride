@@ -2490,6 +2490,34 @@ function formatElapsedDuration(milliseconds) {
   return hours ? `${hours}h ${String(minutes).padStart(2, '0')}m` : `${minutes}m`;
 }
 
+function getOnlineTimeTodaySeconds() {
+  const now = new Date();
+  const today = now.toISOString().slice(0, 10);
+  const storedSeconds = user?.onlineTimeDate === today
+    ? Math.max(0, Number(user?.onlineTimeTodaySeconds) || 0)
+    : 0;
+  if (!isOnline || !user?.onlineStartedAt) return storedSeconds;
+  const startedAt = new Date(user.onlineStartedAt).getTime();
+  if (!Number.isFinite(startedAt)) return storedSeconds;
+  const dayStart = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate());
+  return storedSeconds + Math.max(0, Math.floor((now.getTime() - Math.max(startedAt, dayStart)) / 1000));
+}
+
+function renderOnlineTimeValue() {
+  const onlineTimeValue = document.getElementById('online-time-value');
+  if (!onlineTimeValue) return;
+  onlineTimeValue.textContent = isOnline
+    ? formatElapsedDuration(getOnlineTimeTodaySeconds() * 1000)
+    : (user?.onlineTimeDate ? formatElapsedDuration(getOnlineTimeTodaySeconds() * 1000) : 'Offline');
+}
+
+function syncOnlineTimeClock() {
+  clearInterval(driverOpsClockTimer);
+  driverOpsClockTimer = isOnline
+    ? setInterval(renderOnlineTimeValue, 1000)
+    : null;
+}
+
 function formatFeeCountdown(timestamp) {
   if (!timestamp) return 'Due now';
   const remaining = new Date(timestamp).getTime() - Date.now();
@@ -2515,14 +2543,9 @@ function renderAvailabilityState({ reason = '' } = {}) {
   const statusText = document.getElementById('status-text');
   const statusSub = document.getElementById('status-sub');
   const idleMessage = document.getElementById('idle-msg');
-  const onlineTimeValue = document.getElementById('online-time-value');
   const nextFeeValue = document.getElementById('next-fee-value');
-  const onlineStartedAt = user?.onlineStartedAt ? new Date(user.onlineStartedAt).getTime() : NaN;
-  if (onlineTimeValue) {
-    onlineTimeValue.textContent = isOnline && Number.isFinite(onlineStartedAt)
-      ? formatElapsedDuration(Date.now() - onlineStartedAt)
-      : 'Offline';
-  }
+  renderOnlineTimeValue();
+  syncOnlineTimeClock();
   if (nextFeeValue) {
     nextFeeValue.textContent = user?.ridePreference === 'Long Range Only'
       ? 'Exempt'
@@ -2668,6 +2691,8 @@ async function toggleOnline(online) {
     isOnline = Boolean(result.isOnline);
     if (user) {
       user.onlineStartedAt = result.onlineStartedAt || null;
+      user.onlineTimeDate = result.onlineTimeDate || user.onlineTimeDate || '';
+      user.onlineTimeTodaySeconds = Number(result.onlineTimeTodaySeconds) || 0;
       user.nextFeeDeductionAt = result.nextFeeDeductionAt || result.paidUntilDate || null;
       if (result.paidUntilDate !== undefined) user.paidUntilDate = result.paidUntilDate;
       localStorage.setItem('rh_user', JSON.stringify(user));
@@ -2708,11 +2733,13 @@ function connectSocket() {
   if (socket) return;
   socket = io({ auth: { token, sessionToken } });
   socket.on('connect_error', e => console.warn('Socket error:', e.message));
-  socket.on('driver:status:ack', ({ isOnline: confirmedOnline, onlineStartedAt, nextFeeDeductionAt } = {}) => {
+  socket.on('driver:status:ack', ({ isOnline: confirmedOnline, onlineStartedAt, onlineTimeDate, onlineTimeTodaySeconds, nextFeeDeductionAt } = {}) => {
     if (!confirmedOnline) return;
     isOnline = true;
     if (user) {
       user.onlineStartedAt = onlineStartedAt || user.onlineStartedAt || null;
+      user.onlineTimeDate = onlineTimeDate || user.onlineTimeDate || '';
+      user.onlineTimeTodaySeconds = Number(onlineTimeTodaySeconds) || 0;
       user.nextFeeDeductionAt = nextFeeDeductionAt || user.nextFeeDeductionAt || user.paidUntilDate || null;
       localStorage.setItem('rh_user', JSON.stringify(user));
     }
@@ -2741,11 +2768,17 @@ function connectSocket() {
     reconcileRideRequestsAfterReconnect();
   });
 
-  socket.on('driver:rehydrate', ({ isOnline: restoredOnline }) => {
+  socket.on('driver:rehydrate', ({ isOnline: restoredOnline, onlineStartedAt, onlineTimeDate, onlineTimeTodaySeconds }) => {
     // Do not turn the local toggle off on the first stale reconnect packet:
     // the following driver:status event refreshes the authoritative heartbeat.
     if (restoredOnline || !isOnline) {
       isOnline = !!restoredOnline;
+        if (user && restoredOnline) {
+          user.onlineStartedAt = onlineStartedAt || user.onlineStartedAt || null;
+          user.onlineTimeDate = onlineTimeDate || user.onlineTimeDate || '';
+          user.onlineTimeTodaySeconds = Number(onlineTimeTodaySeconds) || 0;
+          localStorage.setItem('rh_user', JSON.stringify(user));
+        }
       renderAvailabilityState();
     }
     if (restoredOnline) {

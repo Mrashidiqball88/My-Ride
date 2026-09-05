@@ -612,14 +612,20 @@ function DriverHome() {
     </View>;
   }
   const onlineTone = runtime.isOnline ? colors.primary : colors.mutedForeground;
-  const onlineStartedAt = runtime.user.onlineStartedAt ? new Date(runtime.user.onlineStartedAt).getTime() : NaN;
-  const onlineMinutes = runtime.isOnline && Number.isFinite(onlineStartedAt)
-    ? Math.max(0, Math.floor((Date.now() - onlineStartedAt) / 60000))
+  const today = new Date().toISOString().slice(0, 10);
+  const storedOnlineSeconds = runtime.user.onlineTimeDate === today
+    ? Math.max(0, Number(runtime.user.onlineTimeTodaySeconds) || 0)
     : 0;
+  const onlineStartedAt = runtime.user.onlineStartedAt ? new Date(runtime.user.onlineStartedAt).getTime() : NaN;
+  const dayStart = Date.UTC(new Date().getUTCFullYear(), new Date().getUTCMonth(), new Date().getUTCDate());
+  const activeOnlineSeconds = runtime.isOnline && Number.isFinite(onlineStartedAt)
+    ? Math.max(0, Math.floor((Date.now() - Math.max(onlineStartedAt, dayStart)) / 1000))
+    : 0;
+  const onlineMinutes = Math.floor((storedOnlineSeconds + activeOnlineSeconds) / 60);
   const onlineHours = Math.floor(onlineMinutes / 60);
   const onlineTime = runtime.isOnline && Number.isFinite(onlineStartedAt)
     ? onlineHours ? `${onlineHours}h ${String(onlineMinutes % 60).padStart(2, '0')}m` : `${onlineMinutes}m`
-    : 'Offline';
+    : storedOnlineSeconds ? (Math.floor(storedOnlineSeconds / 3600) ? `${Math.floor(storedOnlineSeconds / 3600)}h ${String(Math.floor(storedOnlineSeconds / 60) % 60).padStart(2, '0')}m` : `${Math.floor(storedOnlineSeconds / 60)}m`) : 'Offline';
   const nextFeeAt = runtime.user.nextFeeDeductionAt || runtime.user.paidUntilDate;
   const feeRemaining = nextFeeAt ? new Date(nextFeeAt).getTime() - Date.now() : 0;
   const feeMinutes = Math.max(0, Math.ceil(feeRemaining / 60000));

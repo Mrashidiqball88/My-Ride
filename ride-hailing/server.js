@@ -1750,6 +1750,8 @@ const userSchema = new mongoose.Schema({
   // disconnect must not silently make an otherwise approved driver unavailable.
   lastOnlineHeartbeat: { type: Date, default: null },
   onlineStartedAt: { type: Date, default: null },
+  onlineTimeDate: { type: String, default: '' },
+  onlineTimeTodaySeconds: { type: Number, default: 0 },
   studentRideLastAssignedAt: { type: Date, default: null },
   expoPushToken:       { type: String, default: '' },
   expoPushTokenUpdatedAt: { type: Date, default: null },
@@ -3445,7 +3447,7 @@ async function rehydrateDriverSocket(socket, driverId, { replayOffers = true } =
   const recovery = (async () => {
     const [driver, activeRide] = await Promise.all([
       User.findById(driverId)
-        .select('isOnline accountStatus vehicleType ridePreference longRangeEnabled lastOnlineHeartbeat onlineStartedAt currentLocation paidUntilDate lastDailyFeePaidAt')
+        .select('isOnline accountStatus vehicleType ridePreference longRangeEnabled lastOnlineHeartbeat onlineStartedAt onlineTimeDate onlineTimeTodaySeconds currentLocation paidUntilDate lastDailyFeePaidAt')
         .lean()
         .catch(() => null),
       Ride.findOne({ driver: driverId, status: { $in: ['accepted', 'arrived', 'in-progress'] } })
@@ -3475,6 +3477,8 @@ async function rehydrateDriverSocket(socket, driverId, { replayOffers = true } =
       isOnline,
       vehicleType,
       onlineStartedAt: isOnline ? driver?.onlineStartedAt || null : null,
+      onlineTimeDate: driver?.onlineTimeDate || '',
+      onlineTimeTodaySeconds: driver?.onlineTimeTodaySeconds || 0,
       nextFeeDeductionAt: isOnline ? driver?.paidUntilDate || null : null,
       activeRideId: activeRide ? String(activeRide._id) : null,
       pendingRideIds: pendingRides.map(ride => String(ride._id))
@@ -4639,7 +4643,7 @@ app.post('/api/auth/register', async (req, res) => {
               vehicleModel: user.vehicleModel, vehiclePlate: user.vehiclePlate,
                lastDailyFeePaidAt: null, dailyFeeAmount: await getDailyFeeForVehicle(user.vehicleType),
                paidUntilDate: null, dailyFeeRate: await getDailyFeeForVehicle(user.vehicleType),
-               onlineStartedAt: null, nextFeeDeductionAt: null }
+                onlineStartedAt: null, onlineTimeDate: '', onlineTimeTodaySeconds: 0, nextFeeDeductionAt: null }
     });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -4755,6 +4759,8 @@ app.post('/api/auth/login', async (req, res) => {
               paidUntilDate:  user.paidUntilDate  || null,
                dailyFeeRate:   await getDailyFeeForVehicle(user.vehicleType),
                onlineStartedAt: user.onlineStartedAt || null,
+                onlineTimeDate: user.onlineTimeDate || '',
+                onlineTimeTodaySeconds: user.onlineTimeTodaySeconds || 0,
                nextFeeDeductionAt: user.paidUntilDate || null,
               isFreeTrial:    user.isFreeTrial    || false,
               trialStartDate: user.trialStartDate || null }
@@ -5160,6 +5166,48 @@ app.post('/api/rides/:id/student-response', authMiddleware, driverOnly, async (r
   }
 });
 
+function onlineTimeDayKey(date = new Date()) {
+  return date.toISOString().slice(0, 10);
+}
+
+function onlineTimeDayStart(date = new Date()) {
+  return new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate()));
+}
+
+function onlineSecondsSinceDayStart(startedAt, now) {
+  const start = new Date(startedAt).getTime();
+  const end = new Date(now).getTime();
+  if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start) return 0;
+  const dayStart = onlineTimeDayStart(now).getTime();
+  return Math.max(0, Math.floor((end - Math.max(start, dayStart)) / 1000));
+}
+
+function getOnlineTimeTransition(driver, isOnline, now = new Date()) {
+  const dayKey = onlineTimeDayKey(now);
+  const storedSeconds = driver?.onlineTimeDate === dayKey
+    ? Math.max(0, Number(driver.onlineTimeTodaySeconds) || 0)
+    : 0;
+  const activeStartedAt = driver?.isOnline && driver?.onlineStartedAt
+    ? new Date(driver.onlineStartedAt)
+    : null;
+
+  if (isOnline) {
+    return {
+      onlineStartedAt: activeStartedAt || now,
+      onlineTimeDate: dayKey,
+      onlineTimeTodaySeconds: storedSeconds
+    };
+  }
+
+  return {
+    onlineStartedAt: null,
+    onlineTimeDate: dayKey,
+    onlineTimeTodaySeconds: storedSeconds + (
+      activeStartedAt ? onlineSecondsSinceDayStart(activeStartedAt, now) : 0
+    )
+  };
+}
+
 // Native driver runtime endpoints. Background location tasks use REST because
 // mobile operating systems may wake them without restoring the JS Socket.io app.
 app.post('/api/driver/availability', authMiddleware, async (req, res) => {
@@ -5169,7 +5217,7 @@ app.post('/api/driver/availability', authMiddleware, async (req, res) => {
     }
     const isOnline = req.body?.isOnline === true;
     const driver = await User.findById(req.user.id)
-      .select('accountStatus vehicleType ridePreference paidUntilDate lastDailyFeePaidAt isFreeTrial longRangeEnabled isOnline onlineStartedAt').lean();
+      .select('accountStatus vehicleType ridePreference paidUntilDate lastDailyFeePaidAt isFreeTrial longRangeEnabled isOnline onlineStartedAt onlineTimeDate onlineTimeTodaySeconds').lean();
     if (!driver || driver.accountStatus !== 'active') {
       return res.status(403).json({ error: 'Your driver account is not approved for online availability' });
     }
@@ -5191,10 +5239,12 @@ app.post('/api/driver/availability', authMiddleware, async (req, res) => {
         });
       }
     }
-    const onlineStartedAt = isOnline ? new Date() : null;
+    const onlineNow = new Date();
+    const onlineTime = getOnlineTimeTransition(driver, isOnline, onlineNow);
+    const onlineStartedAt = onlineTime.onlineStartedAt;
     const update = isOnline
-      ? { isOnline: true, lastOnlineHeartbeat: onlineStartedAt, onlineStartedAt }
-      : { isOnline: false, lastOnlineHeartbeat: null, onlineStartedAt: null };
+      ? { isOnline: true, lastOnlineHeartbeat: onlineNow, ...onlineTime }
+      : { isOnline: false, lastOnlineHeartbeat: null, ...onlineTime };
     await User.updateOne({ _id: req.user.id }, update);
     const paidUntilDate = feeResult?.paidUntilDate || driver.paidUntilDate || null;
     res.json({
@@ -5202,6 +5252,8 @@ app.post('/api/driver/availability', authMiddleware, async (req, res) => {
       onlineStartedAt,
       paidUntilDate,
       nextFeeDeductionAt: paidUntilDate,
+      onlineTimeDate: onlineTime.onlineTimeDate,
+      onlineTimeTodaySeconds: onlineTime.onlineTimeTodaySeconds,
       vehicleType: normalizeFareVehicle(driver.vehicleType || 'Car Mini Non-AC'),
       ridePreference: normalizeRidePreference(driver.ridePreference),
       longRangeEnabled: !!driver.longRangeEnabled
@@ -9750,10 +9802,11 @@ io.on('connection', async (socket) => {
     if (role !== 'driver') return;
     const isOnline = requestedOnline === true;
     let feeResult = null;
-    let driver = null;
+    let driver = await User.findById(id)
+      .select('accountStatus vehicleType paidUntilDate lastDailyFeePaidAt isFreeTrial isOnline onlineStartedAt onlineTimeDate onlineTimeTodaySeconds')
+      .lean()
+      .catch(() => null);
     if (isOnline) {
-      driver = await User.findById(id)
-        .select('accountStatus vehicleType paidUntilDate lastDailyFeePaidAt isFreeTrial').catch(() => null);
       if (driver?.accountStatus === 'pending') {
         await User.updateOne({ _id: id }, { isOnline: false, lastOnlineHeartbeat: null, onlineStartedAt: null }).catch(() => {});
         socket.emit('account:suspended', { reason: 'Your account is pending Admin approval. You will be notified once approved.' });
@@ -9780,10 +9833,12 @@ io.on('connection', async (socket) => {
       // Cache vehicle type on socket for room management
       if (driver?.vehicleType) socket.vehicleType = normalizeFareVehicle(driver.vehicleType);
     }
-    const onlineStartedAt = isOnline ? new Date() : null;
+    const onlineNow = new Date();
+    const onlineTime = getOnlineTimeTransition(driver, isOnline, onlineNow);
+    const onlineStartedAt = onlineTime.onlineStartedAt;
     await User.updateOne({ _id: id }, isOnline
-      ? { isOnline: true, lastOnlineHeartbeat: onlineStartedAt, onlineStartedAt }
-      : { isOnline: false, lastOnlineHeartbeat: null, onlineStartedAt: null }
+      ? { isOnline: true, lastOnlineHeartbeat: onlineNow, ...onlineTime }
+      : { isOnline: false, lastOnlineHeartbeat: null, ...onlineTime }
     ).catch(() => {});
     const vRoom = `drivers:${socket.vehicleType || 'Car Mini Non-AC'}`;
     if (isOnline) { socket.join('drivers-online'); socket.join(vRoom); }
@@ -9794,6 +9849,8 @@ io.on('connection', async (socket) => {
       isOnline,
       vehicleType: socket.vehicleType || null,
       onlineStartedAt,
+      onlineTimeDate: onlineTime.onlineTimeDate,
+      onlineTimeTodaySeconds: onlineTime.onlineTimeTodaySeconds,
       nextFeeDeductionAt: feeResult?.paidUntilDate || driver?.paidUntilDate || null
     });
   }));
