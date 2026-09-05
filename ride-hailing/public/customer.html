@@ -690,6 +690,7 @@ body{font-family:'DM Sans','Segoe UI',sans-serif;background:var(--lr-paper);colo
         <div class="dots-dropdown" id="dots-dropdown" style="display:none">
           <div class="dots-item" onclick="openEmergencyContactsModal()">🆘 Emergency Contacts</div>
           <div class="dots-item" onclick="openSupportModal()">🎫 Contact Support</div>
+           <div class="dots-item" onclick="refreshCustomerApp()">🔄 Refresh</div>
           <div class="dots-item" onclick="openTermsModal();closeDotsMenu()">📜 Terms &amp; Conditions</div>
           <div class="dots-item" onclick="openChangePhoneModal();closeDotsMenu()">📱 Change Phone Number</div>
           <div class="dots-item" onclick="openChangePasswordModal();closeDotsMenu()">🔑 Change Password</div>
@@ -1723,6 +1724,10 @@ function toggleDotsMenu(e) {
 }
 function closeDotsMenu() {
   document.getElementById('dots-dropdown').style.display = 'none';
+}
+function refreshCustomerApp() {
+  closeDotsMenu();
+  window.location.reload();
 }
 async function loadCustomerTerms() {
   try {
