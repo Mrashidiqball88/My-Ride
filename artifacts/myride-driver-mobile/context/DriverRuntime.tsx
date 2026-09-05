@@ -71,6 +71,7 @@ export type RideRequest = {
   verificationPin?: string | null;
   broadcastDurationSeconds?: number;
   broadcastExpiresAt?: string | Date;
+  offerExpiresAt?: string | Date;
   pickupLocation?: { address?: string; lat: number; lng: number };
   dropoffLocation?: { address?: string; lat: number; lng: number };
 };
@@ -238,7 +239,7 @@ function normalizeRideRequest(ride: RideRequest & { _id?: string }): RideRequest
 }
 
 function isRideOfferLive(ride: RideRequest | null | undefined) {
-  const expiresAt = new Date(ride?.broadcastExpiresAt || 0).getTime();
+  const expiresAt = new Date(ride?.broadcastExpiresAt || ride?.offerExpiresAt || 0).getTime();
   return Boolean(ride?.id) && Number.isFinite(expiresAt) && expiresAt > Date.now();
 }
 
@@ -279,8 +280,10 @@ export function DriverRuntimeProvider({ children }: { children: ReactNode }) {
   const socket = useRef<Socket | null>(null);
   const tokenRef = useRef<string | null>(null);
   const sessionRef = useRef<string | null>(null);
+  const userRef = useRef<DriverUser | null>(null);
   const isOnlineRef = useRef(false);
   const activeRideIdRef = useRef<string | null>(null);
+  const pendingRideRef = useRef<RideRequest | null>(null);
   const sentOfferRef = useRef<RideRequest | null>(null);
   const alertedRideIds = useRef(new Set<string>());
   const localRideNotificationIds = useRef(new Map<string, string>());
@@ -294,6 +297,8 @@ export function DriverRuntimeProvider({ children }: { children: ReactNode }) {
   const specialSettingPrompted = useRef<AndroidAlertSetting | null>(null);
 
   useEffect(() => { isOnlineRef.current = isOnline; }, [isOnline]);
+  useEffect(() => { userRef.current = user; }, [user]);
+  useEffect(() => { pendingRideRef.current = pendingRide; }, [pendingRide]);
   useEffect(() => { sentOfferRef.current = sentOffer; }, [sentOffer]);
   useEffect(() => { activeRideIdRef.current = activeRideId; }, [activeRideId]);
 
@@ -407,7 +412,7 @@ export function DriverRuntimeProvider({ children }: { children: ReactNode }) {
     if (ride.acceptanceEligibility?.allowed === false) {
       return { allowed: false, reason: ride.acceptanceEligibility.reason || 'This ride cannot be accepted yet.' };
     }
-    if (ride.isLongRange) {
+    if (ride.isLongRange && longRange) {
       const category = ride.vehicleType || longRange?.vehicleType || user?.vehicleType || 'Car Mini Non-AC';
       const minimum = Number(longRange?.settings?.minimumWalletBalances?.[category] || 0);
       const commission = Number(longRange?.settings?.manualCommissionAmounts?.[category] || 0);
@@ -497,16 +502,24 @@ export function DriverRuntimeProvider({ children }: { children: ReactNode }) {
       setSentOffer(current => current?.id === rideId ? null : current);
       if (sentOfferRef.current?.id === rideId) sentOfferRef.current = null;
     });
-    nextSocket.on('ride:accepted', ({ rideId }: { rideId: string }) => {
-      if (sentOfferRef.current?.id !== rideId) return;
+    nextSocket.on('ride:accepted', ({ rideId, driver }: { rideId: string; driver?: { id?: string } }) => {
+      const isWinningDriver = !driver?.id || String(driver.id) === String(userRef.current?.id);
+      const matchesSentOffer = sentOfferRef.current?.id === rideId;
+      const matchesPending = pendingRideRef.current?.id === rideId;
+      if (!isWinningDriver && !matchesSentOffer && !matchesPending) return;
       clearRideAlert(rideId);
-      setSentOffer(null);
-      sentOfferRef.current = null;
-      setPendingRide(current => current?.id === rideId ? null : current);
-      // Do not promote the stale requested snapshot into an active ride. The
-      // server's accepted snapshot contains the assigned Driver and latest
-      // status, so recover it before showing navigation.
-      void hydrateActiveRide();
+      if (isWinningDriver) {
+        setSentOffer(null);
+        sentOfferRef.current = null;
+        setPendingRide(current => current?.id === rideId ? null : current);
+        // Do not promote the stale requested snapshot into an active ride. The
+        // server's accepted snapshot contains the assigned Driver and latest
+        // status, so recover it before showing navigation.
+        void hydrateActiveRide();
+      } else {
+        setSentOffer(current => current?.id === rideId ? null : current);
+        setPendingRide(current => current?.id === rideId ? null : current);
+      }
     });
     const clearCancelledRide = ({ rideId, status }: { rideId: string; status?: string }) => {
       if (status && status !== 'cancelled') return;
@@ -1178,12 +1191,16 @@ export function DriverRuntimeProvider({ children }: { children: ReactNode }) {
       // acceptance. Re-read authoritative state before allowing another
       // attempt, avoiding duplicate claims or a stuck Accept button.
       setAcceptingRide(false);
+      if (await hydrateActiveRide()) {
+        setError(null);
+        return;
+      }
       await hydrateAvailableRides().catch(() => undefined);
       throw error;
     } finally {
       setAcceptingRide(false);
     }
-  }, [acceptingRide, clearRideAlert, getRideAcceptability, hydrateAvailableRides, pendingRide]);
+  }, [acceptingRide, clearRideAlert, getRideAcceptability, hydrateActiveRide, hydrateAvailableRides, pendingRide]);
 
   const updateRideStatus = useCallback(async (
     status: 'arrived' | 'in-progress' | 'completed',

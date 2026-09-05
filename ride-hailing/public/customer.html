@@ -4114,7 +4114,13 @@ async function acceptDriver(driverId, agreedFare) {
       }, agreedFare);
     }
     showToast('Driver accepted! They\'re on the way.', 'success');
-  } catch (e) { showToast(e.message, 'error'); }
+  } catch (e) {
+    const message = String(e?.message || '');
+    const customerMessage = /manual Long Range (commission|charge).*not configured/i.test(message)
+      ? 'That Driver is not available for this ride right now. Please choose another Driver.'
+      : message;
+    showToast(customerMessage || 'That Driver could not be selected. Please choose another Driver.', 'error');
+  }
 }
 
 function statusLabel(s) {

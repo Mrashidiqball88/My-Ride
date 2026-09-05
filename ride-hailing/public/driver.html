@@ -3456,6 +3456,12 @@ async function acceptRide() {
   } catch (e) {
     // A timeout may happen after the server has committed the acceptance.
     // Refresh authoritative state before allowing another action.
+    const previousActiveRide = activeRide;
+    await reconcileActiveRideAfterReconnect().catch(() => {});
+    if (activeRide && activeRide !== previousActiveRide) {
+      showToast('🎉 Ride accepted! Head to pickup.', 'success');
+      return;
+    }
     await reconcileRideRequestsAfterReconnect().catch(() => {});
     showToast(e.message || 'Could not accept ride — try again', 'error');
   } finally {
