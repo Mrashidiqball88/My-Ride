@@ -45,6 +45,22 @@ function smoothBearing(previous: number | null, next: number) {
   return (previous + delta * 0.35 + 360) % 360;
 }
 
+function passengerContactUrls(phone?: string | null) {
+  const digits = String(phone || '').replace(/\D/g, '');
+  if (!digits) return null;
+  const normalizedDigits = digits.startsWith('92') ? digits : `92${digits.replace(/^0/, '')}`;
+  return {
+    tel: `+${normalizedDigits}`,
+    whatsapp: normalizedDigits,
+  };
+}
+
+function openPassengerContact(url: string, action: string) {
+  void Linking.openURL(url).catch(() => {
+    Alert.alert(`${action} unavailable`, `Unable to open ${action.toLowerCase()} on this device.`);
+  });
+}
+
 function DriverNavigationMap({ ride, driverLocation, colors }: {
   ride: RideRequest | null;
   driverLocation: DriverLocation | null;
@@ -86,6 +102,7 @@ function ActiveRideSheet({
     ? ride.status
     : 'accepted';
   const passengerName = ride.passenger?.name || 'Passenger';
+  const passengerContact = passengerContactUrls(ride.passenger?.phone);
 
   const snapTo = (next: SheetState) => {
     const target = next === 'expanded' ? 0 : next === 'compact' ? compactOffset : collapsedOffset;
@@ -204,6 +221,26 @@ function ActiveRideSheet({
         nestedScrollEnabled
         showsVerticalScrollIndicator={false}
       >
+        {passengerContact && <View style={styles.contactActions}>
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel={`Phone Call ${passengerName}`}
+            onPress={() => openPassengerContact(`tel:${passengerContact.tel}`, 'Phone Call')}
+            style={({ pressed }) => [styles.contactButton, { backgroundColor: colors.primary, borderColor: colors.primary, opacity: pressed ? .75 : 1 }]}
+          >
+            <Ionicons name="call-outline" size={18} color={colors.primaryForeground} />
+            <Text style={[styles.contactButtonLabel, { color: colors.primaryForeground }]}>Phone Call</Text>
+          </Pressable>
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel={`WhatsApp ${passengerName}`}
+            onPress={() => openPassengerContact(`https://wa.me/${passengerContact.whatsapp}`, 'WhatsApp')}
+            style={({ pressed }) => [styles.contactButton, { backgroundColor: colors.secondary, borderColor: colors.border, opacity: pressed ? .75 : 1 }]}
+          >
+            <Ionicons name="logo-whatsapp" size={18} color={colors.primary} />
+            <Text style={[styles.contactButtonLabel, { color: colors.foreground }]}>WhatsApp</Text>
+          </Pressable>
+        </View>}
         <View style={[styles.sheetRouteCard, { backgroundColor: colors.secondary, borderColor: colors.border }]}>
           <Text style={[styles.sheetLabel, { color: colors.primary }]}>PICKUP</Text>
           <Text style={[styles.sheetAddress, { color: colors.foreground }]} numberOfLines={2}>{ride.pickupLocation?.address || 'Pickup location shared'}</Text>
@@ -758,7 +795,7 @@ const styles = StyleSheet.create({
   serviceLine: { borderTopWidth: 1, flexDirection: 'row', gap: 8, alignItems: 'center', marginTop: 15, paddingTop: 14 }, serviceText: { fontFamily: 'Inter_500Medium', fontSize: 12 },
   vehicleCard: { marginTop: 12, borderWidth: 1, flexDirection: 'row', alignItems: 'center', gap: 10, padding: 13 }, vehicleLabel: { fontFamily: 'Inter_700Bold', fontSize: 10, letterSpacing: .8 }, vehicleName: { fontFamily: 'Inter_600SemiBold', fontSize: 14, marginTop: 2 },
    navigationCard: { marginTop: 18, borderWidth: 1, padding: 12, overflow: 'hidden' }, navigationHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 3, paddingBottom: 10 }, navigationTitle: { fontFamily: 'Inter_700Bold', fontSize: 15 }, navigationSubtitle: { fontFamily: 'Inter_400Regular', fontSize: 11, marginTop: 2 }, recenterButton: { width: 38, height: 38, borderWidth: 1, borderRadius: 19, alignItems: 'center', justifyContent: 'center' }, navigationMapFrame: { height: 310, overflow: 'hidden', borderRadius: 10, position: 'relative' }, navigationMap: { flex: 1 }, fixedDriverMarker: { position: 'absolute', top: '50%', left: '50%', width: 44, height: 54, marginLeft: -22, marginTop: -27, alignItems: 'center', justifyContent: 'center' }, fixedDriverMarkerHalo: { position: 'absolute', width: 38, height: 38, borderRadius: 19, borderWidth: 2, opacity: .28 }, fixedDriverMarkerDot: { width: 18, height: 18, borderRadius: 9, borderWidth: 3, zIndex: 2 }, fixedDriverMarkerArrow: { position: 'absolute', bottom: 3, width: 0, height: 0, borderLeftWidth: 6, borderRightWidth: 6, borderBottomWidth: 11, borderLeftColor: 'transparent', borderRightColor: 'transparent', zIndex: 1 }, gpsStatus: { position: 'absolute', left: 12, bottom: 12, flexDirection: 'row', alignItems: 'center', gap: 5, paddingHorizontal: 9, paddingVertical: 7, borderRadius: 15, opacity: .95 }, gpsStatusText: { fontFamily: 'Inter_600SemiBold', fontSize: 11 }, pausedBadge: { position: 'absolute', top: 12, left: 12, paddingHorizontal: 9, paddingVertical: 7, borderRadius: 15, opacity: .95 },
-    activeRideStage: { height: 520, marginTop: 18, position: 'relative', zIndex: 40, elevation: 4 }, activeRideSheet: { position: 'absolute', left: 0, right: 0, bottom: 0, borderWidth: 1, borderRadius: 24, overflow: 'hidden', elevation: 12, shadowColor: '#000', shadowOpacity: .3, shadowRadius: 18, shadowOffset: { width: 0, height: -6 } }, sheetHandleArea: { height: 42, alignItems: 'center', justifyContent: 'center' }, sheetHandle: { width: 48, height: 5, borderRadius: 3, opacity: .7 }, sheetHeader: { paddingHorizontal: 15, paddingBottom: 12, borderBottomWidth: 1 }, sheetStatusRow: { flexDirection: 'row', alignItems: 'center', gap: 10 }, sheetTitle: { fontFamily: 'Inter_700Bold', fontSize: 15 }, sheetSubtitle: { fontFamily: 'Inter_400Regular', fontSize: 12, marginTop: 3 }, sheetToggle: { width: 36, height: 36, borderWidth: 1, borderRadius: 18, alignItems: 'center', justifyContent: 'center' }, sheetScroll: { flex: 1 }, sheetContent: { padding: 14, gap: 12, paddingBottom: 24 }, sheetRouteCard: { borderWidth: 1, borderRadius: 13, padding: 12 }, sheetLabel: { fontFamily: 'Inter_700Bold', fontSize: 10, letterSpacing: 1 }, sheetAddress: { fontFamily: 'Inter_500Medium', fontSize: 14, lineHeight: 19, marginTop: 4 }, sheetDivider: { height: 1, marginVertical: 11 }, sheetPrimaryButton: { minHeight: 50, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 16 }, pinCard: { borderWidth: 1, borderRadius: 13, padding: 12, gap: 9 }, pinHint: { fontFamily: 'Inter_400Regular', fontSize: 12, lineHeight: 17 }, pinInput: { height: 50, borderWidth: 1, borderRadius: 11, paddingHorizontal: 14, fontFamily: 'Inter_700Bold', fontSize: 20, letterSpacing: 5 }, sheetCancelButton: { minHeight: 46, borderWidth: 1, borderRadius: 12, alignItems: 'center', justifyContent: 'center' },
+    activeRideStage: { height: 520, marginTop: 18, position: 'relative', zIndex: 40, elevation: 4 }, activeRideSheet: { position: 'absolute', left: 0, right: 0, bottom: 0, borderWidth: 1, borderRadius: 24, overflow: 'hidden', elevation: 12, shadowColor: '#000', shadowOpacity: .3, shadowRadius: 18, shadowOffset: { width: 0, height: -6 } }, sheetHandleArea: { height: 42, alignItems: 'center', justifyContent: 'center' }, sheetHandle: { width: 48, height: 5, borderRadius: 3, opacity: .7 }, sheetHeader: { paddingHorizontal: 15, paddingBottom: 12, borderBottomWidth: 1 }, sheetStatusRow: { flexDirection: 'row', alignItems: 'center', gap: 10 }, sheetTitle: { fontFamily: 'Inter_700Bold', fontSize: 15 }, sheetSubtitle: { fontFamily: 'Inter_400Regular', fontSize: 12, marginTop: 3 }, sheetToggle: { width: 36, height: 36, borderWidth: 1, borderRadius: 18, alignItems: 'center', justifyContent: 'center' }, sheetScroll: { flex: 1 }, sheetContent: { padding: 14, gap: 12, paddingBottom: 24 }, contactActions: { flexDirection: 'row', gap: 10 }, contactButton: { flex: 1, minHeight: 48, borderWidth: 1, borderRadius: 12, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, paddingHorizontal: 10 }, contactButtonLabel: { fontFamily: 'Inter_700Bold', fontSize: 13 }, sheetRouteCard: { borderWidth: 1, borderRadius: 13, padding: 12 }, sheetLabel: { fontFamily: 'Inter_700Bold', fontSize: 10, letterSpacing: 1 }, sheetAddress: { fontFamily: 'Inter_500Medium', fontSize: 14, lineHeight: 19, marginTop: 4 }, sheetDivider: { height: 1, marginVertical: 11 }, sheetPrimaryButton: { minHeight: 50, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 16 }, pinCard: { borderWidth: 1, borderRadius: 13, padding: 12, gap: 9 }, pinHint: { fontFamily: 'Inter_400Regular', fontSize: 12, lineHeight: 17 }, pinInput: { height: 50, borderWidth: 1, borderRadius: 11, paddingHorizontal: 14, fontFamily: 'Inter_700Bold', fontSize: 20, letterSpacing: 5 }, sheetCancelButton: { minHeight: 46, borderWidth: 1, borderRadius: 12, alignItems: 'center', justifyContent: 'center' },
   rideCard: { marginTop: 18, borderWidth: 1, padding: 18 }, rideHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'baseline' }, rideLabel: { fontFamily: 'Inter_700Bold', letterSpacing: 1.1, fontSize: 12 }, fare: { fontFamily: 'Inter_700Bold', fontSize: 23 },
   offerTimer: { flexDirection: 'row', alignItems: 'center', gap: 6, alignSelf: 'flex-start', borderWidth: 1, borderRadius: 9, paddingHorizontal: 9, paddingVertical: 6, marginTop: 11 }, offerTimerText: { fontFamily: 'Inter_700Bold', fontSize: 12 },
   location: { fontFamily: 'Inter_600SemiBold', fontSize: 16, marginTop: 15 }, route: { fontFamily: 'Inter_400Regular', fontSize: 13, marginTop: 6 }, rideActions: { flexDirection: 'row', gap: 10, marginTop: 18 }, secondaryButton: { flex: 1, height: 46, borderWidth: 1, alignItems: 'center', justifyContent: 'center' }, acceptButton: { flex: 1, height: 46, alignItems: 'center', justifyContent: 'center' },
