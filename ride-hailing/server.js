@@ -1964,7 +1964,7 @@ function hashDeviceIdentifier(deviceId) {
     : '';
 }
 
-// Sub-Admin schema — granular-permission secondary admin accounts (max 50)
+// Sub-Admin schema — granular-permission secondary admin accounts (max 200)
 const subAdminSchema = new mongoose.Schema({
   username:  { type: String, required: true, unique: true, trim: true },
   password:  { type: String, required: true },
@@ -7160,11 +7160,11 @@ app.get('/api/admin/session', adminJwt, async (req, res) => {
   });
 });
 
-// POST /api/admin/sub-users/create — super-admin only; enforces 50-user cap
+// POST /api/admin/sub-users/create — super-admin only; enforces 200-user cap
 app.post('/api/admin/sub-users/create', adminJwt, requireSuperAdmin, async (req, res) => {
   try {
     const count = await SubAdmin.countDocuments();
-    if (count >= 50) return res.status(400).json({ error: 'Maximum limit of 50 sub-admin users reached.' });
+    if (count >= 200) return res.status(400).json({ error: 'Maximum limit of 200 sub-admin users reached.' });
     const { username, password, permissions } = req.body;
     if (!username || !password) return res.status(400).json({ error: 'Username and password required' });
     if (await SubAdmin.findOne({ username: username.trim() }))
