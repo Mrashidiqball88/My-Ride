@@ -117,6 +117,11 @@ test.describe('Admin Mapbox maps and city-aware place search', () => {
       hasLeaflet: Boolean(window.L),
       markerCount: adminLiveMarkers.size
     }))).toEqual({ hasMapbox: true, hasLeaflet: false, markerCount: 1 });
+    await expect.poll(() => page.evaluate(() => {
+      const map = document.querySelector('#admin-live-map');
+      const rect = map?.getBoundingClientRect();
+      return Boolean(rect?.width && rect.height);
+    })).toBe(true);
     expect(forbiddenMapRequests).toEqual([]);
 
     const placeInput = page.locator('#admin-place-search-input');
