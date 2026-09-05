@@ -1,0 +1,21 @@
+🚨 CRITICAL WARNING / STRICT SCOPE ENFORCEMENT:
+Do NOT modify, touch, refactor, or alter ANY other file, setting, module, pricing formula, wallet logic, or unrelated code in the entire codebase. Restrict your changes strictly and exclusively to implementing the two new admin control features specified below: (1) Fair Rotation & Daily Student Ride Quota, and (2) Student Ride Rejection & Missed Log. Leave all other parts of the platform completely untouched and secure from any errors.
+
+---
+
+ADMIN PANEL & BACKEND REQUIREMENT: Fair Student Quota & Rejection Tracking System
+
+Please implement the following two robust features in the Admin Panel and backend logic with zero margin for calculation or logic errors:
+
+1. **Fair Rotation & Daily Student Ride Quota Settings**:
+   - **Admin UI Control**: Add a dedicated settings card in the Admin Panel under Student/Pricing controls allowing the admin to configure the **Daily Mandatory Student Rides Quota per Driver** (e.g., configurable input field, default set to 2 or 3 rides per day).
+   - **Fair Rotation Backend Logic**: Implement a fair rotation algorithm that distributes student ride requests evenly among active online drivers so that the daily student ride quota is shared fairly across the fleet without overburdening any single driver.
+   - **Quota Tracking**: The backend must track each driver's completed student rides for the current calendar day to ensure compliance.
+
+2. **Student Ride Rejection & Missed Log Card**:
+   - **Admin UI Card**: Create a dedicated monitoring card/table in the Admin Panel named **"Student Ride Rejection & Missed Log"**.
+   - **Detailed Logging**: This log must record every instance where a driver rejects or misses a student ride request. Each entry must capture:
+     - **Driver Details**: Driver Name, Phone Number, and ID.
+     - **Distance & Location**: The distance in kilometers (KM) between the driver and the student's pickup location.
+     - **Response Type**: Explicitly indicate whether the driver clicked "Reject" or if the request resulted in a "Timeout / Ignored" state.
+   - **Data Integrity**: Ensure logs update in real-time and maintain accurate data history for admin oversight.
