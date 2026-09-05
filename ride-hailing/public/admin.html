@@ -28,7 +28,7 @@ body{font-family:'Segoe UI',system-ui,sans-serif;background:#06060e;color:#e2e8f
 #admin-app{display:none;width:100vw;height:100vh;overflow:hidden;flex-direction:row}
 #admin-app:not(.authenticated){display:none!important}
 #sidebar{width:230px;min-width:230px;background:#08080f;border-right:1px solid #12122a;display:flex;flex-direction:column;overflow-y:auto;flex-shrink:0}
-#main{flex:1;min-width:0;min-height:0;display:flex;flex-direction:column;overflow:hidden}
+#main{flex:1;display:flex;flex-direction:column;overflow:hidden}
 
 /* ── Sidebar ── */
 .sb-logo{padding:1.2rem 1.2rem .8rem;border-bottom:1px solid #12122a}
@@ -61,10 +61,10 @@ body{font-family:'Segoe UI',system-ui,sans-serif;background:#06060e;color:#e2e8f
 #admin-email-lbl{font-size:.72rem;color:#475569}
 
 /* ── Main Content ── */
-#content-area{flex:1;min-width:0;min-height:0;overflow-y:auto;padding:1.5rem}
+#content-area{flex:1;overflow-y:auto;padding:1.5rem}
 
 /* ── Section Panels ── */
-.section-panel{display:none;min-width:0}.section-panel.active{display:block}
+.section-panel{display:none}.section-panel.active{display:block}
 .section-intro{font-size:.8rem;color:#64748b;line-height:1.55;margin:-.25rem 0 1rem}
 .management-shortcuts{display:grid;grid-template-columns:repeat(auto-fit,minmax(175px,1fr));gap:.7rem;margin:0 0 1.2rem}
 .management-shortcut{appearance:none;text-align:left;background:#0f0f1e;border:1px solid #1e1e2e;border-radius:12px;padding:.85rem;cursor:pointer;color:#cbd5e1;transition:transform .15s,border-color .15s,background .15s}
@@ -2121,8 +2121,6 @@ let adminLiveMapHasFitted = false;
 let adminLiveMapRetryTimer = null;
 let adminLiveMapResizeObserver = null;
 let adminLiveMapResizeBound = false;
-let adminMapboxScriptRetryTimer = null;
-let adminMapboxScriptLoading = false;
 let adminLiveLocationRefreshTimer = null;
 let adminPlaceSearchTimer = null;
 let adminPlaceSearchSeq = 0;
@@ -3837,14 +3835,13 @@ document.getElementById('admin-place-search-results')?.addEventListener('scroll'
 
 function initAdminLiveMap() {
   const mapEl = document.getElementById('admin-live-map');
-  const token = String(window.__MYRIDE_MAPBOX_PUBLIC_TOKEN__ || MAPBOX_PUBLIC_TOKEN || '').trim();
-  if (!mapEl || !window.mapboxgl || !token) return false;
+  if (!mapEl || !window.mapboxgl || !MAPBOX_PUBLIC_TOKEN) return false;
   if (!mapEl.offsetWidth || !mapEl.offsetHeight) return false;
   if (adminLiveMap) {
     requestAnimationFrame(() => adminLiveMap?.resize());
     return true;
   }
-  mapboxgl.accessToken = token;
+  mapboxgl.accessToken = MAPBOX_PUBLIC_TOKEN;
   adminLiveMap = new mapboxgl.Map({
     container: mapEl,
     style: 'mapbox://styles/mapbox/streets-v12',
@@ -3889,40 +3886,6 @@ function initAdminLiveMap() {
   return true;
 }
 
-function ensureAdminMapboxScript() {
-  if (window.mapboxgl) {
-    const token = String(window.__MYRIDE_MAPBOX_PUBLIC_TOKEN__ || MAPBOX_PUBLIC_TOKEN || '').trim();
-    if (token) mapboxgl.accessToken = token;
-    return true;
-  }
-  if (adminMapboxScriptLoading) return false;
-
-  // The original head script is blocking, so if execution reached this point
-  // without mapboxgl it has already failed. Use a fresh node rather than
-  // reusing the failed script, whose error event cannot fire again.
-  const script = document.createElement('script');
-  adminMapboxScriptLoading = true;
-  script.addEventListener('load', () => {
-    adminMapboxScriptLoading = false;
-    scheduleAdminLiveMapInit();
-  }, { once: true });
-  script.addEventListener('error', () => {
-    adminMapboxScriptLoading = false;
-    if (adminMapboxScriptRetryTimer === null) {
-      adminMapboxScriptRetryTimer = setTimeout(() => {
-        adminMapboxScriptRetryTimer = null;
-        ensureAdminMapboxScript();
-        scheduleAdminLiveMapInit();
-      }, 1000);
-    }
-  }, { once: true });
-  script.src = 'https://api.mapbox.com/mapbox-gl-js/v3.15.0/mapbox-gl.js';
-  script.async = true;
-  script.dataset.adminMapboxLoader = 'true';
-  document.head.appendChild(script);
-  return false;
-}
-
 function scheduleAdminLiveMapInit() {
   if (adminLiveMapRetryTimer !== null) return;
   const attempt = () => {
@@ -3930,8 +3893,6 @@ function scheduleAdminLiveMapInit() {
     const mapEl = document.getElementById('admin-live-map');
     const state = document.getElementById('admin-live-map-state');
     if (!mapEl || !document.getElementById('sec-overview')?.classList.contains('active')) return;
-    const token = String(window.__MYRIDE_MAPBOX_PUBLIC_TOKEN__ || MAPBOX_PUBLIC_TOKEN || '').trim();
-    ensureAdminMapboxScript();
     if (initAdminLiveMap()) {
       if (adminLiveLocations.length && adminLiveMap?.isStyleLoaded()) {
         renderAdminLiveLocations(adminLiveLocations);
@@ -3939,14 +3900,14 @@ function scheduleAdminLiveMapInit() {
       return;
     }
     if (state) {
-      state.textContent = !token
+      state.textContent = !MAPBOX_PUBLIC_TOKEN
         ? 'Map configuration is unavailable. Add a Mapbox public token and refresh.'
         : !window.mapboxgl
           ? 'Loading the map service…'
           : 'Preparing the map container…';
       state.classList.add('visible');
     }
-    if (token && (!window.mapboxgl || !mapEl.offsetWidth || !mapEl.offsetHeight)) {
+    if (MAPBOX_PUBLIC_TOKEN && (!window.mapboxgl || !mapEl.offsetWidth || !mapEl.offsetHeight)) {
       adminLiveMapRetryTimer = setTimeout(attempt, 250);
     }
   };
@@ -6036,7 +5997,6 @@ document.addEventListener('keydown', e => {
 // ── Init ──────────────────────────────────────────────────────────────────────
 initRevenueTrendDrag();
 loadAdminLoginConfig();
-ensureAdminMapboxScript();
 
 if (adminToken) {
   // Decode stored JWT to restore isSuperAdmin + adminPerms
