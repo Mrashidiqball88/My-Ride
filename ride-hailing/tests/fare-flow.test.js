@@ -980,7 +980,7 @@ test('available-rides recovery uses the same radius so reconnecting drivers cann
     assert.deepEqual(result.body.map(ride => ride._id), ['near-ride']);
    assert.equal(result.body[0].acceptanceEligibility.allowed, false);
    assert.equal(result.body[0].acceptanceEligibility.dailyFeeDue, true);
-   assert.match(result.body[0].acceptanceEligibility.reason, /Daily Fee/);
+    assert.equal(result.body[0].acceptanceEligibility.reason, 'You cannot receive rides. Your fee is unpaid. The Accept button is disabled until you clear your balance.');
   } finally {
     await new Promise(resolve => server.close(resolve));
   }

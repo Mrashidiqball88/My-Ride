@@ -156,7 +156,8 @@ test('daily fee is charged from the wallet only when a driver goes online, and i
     models.Wallet.findOneAndUpdate = async () => null;
     const insufficient = await request(server, '/api/driver/availability', { isOnline: true });
     assert.equal(insufficient.response.status, 403);
-    assert.match(insufficient.body.error, /must cover today's Daily Fee/);
+    assert.equal(insufficient.body.error, 'You cannot receive rides. Your fee is unpaid. The Accept button is disabled until you clear your balance.');
+    assert.equal(insufficient.body.code, 'DAILY_FEE_REQUIRED');
   } finally {
     await new Promise(resolve => server.close(resolve));
   }
@@ -528,6 +529,28 @@ test('the scheduled Daily Fee sweep skips Long Range Only and charges eligible B
   assert.deepEqual(touchedWallets, ['both-ranges']);
   assert.equal(charges.length, 1);
   assert.equal(charges[0].query.user, 'both-ranges');
+});
+
+test('the scheduled Daily Fee sweep never charges offline Drivers', async () => {
+  const drivers = [
+    { _id: 'offline-for-days', vehicleType: 'Car Mini', ridePreference: 'Both', isOnline: false, paidUntilDate: null, lastDailyFeePaidAt: null },
+    { _id: 'currently-online', vehicleType: 'Car Mini', ridePreference: 'Both', isOnline: true, paidUntilDate: null, lastDailyFeePaidAt: null }
+  ];
+  models.User.find = () => ({ select: () => drivers });
+  models.Settings.findOne = () => ({ lean: async () => ({ value: { 'Car Mini': 100 } }) });
+  const touchedWallets = [];
+  models.Wallet.findOne = query => ({
+    select: () => ({ lean: async () => {
+      touchedWallets.push(query.user);
+      return { balance: 500, fee_paid_at: null };
+    } })
+  });
+  models.Wallet.findOneAndUpdate = async () => ({ balance: 400 });
+  models.User.updateOne = async () => ({ acknowledged: true });
+
+  await runDailyDeduction({ force: true });
+
+  assert.deepEqual(touchedWallets, ['currently-online']);
 });
 
 test('Long Range toggle checks the configured wallet minimum for the Driver vehicle category', async () => {

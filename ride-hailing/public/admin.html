@@ -238,7 +238,7 @@ body{font-family:'Segoe UI',system-ui,sans-serif;background:#06060e;color:#e2e8f
 .data-table tr:hover td{background:#0a0a14}
 .table-wrap{background:#0f0f1e;border:1px solid #1e1e2e;border-radius:14px;overflow:hidden}
 #sec-drivers .table-wrap,#sec-passengers .table-wrap{overflow-x:auto}
-#sec-drivers .data-table{min-width:900px}
+#sec-drivers .data-table{min-width:1240px}
 #sec-passengers .data-table{min-width:720px}
 .table-serial{width:42px;text-align:center;color:#64748b!important;font-variant-numeric:tabular-nums;font-weight:700}
 
@@ -1119,9 +1119,9 @@ button,input,select,textarea{
           <thead><tr>
             <th class="table-serial">#</th>
             <th style="width:32px"><input type="checkbox" id="select-all-chk" onchange="toggleSelectAll(this.checked)" style="cursor:pointer"></th>
-            <th>Driver</th><th>Phone</th><th>Vehicle</th><th>Daily Fee</th><th>Real Wallet Balance</th><th>Bonus Credit Balance</th><th>Rating</th><th>Status</th><th>Device Binding</th><th>Joined</th><th>Actions</th>
+            <th>Driver</th><th>Phone</th><th>Vehicle</th><th>Daily Fee</th><th>Real Wallet Balance</th><th>Bonus Credit Balance</th><th>Rating</th><th>Status</th><th>Today's Online Time</th><th>Next Fee Deduction Time</th><th>Device Binding</th><th>Joined</th><th>Actions</th>
           </tr></thead>
-          <tbody id="drivers-tbody"><tr><td colspan="13" class="loading-row">Loading…</td></tr></tbody>
+          <tbody id="drivers-tbody"><tr><td colspan="15" class="loading-row">Loading…</td></tr></tbody>
         </table></div>
       </div>
 
@@ -3005,10 +3005,10 @@ function normalizeManagementResponse(payload, statuses) {
   };
 }
 
-async function loadDrivers(status = 'all') {
+async function loadDrivers(status = 'all', { showLoading = true } = {}) {
   currentDriverStatus = status;
   const tbody = document.getElementById('drivers-tbody');
-  tbody.innerHTML = '<tr><td colspan="13" class="loading-row">Loading…</td></tr>';
+  if (showLoading) tbody.innerHTML = '<tr><td colspan="15" class="loading-row">Loading…</td></tr>';
   try {
     const [driverResponse, dailyFees] = await Promise.all([
       api(`/api/admin/drivers?status=${encodeURIComponent(status)}&includeCounts=true`),
@@ -3020,9 +3020,11 @@ async function loadDrivers(status = 'all') {
     );
     updateManagementFilterCounts('driver', counts, ['all', 'active', 'pending', 'suspended', 'blocked']);
     dailyFeeSettingsState = dailyFees;
-     if (!drivers.length) { tbody.innerHTML = '<tr><td colspan="13" class="empty-state"><span class="empty-icon">🚗</span>No drivers found</td></tr>'; return; }
-    document.getElementById('select-all-chk').checked = false;
-    selectedDriverIds.clear(); updateBulkGrantBtn();
+     if (!drivers.length) { tbody.innerHTML = '<tr><td colspan="15" class="empty-state"><span class="empty-icon">🚗</span>No drivers found</td></tr>'; return; }
+     if (showLoading) {
+       document.getElementById('select-all-chk').checked = false;
+       selectedDriverIds.clear(); updateBulkGrantBtn();
+     }
     tbody.innerHTML = drivers.map((d, index) => {
       const lowRating  = (d.rating||5) < 3;
       const hasPhoto   = d.profilePhoto && d.profilePhoto.startsWith('data:');
@@ -3034,6 +3036,10 @@ async function loadDrivers(status = 'all') {
       const paidUntil  = paidAt ? new Date(paidAt.getTime() + 24 * 60 * 60 * 1000) : (d.paidUntilDate ? new Date(d.paidUntilDate) : null);
       const feePaid    = paidUntil && paidUntil > new Date();
       const ds         = feePaid ? paidUntil.toLocaleDateString('en-PK', { day:'2-digit', month:'short' }) : '';
+       const onlineShiftText = d.isOnline && d.onlineStartedAt ? fmtDate(d.onlineStartedAt) : '—';
+       const nextFeeText = d.nextFeeDeductionAt
+         ? fmtDate(d.nextFeeDeductionAt)
+         : d.ridePreference === 'Long Range Only' ? 'Exempt (Long Range Only)' : 'Due now / unpaid';
       let feeCell;
       if (feePaid && d.isFreeTrial) {
         feeCell = `<div style="font-size:.73rem"><span style="color:#f5c518;font-weight:700">🎁 Free Bonus Active</span><br><span style="color:#64748b;font-size:.65rem">(Until ${ds})</span></div>`;
@@ -3057,7 +3063,9 @@ async function loadDrivers(status = 'all') {
          <td><div style="font-size:.75rem;font-weight:800;color:#4ade9a">${revenueAmount(d.realWalletBalance)}</div><span style="font-size:.64rem;color:#64748b">Advance held</span></td>
          <td><div style="font-size:.75rem;font-weight:800;color:#aebaff">${revenueAmount(d.bonusCreditBalance)}</div><span style="font-size:.64rem;color:#64748b">Promotional</span></td>
         <td style="${lowRating?'color:#ef4444':''};font-weight:${lowRating?'700':'400'}">⭐ ${(d.rating||5).toFixed(1)}</td>
-        <td>${badgeHtml(d.accountStatus||'active')}</td>
+         <td><div style="display:flex;flex-direction:column;gap:.25rem;align-items:flex-start">${badgeHtml(d.accountStatus||'active')}<span style="font-size:.68rem;font-weight:700;color:${d.isOnline?'#22c55e':'#64748b'}">${d.isOnline?'● Online':'● Offline'}</span></div></td>
+         <td style="font-size:.72rem;color:${d.isOnline?'#e2e8f0':'#64748b'}"><span style="font-size:.64rem;color:#64748b">${d.isOnline?'Current shift':'No active shift'}</span><br>${escHtml(onlineShiftText)}</td>
+         <td style="font-size:.72rem;color:${d.nextFeeDeductionAt?'#e2e8f0':'#64748b'}"><span style="font-size:.64rem;color:#64748b">${d.nextFeeDeductionAt?'Scheduled expiry':'Fee state'}</span><br>${escHtml(nextFeeText)}</td>
          <td><div style="display:flex;align-items:center;gap:.35rem;flex-wrap:wrap">
            <span style="font-size:.7rem;font-weight:700;color:${d.deviceBindingEnabled?'#22c55e':'#64748b'}">${d.deviceBindingEnabled?'ON':'OFF'}</span>
             ${hasPermission('manageDriverStatus') ? `<select aria-label="Device Binding for ${escHtml(d.name)}" title="Change device binding" class="modal-input" style="width:auto;min-width:58px;padding:.28rem .35rem;font-size:.68rem" onchange="setDriverDeviceBinding('${d._id}', this.value === 'on')"><option value="off" ${d.deviceBindingEnabled?'':'selected'}>OFF</option><option value="on" ${d.deviceBindingEnabled?'selected':''}>ON</option></select>` : ''}
@@ -3079,7 +3087,7 @@ async function loadDrivers(status = 'all') {
       </tr>`;
     }).join('');
     refreshFeePassTimers();
-   } catch (e) { tbody.innerHTML = `<tr><td colspan="13" style="text-align:center;color:#ef4444;padding:1rem">${e.message}</td></tr>`; }
+    } catch (e) { tbody.innerHTML = `<tr><td colspan="15" style="text-align:center;color:#ef4444;padding:1rem">${e.message}</td></tr>`; }
 }
 
 function refreshFeePassTimers() {
@@ -3102,7 +3110,10 @@ function refreshFeePassTimers() {
   });
 }
 setInterval(() => {
-  if (document.getElementById('sec-drivers')?.classList.contains('active')) refreshFeePassTimers();
+  if (document.getElementById('sec-drivers')?.classList.contains('active')) {
+    refreshFeePassTimers();
+    if (adminToken && !selectedDriverIds.size) loadDrivers(currentDriverStatus, { showLoading: false });
+  }
 }, 30000);
 
 // ── 4. PASSENGERS ─────────────────────────────────────────────────────────────

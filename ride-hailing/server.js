@@ -879,6 +879,8 @@ async function ensureWalletSourceBalances(userId, { session } = {}) {
   };
 }
 
+const DAILY_FEE_UNPAID_MESSAGE = 'You cannot receive rides. Your fee is unpaid. The Accept button is disabled until you clear your balance.';
+
 async function chargeDailyFeeForOnlineDriver(driverId, driver, dailyFeeSettings = null) {
   if (isLongRangeOnlyDriver(driver)) {
     return { allowed: true, charged: false, rate: null, exempt: true, reason: 'Long Range Only drivers are exempt from the Daily Fee' };
@@ -892,19 +894,26 @@ async function chargeDailyFeeForOnlineDriver(driverId, driver, dailyFeeSettings 
   const activePassCutoff = new Date(now.getTime() - ACTIVE_FEE_PASS_MS);
   const paidUntilDate = driver.paidUntilDate ? new Date(driver.paidUntilDate) : null;
   if (paidUntilDate && !Number.isNaN(paidUntilDate.getTime()) && paidUntilDate >= now) {
-    return { allowed: true, charged: false, rate, alreadyPaid: true };
+    return { allowed: true, charged: false, rate, alreadyPaid: true, paidUntilDate };
   }
 
   const walletSnapshot = await Wallet.findOne({ user: driverId })
     .select('fee_paid_at balance realCashWallet bonusWallet realCashAvailable bonusAvailable transactions').lean();
   const previousFeePaidAt = walletSnapshot?.fee_paid_at || driver.lastDailyFeePaidAt;
   if (previousFeePaidAt && new Date(previousFeePaidAt) > activePassCutoff) {
-    return { allowed: true, charged: false, rate, alreadyPaid: true, feePaidAt: previousFeePaidAt };
+    return {
+      allowed: true,
+      charged: false,
+      rate,
+      alreadyPaid: true,
+      feePaidAt: previousFeePaidAt,
+      paidUntilDate: new Date(new Date(previousFeePaidAt).getTime() + ACTIVE_FEE_PASS_MS)
+    };
   }
 
   const allocation = allocateWalletDebit(walletSnapshot, rate);
   if (allocation.realCashAvailable + allocation.bonusAvailable < rate) {
-    return { allowed: false, charged: false, rate, reason: 'Wallet balance is insufficient for today’s Daily Fee.' };
+    return { allowed: false, charged: false, rate, reason: DAILY_FEE_UNPAID_MESSAGE, balance: walletSnapshot?.balance || 0 };
   }
   const wallet = await Wallet.findOneAndUpdate(
     {
@@ -944,7 +953,7 @@ async function chargeDailyFeeForOnlineDriver(driverId, driver, dailyFeeSettings 
     if (currentWallet?.fee_paid_at && new Date(currentWallet.fee_paid_at) > activePassCutoff) {
       return { allowed: true, charged: false, rate, alreadyCharged: true, balance: currentWallet.balance, feePaidAt: currentWallet.fee_paid_at };
     }
-    return { allowed: false, charged: false, rate, balance: currentWallet?.balance || 0 };
+    return { allowed: false, charged: false, rate, balance: currentWallet?.balance || 0, reason: DAILY_FEE_UNPAID_MESSAGE };
   }
 
   await User.updateOne(
@@ -961,6 +970,7 @@ async function chargeDailyFeeForOnlineDriver(driverId, driver, dailyFeeSettings 
     rate,
     balance: wallet.balance,
     feePaidAt: now,
+    paidUntilDate: new Date(now.getTime() + ACTIVE_FEE_PASS_MS),
     fundingSource: allocation.fundingSource,
     realAmount: allocation.realAmount,
     bonusAmount: allocation.bonusAmount
@@ -978,7 +988,7 @@ async function getDriverDailyFeeEligibility(driver) {
     allowed: Boolean(paid) || !Number.isFinite(rate) || rate <= 0,
     rate: Number.isFinite(rate) && rate > 0 ? rate : null,
     reason: paid ? null : Number.isFinite(rate) && rate > 0
-      ? `Pay today's Daily Fee of Rs ${rate.toLocaleString()} before accepting rides.`
+      ? DAILY_FEE_UNPAID_MESSAGE
       : 'Daily Fee is not configured; contact Admin.'
   };
 }
@@ -1668,6 +1678,7 @@ const userSchema = new mongoose.Schema({
   // Native foreground services reconnect after radio/process changes, so a
   // disconnect must not silently make an otherwise approved driver unavailable.
   lastOnlineHeartbeat: { type: Date, default: null },
+  onlineStartedAt: { type: Date, default: null },
   expoPushToken:       { type: String, default: '' },
   expoPushTokenUpdatedAt: { type: Date, default: null },
   rating:       { type: Number, default: 5.0 },
@@ -3196,7 +3207,7 @@ async function rehydrateDriverSocket(socket, driverId, { replayOffers = true } =
   const recovery = (async () => {
     const [driver, activeRide] = await Promise.all([
       User.findById(driverId)
-        .select('isOnline accountStatus vehicleType ridePreference longRangeEnabled lastOnlineHeartbeat currentLocation paidUntilDate lastDailyFeePaidAt')
+        .select('isOnline accountStatus vehicleType ridePreference longRangeEnabled lastOnlineHeartbeat onlineStartedAt currentLocation paidUntilDate lastDailyFeePaidAt')
         .lean()
         .catch(() => null),
       Ride.findOne({ driver: driverId, status: { $in: ['accepted', 'arrived', 'in-progress'] } })
@@ -3225,6 +3236,8 @@ async function rehydrateDriverSocket(socket, driverId, { replayOffers = true } =
     socket.emit('driver:rehydrate', {
       isOnline,
       vehicleType,
+      onlineStartedAt: isOnline ? driver?.onlineStartedAt || null : null,
+      nextFeeDeductionAt: isOnline ? driver?.paidUntilDate || null : null,
       activeRideId: activeRide ? String(activeRide._id) : null,
       pendingRideIds: pendingRides.map(ride => String(ride._id))
     });
@@ -4387,7 +4400,8 @@ app.post('/api/auth/register', async (req, res) => {
               ridePreference: user.ridePreference || 'Both',
               vehicleModel: user.vehicleModel, vehiclePlate: user.vehiclePlate,
                lastDailyFeePaidAt: null, dailyFeeAmount: await getDailyFeeForVehicle(user.vehicleType),
-               paidUntilDate: null, dailyFeeRate: await getDailyFeeForVehicle(user.vehicleType) }
+               paidUntilDate: null, dailyFeeRate: await getDailyFeeForVehicle(user.vehicleType),
+               onlineStartedAt: null, nextFeeDeductionAt: null }
     });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -4502,6 +4516,8 @@ app.post('/api/auth/login', async (req, res) => {
                dailyFeeAmount: await getDailyFeeForVehicle(user.vehicleType),
               paidUntilDate:  user.paidUntilDate  || null,
                dailyFeeRate:   await getDailyFeeForVehicle(user.vehicleType),
+               onlineStartedAt: user.onlineStartedAt || null,
+               nextFeeDeductionAt: user.paidUntilDate || null,
               isFreeTrial:    user.isFreeTrial    || false,
               trialStartDate: user.trialStartDate || null }
     });
@@ -4862,26 +4878,43 @@ app.post('/api/driver/availability', authMiddleware, async (req, res) => {
     }
     const isOnline = req.body?.isOnline === true;
     const driver = await User.findById(req.user.id)
-      .select('accountStatus vehicleType ridePreference paidUntilDate lastDailyFeePaidAt isFreeTrial longRangeEnabled').lean();
+      .select('accountStatus vehicleType ridePreference paidUntilDate lastDailyFeePaidAt isFreeTrial longRangeEnabled isOnline onlineStartedAt').lean();
     if (!driver || driver.accountStatus !== 'active') {
       return res.status(403).json({ error: 'Your driver account is not approved for online availability' });
     }
+    let feeResult = null;
     if (isOnline) {
       if (!isVehicleCategoryActive(await getVehicleCategorySettings(), driver.vehicleType)) {
         return res.status(403).json({ error: 'This vehicle category is currently inactive. Contact Admin before going online.' });
       }
-      const feeResult = await chargeDailyFeeForOnlineDriver(req.user.id, driver);
+      feeResult = await chargeDailyFeeForOnlineDriver(req.user.id, driver);
       if (!feeResult.allowed) {
+        await User.updateOne(
+          { _id: req.user.id },
+          { isOnline: false, lastOnlineHeartbeat: null, onlineStartedAt: null }
+        );
         return res.status(403).json({
-          error: `Wallet balance must cover today's Daily Fee of Rs ${feeResult.rate.toLocaleString()} before going online. Current balance: Rs ${Number(feeResult.balance).toLocaleString()}.`
+          error: DAILY_FEE_UNPAID_MESSAGE,
+          code: 'DAILY_FEE_REQUIRED',
+          dailyFee: feeResult
         });
       }
     }
+    const onlineStartedAt = isOnline ? new Date() : null;
     const update = isOnline
-      ? { isOnline: true, lastOnlineHeartbeat: new Date() }
-      : { isOnline: false };
+      ? { isOnline: true, lastOnlineHeartbeat: onlineStartedAt, onlineStartedAt }
+      : { isOnline: false, lastOnlineHeartbeat: null, onlineStartedAt: null };
     await User.updateOne({ _id: req.user.id }, update);
-    res.json({ isOnline, vehicleType: normalizeFareVehicle(driver.vehicleType || 'Car Mini Non-AC'), ridePreference: normalizeRidePreference(driver.ridePreference), longRangeEnabled: !!driver.longRangeEnabled });
+    const paidUntilDate = feeResult?.paidUntilDate || driver.paidUntilDate || null;
+    res.json({
+      isOnline,
+      onlineStartedAt,
+      paidUntilDate,
+      nextFeeDeductionAt: paidUntilDate,
+      vehicleType: normalizeFareVehicle(driver.vehicleType || 'Car Mini Non-AC'),
+      ridePreference: normalizeRidePreference(driver.ridePreference),
+      longRangeEnabled: !!driver.longRangeEnabled
+    });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -7408,6 +7441,8 @@ app.get('/api/admin/drivers', adminJwt, requirePerm('viewDrivers'), async (req, 
       const value = driver.toObject();
       return {
         ...value,
+        onlineStartedAt: value.isOnline ? value.onlineStartedAt || null : null,
+        nextFeeDeductionAt: value.paidUntilDate || null,
         cnicFront: !!value.cnicFront,
         cnicBack: !!value.cnicBack,
         licensePhoto: !!value.licensePhoto,
@@ -7449,13 +7484,13 @@ app.patch('/api/admin/drivers/:id/ride-preference', adminJwt, requirePerm('manag
       return res.status(400).json({ error: `Ride preference must be one of: ${DRIVER_RIDE_PREFERENCES.join(', ')}` });
     }
     const driver = await User.findOne({ _id: req.params.id, role: 'driver' })
-      .select('name vehicleType accountStatus paidUntilDate lastDailyFeePaidAt isFreeTrial ridePreference')
+      .select('name vehicleType accountStatus isOnline onlineStartedAt paidUntilDate lastDailyFeePaidAt isFreeTrial ridePreference')
       .lean();
     if (!driver) return res.status(404).json({ error: 'Driver not found' });
 
     await User.updateOne({ _id: driver._id }, { ridePreference });
     const updatedDriver = { ...driver, ridePreference };
-    const dailyFee = updatedDriver.accountStatus === 'active'
+    const dailyFee = updatedDriver.accountStatus === 'active' && updatedDriver.isOnline !== false
       ? await chargeDailyFeeForOnlineDriver(updatedDriver._id, updatedDriver)
       : { allowed: true, charged: false };
     io.to(`user:${driver._id}`).emit('ride-preference:updated', { ridePreference, dailyFee });
@@ -9342,45 +9377,53 @@ io.on('connection', async (socket) => {
   socket.on('driver:status', ({ isOnline: requestedOnline } = {}) => enqueueDriverAvailability(async () => {
     if (role !== 'driver') return;
     const isOnline = requestedOnline === true;
+    let feeResult = null;
+    let driver = null;
     if (isOnline) {
-      const driver = await User.findById(id)
+      driver = await User.findById(id)
         .select('accountStatus vehicleType paidUntilDate lastDailyFeePaidAt isFreeTrial').catch(() => null);
       if (driver?.accountStatus === 'pending') {
-        await User.updateOne({ _id: id }, { isOnline: false }).catch(() => {});
+        await User.updateOne({ _id: id }, { isOnline: false, lastOnlineHeartbeat: null, onlineStartedAt: null }).catch(() => {});
         socket.emit('account:suspended', { reason: 'Your account is pending Admin approval. You will be notified once approved.' });
         return;
       }
       if (driver?.accountStatus === 'suspended' || driver?.accountStatus === 'blocked' || driver?.accountStatus === 'pending_deletion') {
-        await User.updateOne({ _id: id }, { isOnline: false }).catch(() => {});
+        await User.updateOne({ _id: id }, { isOnline: false, lastOnlineHeartbeat: null, onlineStartedAt: null }).catch(() => {});
         socket.emit('account:suspended', { reason: 'Your account has been suspended. Please contact Admin.' });
         return;
       }
       if (!isVehicleCategoryActive(await getVehicleCategorySettings(), driver?.vehicleType)) {
-        await User.updateOne({ _id: id }, { isOnline: false }).catch(() => {});
+        await User.updateOne({ _id: id }, { isOnline: false, lastOnlineHeartbeat: null, onlineStartedAt: null }).catch(() => {});
         socket.emit('account:suspended', { reason: 'This vehicle category is currently inactive. Contact Admin before going online.' });
         return;
       }
-      const feeResult = await chargeDailyFeeForOnlineDriver(id, driver);
+      feeResult = await chargeDailyFeeForOnlineDriver(id, driver);
       if (!feeResult.allowed) {
-        await User.updateOne({ _id: id }, { isOnline: false }).catch(() => {});
+        await User.updateOne({ _id: id }, { isOnline: false, lastOnlineHeartbeat: null, onlineStartedAt: null }).catch(() => {});
         socket.emit('account:suspended', {
-          reason: `Wallet balance must cover today's Daily Fee of Rs ${feeResult.rate.toLocaleString()} before going online. Current balance: Rs ${Number(feeResult.balance).toLocaleString()}.`
+          reason: DAILY_FEE_UNPAID_MESSAGE
         });
         return;
       }
       // Cache vehicle type on socket for room management
       if (driver?.vehicleType) socket.vehicleType = normalizeFareVehicle(driver.vehicleType);
     }
+    const onlineStartedAt = isOnline ? new Date() : null;
     await User.updateOne({ _id: id }, isOnline
-      ? { isOnline: true, lastOnlineHeartbeat: new Date() }
-      : { isOnline: false }
+      ? { isOnline: true, lastOnlineHeartbeat: onlineStartedAt, onlineStartedAt }
+      : { isOnline: false, lastOnlineHeartbeat: null, onlineStartedAt: null }
     ).catch(() => {});
     const vRoom = `drivers:${socket.vehicleType || 'Car Mini Non-AC'}`;
     if (isOnline) { socket.join('drivers-online'); socket.join(vRoom); }
     else          { socket.leave('drivers-online'); socket.leave(vRoom); }
     if (isOnline) await rehydrateDriverSocket(socket, id, { replayOffers: true }).catch(() => {});
     void syncRedisDriverPresence(id);
-    socket.emit('driver:status:ack', { isOnline, vehicleType: socket.vehicleType || null });
+    socket.emit('driver:status:ack', {
+      isOnline,
+      vehicleType: socket.vehicleType || null,
+      onlineStartedAt,
+      nextFeeDeductionAt: feeResult?.paidUntilDate || driver?.paidUntilDate || null
+    });
   }));
 
   // Native clients explicitly heartbeat while their foreground service is
@@ -9821,13 +9864,20 @@ async function runDailyDeduction({ force = false } = {}) {
     // Short Range Only and Both are charged through the same atomic 24-hour
     // pass logic used when going online. This also makes the scheduled sweep
     // safe to retry without charging an active pass twice.
-    const drivers = await User.find({ role: 'driver', accountStatus: 'active' })
-      .select('_id vehicleType ridePreference name paidUntilDate lastDailyFeePaidAt isFreeTrial');
+    const drivers = await User.find({
+      role: 'driver',
+      accountStatus: 'active',
+      isOnline: true
+    })
+      .select('_id vehicleType ridePreference name paidUntilDate lastDailyFeePaidAt isFreeTrial isOnline lastOnlineHeartbeat');
     const dailyFeeSettings = await getDailyFeeSettings();
     let charged = 0;
     let exempt = 0;
     let blocked = 0;
     for (const driver of drivers) {
+      // Keep legacy test/demo records compatible while making an explicit
+      // offline state immune to the scheduled rollover.
+      if (driver.isOnline === false) continue;
       const result = await chargeDailyFeeForOnlineDriver(driver._id, driver, dailyFeeSettings);
       if (result.exempt) exempt++;
       else if (result.charged) charged++;

@@ -108,7 +108,10 @@ test('audits registration, scheduled fees, wallet gates, completion commission, 
   });
 
   await Promise.all([driverA, driverB, driverC].map(driver =>
-    models.Wallet.updateOne({ user: driver._id }, { $set: { balance: 5000 } })
+    models.User.updateOne(
+      { _id: driver._id },
+      { $set: { isOnline: true, lastOnlineHeartbeat: new Date() } }
+    ).then(() => models.Wallet.updateOne({ user: driver._id }, { $set: { balance: 5000 } }))
   ));
   await runDailyDeduction({ force: true });
 

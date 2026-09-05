@@ -50,7 +50,9 @@ export const DRIVER_VEHICLE_CATEGORIES = [
 export type DriverUser = {
   id: string; name: string; role: 'driver'; accountStatus: string;
   vehicleType?: string; vehicleModel?: string; vehiclePlate?: string; rating?: number;
+  ridePreference?: string;
   paidUntilDate?: string | Date | null; dailyFeeRate?: number | null;
+  onlineStartedAt?: string | Date | null; nextFeeDeductionAt?: string | Date | null;
 };
 export type RideAcceptanceEligibility = {
   allowed: boolean;
@@ -422,7 +424,7 @@ export function DriverRuntimeProvider({ children }: { children: ReactNode }) {
       const paidUntil = user.paidUntilDate ? new Date(user.paidUntilDate) : null;
       const feeCurrent = paidUntil && !Number.isNaN(paidUntil.getTime()) && paidUntil >= new Date();
       if (!feeCurrent) {
-        return { allowed: false, reason: `Pay today's Daily Fee of Rs ${Number(user.dailyFeeRate).toLocaleString()} before accepting rides.` };
+        return { allowed: false, reason: 'You cannot receive rides. Your fee is unpaid. The Accept button is disabled until you clear your balance.' };
       }
     }
     return { allowed: true, reason: null };
@@ -848,9 +850,25 @@ export function DriverRuntimeProvider({ children }: { children: ReactNode }) {
         isOnlineRef.current = true;
         await startLocationService(Boolean(activeRideIdRef.current));
       }
-      await api('/api/driver/availability', token, sessionRef.current || undefined, {
+      const availability = await api('/api/driver/availability', token, sessionRef.current || undefined, {
         method: 'POST', body: JSON.stringify({ isOnline: next }),
       });
+      setUser(current => current ? {
+        ...current,
+        onlineStartedAt: availability.onlineStartedAt || null,
+        nextFeeDeductionAt: availability.nextFeeDeductionAt || availability.paidUntilDate || null,
+        ...(availability.paidUntilDate !== undefined ? { paidUntilDate: availability.paidUntilDate } : {}),
+      } : current);
+      const storedUser = await SecureStore.getItemAsync(USER_KEY);
+      if (storedUser) {
+        const nextUser = {
+          ...(JSON.parse(storedUser) as DriverUser),
+          onlineStartedAt: availability.onlineStartedAt || null,
+          nextFeeDeductionAt: availability.nextFeeDeductionAt || availability.paidUntilDate || null,
+          ...(availability.paidUntilDate !== undefined ? { paidUntilDate: availability.paidUntilDate } : {}),
+        };
+        await SecureStore.setItemAsync(USER_KEY, JSON.stringify(nextUser));
+      }
       await SecureStore.setItemAsync(ONLINE_KEY, String(next));
       setIsOnline(next);
       socket.current?.emit('driver:status', { isOnline: next });

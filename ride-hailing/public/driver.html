@@ -341,6 +341,7 @@ textarea.support-input{resize:vertical;min-height:85px}
 .map-refresh-btn{height:34px;width:38px;border:0;border-radius:11px;background:rgba(116,224,209,.14);color:var(--dc-cyan);font-size:16px;cursor:pointer;transition:transform .18s,background .18s}.map-refresh-btn:hover{background:var(--dc-cyan);color:#10201f}.map-refresh-btn:disabled{opacity:.55;cursor:wait}.map-refresh-btn:disabled span{display:inline-block;animation:spin .75s linear infinite}@keyframes spin{to{transform:rotate(360deg)}}
 .driver-ops-details{display:none;margin-top:7px;padding:11px;background:rgba(17,26,32,.96);border:1px solid rgba(157,185,201,.18);border-radius:16px;backdrop-filter:blur(16px)}.driver-ops-control.is-open .driver-ops-details{display:block}
 .driver-ops-row{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:5px 2px}.online-status-text{font-size:13px;font-weight:800}.online-sub{font-size:10px;color:var(--dc-muted);margin-top:2px;line-height:1.3}
+.driver-ops-metrics{display:grid;grid-template-columns:1fr 1fr;gap:7px;margin-top:8px}.driver-ops-metric{min-width:0;padding:9px 8px;border:1px solid rgba(157,185,201,.16);border-radius:12px;background:rgba(255,255,255,.035)}.driver-ops-metric-label{font-size:9px;color:var(--dc-muted);line-height:1.25}.driver-ops-metric-value{display:block;margin-top:4px;font-size:12px;font-weight:800;color:#eef8f7;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .driver-ops-control #long-range-bar,.driver-ops-control #fee-info-bar,.driver-ops-control #trial-history-banner{position:static!important;left:auto!important;right:auto!important;top:auto!important;width:auto!important;margin-top:8px;border:1px solid var(--dc-line)!important;border-radius:12px!important;background:rgba(255,255,255,.04)!important;padding:9px!important}
 .driver-ops-control #long-range-bar{gap:8px!important}.driver-ops-control #long-range-reminder{font-size:.62rem!important;line-height:1.35}.driver-ops-control #fee-info-bar{font-size:.66rem!important}.driver-ops-control #trial-history-banner{font-size:.66rem!important;color:var(--dc-yellow)!important}
 .toggle-wrap{width:44px;height:25px}.toggle-label{background:#384345}.toggle-label::after{width:19px;height:19px;left:3px;top:3px}.toggle-input:checked+.toggle-label{background:var(--dc-cyan)}.toggle-input:checked+.toggle-label::after{transform:translateX(19px)}
@@ -897,6 +898,10 @@ body{font-family:'DM Sans','Segoe UI',sans-serif;background:var(--dc-night);colo
        <div id="fee-info-bar" style="display:none;flex-wrap:wrap;align-items:center;gap:.4rem">
         <span>🚗</span><span id="fee-vehicle-text" style="color:#cbd5e1;font-weight:600">—</span><span style="color:#526068">·</span><span id="fee-status-text">—</span>
       </div>
+       <div class="driver-ops-metrics" aria-live="polite">
+         <div class="driver-ops-metric"><span class="driver-ops-metric-label">Today's Online Time</span><strong class="driver-ops-metric-value" id="online-time-value">Offline</strong></div>
+         <div class="driver-ops-metric"><span class="driver-ops-metric-label">Next Fee Deduction</span><strong class="driver-ops-metric-value" id="next-fee-value">—</strong></div>
+       </div>
       <div id="trial-history-banner" style="display:none;align-items:center;gap:.4rem"><span>🎁</span><span></span></div>
     </div>
   </div>
@@ -1162,6 +1167,7 @@ let alertInterval = null;   // repeating beep interval
 let rideNotification = null; // active browser notification for the current offer
 let loadingAcceptedRideId = null;
 let dailyFeeDue   = false;  // true when driver hasn't submitted today's platform fee
+let driverOpsClockTimer = null;
 let driverFareSettings = {};
 let dailyFeeSettings = {};
 let driverPerKmRates = {};
@@ -2442,6 +2448,23 @@ function syncDriverOpsState() {
   control?.classList.toggle('is-online', isOnline);
 }
 
+function formatElapsedDuration(milliseconds) {
+  const totalMinutes = Math.max(0, Math.floor(milliseconds / 60000));
+  const hours = Math.floor(totalMinutes / 60);
+  const minutes = totalMinutes % 60;
+  return hours ? `${hours}h ${String(minutes).padStart(2, '0')}m` : `${minutes}m`;
+}
+
+function formatFeeCountdown(timestamp) {
+  if (!timestamp) return 'Due now';
+  const remaining = new Date(timestamp).getTime() - Date.now();
+  if (!Number.isFinite(remaining) || remaining <= 0) return 'Due now';
+  const totalMinutes = Math.ceil(remaining / 60000);
+  const hours = Math.floor(totalMinutes / 60);
+  const minutes = totalMinutes % 60;
+  return hours ? `In ${hours}h ${String(minutes).padStart(2, '0')}m` : `In ${minutes}m`;
+}
+
 function hideIdleInfoPanel() {
   const panel = document.getElementById('info-panel');
   if (!panel) return;
@@ -2457,6 +2480,19 @@ function renderAvailabilityState({ reason = '' } = {}) {
   const statusText = document.getElementById('status-text');
   const statusSub = document.getElementById('status-sub');
   const idleMessage = document.getElementById('idle-msg');
+  const onlineTimeValue = document.getElementById('online-time-value');
+  const nextFeeValue = document.getElementById('next-fee-value');
+  const onlineStartedAt = user?.onlineStartedAt ? new Date(user.onlineStartedAt).getTime() : NaN;
+  if (onlineTimeValue) {
+    onlineTimeValue.textContent = isOnline && Number.isFinite(onlineStartedAt)
+      ? formatElapsedDuration(Date.now() - onlineStartedAt)
+      : 'Offline';
+  }
+  if (nextFeeValue) {
+    nextFeeValue.textContent = user?.ridePreference === 'Long Range Only'
+      ? 'Exempt'
+      : formatFeeCountdown(user?.nextFeeDeductionAt || user?.paidUntilDate);
+  }
   if (reason) {
     if (statusText) statusText.textContent = 'Cannot go online';
     if (statusSub) statusSub.textContent = reason;
@@ -2582,31 +2618,54 @@ function setupActiveRideSheet() {
 }
 
 // ── Online Toggle ──────────────────────────────────────────────────────────
-function toggleOnline(online) {
+async function toggleOnline(online) {
   if (online && user?.accountStatus === 'pending') {
     showToast('Account pending Admin approval — cannot go online yet', 'error');
     isOnline = false;
     renderAvailabilityState();
     return;
   }
-  isOnline = online;
-  if (!online) {
-    stopActiveRideLocationSync();
-    pendingRide = null;
-    sentOffer = null;
-    hideRideRequest();
-    clearRideMap();
+  const toggle = document.getElementById('online-toggle');
+  const previousOnline = isOnline;
+  if (toggle) toggle.disabled = true;
+  try {
+    const result = await apiCall('/api/driver/availability', 'POST', { isOnline: online });
+    isOnline = Boolean(result.isOnline);
+    if (user) {
+      user.onlineStartedAt = result.onlineStartedAt || null;
+      user.nextFeeDeductionAt = result.nextFeeDeductionAt || result.paidUntilDate || null;
+      if (result.paidUntilDate !== undefined) user.paidUntilDate = result.paidUntilDate;
+      localStorage.setItem('rh_user', JSON.stringify(user));
+    }
+    if (!online) {
+      stopActiveRideLocationSync();
+      pendingRide = null;
+      sentOffer = null;
+      hideRideRequest();
+      clearRideMap();
+      clearInterval(driverHeartbeatTimer);
+      driverHeartbeatTimer = null;
+    } else {
+      startDriverHeartbeat();
+      if (activeRide) startActiveRideLocationSync();
+    }
+    socket?.emit('driver:status', { isOnline: online });
+    checkDailyFee();
+    renderAvailabilityState();
+    updateDailyFeeBanner();
+    showToast(online ? 'You are now Online' : 'You went Offline', online ? 'success' : 'info');
+  } catch (error) {
+    isOnline = previousOnline && !online ? false : previousOnline;
+    if (online) isOnline = false;
+    checkDailyFee();
+    renderAvailabilityState({ reason: error.message || 'Unable to change availability.' });
+    showToast(error.message || 'Unable to change availability.', 'error');
+  } finally {
+    if (toggle) {
+      toggle.disabled = false;
+      toggle.checked = isOnline;
+    }
   }
-  socket?.emit('driver:status', { isOnline: online });
-  if (online) {
-    startDriverHeartbeat();
-    if (activeRide) startActiveRideLocationSync();
-  } else {
-    clearInterval(driverHeartbeatTimer);
-    driverHeartbeatTimer = null;
-  }
-  renderAvailabilityState();
-  showToast(online ? 'You are now Online' : 'You went Offline', online ? 'success' : 'info');
 }
 
 // ── Socket.io ─────────────────────────────────────────────────────────────
@@ -2614,9 +2673,14 @@ function connectSocket() {
   if (socket) return;
   socket = io({ auth: { token, sessionToken } });
   socket.on('connect_error', e => console.warn('Socket error:', e.message));
-  socket.on('driver:status:ack', ({ isOnline: confirmedOnline } = {}) => {
+  socket.on('driver:status:ack', ({ isOnline: confirmedOnline, onlineStartedAt, nextFeeDeductionAt } = {}) => {
     if (!confirmedOnline) return;
     isOnline = true;
+    if (user) {
+      user.onlineStartedAt = onlineStartedAt || user.onlineStartedAt || null;
+      user.nextFeeDeductionAt = nextFeeDeductionAt || user.nextFeeDeductionAt || user.paidUntilDate || null;
+      localStorage.setItem('rh_user', JSON.stringify(user));
+    }
     startDriverHeartbeat();
     sendDriverHeartbeat();
     renderAvailabilityState();
@@ -2992,7 +3056,7 @@ function getRideRequestAcceptability(ride) {
     return {
       allowed: false,
       reason: rate
-        ? `Pay today's Daily Fee of Rs ${rate.toLocaleString()} before accepting rides.`
+        ? 'You cannot receive rides. Your fee is unpaid. The Accept button is disabled until you clear your balance.'
         : 'Daily Fee is not configured — contact Admin.',
       dailyFeeDue: true
     };

@@ -511,10 +511,9 @@ function DriverHome() {
     : 0;
   const pendingRideBlocked = Boolean(runtime.pendingRide && !runtime.pendingRideAcceptable);
   useEffect(() => {
-    if (!runtime.pendingRide) return;
     const interval = setInterval(() => setClock(Date.now()), 1000);
     return () => clearInterval(interval);
-  }, [runtime.pendingRide]);
+  }, []);
   useEffect(() => {
     if (runtime.user && runtime.rideHistory === null) void runtime.refreshRideHistory().catch(() => undefined);
     if (runtime.user && runtime.walletSummary === null) void runtime.refreshPayments().catch(() => undefined);
@@ -613,6 +612,23 @@ function DriverHome() {
     </View>;
   }
   const onlineTone = runtime.isOnline ? colors.primary : colors.mutedForeground;
+  const onlineStartedAt = runtime.user.onlineStartedAt ? new Date(runtime.user.onlineStartedAt).getTime() : NaN;
+  const onlineMinutes = runtime.isOnline && Number.isFinite(onlineStartedAt)
+    ? Math.max(0, Math.floor((Date.now() - onlineStartedAt) / 60000))
+    : 0;
+  const onlineHours = Math.floor(onlineMinutes / 60);
+  const onlineTime = runtime.isOnline && Number.isFinite(onlineStartedAt)
+    ? onlineHours ? `${onlineHours}h ${String(onlineMinutes % 60).padStart(2, '0')}m` : `${onlineMinutes}m`
+    : 'Offline';
+  const nextFeeAt = runtime.user.nextFeeDeductionAt || runtime.user.paidUntilDate;
+  const feeRemaining = nextFeeAt ? new Date(nextFeeAt).getTime() - Date.now() : 0;
+  const feeMinutes = Math.max(0, Math.ceil(feeRemaining / 60000));
+  const feeHours = Math.floor(feeMinutes / 60);
+  const nextFee = runtime.user.ridePreference === 'Long Range Only'
+    ? 'Exempt'
+    : feeRemaining > 0
+      ? feeHours ? `In ${feeHours}h ${String(feeMinutes % 60).padStart(2, '0')}m` : `In ${feeMinutes}m`
+      : 'Due now';
   return <View style={[styles.appShell, { backgroundColor: colors.background }]}>
    <ScrollView
     style={[styles.app, { backgroundColor: colors.background }]}
@@ -653,6 +669,16 @@ function DriverHome() {
       <View style={styles.statusRow}><View style={[styles.statusDot, { backgroundColor: onlineTone }]} /><View style={{ flex: 1 }}><Text style={[styles.statusTitle, { color: colors.foreground }]}>{runtime.isOnline ? 'You are online' : 'You are offline'}</Text><Text style={[styles.statusCopy, { color: colors.mutedForeground }]}>{runtime.isOnline ? 'Foreground service is keeping location and ride alerts active.' : 'Go online when you are ready for trips.'}</Text></View>
        <Switch testID="driver-online-toggle" value={runtime.isOnline} onValueChange={toggle} disabled={busy || (!isWeb && !runtime.alertReadiness.ready)} trackColor={{ false: colors.muted, true: colors.primary }} thumbColor={colors.primaryForeground} /></View>
       {runtime.isOnline && <View style={[styles.serviceLine, { borderTopColor: colors.border }]}><Ionicons name="shield-checkmark-outline" size={17} color={colors.primary} /><Text style={[styles.serviceText, { color: colors.mutedForeground }]}>Background service active · {runtime.connection === 'connected' ? 'Connected' : 'Reconnecting…'}</Text></View>}
+       <View testID="driver-availability-metrics" style={styles.availabilityMetrics}>
+         <View style={[styles.availabilityMetric, { backgroundColor: colors.secondary, borderColor: colors.border }]}>
+           <Text style={[styles.availabilityMetricLabel, { color: colors.mutedForeground }]}>Today's Online Time</Text>
+           <Text testID="driver-online-time" style={[styles.availabilityMetricValue, { color: colors.foreground }]}>{onlineTime}</Text>
+         </View>
+         <View style={[styles.availabilityMetric, { backgroundColor: colors.secondary, borderColor: colors.border }]}>
+           <Text style={[styles.availabilityMetricLabel, { color: colors.mutedForeground }]}>Next Fee Deduction</Text>
+           <Text testID="driver-next-fee" style={[styles.availabilityMetricValue, { color: colors.foreground }]}>{nextFee}</Text>
+         </View>
+       </View>
     </View>
     <View testID="driver-vehicle-category" style={[styles.vehicleCard, { backgroundColor: colors.secondary, borderColor: colors.border, borderRadius: colors.radius }]}>
       <Ionicons name="car-sport-outline" size={19} color={colors.primary} />
@@ -711,6 +737,10 @@ export default function Index() { return <DriverHome />; }
 const styles = StyleSheet.create({
   center: { flex: 1, alignItems: 'center', justifyContent: 'center' },
   appShell: { flex: 1, position: 'relative' },
+  availabilityMetrics: { flexDirection: 'row', gap: 8, marginTop: 13 },
+  availabilityMetric: { flex: 1, minWidth: 0, borderWidth: 1, borderRadius: 12, paddingHorizontal: 10, paddingVertical: 9 },
+  availabilityMetricLabel: { fontSize: 10, lineHeight: 13 },
+  availabilityMetricValue: { fontSize: 14, fontFamily: 'Inter_700Bold', marginTop: 4 },
   auth: { flex: 1, paddingHorizontal: 24, alignItems: 'center' }, brandMark: { width: 62, height: 62, borderRadius: 21, alignItems: 'center', justifyContent: 'center', marginBottom: 18 },
   brand: { fontSize: 30, fontFamily: 'Inter_700Bold' }, subtle: { fontSize: 15, marginTop: 6 }, authCard: { width: '100%', borderWidth: 1, padding: 20, marginTop: 34, gap: 12 },
   cardTitle: { fontFamily: 'Inter_700Bold', fontSize: 19, marginBottom: 5 }, input: { borderWidth: 1, borderRadius: 12, paddingHorizontal: 14, paddingVertical: 14, fontFamily: 'Inter_400Regular', fontSize: 16 },
