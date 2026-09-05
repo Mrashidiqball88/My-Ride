@@ -1604,6 +1604,19 @@ button,input,select,textarea{
             <input class="modal-input" id="student-discount-percent" type="number" min="0" max="100" step=".01" style="max-width:180px">
             <strong style="color:#e2e8f0">%</strong>
           </div>
+          <label class="field-label" for="student-discount-daily-limit" style="display:block;margin-top:1rem">Maximum discounted rides per student per day</label>
+          <input class="modal-input" id="student-discount-daily-limit" type="number" min="0" max="1000" step="1" style="max-width:180px;margin-top:.45rem">
+          <div style="display:flex;align-items:center;gap:.65rem;margin-top:1rem;flex-wrap:wrap">
+            <div>
+              <label class="field-label" for="student-discount-start-time">Discount start time</label>
+              <input class="modal-input" id="student-discount-start-time" type="time" step="60" style="margin-top:.45rem">
+            </div>
+            <div>
+              <label class="field-label" for="student-discount-end-time">Discount end time</label>
+              <input class="modal-input" id="student-discount-end-time" type="time" step="60" style="margin-top:.45rem">
+            </div>
+          </div>
+          <p style="font-size:.72rem;color:#64748b;margin:.7rem 0 0">The daily count uses completed discounted rides. Times use UTC and support windows that cross midnight.</p>
         </div>
         <div id="student-discount-settings-feedback" style="min-height:1.25rem;font-size:.8rem;margin:.8rem 0"></div>
         <button class="btn btn-primary" onclick="saveStudentDiscountSettings()">💾 Save Student Feature Settings</button>
@@ -5187,6 +5200,9 @@ async function loadStudentDiscountSettings() {
     const settings = await api('/api/admin/student-discount-settings');
     document.getElementById('student-discount-enabled').checked = settings.enabled !== false;
     document.getElementById('student-discount-percent').value = settings.discountPercent;
+    document.getElementById('student-discount-daily-limit').value = settings.maxDiscountedRidesPerDay;
+    document.getElementById('student-discount-start-time').value = settings.startTime;
+    document.getElementById('student-discount-end-time').value = settings.endTime;
     feedback.textContent = '';
   } catch (e) {
     feedback.textContent = `⚠ ${e.message}`; feedback.style.color = '#ef4444';
@@ -5196,17 +5212,32 @@ async function loadStudentDiscountSettings() {
 async function saveStudentDiscountSettings() {
   const feedback = document.getElementById('student-discount-settings-feedback');
   const value = Number(document.getElementById('student-discount-percent').value);
+  const dailyLimit = Number(document.getElementById('student-discount-daily-limit').value);
+  const startTime = document.getElementById('student-discount-start-time').value;
+  const endTime = document.getElementById('student-discount-end-time').value;
   if (!Number.isFinite(value) || value < 0 || value > 100) {
     feedback.textContent = 'Enter a percentage from 0 to 100.'; feedback.style.color = '#ef4444'; return;
+  }
+  if (!Number.isInteger(dailyLimit) || dailyLimit < 0 || dailyLimit > 1000) {
+    feedback.textContent = 'Enter a whole-number daily discounted ride limit from 0 to 1000.'; feedback.style.color = '#ef4444'; return;
+  }
+  if (!/^(?:[01]\d|2[0-3]):[0-5]\d$/.test(startTime) || !/^(?:[01]\d|2[0-3]):[0-5]\d$/.test(endTime)) {
+    feedback.textContent = 'Choose a valid discount start and end time.'; feedback.style.color = '#ef4444'; return;
   }
   try {
     feedback.textContent = 'Saving…'; feedback.style.color = '#64748b';
     const result = await api('/api/admin/student-discount-settings', 'PATCH', {
       enabled: document.getElementById('student-discount-enabled').checked,
-      discountPercent: value
+      discountPercent: value,
+      maxDiscountedRidesPerDay: dailyLimit,
+      startTime,
+      endTime
     });
     document.getElementById('student-discount-enabled').checked = result.settings.enabled !== false;
     document.getElementById('student-discount-percent').value = result.settings.discountPercent;
+    document.getElementById('student-discount-daily-limit').value = result.settings.maxDiscountedRidesPerDay;
+    document.getElementById('student-discount-start-time').value = result.settings.startTime;
+    document.getElementById('student-discount-end-time').value = result.settings.endTime;
     feedback.textContent = '✓ Student discount saved and published live.'; feedback.style.color = '#22c55e';
     showToast('Student discount updated ✓', 'success');
   } catch (e) {

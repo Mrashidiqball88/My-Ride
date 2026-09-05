@@ -9,6 +9,7 @@ const feature = require('../server');
 const {
   app, models, normalizeStudentDiscountSettings,
   applyStudentDiscountToFareQuote, customerRegistrationAccountStatus,
+  getVerifiedStudentDiscountPercent,
   FARE_VEHICLE_CATEGORIES
 } = feature;
 
@@ -20,6 +21,7 @@ const originalUserFindById = models.User.findById;
 const originalUserFind = models.User.find;
 const originalUserFindOneAndUpdate = models.User.findOneAndUpdate;
 const originalUserFindByIdAndUpdate = models.User.findByIdAndUpdate;
+const originalRideCountDocuments = models.Ride.countDocuments;
 
 afterEach(() => {
   models.Settings.findOne = originalSettingsFindOne;
@@ -29,6 +31,7 @@ afterEach(() => {
   models.User.find = originalUserFind;
   models.User.findOneAndUpdate = originalUserFindOneAndUpdate;
   models.User.findByIdAndUpdate = originalUserFindByIdAndUpdate;
+  models.Ride.countDocuments = originalRideCountDocuments;
 });
 
 function adminToken() {
@@ -47,8 +50,26 @@ test('student discount normalization is bounded and fare breakdown is auditable'
   assert.equal(customerRegistrationAccountStatus(false, true), 'active');
   assert.equal(customerRegistrationAccountStatus(true, true), 'pending');
   assert.equal(customerRegistrationAccountStatus(false, false), 'pending');
-  assert.deepEqual(normalizeStudentDiscountSettings({ discountPercent: -4 }), { enabled: true, discountPercent: 0 });
-  assert.deepEqual(normalizeStudentDiscountSettings({ enabled: false, discountPercent: 125 }), { enabled: false, discountPercent: 100 });
+  assert.deepEqual(normalizeStudentDiscountSettings({ discountPercent: -4 }), {
+    enabled: true,
+    discountPercent: 0,
+    maxDiscountedRidesPerDay: 2,
+    startTime: '06:00',
+    endTime: '17:00'
+  });
+  assert.deepEqual(normalizeStudentDiscountSettings({
+    enabled: false,
+    discountPercent: 125,
+    maxDiscountedRidesPerDay: 3,
+    startTime: '07:30',
+    endTime: '18:45'
+  }), {
+    enabled: false,
+    discountPercent: 100,
+    maxDiscountedRidesPerDay: 3,
+    startTime: '07:30',
+    endTime: '18:45'
+  });
   const quote = applyStudentDiscountToFareQuote({ totalFare: 500, subtotal: 500 }, 15);
   assert.equal(quote.totalBeforeDiscount, 500);
   assert.equal(quote.studentDiscountPercent, 15);
@@ -99,11 +120,19 @@ test('Admin student discount setting accepts valid values and rejects out-of-ran
     const saved = await request(server, '/api/admin/student-discount-settings', {
       method: 'PATCH',
       headers: { authorization: `Bearer ${adminToken()}` },
-      body: JSON.stringify({ discountPercent: 20 })
+      body: JSON.stringify({
+        discountPercent: 20,
+        maxDiscountedRidesPerDay: 3,
+        startTime: '06:00',
+        endTime: '17:00'
+      })
     });
     assert.equal(saved.response.status, 200);
     assert.equal(saved.body.settings.discountPercent, 20);
     assert.equal(saved.body.settings.enabled, true);
+    assert.equal(saved.body.settings.maxDiscountedRidesPerDay, 3);
+    assert.equal(saved.body.settings.startTime, '06:00');
+    assert.equal(saved.body.settings.endTime, '17:00');
 
     const disabled = await request(server, '/api/admin/student-discount-settings', {
       method: 'PATCH',
@@ -112,6 +141,9 @@ test('Admin student discount setting accepts valid values and rejects out-of-ran
     });
     assert.equal(disabled.response.status, 200);
     assert.equal(disabled.body.settings.enabled, false);
+    assert.equal(disabled.body.settings.maxDiscountedRidesPerDay, 3);
+    assert.equal(disabled.body.settings.startTime, '06:00');
+    assert.equal(disabled.body.settings.endTime, '17:00');
 
     const rejected = await request(server, '/api/admin/student-discount-settings', {
       method: 'PATCH',
@@ -119,9 +151,70 @@ test('Admin student discount setting accepts valid values and rejects out-of-ran
       body: JSON.stringify({ discountPercent: 101 })
     });
     assert.equal(rejected.response.status, 422);
+
+    const invalidLimit = await request(server, '/api/admin/student-discount-settings', {
+      method: 'PATCH',
+      headers: { authorization: `Bearer ${adminToken()}` },
+      body: JSON.stringify({ discountPercent: 20, maxDiscountedRidesPerDay: 1.5 })
+    });
+    assert.equal(invalidLimit.response.status, 422);
+
+    const invalidTime = await request(server, '/api/admin/student-discount-settings', {
+      method: 'PATCH',
+      headers: { authorization: `Bearer ${adminToken()}` },
+      body: JSON.stringify({ discountPercent: 20, startTime: '25:00', endTime: '17:00' })
+    });
+    assert.equal(invalidTime.response.status, 422);
   } finally {
     await new Promise(resolve => server.close(resolve));
   }
+});
+
+test('student discount honors the UTC time window and completed daily ride limit', async () => {
+  let completedDiscountedRides = 0;
+  let countQuery = null;
+  models.Settings.findOne = ({ key }) => ({
+    lean: async () => key === 'student_discount_settings'
+      ? {
+          value: {
+            enabled: true,
+            discountPercent: 10,
+            maxDiscountedRidesPerDay: 2,
+            startTime: '06:00',
+            endTime: '17:00'
+          }
+        }
+      : null
+  });
+  models.User.findById = () => ({
+    select: () => ({
+      lean: async () => ({
+        role: 'customer',
+        isStudent: true,
+        studentVerificationStatus: 'approved'
+      })
+    })
+  });
+  models.Ride.countDocuments = async query => {
+    countQuery = query;
+    return completedDiscountedRides;
+  };
+
+  const insideWindow = new Date('2026-09-05T08:00:00.000Z');
+  assert.equal(await getVerifiedStudentDiscountPercent('student-1', insideWindow), 10);
+  assert.equal(countQuery.status, 'completed');
+  assert.deepEqual(countQuery['fareQuote.studentDiscountPercent'], { $gt: 0 });
+  assert.equal(countQuery.settledAt.$gte.toISOString(), '2026-09-05T00:00:00.000Z');
+  assert.equal(countQuery.settledAt.$lt.toISOString(), '2026-09-06T00:00:00.000Z');
+
+  completedDiscountedRides = 2;
+  assert.equal(await getVerifiedStudentDiscountPercent('student-1', insideWindow), 0);
+
+  completedDiscountedRides = 0;
+  assert.equal(
+    await getVerifiedStudentDiscountPercent('student-1', new Date('2026-09-05T17:00:00.000Z')),
+    0
+  );
 });
 
 test('Student registration is rejected while the master Student feature is disabled', async () => {
@@ -153,9 +246,19 @@ test('fare calculation applies the discount only to an approved Customer', async
   const settingValue = key => {
     if (key === 'daily_fare_settings') return fareSettings;
     if (key === 'per_km_rates') return {};
+    if (key === 'student_discount_settings') {
+      return {
+        enabled: true,
+        discountPercent: 10,
+        maxDiscountedRidesPerDay: 2,
+        startTime: '00:00',
+        endTime: '23:59'
+      };
+    }
     return null;
   };
   models.Settings.findOne = ({ key }) => ({ lean: async () => ({ value: settingValue(key) }) });
+  models.Ride.countDocuments = async () => 0;
   const server = app.listen(0);
   try {
     models.User.findById = () => ({
@@ -214,6 +317,7 @@ test('disabled global student discounts produce a zero server-authoritative disc
       role: 'customer', isStudent: true, studentVerificationStatus: 'approved'
     }) })
   });
+  models.Ride.countDocuments = async () => 0;
   const server = app.listen(0);
   try {
     const result = await request(server, '/api/fare/calculate', {
@@ -337,4 +441,7 @@ test('Customer and Admin surfaces include student verification and fare breakdow
   assert.match(admin, /Enable Student registration and discounts/);
   assert.match(admin, /Student review/);
   assert.match(admin, /id="student-discount-percent"/);
+  assert.match(admin, /id="student-discount-daily-limit"/);
+  assert.match(admin, /id="student-discount-start-time"/);
+  assert.match(admin, /id="student-discount-end-time"/);
 });

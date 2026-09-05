@@ -1382,7 +1382,13 @@ const DEFAULT_CUSTOMER_FARE_DISPLAY_SETTINGS = Object.freeze({
 });
 
 const STUDENT_DISCOUNT_SETTINGS_KEY = 'student_discount_settings';
-const DEFAULT_STUDENT_DISCOUNT_SETTINGS = Object.freeze({ enabled: true, discountPercent: 10 });
+const DEFAULT_STUDENT_DISCOUNT_SETTINGS = Object.freeze({
+  enabled: true,
+  discountPercent: 10,
+  maxDiscountedRidesPerDay: 2,
+  startTime: '06:00',
+  endTime: '17:00'
+});
 
 function customerRegistrationAccountStatus(isStudent, identityVerified) {
   return isStudent ? 'pending' : (identityVerified ? 'active' : 'pending');
@@ -1390,11 +1396,21 @@ function customerRegistrationAccountStatus(isStudent, identityVerified) {
 
 function normalizeStudentDiscountSettings(input = {}) {
   const value = Number(input?.discountPercent);
+  const rideLimit = Number(input?.maxDiscountedRidesPerDay);
+  const normalizeTime = (candidate, fallback) => {
+    const value = String(candidate ?? '');
+    return /^(?:[01]\d|2[0-3]):[0-5]\d$/.test(value) ? value : fallback;
+  };
   return {
     enabled: input?.enabled !== false,
     discountPercent: Number.isFinite(value)
       ? Number(Math.min(100, Math.max(0, value)).toFixed(2))
-      : DEFAULT_STUDENT_DISCOUNT_SETTINGS.discountPercent
+      : DEFAULT_STUDENT_DISCOUNT_SETTINGS.discountPercent,
+    maxDiscountedRidesPerDay: Number.isFinite(rideLimit)
+      ? Math.min(1000, Math.max(0, Math.floor(rideLimit)))
+      : DEFAULT_STUDENT_DISCOUNT_SETTINGS.maxDiscountedRidesPerDay,
+    startTime: normalizeTime(input?.startTime, DEFAULT_STUDENT_DISCOUNT_SETTINGS.startTime),
+    endTime: normalizeTime(input?.endTime, DEFAULT_STUDENT_DISCOUNT_SETTINGS.endTime)
   };
 }
 
@@ -1403,7 +1419,40 @@ async function getStudentDiscountSettings() {
   return normalizeStudentDiscountSettings(doc?.value);
 }
 
-async function getVerifiedStudentDiscountPercent(userId) {
+function studentDiscountTimeToMinutes(value) {
+  const [hours, minutes] = String(value).split(':').map(Number);
+  return hours * 60 + minutes;
+}
+
+function isStudentDiscountWithinTimeWindow(at, settings) {
+  const date = at instanceof Date ? at : new Date(at);
+  if (Number.isNaN(date.getTime())) return false;
+  const start = studentDiscountTimeToMinutes(settings.startTime);
+  const end = studentDiscountTimeToMinutes(settings.endTime);
+  const current = date.getUTCHours() * 60 + date.getUTCMinutes();
+  if (start === end) return false;
+  return start < end
+    ? current >= start && current < end
+    : current >= start || current < end;
+}
+
+async function getCompletedStudentDiscountRideCount(userId, at = new Date()) {
+  const date = at instanceof Date ? at : new Date(at);
+  if (!userId || Number.isNaN(date.getTime())) return 0;
+  const dayStart = new Date(date);
+  dayStart.setUTCHours(0, 0, 0, 0);
+  const nextDay = new Date(dayStart);
+  nextDay.setUTCDate(nextDay.getUTCDate() + 1);
+  const count = await Ride.countDocuments({
+    passenger: userId,
+    status: 'completed',
+    'fareQuote.studentDiscountPercent': { $gt: 0 },
+    settledAt: { $gte: dayStart, $lt: nextDay }
+  });
+  return Number.isFinite(Number(count)) ? Number(count) : 0;
+}
+
+async function getVerifiedStudentDiscountPercent(userId, requestedAt = new Date()) {
   if (!userId) return 0;
   const user = await User.findById(userId)
     .select('role isStudent studentVerificationStatus')
@@ -1413,7 +1462,10 @@ async function getVerifiedStudentDiscountPercent(userId) {
     return 0;
   }
   const settings = await getStudentDiscountSettings();
-  return settings.enabled ? settings.discountPercent : 0;
+  if (!settings.enabled || settings.discountPercent <= 0 || settings.maxDiscountedRidesPerDay <= 0) return 0;
+  if (!isStudentDiscountWithinTimeWindow(requestedAt, settings)) return 0;
+  const completedDiscountedRides = await getCompletedStudentDiscountRideCount(userId, requestedAt);
+  return completedDiscountedRides < settings.maxDiscountedRidesPerDay ? settings.discountPercent : 0;
 }
 
 function applyStudentDiscountToFareQuote(fareQuote, discountPercent = 0) {
@@ -1612,7 +1664,7 @@ async function refreshPendingRideFares(settings, perKmRates = null) {
       fareQuote,
       Number.isFinite(Number(ride.fareQuote?.studentDiscountPercent))
         ? Number(ride.fareQuote.studentDiscountPercent)
-        : await getVerifiedStudentDiscountPercent(ride.passenger)
+        : await getVerifiedStudentDiscountPercent(ride.passenger, ride.createdAt)
     );
     if (fareQuote.error || (
       ride.fare === fareQuote.totalFare
@@ -3440,7 +3492,7 @@ async function refreshRideFareFromCurrentSettings(ride, waitingRateSettings = nu
     fareQuote,
     Number.isFinite(persistedDiscount)
       ? persistedDiscount
-      : await getVerifiedStudentDiscountPercent(ride.passenger)
+      : await getVerifiedStudentDiscountPercent(ride.passenger, ride.createdAt)
   );
   const isActiveRide = ['accepted', 'arrived', 'in-progress'].includes(ride.status);
   if (isActiveRide && !Number.isFinite(Number(ride.agreedFareBeforeWaiting))) {
@@ -4632,6 +4684,7 @@ app.get('/api/auth/me', authMiddleware, async (req, res) => {
 // calculated from the current Admin Settings document.
 app.post('/api/fare/calculate', optionalCustomerAuth, async (req, res) => {
   try {
+    const requestedAt = new Date();
     const [settingsDoc, ratesDoc, longRangeDoc, vehicleCategoryDoc, waitingRateDoc] = await Promise.all([
       Settings.findOne({ key: 'daily_fare_settings' }).lean(),
       Settings.findOne({ key: 'per_km_rates' }).lean(),
@@ -4655,7 +4708,7 @@ app.post('/api/fare/calculate', optionalCustomerAuth, async (req, res) => {
       req.body?.waitingSeconds
     );
     if (result.error) return res.status(422).json({ error: result.error });
-    const discountPercent = await getVerifiedStudentDiscountPercent(req.user?.id);
+    const discountPercent = await getVerifiedStudentDiscountPercent(req.user?.id, requestedAt);
     res.json(applyStudentDiscountToFareQuote(result, discountPercent));
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
@@ -4694,6 +4747,7 @@ app.get('/api/customer/vehicle-config', async (req, res) => {
 
 app.post('/api/rides', authMiddleware, customerOnly, customerCanBook, async (req, res) => {
   try {
+    const requestedAt = new Date();
     const { pickupLocation, dropoffLocation, dropoffLocations, distance, vehicleType, notes, paymentMethod, mobileAccount, customerOffer, customerFareOffset } = req.body;
     if (!pickupLocation) {
       return res.status(400).json({ error: 'Pickup is required' });
@@ -4731,7 +4785,7 @@ app.post('/api/rides', authMiddleware, customerOnly, customerCanBook, async (req
       normalizeWaitingRateSettings(waitingRateDoc?.value)
     );
     if (fareQuote.error) return res.status(422).json({ error: fareQuote.error });
-    const discountPercent = await getVerifiedStudentDiscountPercent(req.user.id);
+    const discountPercent = await getVerifiedStudentDiscountPercent(req.user.id, requestedAt);
     const discountedFareQuote = applyStudentDiscountToFareQuote(fareQuote, discountPercent);
     const offerResult = resolveCustomerFareOffer(customerOffer, discountedFareQuote.totalFare, customerFareOffset);
     if (offerResult.error) return res.status(422).json({ error: offerResult.error });
@@ -5512,7 +5566,9 @@ app.patch('/api/rides/:id/update-fare', authMiddleware, async (req, res) => {
     if (fareQuote.error) return res.status(422).json({ error: fareQuote.error });
     fareQuote = applyStudentDiscountToFareQuote(
       fareQuote,
-      await getVerifiedStudentDiscountPercent(req.user.id)
+      Number.isFinite(Number(ride.fareQuote?.studentDiscountPercent))
+        ? Number(ride.fareQuote.studentDiscountPercent)
+        : await getVerifiedStudentDiscountPercent(req.user.id, ride.createdAt)
     );
     ride.fare = fareQuote.totalFare;
     ride.customerFareOffset = 0;
@@ -8583,12 +8639,28 @@ app.get('/api/admin/student-discount-settings', adminJwt, requirePerm('manageFar
 app.patch('/api/admin/student-discount-settings', adminJwt, requirePerm('manageFareSettings'), async (req, res) => {
   try {
     const raw = Number(req.body?.discountPercent);
+    const dailyLimitInput = req.body?.maxDiscountedRidesPerDay;
+    const startTimeInput = req.body?.startTime;
+    const endTimeInput = req.body?.endTime;
     if (!Number.isFinite(raw) || raw < 0 || raw > 100) {
       return res.status(422).json({ error: 'Student discount must be a percentage from 0 to 100' });
     }
+    if (dailyLimitInput !== undefined
+      && (!Number.isInteger(Number(dailyLimitInput)) || Number(dailyLimitInput) < 0 || Number(dailyLimitInput) > 1000)) {
+      return res.status(422).json({ error: 'Daily discounted ride limit must be a whole number from 0 to 1000' });
+    }
+    const validTime = value => typeof value === 'string' && /^(?:[01]\d|2[0-3]):[0-5]\d$/.test(value);
+    if ((startTimeInput !== undefined && !validTime(startTimeInput))
+      || (endTimeInput !== undefined && !validTime(endTimeInput))) {
+      return res.status(422).json({ error: 'Student discount times must use HH:MM format' });
+    }
+    const currentSettings = await getStudentDiscountSettings();
     const settings = normalizeStudentDiscountSettings({
       enabled: req.body?.enabled !== false,
-      discountPercent: raw
+      discountPercent: raw,
+      maxDiscountedRidesPerDay: dailyLimitInput ?? currentSettings.maxDiscountedRidesPerDay,
+      startTime: startTimeInput ?? currentSettings.startTime,
+      endTime: endTimeInput ?? currentSettings.endTime
     });
     await Settings.findOneAndUpdate(
       { key: STUDENT_DISCOUNT_SETTINGS_KEY },
@@ -9994,6 +10066,7 @@ module.exports = {
   normalizeCustomerFareDisplaySettings,
   getCustomerFareDisplaySettings,
   normalizeStudentDiscountSettings,
+  getVerifiedStudentDiscountPercent,
   applyStudentDiscountToFareQuote,
   normalizeLongRangeSettings,
   validateLongRangeSettings,
