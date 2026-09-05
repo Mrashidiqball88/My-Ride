@@ -1641,10 +1641,14 @@ function prevRegStep() {
 }
 
 function openDocumentSource(inputId, source, cameraFacing = 'environment') {
-  const input = document.getElementById(`${inputId}-${source}`) || document.getElementById(inputId);
+  const input = document.getElementById(`${inputId}-${source}`);
   if (!input) return;
-  if (source === 'camera') input.setAttribute('capture', cameraFacing);
-  else input.removeAttribute('capture');
+  if (source === 'camera') {
+    input.accept = 'image/*';
+    input.setAttribute('capture', cameraFacing);
+  } else {
+    input.removeAttribute('capture');
+  }
   input.click();
 }
 
