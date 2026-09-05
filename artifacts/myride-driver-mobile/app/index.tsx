@@ -525,6 +525,7 @@ function DriverHome() {
   const [otpMessage, setOtpMessage] = useState('');
   const [busy, setBusy] = useState(false);
   const [activeTab, setActiveTab] = useState<DriverTab>('home');
+  const [menuOpen, setMenuOpen] = useState(false);
   const [, setClock] = useState(Date.now());
   const isWeb = Platform.OS === 'web';
   const report = (message: string) => Alert.alert('My Ride Driver', message);
@@ -682,7 +683,19 @@ function DriverHome() {
     {activeTab === 'home' ? <>
     <View style={styles.header}>
       <View><Text style={[styles.eyebrow, { color: colors.mutedForeground }]}>MY RIDE DRIVER</Text><Text style={[styles.name, { color: colors.foreground }, isRtlText(userName) && styles.rtlText]}>{userName}</Text></View>
-      <Pressable testID="driver-sign-out" onPress={() => void runtime.signOut()}><Ionicons name="log-out-outline" size={25} color={colors.mutedForeground} /></Pressable>
+       <View style={styles.headerActions}>
+         {!isWeb && <Pressable
+           testID="driver-menu-toggle"
+           accessibilityRole="button"
+           accessibilityLabel="Open Driver menu"
+           accessibilityState={{ expanded: menuOpen }}
+           onPress={() => setMenuOpen(current => !current)}
+           style={({ pressed }) => [styles.menuButton, { borderColor: colors.border, backgroundColor: colors.card, opacity: pressed ? .7 : 1 }]}
+         >
+           <Ionicons name="ellipsis-vertical" size={22} color={colors.foreground} />
+         </Pressable>}
+         <Pressable testID="driver-sign-out" onPress={() => void runtime.signOut()}><Ionicons name="log-out-outline" size={25} color={colors.mutedForeground} /></Pressable>
+       </View>
     </View>
     {!isWeb && !runtime.alertReadiness.ready && <View testID="driver-alert-readiness" style={[styles.setupCard, { backgroundColor: colors.card, borderColor: colors.primary, borderRadius: colors.radius + 12 }]}>
       <View style={styles.statusRow}><Ionicons name="shield-checkmark-outline" size={22} color={colors.primary} /><View style={{ flex: 1 }}><Text style={[styles.cardTitle, { color: colors.foreground }]}>Required alert setup</Text><Text style={[styles.statusCopy, { color: colors.mutedForeground }]}>Complete these checks before going online. Ride requests must be able to reach you with the screen locked.</Text></View></View>
@@ -770,7 +783,47 @@ function DriverHome() {
         loading={runtime.paymentsLoading}
         onRefresh={() => void runtime.refreshPayments().catch(() => undefined)}
       />}
-   </ScrollView>
+    </ScrollView>
+    {!isWeb && menuOpen && <View
+      testID="driver-menu"
+      accessibilityRole="menu"
+      accessibilityViewIsModal
+      style={[styles.nativeDriverMenu, { top: insets.top + 58, right: 20, backgroundColor: colors.card, borderColor: colors.border }]}
+    >
+      <Pressable
+        accessibilityRole="menuitem"
+        onPress={() => { setMenuOpen(false); setActiveTab('home'); }}
+        style={({ pressed }) => [styles.nativeDriverMenuItem, { opacity: pressed ? .7 : 1 }]}
+      >
+        <Ionicons name="home-outline" size={19} color={colors.primary} />
+        <Text style={[styles.nativeDriverMenuLabel, { color: colors.foreground }]}>Home</Text>
+      </Pressable>
+      <Pressable
+        accessibilityRole="menuitem"
+        onPress={() => { setMenuOpen(false); setActiveTab('history'); }}
+        style={({ pressed }) => [styles.nativeDriverMenuItem, { opacity: pressed ? .7 : 1 }]}
+      >
+        <Ionicons name="receipt-outline" size={19} color={colors.primary} />
+        <Text style={[styles.nativeDriverMenuLabel, { color: colors.foreground }]}>Ride history</Text>
+      </Pressable>
+      <Pressable
+        accessibilityRole="menuitem"
+        onPress={() => { setMenuOpen(false); setActiveTab('payments'); }}
+        style={({ pressed }) => [styles.nativeDriverMenuItem, { opacity: pressed ? .7 : 1 }]}
+      >
+        <Ionicons name="card-outline" size={19} color={colors.primary} />
+        <Text style={[styles.nativeDriverMenuLabel, { color: colors.foreground }]}>Payments</Text>
+      </Pressable>
+      <View style={[styles.nativeDriverMenuDivider, { backgroundColor: colors.border }]} />
+      <Pressable
+        accessibilityRole="menuitem"
+        onPress={() => { setMenuOpen(false); void runtime.signOut(); }}
+        style={({ pressed }) => [styles.nativeDriverMenuItem, { opacity: pressed ? .7 : 1 }]}
+      >
+        <Ionicons name="log-out-outline" size={19} color={colors.destructive} />
+        <Text style={[styles.nativeDriverMenuLabel, { color: colors.destructive }]}>Sign out</Text>
+      </Pressable>
+    </View>}
    <DriverBottomNavigation colors={colors} activeTab={activeTab} bottomInset={isWeb ? 0 : insets.bottom} onSelect={selectTab} />
   </View>;
 }
@@ -788,7 +841,7 @@ const styles = StyleSheet.create({
   brand: { fontSize: 30, fontFamily: 'Inter_700Bold' }, subtle: { fontSize: 15, marginTop: 6 }, authCard: { width: '100%', borderWidth: 1, padding: 20, marginTop: 34, gap: 12 },
   cardTitle: { fontFamily: 'Inter_700Bold', fontSize: 19, marginBottom: 5 }, input: { borderWidth: 1, borderRadius: 12, paddingHorizontal: 14, paddingVertical: 14, fontFamily: 'Inter_400Regular', fontSize: 16 },
    primaryButton: { height: 52, justifyContent: 'center', alignItems: 'center', marginTop: 4 }, buttonText: { fontFamily: 'Inter_700Bold', fontSize: 16 }, authModes: { flexDirection: 'row', gap: 8 }, modeButton: { flex: 1, minHeight: 42, borderWidth: 1, borderRadius: 10, justifyContent: 'center', alignItems: 'center' }, otpBlock: { gap: 6 }, otpLink: { alignSelf: 'flex-start', paddingVertical: 2 }, otpMessage: { fontSize: 12, lineHeight: 17 }, legal: { fontFamily: 'Inter_400Regular', fontSize: 13, lineHeight: 19, textAlign: 'center', marginTop: 20, paddingHorizontal: 12 },
-   app: { flex: 1, paddingHorizontal: 20 }, header: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingVertical: 20 }, eyebrow: { fontFamily: 'Inter_700Bold', fontSize: 11, letterSpacing: 1.2 }, name: { fontFamily: 'Inter_700Bold', fontSize: 24, marginTop: 3 },
+   app: { flex: 1, paddingHorizontal: 20 }, header: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingVertical: 20 }, headerActions: { flexDirection: 'row', alignItems: 'center', gap: 10 }, menuButton: { width: 40, height: 40, borderWidth: 1, borderRadius: 20, alignItems: 'center', justifyContent: 'center' }, nativeDriverMenu: { position: 'absolute', minWidth: 190, borderWidth: 1, borderRadius: 14, paddingVertical: 6, zIndex: 1000, elevation: 30, shadowColor: '#000', shadowOpacity: .28, shadowRadius: 16, shadowOffset: { width: 0, height: 8 } }, nativeDriverMenuItem: { minHeight: 46, flexDirection: 'row', alignItems: 'center', gap: 10, paddingHorizontal: 14 }, nativeDriverMenuLabel: { fontFamily: 'Inter_600SemiBold', fontSize: 14 }, nativeDriverMenuDivider: { height: 1, marginVertical: 5, marginHorizontal: 12 }, eyebrow: { fontFamily: 'Inter_700Bold', fontSize: 11, letterSpacing: 1.2 }, name: { fontFamily: 'Inter_700Bold', fontSize: 24, marginTop: 3 },
   setupCard: { borderWidth: 1, padding: 16, marginBottom: 12 }, setupRow: { flexDirection: 'row', alignItems: 'center', gap: 9, marginTop: 11 }, setupRowText: { flex: 1, fontFamily: 'Inter_500Medium', fontSize: 13 }, setupMessage: { fontFamily: 'Inter_500Medium', fontSize: 12, lineHeight: 18, marginTop: 14 }, setupActions: { gap: 10, marginTop: 16 },
   statusCard: { borderWidth: 1, padding: 18 }, statusRow: { flexDirection: 'row', alignItems: 'center', gap: 12 }, statusDot: { width: 12, height: 12, borderRadius: 6 }, statusTitle: { fontFamily: 'Inter_700Bold', fontSize: 18 }, statusCopy: { fontFamily: 'Inter_400Regular', fontSize: 13, marginTop: 3, lineHeight: 19 },
   longRangeCard: { borderWidth: 1, padding: 16, marginTop: 12 }, longRangeTitle: { fontFamily: 'Inter_700Bold', fontSize: 15 }, longRangeReminder: { flexDirection: 'row', alignItems: 'flex-start', gap: 7, borderWidth: 1, padding: 10, marginTop: 14, borderRadius: 10 }, longRangeReminderText: { flex: 1, fontFamily: 'Inter_600SemiBold', fontSize: 12, lineHeight: 17 },
