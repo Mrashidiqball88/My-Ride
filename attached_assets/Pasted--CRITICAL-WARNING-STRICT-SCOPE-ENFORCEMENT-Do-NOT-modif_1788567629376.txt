@@ -1,0 +1,26 @@
+🚨 CRITICAL WARNING / STRICT SCOPE ENFORCEMENT:
+Do NOT modify, touch, refactor, or alter ANY other file, setting, module, or unrelated logic in the entire codebase. Restrict your changes strictly and exclusively to the driver app expandable UI and the online/offline fee deduction lifecycle specified below. Leave all other parts of the application completely untouched.
+
+---
+
+FINAL CRITICAL BUSINESS LOGIC: Driver Online/Offline Lifecycle & Fee Deduction Rules
+
+Please update the driver app interface and backend logic with these precise rules:
+
+1. **UI Addition in Driver Expandable Card (`driver.html` / Mobile Artifact)**:
+   - Inside the draggable control panel, directly below the subscription status (e.g., "Car Sedan ✓ Paid till..."), add **two compact info cards**:
+     1. **"Today's Online Time"**: Displays the exact timestamp/date when the driver went online for the current shift.
+     2. **"Next Fee Deduction"**: Displays the exact timestamp/countdown for the next scheduled 24-hour fee deduction.
+
+2. **Offline Immunity Rule**:
+   - If a driver goes offline and stays offline for multiple days (e.g., 2-3 days or more), the system must **NEVER** deduct daily fees while they are offline. No fees accumulate or deduct during offline status.
+
+3. **Immediate On-Login Deduction**:
+   - The exact moment a driver goes **online** after being offline, if their fee cycle is due, the system must immediately attempt to deduct the daily fee:
+     - **Priority 1**: Regular Recharged Wallet Balance (counts towards Real Revenue).
+     - **Priority 2**: Bonus Credit Balance (non-revenue / bonus-funded).
+
+4. **Insufficient Balance Handling & Notification on Login**:
+   - If a driver comes online and their balance is insufficient to pay the due daily fee:
+     - The system must immediately show an alert / top notification: *"You cannot receive rides. Your fee is unpaid. The Accept button is disabled until you clear your balance."*
+     - Their ride acceptance / "Accept" button must remain **disabled** so they cannot accept any rides until the fee is paid. They cannot work for free thinking they are online with an unpaid balance.
