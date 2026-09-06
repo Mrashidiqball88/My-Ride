@@ -3970,8 +3970,8 @@ function showMatchedPanel(driver, agreedFare, rideStatus = activeRide?.status ||
   // rides restored directly as arrived or in-progress.
   const contact = normalizeCustomerContactPhone(driver.phone);
   const contactHtml = contact
-    ? `<a class="btn-call" href="tel:${contact.tel}" onclick="return openCustomerRideContact(event, this.href)">📞 Phone Call</a>
-       <a class="btn-whatsapp" href="https://wa.me/${contact.whatsapp}" onclick="return openCustomerRideContact(event, this.href)">💬 WhatsApp</a>`
+     ? `<a class="btn-call" href="tel:${contact.tel}">📞 Phone Call</a>
+        <a class="btn-whatsapp" href="https://wa.me/${contact.whatsapp}">💬 WhatsApp</a>`
     : `<div style="font-size:.78rem;color:#555;text-align:center;flex:1">Contact details not available</div>`;
   document.getElementById('ar-contact-btns').innerHTML = contactHtml;
   document.getElementById('ar-contact-btns').style.display = 'flex';

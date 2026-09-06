@@ -2978,6 +2978,33 @@ function rideResponseForUser(ride, role) {
   return payload;
 }
 
+async function rideResponseForUserWithContact(ride, role) {
+  const payload = rideResponseForUser(ride, role);
+  const field = role === 'customer' ? 'driver' : 'passenger';
+  const participant = payload[field];
+  let participantId = participant?._id || participant?.id || participant;
+  if (!participantId && ride?._id) {
+    const rawRide = await Ride.findById(ride._id).select(field).lean().catch(() => null);
+    participantId = rawRide?.[field] || null;
+  }
+  if (!participantId) return payload;
+
+  const contact = await User.findById(participantId)
+    .select('name phone vehicleType vehicleModel vehiclePlate rating profilePhoto')
+    .lean()
+    .catch(() => null);
+  if (!contact) return payload;
+
+  payload[field] = {
+    ...(participant && typeof participant === 'object' ? participant : {}),
+    ...contact,
+    _id: contact._id || participant?._id || participantId,
+    id: String(contact._id || participant?._id || participantId),
+    phone: contact.phone || ''
+  };
+  return payload;
+}
+
 function roundFareOfferBoundary(amount) {
   return Math.max(
     CUSTOMER_OFFER_INCREMENT,
@@ -5505,7 +5532,7 @@ app.get('/api/rides/:id', authMiddleware, async (req, res) => {
     if (!isPassenger && !isDriver) {
       return res.status(403).json({ error: 'You are not authorized to view this ride' });
     }
-    res.json(rideResponseForUser(ride, isPassenger ? 'customer' : 'driver'));
+    res.json(await rideResponseForUserWithContact(ride, isPassenger ? 'customer' : 'driver'));
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -5577,7 +5604,7 @@ app.patch('/api/rides/:id/accept', authMiddleware, async (req, res) => {
       profilePhoto: driverUser.profilePhoto || ''
     });
 
-    res.json(rideResponseForUser(ride, 'driver'));
+    res.json(await rideResponseForUserWithContact(ride, 'driver'));
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -5706,7 +5733,7 @@ app.patch('/api/rides/:id/cancel', authMiddleware, async (req, res) => {
     if (isPassenger) {
       emitRideLifecycle(ride, 'ride_cancelled', cancellationDetail, cancellationAudience);
     }
-    res.json(rideResponseForUser(ride, isPassenger ? 'customer' : 'driver'));
+    res.json(await rideResponseForUserWithContact(ride, isPassenger ? 'customer' : 'driver'));
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -5787,7 +5814,7 @@ async function cancelRideForDriverEmergency(rideId, driverId) {
 app.post('/api/rides/:id/emergency-cancel', authMiddleware, driverOnly, async (req, res) => {
   try {
     const ride = await cancelRideForDriverEmergency(req.params.id, req.user.id);
-    res.json(rideResponseForUser(ride, 'driver'));
+    res.json(await rideResponseForUserWithContact(ride, 'driver'));
   } catch (err) {
     res.status(err.statusCode || 500).json({ error: err.message });
   }
@@ -5866,7 +5893,7 @@ app.get('/api/driver/active-ride', authMiddleware, async (req, res) => {
       driver: req.user.id,
       status: { $in: ['accepted', 'arrived', 'in-progress'] }
     }).populate('passenger', 'name phone').lean();
-    res.json({ ride: ride || null });
+    res.json({ ride: ride ? await rideResponseForUserWithContact(ride, 'driver') : null });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -5956,7 +5983,7 @@ app.patch('/api/rides/:id/accept-driver', authMiddleware, customerOnly, customer
       profilePhoto: driverUser.profilePhoto || ''
     });
 
-    res.json(rideResponseForUser(ride, 'customer'));
+    res.json(await rideResponseForUserWithContact(ride, 'customer'));
   } catch (err) {
     res.status(500).json({ error: err.message });
   }

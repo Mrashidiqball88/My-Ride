@@ -3562,8 +3562,8 @@ function showActivePanel(ride) {
   if (callEl) {
     callEl.innerHTML = contact
       ? `<div class="ap-dual-btns">
-           <a class="btn-call-pass" href="tel:${contact.tel}" onclick="return openDriverRideContact(event, this.href)">📞 Phone Call</a>
-           <a class="btn-wa-pass" href="https://wa.me/${contact.whatsapp}" onclick="return openDriverRideContact(event, this.href)">💬 WhatsApp</a>
+           <a class="btn-call-pass" href="tel:${contact.tel}">📞 Phone Call</a>
+           <a class="btn-wa-pass" href="https://wa.me/${contact.whatsapp}">💬 WhatsApp</a>
          </div>`
       : '<div class="ap-contact-unavailable">Passenger contact unavailable</div>';
   }
