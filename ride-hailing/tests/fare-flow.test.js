@@ -448,7 +448,7 @@ test('Customer fare quote uses active Long Range rates without daily fare slabs'
   }
 });
 
-test('Long Range commission is a fixed amount charged once at acceptance', async () => {
+test('Long Range commission is a percentage of the final fare charged once at acceptance', async () => {
   const updates = [];
   let debitAttempt = 0;
   models.Wallet.findOneAndUpdate = async () => {
@@ -458,7 +458,7 @@ test('Long Range commission is a fixed amount charged once at acceptance', async
   models.Wallet.exists = async () => debitAttempt > 1;
   models.Ride.updateOne = async (_query, update) => { updates.push(update); };
   const ride = { _id: 'long-range-ride', isLongRange: true, fare: 1000, longRangeCommissionChargedAt: null };
-  const settings = { manualCommissionAmounts: { 'Car Mini Non-AC': 100 } };
+  const settings = { manualCommissionAmounts: { 'Car Mini Non-AC': 10 } };
   ride.vehicleType = 'Car Mini Non-AC';
   assert.equal((await chargeLongRangeCommission(ride, 'driver-1', settings)).ok, true);
   assert.equal((await chargeLongRangeCommission(ride, 'driver-1', settings)).ok, true);

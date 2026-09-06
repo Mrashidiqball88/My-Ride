@@ -57,3 +57,4 @@
 - [Admin revenue consistency](admin-revenue-consistency.md) — Overview revenue widgets and detailed schedules must share one trend; approved recharge payments are excluded operating revenue.
 - [Model facade query support](model-facade-query-support.md) — use supported facade query chains instead of assuming every native Mongoose helper exists.
 - [Online fee lifecycle](online-fee-lifecycle.md) — scheduled fees target explicitly online Drivers; web and native activation share server-authoritative timing and failure state.
+- [Long Range commission percentage](long-range-commission-percentage.md) — configured Long Range commission values are percentages of the final agreed fare; minimum wallet floors remain separate.

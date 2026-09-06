@@ -1609,7 +1609,7 @@ button,input,select,textarea{
           <article class="settings-card" id="long-range-settings-card">
             <div class="settings-icon">🛣️</div>
             <h3>Long Range Rides</h3>
-            <p>Set the opt-in distance cutoff, Driver eligibility, dispatch radius, pricing, and fixed manual charge.</p>
+            <p>Set the opt-in distance cutoff, Driver eligibility, dispatch radius, pricing, and manual commission percentage.</p>
             <button class="btn btn-primary" onclick="showSection('long-range-settings')">Manage Long Range</button>
           </article>
           <article class="settings-card" id="payment-settings-card">
@@ -1751,7 +1751,7 @@ button,input,select,textarea{
       </div>
       <div class="section-panel" id="sec-long-range-settings">
         <div class="sec-hdr"><h2>🛣️ Long Range Ride Settings</h2><div class="sec-hdr-actions"><button class="btn-refresh" onclick="loadLongRangeSettings()">↻ Reload</button></div></div>
-        <p style="font-size:.8rem;color:#475569;margin-bottom:1.1rem">Long Range rides use dedicated per-kilometre rates and are sent only to eligible Drivers who opt in.</p>
+        <p style="font-size:.8rem;color:#475569;margin-bottom:1.1rem">Long Range rides use dedicated per-kilometre rates and a manual commission percentage, and are sent only to eligible Drivers who opt in.</p>
         <div style="background:#0f0f1e;border:1px solid #1e1e2e;border-radius:14px;padding:1rem;max-width:760px">
           <label style="display:flex;align-items:center;gap:.65rem;font-weight:700;color:#e2e8f0;margin-bottom:1rem"><input id="lr-enabled" type="checkbox"> Enable Long Range Ride mode</label>
            <div class="field-row">
@@ -1760,7 +1760,7 @@ button,input,select,textarea{
           <div class="field-row">
             <div class="field-item"><div class="field-label">Long Range broadcast radius (km)</div><input class="modal-input" id="lr-radius" type="number" min=".5" step=".1"></div>
           </div>
-            <div class="field-label" style="margin-top:1rem">Long Range rate, manual charge, and minimum wallet balance by vehicle</div><div id="lr-rates" class="field-row"></div>
+             <div class="field-label" style="margin-top:1rem">Long Range rate, manual commission percentage, and minimum wallet balance by vehicle</div><div id="lr-rates" class="field-row"></div>
         </div>
         <div id="long-range-settings-feedback" style="min-height:1.25rem;font-size:.8rem;margin:.8rem 0"></div>
         <button class="btn btn-primary" style="padding:.75rem 2rem;font-size:.9rem" onclick="saveLongRangeSettings()">💾 Save Long Range Settings</button>
@@ -5702,7 +5702,7 @@ async function saveWaitingRateSettings() {
 const LONG_RANGE_CATEGORIES = ['Car Sedan', 'Car Mini AC', 'Car Mini Non-AC', 'Riksha', 'Bike', 'Car SUV', 'Van Seven Seats', 'Cary Dibba', 'Toyota Highroof', 'Toyota Saloon Coaster', 'Old Cars', 'Off-Road Dalla (Pickup)', 'Toyota Land Cruiser V8', 'Electric Scooty'];
 function renderLongRangeRates(rates = {}, minimumWalletBalances = {}, manualCommissionAmounts = {}) {
   document.getElementById('lr-rates').innerHTML = LONG_RANGE_CATEGORIES.map(category =>
-    `<div class="field-item" style="min-width:220px"><div class="field-label">${category} (Rs /km)</div><input class="modal-input lr-rate" data-category="${category}" type="number" min=".01" step=".01" value="${rates[category] ?? ''}"><div class="field-label" style="margin-top:.45rem">Manual Long Range charge (Rs / ride)</div><input class="modal-input lr-commission" data-category="${category}" type="number" min="0" step="1" value="${manualCommissionAmounts[category] ?? ''}"><div class="field-label" style="margin-top:.45rem">Minimum Wallet Balance (Rs)</div><input class="modal-input lr-min-wallet" data-category="${category}" type="number" min="0" step="1" value="${minimumWalletBalances[category] ?? 500}"></div>`
+    `<div class="field-item" style="min-width:220px"><div class="field-label">${category} (Rs /km)</div><input class="modal-input lr-rate" data-category="${category}" type="number" min=".01" step=".01" value="${rates[category] ?? ''}"><div class="field-label" style="margin-top:.45rem">MANUAL LONG RANGE COMMISSION (%)</div><div style="display:flex;align-items:center;gap:.45rem"><input class="modal-input lr-commission" data-category="${category}" type="number" min="0" step=".01" value="${manualCommissionAmounts[category] ?? ''}" aria-label="${category} manual Long Range commission percentage"><span aria-hidden="true">%</span></div><div class="field-label" style="margin-top:.45rem">Minimum Wallet Balance (Rs)</div><input class="modal-input lr-min-wallet" data-category="${category}" type="number" min="0" step="1" value="${minimumWalletBalances[category] ?? 500}"></div>`
   ).join('');
 }
 async function loadLongRangeSettings() {

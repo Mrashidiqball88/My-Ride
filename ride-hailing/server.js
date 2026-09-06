@@ -1315,8 +1315,9 @@ const DEFAULT_LONG_RANGE_SETTINGS = Object.freeze({
   distanceCutoffKm: 50,
   minimumWalletBalances: DEFAULT_LONG_RANGE_MINIMUM_WALLET_BALANCES,
   broadcastRadiusKm: 30,
-  // Long Range platform charges are fixed amounts configured by Admin for
-  // each vehicle category. There is deliberately no percentage fallback.
+  // Long Range platform commissions are percentages configured by Admin for
+  // each vehicle category. Keep the setting key stable for persisted data and
+  // existing Admin API clients.
   manualCommissionAmounts: Object.fromEntries(FARE_VEHICLE_CATEGORIES.map(category => [category, 0])),
   perKmRates: Object.fromEntries(FARE_VEHICLE_CATEGORIES.map(category => [category, null]))
 });
@@ -1356,7 +1357,7 @@ function validateLongRangeSettings(input) {
     for (const category of FARE_VEHICLE_CATEGORIES) {
       if (!settings.perKmRates[category]) errors.push(`${category}: Long Range /km rate must be greater than zero`);
       if (!Number.isFinite(settings.manualCommissionAmounts[category]) || settings.manualCommissionAmounts[category] <= 0) {
-        errors.push(`${category}: Manual Long Range commission amount must be greater than zero`);
+        errors.push(`${category}: Manual Long Range commission percentage must be greater than zero`);
       }
       if (!Number.isFinite(settings.minimumWalletBalances[category]) || settings.minimumWalletBalances[category] < 0) {
         errors.push(`${category}: Minimum Wallet Balance must be zero or greater`);
@@ -1524,15 +1525,22 @@ function getLongRangeMinimumWalletBalance(settings, vehicleType) {
   return Number(settings?.minimumWalletBalances?.[category] ?? DEFAULT_LONG_RANGE_MINIMUM_WALLET_BALANCES[category] ?? 0);
 }
 
-function getLongRangeCommissionAmount(settings, vehicleType) {
+function getLongRangeCommissionPercentage(settings, vehicleType) {
   const category = normalizeFareVehicle(vehicleType || 'Car Mini Non-AC');
   return Number(settings?.manualCommissionAmounts?.[category] || 0);
 }
 
-function getLongRangeRequiredWalletBalance(settings, vehicleType) {
+function getLongRangeCommissionAmount(settings, vehicleType, finalFare) {
+  const percentage = getLongRangeCommissionPercentage(settings, vehicleType);
+  const fare = Number(finalFare);
+  if (!Number.isFinite(fare) || fare < 0) return 0;
+  return Number((fare * percentage / 100).toFixed(2));
+}
+
+function getLongRangeRequiredWalletBalance(settings, vehicleType, finalFare) {
   return Math.max(
     getLongRangeMinimumWalletBalance(settings, vehicleType),
-    getLongRangeCommissionAmount(settings, vehicleType)
+    getLongRangeCommissionAmount(settings, vehicleType, finalFare)
   );
 }
 
@@ -3108,9 +3116,14 @@ async function chargeLongRangeCommission(ride, driverId, longRangeSettings, { se
   if (!ride.isLongRange || ride.longRangeCommissionChargedAt) {
     return { ok: true, alreadyCharged: !!ride.longRangeCommissionChargedAt };
   }
-  const amount = getLongRangeCommissionAmount(longRangeSettings, ride.vehicleType);
-  if (!amount) {
-    return { ok: false, error: 'A manual Long Range commission amount is not configured for this vehicle category.' };
+  const finalFare = Number(ride.fare);
+  if (!Number.isFinite(finalFare) || finalFare < 0) {
+    return { ok: false, error: 'The final Long Range ride fare is unavailable for commission calculation.' };
+  }
+  const percentage = getLongRangeCommissionPercentage(longRangeSettings, ride.vehicleType);
+  const amount = getLongRangeCommissionAmount(longRangeSettings, ride.vehicleType, finalFare);
+  if (!percentage) {
+    return { ok: false, error: 'A manual Long Range commission percentage is not configured for this vehicle category.' };
   }
   const walletSnapshot = await ensureWalletSourceBalances(driverId, { session });
   const allocation = allocateWalletDebit(walletSnapshot, amount);
@@ -3256,8 +3269,8 @@ async function completeRideFinancialSettlement(rideId, driverId, waitingRateSett
 
     const fare = Number(ride.fare);
     // Daily Fees are the normal platform revenue. Ordinary ride fares are
-    // paid to the Driver in full; only the separately charged fixed Long
-    // Range amount is a platform ride charge.
+    // paid to the Driver in full; only the separately charged Long Range
+    // percentage commission is a platform ride charge.
     const earnings = fare;
     const operationId = `ride:${ride._id}:settlement`;
     const customerWallet = await Wallet.findOneAndUpdate(
@@ -3339,13 +3352,13 @@ async function completeRideFinancialSettlement(rideId, driverId, waitingRateSett
   });
 }
 
-async function validateLongRangeDriverEligibility(driverId, settings) {
+async function validateLongRangeDriverEligibility(driverId, settings, finalFare = null) {
   const [driver, wallet] = await Promise.all([
     User.findById(driverId).select('longRangeEnabled accountStatus vehicleType').lean(),
     Wallet.findOne({ user: driverId }).select('balance').lean()
   ]);
   return !!(settings.enabled && driver?.accountStatus === 'active' && driver.longRangeEnabled
-    && Number(wallet?.balance || 0) >= getLongRangeRequiredWalletBalance(settings, driver.vehicleType));
+     && Number(wallet?.balance || 0) >= getLongRangeRequiredWalletBalance(settings, driver.vehicleType, finalFare));
 }
 
 function emitRideRequestToDrivers(drivers, payload) {
@@ -3414,26 +3427,36 @@ async function getAvailableRidesForDriver(driver) {
       Number(ride.pickupLocation.lat),
       Number(ride.pickupLocation.lng)
      ) <= (ride.isLongRange ? longRangeSettings.broadcastRadiusKm : radiusKm))
-    .map(ride => ({
-      ...(typeof ride.toObject === 'function' ? ride.toObject() : ride),
-      acceptanceEligibility: {
-        allowed: feeState.allowed && (!ride.isLongRange || (
-          longRangeSettings.enabled
-          && driver.longRangeEnabled
-          && Number(wallet?.balance || 0) >= getLongRangeRequiredWalletBalance(longRangeSettings, driver.vehicleType)
-        )),
-        reason: !feeState.allowed
-          ? feeState.reason
-          : ride.isLongRange && Number(wallet?.balance || 0) < getLongRangeRequiredWalletBalance(longRangeSettings, driver.vehicleType)
-            ? `Wallet balance must cover the Long Range commission of Rs ${getLongRangeCommissionAmount(longRangeSettings, driver.vehicleType).toLocaleString()}.`
-            : null,
-        dailyFeeDue: !feeState.allowed,
-        dailyFeeRate: feeState.rate,
-        longRangeCommissionAmount: ride.isLongRange
-          ? getLongRangeCommissionAmount(longRangeSettings, driver.vehicleType)
-          : 0
-      }
-    }));
+    .map(ride => {
+      const longRangeRequiredWalletBalance = getLongRangeRequiredWalletBalance(
+        longRangeSettings,
+        driver.vehicleType,
+        ride.fare
+      );
+      const longRangeCommissionAmount = getLongRangeCommissionAmount(
+        longRangeSettings,
+        driver.vehicleType,
+        ride.fare
+      );
+      return {
+        ...(typeof ride.toObject === 'function' ? ride.toObject() : ride),
+        acceptanceEligibility: {
+          allowed: feeState.allowed && (!ride.isLongRange || (
+            longRangeSettings.enabled
+            && driver.longRangeEnabled
+            && Number(wallet?.balance || 0) >= longRangeRequiredWalletBalance
+          )),
+          reason: !feeState.allowed
+            ? feeState.reason
+            : ride.isLongRange && Number(wallet?.balance || 0) < longRangeRequiredWalletBalance
+              ? `Wallet balance must cover the Long Range commission of Rs ${longRangeCommissionAmount.toLocaleString()}.`
+              : null,
+          dailyFeeDue: !feeState.allowed,
+          dailyFeeRate: feeState.rate,
+          longRangeCommissionAmount: ride.isLongRange ? longRangeCommissionAmount : 0
+        }
+      };
+    });
 }
 
 async function rehydrateDriverSocket(socket, driverId, { replayOffers = true } = {}) {
@@ -5423,7 +5446,7 @@ app.patch('/api/rides/:id/accept', authMiddleware, async (req, res) => {
     ride.agreedFareBeforeWaiting = ride.fare;
     if (ride.isLongRange) {
       const settings = await getLongRangeSettings();
-      if (!await validateLongRangeDriverEligibility(req.user.id, settings)) {
+      if (!await validateLongRangeDriverEligibility(req.user.id, settings, ride.fare)) {
         await Ride.updateOne({ _id: ride._id, driver: req.user.id, status: 'accepted' }, { $set: { driver: null, status: 'requested' } });
         return res.status(403).json({ error: 'You are not currently eligible for Long Range rides.' });
       }
@@ -5789,7 +5812,7 @@ app.patch('/api/rides/:id/accept-driver', authMiddleware, customerOnly, customer
     await ride.save();
     if (ride.isLongRange) {
       const settings = await getLongRangeSettings();
-      if (!await validateLongRangeDriverEligibility(driverId, settings)) {
+      if (!await validateLongRangeDriverEligibility(driverId, settings, ride.fare)) {
         await Ride.updateOne({ _id: ride._id, driver: driverId, status: 'accepted' }, { $set: { driver: null, status: 'requested', verificationPin: null } });
         return res.status(403).json({ error: 'Selected Driver is no longer eligible for Long Range rides.' });
       }

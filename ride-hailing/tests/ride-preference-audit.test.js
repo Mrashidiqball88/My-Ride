@@ -28,7 +28,7 @@ function longRangeSettings() {
     enabled: true,
     distanceCutoffKm: 50,
     broadcastRadiusKm: 30,
-    manualCommissionAmounts: Object.fromEntries(FARE_VEHICLE_CATEGORIES.map(category => [category, 125])),
+    manualCommissionAmounts: Object.fromEntries(FARE_VEHICLE_CATEGORIES.map(category => [category, 12.5])),
     minimumWalletBalances,
     perKmRates: Object.fromEntries(FARE_VEHICLE_CATEGORIES.map(category => [category, 100]))
   };
@@ -189,7 +189,7 @@ test('audits registration, scheduled fees, wallet gates, completion commission, 
   const afterCompletion = await models.Wallet.findOne({ user: driverB._id }).lean();
   const commissions = afterCompletion.transactions.filter(tx => tx.description === 'Long Range commission');
   assert.equal(commissions.length, 1);
-  assert.equal(commissions[0].amount, 125);
+   assert.equal(commissions[0].amount, 125);
 
   const overridden = await json(`/api/admin/drivers/${driverB._id}/ride-preference`, {
     token: adminToken, method: 'PATCH', body: { ridePreference: 'Both' }

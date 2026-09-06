@@ -689,7 +689,7 @@ test('Long Range commission records bonus funding without treating it as real re
   const result = await chargeLongRangeCommission(
     ride,
     driver._id,
-    { manualCommissionAmounts: { 'Car Sedan': 100 } }
+    { manualCommissionAmounts: { 'Car Sedan': 10 } }
   );
 
   assert.equal(result.fundingSource, 'bonus');
@@ -719,7 +719,7 @@ test('Long Range commission spends real cash before falling back to bonus', asyn
   const result = await chargeLongRangeCommission(
     ride,
     driver._id,
-    { manualCommissionAmounts: { 'Car Sedan': 100 } }
+    { manualCommissionAmounts: { 'Car Sedan': 10 } }
   );
 
   assert.equal(result.fundingSource, 'mixed');
