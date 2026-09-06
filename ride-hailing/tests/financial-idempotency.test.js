@@ -170,6 +170,88 @@ test('concurrent Driver payment approval credits the wallet once', async () => {
   assert.equal(wallet.balance, 2600);
 });
 
+test('approved Driver recharge buys the configured Daily Fee pass and records current-day revenue', async () => {
+  const driver = await createParticipant('driver', 'payment-fee');
+  await models.Settings.create({
+    key: 'daily_fee_settings',
+    value: { 'Car Sedan': 270 }
+  });
+  const payment = await models.Payment.create({
+    driver: driver._id,
+    trxId: 'FINANCIAL-APPROVAL-FEE-1',
+    amount: 5000,
+    vehicleCategory: 'Car Sedan',
+    paymentType: 'jazzcash',
+    proofScreenshot: 'data:image/png;base64,AA==',
+    submittedDate: '2026-09-06',
+  });
+
+  const approved = await approveDriverPayment(
+    payment._id,
+    { id: 'admin-fee', role: 'admin' },
+    'approved'
+  );
+  const [wallet, storedDriver, storedPayment] = await Promise.all([
+    models.Wallet.findOne({ user: driver._id }).lean(),
+    models.User.findById(driver._id).lean(),
+    models.Payment.findById(payment._id).lean()
+  ]);
+  const feeTransactions = wallet.transactions.filter(transaction =>
+    transaction.description.startsWith('Automatic daily fee for going online')
+  );
+
+  assert.equal(approved.feeResult.charged, true);
+  assert.equal(approved.feeResult.rate, 270);
+  assert.equal(wallet.balance, 4730);
+  assert.equal(wallet.realCashAvailable, 4730);
+  assert.equal(feeTransactions.length, 1);
+  assert.equal(feeTransactions[0].type, 'debit');
+  assert.equal(feeTransactions[0].amount, 270);
+  assert.equal(feeTransactions[0].fundingSource, 'real');
+  assert.equal(storedDriver.paidUntilDate.getTime(), storedPayment.paidUntilDate.getTime());
+
+  await models.Admin.create({ _id: 'super-admin', email: 'fee-approval-admin@example.test', sessionVersion: 0 });
+  const adminServer = app.listen(0);
+  try {
+    const token = jwt.sign({ isAdmin: true, username: 'fee-approval-admin' }, 'ride-hailing-secret-fallback');
+    const response = await fetch(`http://127.0.0.1:${adminServer.address().port}/api/admin/revenue?days=7`, {
+      headers: { authorization: `Bearer ${token}` }
+    });
+    assert.equal(response.status, 200);
+    const body = await response.json();
+    assert.equal(body.period.dailyFeeCollections, 270);
+    assert.equal(body.period.netRevenue, 270);
+    assert.equal(body.trend.at(-1).dailyFeeCollections, 270);
+  } finally {
+    await new Promise(resolve => adminServer.close(resolve));
+  }
+});
+
+test('concurrent Daily Fee activation creates one debit and one 24-hour pass', async () => {
+  const driver = await createParticipant('driver', 'fee-concurrent');
+  await models.Wallet.create({
+    user: driver._id,
+    balance: 5000,
+    realCashAvailable: 5000,
+    bonusAvailable: 0
+  });
+
+  const results = await Promise.all([
+    chargeDailyFeeForOnlineDriver(driver._id, driver, { 'Car Sedan': 270 }),
+    chargeDailyFeeForOnlineDriver(driver._id, driver, { 'Car Sedan': 270 })
+  ]);
+  const wallet = await models.Wallet.findOne({ user: driver._id }).lean();
+  const feeTransactions = wallet.transactions.filter(transaction =>
+    transaction.description.startsWith('Automatic daily fee for going online')
+  );
+
+  assert.equal(results.filter(result => result.charged).length, 1);
+  assert.equal(results.filter(result => result.alreadyCharged || result.alreadyPaid).length, 1);
+  assert.equal(wallet.balance, 4730);
+  assert.equal(feeTransactions.length, 1);
+  assert.equal((await models.User.findById(driver._id).lean()).paidUntilDate instanceof Date, true);
+});
+
 test('Driver payment approval rolls back the wallet when the Driver update fails', async () => {
   const driver = await createParticipant('driver', 'rollback-payment');
   await models.Wallet.create({ user: driver._id, balance: 100 });

@@ -881,7 +881,11 @@ async function ensureWalletSourceBalances(userId, { session } = {}) {
 
 const DAILY_FEE_UNPAID_MESSAGE = 'You cannot receive rides. Your fee is unpaid. The Accept button is disabled until you clear your balance.';
 
-async function chargeDailyFeeForOnlineDriver(driverId, driver, dailyFeeSettings = null) {
+function applySession(query, session) {
+  return session && typeof query?.session === 'function' ? query.session(session) : query;
+}
+
+async function chargeDailyFeeForOnlineDriverCore(driverId, driver, dailyFeeSettings = null, session = null) {
   if (isLongRangeOnlyDriver(driver)) {
     return { allowed: true, charged: false, rate: null, exempt: true, reason: 'Long Range Only drivers are exempt from the Daily Fee' };
   }
@@ -897,9 +901,13 @@ async function chargeDailyFeeForOnlineDriver(driverId, driver, dailyFeeSettings 
     return { allowed: true, charged: false, rate, alreadyPaid: true, paidUntilDate };
   }
 
-  const walletSnapshot = await Wallet.findOne({ user: driverId })
-    .select('fee_paid_at balance realCashWallet bonusWallet realCashAvailable bonusAvailable transactions').lean();
-  const previousFeePaidAt = walletSnapshot?.fee_paid_at || driver.lastDailyFeePaidAt;
+  const walletSnapshotQuery = Wallet.findOne({ user: driverId })
+    .select('fee_paid_at balance realCashWallet bonusWallet realCashAvailable bonusAvailable transactions');
+  const walletSnapshot = await applySession(walletSnapshotQuery, session).lean();
+  // Only the wallet's fee marker can authorize a wallet-paid pass. A User
+  // lastDailyFeePaidAt value is legacy display state and may exist without the
+  // corresponding debit (for example after an interrupted old approval flow).
+  const previousFeePaidAt = walletSnapshot?.fee_paid_at;
   if (previousFeePaidAt && new Date(previousFeePaidAt) > activePassCutoff) {
     return {
       allowed: true,
@@ -944,26 +952,31 @@ async function chargeDailyFeeForOnlineDriver(driverId, driver, dailyFeeSettings 
         }
       }
     },
-    { new: true }
+    { new: true, ...(session ? { session } : {}) }
   );
 
   if (!wallet) {
-    const currentWallet = await Wallet.findOne({ user: driverId })
-      .select('balance fee_paid_at').lean();
+    const currentWalletQuery = Wallet.findOne({ user: driverId })
+      .select('balance fee_paid_at');
+    const currentWallet = await applySession(currentWalletQuery, session).lean();
     if (currentWallet?.fee_paid_at && new Date(currentWallet.fee_paid_at) > activePassCutoff) {
       return { allowed: true, charged: false, rate, alreadyCharged: true, balance: currentWallet.balance, feePaidAt: currentWallet.fee_paid_at };
     }
     return { allowed: false, charged: false, rate, balance: currentWallet?.balance || 0, reason: DAILY_FEE_UNPAID_MESSAGE };
   }
 
-  await User.updateOne(
+  const driverUpdate = await User.updateOne(
     { _id: driverId },
     {
       lastDailyFeePaidAt: now,
       paidUntilDate: new Date(now.getTime() + ACTIVE_FEE_PASS_MS),
       isFreeTrial: false
-    }
+    },
+    session ? { session } : undefined
   );
+  if (driverUpdate.matchedCount === 0 && driverUpdate.n === 0) {
+    throw financialError('Driver account could not be updated; the Daily Fee was not charged.', 503, 'DRIVER_UPDATE_FAILED');
+  }
   return {
     allowed: true,
     charged: true,
@@ -971,10 +984,24 @@ async function chargeDailyFeeForOnlineDriver(driverId, driver, dailyFeeSettings 
     balance: wallet.balance,
     feePaidAt: now,
     paidUntilDate: new Date(now.getTime() + ACTIVE_FEE_PASS_MS),
+    wallet,
     fundingSource: allocation.fundingSource,
     realAmount: allocation.realAmount,
     bonusAmount: allocation.bonusAmount
   };
+}
+
+async function chargeDailyFeeForOnlineDriver(driverId, driver, dailyFeeSettings = null) {
+  // Production financial writes must commit the wallet debit, ledger entry, and
+  // Driver pass together. The disconnected branch preserves the lightweight
+  // unit-test seam used by lifecycle tests; the real application never reaches
+  // it because database readiness is required before financial operations.
+  if (mongoose.connection.readyState !== 1) {
+    return chargeDailyFeeForOnlineDriverCore(driverId, driver, dailyFeeSettings);
+  }
+  return runFinancialTransaction(session =>
+    chargeDailyFeeForOnlineDriverCore(driverId, driver, dailyFeeSettings, session)
+  );
 }
 
 async function getDriverDailyFeeEligibility(driver) {
@@ -6141,12 +6168,11 @@ async function approveDriverPayment(paymentId, admin, adminNote = '') {
 
     const now = new Date();
     const actor = paymentAdminActor(admin);
-    const passValidUntil = new Date(now.getTime() + ACTIVE_FEE_PASS_MS);
     const operationId = `payment:${payment._id}:wallet-credit`;
     await ensureWalletSourceBalances(payment.driver, { session });
     const walletBeforeDoc = await Wallet.findOne({ user: payment.driver }).session(session);
     const balanceBefore = Number(walletBeforeDoc?.balance || 0);
-    const wallet = await Wallet.findOneAndUpdate(
+    const creditedWallet = await Wallet.findOneAndUpdate(
       { user: payment.driver },
       {
         $inc: {
@@ -6154,7 +6180,6 @@ async function approveDriverPayment(paymentId, admin, adminNote = '') {
           realCashWallet: payment.amount,
           realCashAvailable: payment.amount
         },
-        $set: { fee_paid_at: now },
         $push: {
           transactions: {
             amount: payment.amount,
@@ -6171,9 +6196,26 @@ async function approveDriverPayment(paymentId, admin, adminNote = '') {
       },
       { new: true, upsert: true, session }
     );
-    if (!wallet) {
+    if (!creditedWallet) {
       throw financialError('Driver wallet is unavailable; the payment was not approved.', 503, 'DRIVER_WALLET_UNAVAILABLE');
     }
+
+    const driverQuery = User.findById(payment.driver)
+      .select('vehicleType ridePreference paidUntilDate lastDailyFeePaidAt isFreeTrial');
+    const driver = await applySession(driverQuery, session).lean();
+    if (!driver) {
+      throw financialError('Driver account could not be found; the payment was not approved.', 404, 'DRIVER_NOT_FOUND');
+    }
+
+    const feeResult = await chargeDailyFeeForOnlineDriverCore(
+      payment.driver,
+      driver,
+      await getDailyFeeSettings(),
+      session
+    );
+    const feeConfigured = Number.isFinite(feeResult.rate) && feeResult.rate > 0;
+    const passValidUntil = feeResult.paidUntilDate
+      || (!feeConfigured ? new Date(now.getTime() + ACTIVE_FEE_PASS_MS) : null);
 
     const approvedPayment = await Payment.findOneAndUpdate(
       { _id: payment._id, status: 'pending' },
@@ -6185,7 +6227,7 @@ async function approveDriverPayment(paymentId, admin, adminNote = '') {
           approvedAt: now,
           walletCreditedAt: now,
           walletCreditOperationId: operationId,
-          paidUntilDate: passValidUntil
+           ...(passValidUntil ? { paidUntilDate: passValidUntil } : {})
         },
         $push: {
           auditLog: {
@@ -6194,8 +6236,8 @@ async function approveDriverPayment(paymentId, admin, adminNote = '') {
             actorRole: actor.role,
             reason: String(adminNote || '').trim(),
             balanceBefore,
-            balanceAfter: Number(wallet.balance),
-            passValidUntil,
+            balanceAfter: Number(feeResult.wallet?.balance ?? creditedWallet.balance),
+            ...(passValidUntil ? { passValidUntil } : {}),
             createdAt: now
           }
         }
@@ -6204,15 +6246,32 @@ async function approveDriverPayment(paymentId, admin, adminNote = '') {
     );
     if (!approvedPayment) return null;
 
-    const driverUpdate = await User.updateOne(
-      { _id: payment.driver },
-      { lastDailyFeePaidAt: now, paidUntilDate: passValidUntil, isFreeTrial: false },
-      { session }
-    );
-    if (driverUpdate.matchedCount === 0 && driverUpdate.n === 0) {
-      throw financialError('Driver account could not be updated; the payment was not approved.', 503, 'DRIVER_UPDATE_FAILED');
+    // The configured-fee path writes the Driver pass inside the same
+    // transaction as the wallet debit. If no fee is configured, preserve the
+    // legacy approval behavior without inventing a revenue entry.
+    if (!feeConfigured) {
+      const driverUpdate = await User.updateOne(
+        { _id: payment.driver },
+        { paidUntilDate: passValidUntil },
+        { session }
+      );
+      if (driverUpdate.matchedCount === 0 && driverUpdate.n === 0) {
+        throw financialError('Driver account could not be updated; the payment was not approved.', 503, 'DRIVER_UPDATE_FAILED');
+      }
     }
-    return { payment: approvedPayment, wallet, passValidUntil, actor };
+    if (feeConfigured && !feeResult.allowed) {
+      // A recharge can be approved even when it does not yet cover the fee,
+      // but it must not create a paid pass.
+      approvedPayment.paidUntilDate = null;
+    }
+    return {
+      payment: approvedPayment,
+      wallet: feeResult.wallet || creditedWallet,
+      passValidUntil,
+      balanceBefore,
+      feeResult,
+      actor
+    };
   });
 }
 
@@ -8135,14 +8194,18 @@ app.patch('/api/admin/payments/:id/approve', adminJwt, requirePerm('approveWalle
       trxId: approved.payment.trxId,
       amount: approved.payment.amount,
       status: 'approved',
-      paidUntilDate: approved.passValidUntil.toISOString()
+      paidUntilDate: approved.passValidUntil?.toISOString() || null,
+      dailyFee: approved.feeResult?.charged ? {
+        amount: approved.feeResult.rate,
+        fundingSource: approved.feeResult.fundingSource
+      } : null
     };
     io.to(`user:${approved.payment.driver}`).emit('payment:approved', notification);
     io.to('admin-room').emit('payment:approved', notification);
     res.json({
       success: true,
       payment: approved.payment,
-      balanceBefore: Number(approved.wallet.balance) - Number(approved.payment.amount),
+      balanceBefore: approved.balanceBefore,
       balanceAfter: approved.wallet.balance,
       passValidUntil: approved.passValidUntil
     });
