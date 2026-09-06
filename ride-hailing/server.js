@@ -7803,8 +7803,8 @@ app.get('/api/admin/live-locations', adminJwt, requireProfileSearchAccess, async
 
     if (allowedRoles.includes('driver')) {
       const heartbeatAfter = new Date(now.getTime() - DRIVER_HEARTBEAT_MAX_AGE_MS);
-      const drivers = await User.find({
-        role: 'driver',
+      const liveUsers = await User.find({
+        role: { $in: ['customer', 'driver'] },
         accountStatus: 'active',
         isOnline: true,
         lastOnlineHeartbeat: { $gte: heartbeatAfter }
@@ -7812,6 +7812,7 @@ app.get('/api/admin/live-locations', adminJwt, requireProfileSearchAccess, async
         .select('name phone role accountStatus isOnline lastOnlineHeartbeat currentLocation vehicleType vehicleModel vehiclePlate')
         .sort({ name: 1 })
         .lean();
+      const drivers = liveUsers.filter(user => user.role === 'driver');
       drivers.forEach(driver => {
         if (!hasValidCoordinates(driver.currentLocation)) return;
         locations.push({
