@@ -10246,8 +10246,8 @@ async function seedDemoAccounts() {
         vehicleModel: 'Toyota Corolla',
         vehiclePlate: 'DEMO-2026',
         isOnline: false,
-        lastDailyFeePaidAt: now,
-        paidUntilDate: new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000),
+        lastDailyFeePaidAt: null,
+        paidUntilDate: null,
         isFreeTrial: false
       }
     },
@@ -10257,8 +10257,17 @@ async function seedDemoAccounts() {
   await Wallet.findOneAndUpdate(
     { user: driver._id },
     {
-      $set: { balance: 5000, realCashWallet: 5000, fee_paid_at: now },
-      $setOnInsert: { transactions: [] }
+      // Demo state must never advertise a paid pass without the matching
+      // negative Daily Fee ledger entry. The first online activation will use
+      // the same atomic debit path as every real Driver.
+      $set: {
+        balance: 5000,
+        realCashWallet: 5000,
+        realCashAvailable: 5000,
+        bonusAvailable: 0,
+        fee_paid_at: null,
+        transactions: []
+      }
     },
     { upsert: true, new: true }
   );
