@@ -369,6 +369,9 @@ body{font-family:'Segoe UI',system-ui,sans-serif;background:#06060e;color:#e2e8f
 .modal-input{width:100%;background:#06060e;border:1px solid #1e1e2e;border-radius:8px;padding:.55rem .75rem;color:#e2e8f0;font-size:.85rem;outline:none;margin-top:.3rem}
 .modal-input:focus{border-color:#f5c518}
 textarea.modal-input{resize:vertical;min-height:70px}
+.payment-proof-box{max-width:min(92vw,920px);width:auto}
+.payment-proof-body{display:flex;align-items:center;justify-content:center;min-height:180px;padding:1rem;background:#06060e}
+#payment-proof-image{display:block;max-width:100%;max-height:68vh;width:auto;height:auto;object-fit:contain;border-radius:10px;background:#0f0f1e}
 
 /* ── Mobile layout containment ── */
 @media (max-width:700px){
@@ -2065,6 +2068,23 @@ button,input,select,textarea{
   </div>
 </div>
 
+<!-- ── Payment Proof Viewer Modal ── -->
+<div class="modal-backdrop" id="payment-proof-modal" role="dialog" aria-modal="true" aria-labelledby="payment-proof-title">
+  <div class="modal-box payment-proof-box">
+    <div class="modal-header">
+      <div class="modal-title" id="payment-proof-title">🖼 Payment Proof</div>
+      <button class="btn-close" type="button" aria-label="Close payment proof" onclick="closeModal('payment-proof-modal')">✕</button>
+    </div>
+    <div class="modal-body payment-proof-body">
+      <img id="payment-proof-image" alt="Uploaded payment proof screenshot">
+      <div id="payment-proof-error" class="empty-state" style="display:none;color:#ef4444">Unable to display this payment proof.</div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-gray" type="button" onclick="closeModal('payment-proof-modal')">Close</button>
+    </div>
+  </div>
+</div>
+
 <!-- ── Live Location Map Modal ── -->
 <div class="modal-backdrop" id="live-location-modal" role="dialog" aria-modal="true" aria-labelledby="live-location-title">
   <div class="modal-box live-map-modal">
@@ -2990,12 +3010,30 @@ async function loadPayments(status = 'pending') {
         </div>
         <div class="pay-amount">Rs ${(p.amount||0).toLocaleString()}</div>
         <div class="pay-actions" style="display:flex;align-items:center;gap:.5rem;flex-wrap:wrap">
-          ${hasPermission('viewPaymentProofs') && hasSafeProof ? `<a href="${escHtml(proofUrl)}" target="_blank" rel="noopener" class="btn btn-gray" style="text-decoration:none">🖼 View Proof</a>` : '<span class="badge badge-red">Proof hidden or unavailable</span>'}
+          ${hasPermission('viewPaymentProofs') && hasSafeProof ? `<button type="button" class="btn btn-gray payment-proof-button" data-proof-url="${escHtml(proofUrl)}">🖼 View Proof</button>` : '<span class="badge badge-red">Proof hidden or unavailable</span>'}
           ${isPending && hasPermission('approveWalletTopups') ? `<button class="btn btn-green" onclick="approvePayment('${p._id}')">✓ Approve</button><button class="btn btn-red" onclick="rejectPayment('${p._id}')">✕ Reject</button>` : ''}
         </div>
       </div>`;
     }).join('');
+    el.querySelectorAll('.payment-proof-button').forEach(button => {
+      button.addEventListener('click', () => openPaymentProof(button.dataset.proofUrl));
+    });
   } catch (e) { el.innerHTML = `<div class="empty-state">Error: ${escHtml(e.message)}</div>`; }
+}
+
+function openPaymentProof(proofUrl) {
+  const image = document.getElementById('payment-proof-image');
+  const error = document.getElementById('payment-proof-error');
+  if (!image || !error) return;
+  image.hidden = false;
+  image.src = proofUrl || '';
+  image.alt = 'Uploaded payment proof screenshot';
+  error.style.display = 'none';
+  image.onerror = () => {
+    image.hidden = true;
+    error.style.display = 'block';
+  };
+  openModal('payment-proof-modal');
 }
 
 async function approvePayment(paymentId) {
