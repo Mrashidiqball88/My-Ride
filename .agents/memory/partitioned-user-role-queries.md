@@ -9,8 +9,8 @@ When the shared User facade resolves a query to one concrete Customer or Driver 
 
 **How to apply:** Keep role-based collection selection in the facade, remove only a single-role discriminator from the concrete collection filter, and retain explicit authorization/availability checks at sensitive route boundaries.
 
-The Admin live-location snapshot must use the proven multi-role facade query shape and filter Drivers after the merge; its single-role snapshot query can otherwise return an empty fleet even while map-search and map-location resolve the same Driver.
+Realtime Driver audience reads must search both the dedicated Driver collection and legacy Driver-role records still stored in the Customer collection; keep the fallback scoped to dispatch, recovery, presence, and live fleet reads.
 
-**Why:** The live fleet view is a high-frequency read path, and a query-shape mismatch can make every fresh heartbeat appear missing without affecting the Driver heartbeat or persisted coordinates.
+**Why:** A partial Customer/Driver collection migration can make single-role Driver queries return zero candidates even while authentication, map-search, and map-location resolve the same online Driver.
 
-**How to apply:** Keep this workaround scoped to the fleet snapshot, and verify the result against the authoritative map-location endpoint before changing heartbeat writes or Socket.io publishing.
+**How to apply:** Prefer current Driver records, include only explicitly role-marked legacy Driver records from the other partition, deduplicate by ID, and preserve the no-database User facade seam used by tests.

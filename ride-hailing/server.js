@@ -3017,12 +3017,47 @@ function resolveCustomerFareOffer(value, authoritativeFare, offsetValue = undefi
   return { value: proposed, offset };
 }
 
+// Driver records created before the Customer/Driver collection split may
+// still live in the Customer collection with an explicit driver role. The
+// realtime audience must see both that legacy shape and current Driver
+// records, while all other user queries remain on the compatibility facade.
+async function findDriverDocuments(filter = {}, { select = '_id', lean = true } = {}) {
+  // Unit and preview doubles may replace the shared User facade before a
+  // database connection exists. Preserve that seam instead of buffering a
+  // direct collection query for ten seconds.
+  if (!(dbConnected || mongoose.connection.readyState === 1)) {
+    let query = User.find({
+      ...filter,
+      role: { $in: ['customer', 'driver'] }
+    });
+    if (select) query = query.select(select);
+    if (lean) query = query.lean();
+    const values = await query;
+    return Array.isArray(values)
+      ? values.filter(value => !value.role || value.role === 'driver')
+      : [];
+  }
+  const driverFilter = { ...filter };
+  delete driverFilter.role;
+  const legacyDriverFilter = { ...filter, role: 'driver' };
+  const queries = [
+    Driver.find(driverFilter),
+    Customer.find(legacyDriverFilter)
+  ];
+  if (select) queries.forEach(query => query.select(select));
+  if (lean) queries.forEach(query => query.lean());
+  const values = await Promise.all(queries.map(query => query.exec()));
+  return [...new Map(
+    values.flat().map(value => [String(value._id), value])
+  ).values()];
+}
+
 async function syncRedisDriverPresence(driverId) {
   if (!isRedisReady()) return false;
-  const driver = await User.findOne({ _id: driverId, role: 'driver' })
-    .select('_id vehicleType ridePreference longRangeEnabled isOnline accountStatus lastOnlineHeartbeat currentLocation')
-    .lean()
-    .catch(() => null);
+  const [driver] = await findDriverDocuments(
+    { _id: driverId },
+    { select: '_id vehicleType ridePreference longRangeEnabled isOnline accountStatus lastOnlineHeartbeat currentLocation' }
+  ).catch(() => []);
   const heartbeatIsFresh = driver?.lastOnlineHeartbeat
     && Date.now() - new Date(driver.lastOnlineHeartbeat).getTime() <= DRIVER_HEARTBEAT_MAX_AGE_MS;
   if (!driver || !driver.isOnline || driver.accountStatus !== 'active' || !heartbeatIsFresh
@@ -3041,14 +3076,15 @@ async function syncRedisDriverPresence(driverId) {
 
 async function rebuildRedisDriverIndex() {
   if (!isRedisReady() || !(dbConnected || mongoose.connection.readyState === 1)) return false;
-  const drivers = await User.find({
-    role: 'driver',
+  const drivers = await findDriverDocuments({
     isOnline: true,
     accountStatus: 'active',
     lastOnlineHeartbeat: { $gte: new Date(Date.now() - DRIVER_HEARTBEAT_MAX_AGE_MS) },
     'currentLocation.lat': { $ne: 0 },
     'currentLocation.lng': { $ne: 0 }
-  }).select('_id vehicleType ridePreference longRangeEnabled currentLocation').lean().catch(() => null);
+  }, {
+    select: '_id vehicleType ridePreference longRangeEnabled currentLocation'
+  }).catch(() => null);
   if (!drivers) return false;
   const rebuilt = await rebuildDriverGeoIndex(drivers);
   if (rebuilt) console.log(`[redis] rebuilt Driver GEO index (${drivers.length} fresh online driver(s))`);
@@ -3078,8 +3114,7 @@ async function findRideBroadcastDrivers(
   const locationFilter = redisCandidateIds?.length
     ? { _id: { $in: redisCandidateIds } }
     : coordinateBoundsQuery('currentLocation', pickupLocation, radiusKm);
-  const candidates = await User.find({
-    role: 'driver',
+  const candidates = await findDriverDocuments({
     isOnline: true,
     accountStatus: 'active',
     ridePreference: { $ne: 'Long Range Only' },
@@ -3088,7 +3123,9 @@ async function findRideBroadcastDrivers(
     'currentLocation.lat': { $ne: 0 },
     'currentLocation.lng': { $ne: 0 },
     ...locationFilter
-  }).select('_id currentLocation expoPushToken studentRideLastAssignedAt').lean();
+  }, {
+    select: '_id currentLocation expoPushToken studentRideLastAssignedAt'
+  });
 
   if (!candidates.length) return { drivers: [], radiusKm };
   const candidateIds = candidates.map(driver => driver._id);
@@ -3136,14 +3173,16 @@ async function findLongRangeBroadcastDrivers(
   const locationFilter = redisCandidateIds?.length
     ? { _id: { $in: redisCandidateIds } }
     : coordinateBoundsQuery('currentLocation', pickupLocation, radiusKm);
-  const candidates = await User.find({
-    role: 'driver', isOnline: true, longRangeEnabled: true, accountStatus: 'active',
+  const candidates = await findDriverDocuments({
+    isOnline: true, longRangeEnabled: true, accountStatus: 'active',
     ridePreference: { $ne: 'Short Range Only' },
     vehicleType: { $in: storedVehicleTypesForFareCategory(vehicleType) },
     lastOnlineHeartbeat: { $gte: new Date(Date.now() - DRIVER_HEARTBEAT_MAX_AGE_MS) },
     'currentLocation.lat': { $ne: 0 }, 'currentLocation.lng': { $ne: 0 },
     ...locationFilter
-  }).select('_id currentLocation expoPushToken longRangeEnabled studentRideLastAssignedAt').lean();
+  }, {
+    select: '_id currentLocation expoPushToken longRangeEnabled studentRideLastAssignedAt'
+  });
   const drivers = candidates.filter(driver => driver.longRangeEnabled === true
       && hasValidCoordinates(driver.currentLocation))
     .map(driver => ({ ...driver, distanceFromPickupKm: haversineKm(
@@ -7803,16 +7842,14 @@ app.get('/api/admin/live-locations', adminJwt, requireProfileSearchAccess, async
 
     if (allowedRoles.includes('driver')) {
       const heartbeatAfter = new Date(now.getTime() - DRIVER_HEARTBEAT_MAX_AGE_MS);
-      const liveUsers = await User.find({
-        role: { $in: ['customer', 'driver'] },
+      const drivers = await findDriverDocuments({
         accountStatus: 'active',
         isOnline: true,
         lastOnlineHeartbeat: { $gte: heartbeatAfter }
-      })
-        .select('name phone role accountStatus isOnline lastOnlineHeartbeat currentLocation vehicleType vehicleModel vehiclePlate')
-        .sort({ name: 1 })
-        .lean();
-      const drivers = liveUsers.filter(user => user.role === 'driver');
+      }, {
+        select: 'name phone role accountStatus isOnline lastOnlineHeartbeat currentLocation vehicleType vehicleModel vehiclePlate'
+      });
+      drivers.sort((a, b) => String(a.name || '').localeCompare(String(b.name || '')));
       drivers.forEach(driver => {
         if (!hasValidCoordinates(driver.currentLocation)) return;
         locations.push({
