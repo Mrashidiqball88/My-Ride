@@ -58,3 +58,4 @@
 - [Model facade query support](model-facade-query-support.md) — use supported facade query chains instead of assuming every native Mongoose helper exists.
 - [Online fee lifecycle](online-fee-lifecycle.md) — scheduled fees target explicitly online Drivers; web and native activation share server-authoritative timing and failure state.
 - [Long Range commission percentage](long-range-commission-percentage.md) — configured Long Range commission values are percentages of the final agreed fare; minimum wallet floors remain separate.
+- [Active ride contact rehydration](active-ride-contact-rehydration.md) — render normalized opposing-party contact actions for every restored active ride status, not only the initial acceptance event.

@@ -1438,11 +1438,20 @@ function rememberDocumentFile(targetInputId, file) {
 function openDocumentSource(inputId, source) {
   const input = document.getElementById(`${inputId}-${source}`);
   if (!input) return;
+  input.value = '';
   if (source === 'camera') {
     input.accept = 'image/*';
     input.setAttribute('capture', 'environment');
   } else {
     input.removeAttribute('capture');
+  }
+  try {
+    if (typeof input.showPicker === 'function') {
+      input.showPicker();
+      return;
+    }
+  } catch {
+    // Some WebViews expose showPicker but reject it for hidden file inputs.
   }
   input.click();
 }
@@ -3916,14 +3925,27 @@ function openCustomerRideContact(event, url) {
   return false;
 }
 
-function showMatchedPanel(driver, agreedFare) {
+function normalizeCustomerContactPhone(phone) {
+  let digits = String(phone || '').replace(/\D/g, '');
+  if (digits.startsWith('00')) digits = digits.slice(2);
+  if (digits.startsWith('92')) digits = digits.slice(2);
+  digits = digits.replace(/^0+/, '');
+  return digits ? { tel: `+92${digits}`, whatsapp: `92${digits}` } : null;
+}
+
+function showMatchedPanel(driver, agreedFare, rideStatus = activeRide?.status || 'accepted') {
   document.getElementById('active-ride').style.display = 'block';
   document.getElementById('bottom-panel').style.display = 'none';
   setupCustomerActiveRideSheet();
   setCustomerActiveRideSheetState('compact');
   document.getElementById('ar-waiting').style.display = 'none';
   document.getElementById('ar-matched').style.display = 'block';
-  document.getElementById('ar-status-text').textContent = 'Driver on the way! 🚗';
+  const statusText = {
+    accepted: 'Driver on the way! 🚗',
+    arrived: 'Driver has arrived! 📍',
+    'in-progress': 'Ride in progress 🚗'
+  }[rideStatus] || 'Driver on the way! 🚗';
+  document.getElementById('ar-status-text').textContent = statusText;
   // Driver avatar — show profile photo if available, else initial letter
   const avatarEl = document.getElementById('ar-avatar');
   avatarEl.replaceChildren();
@@ -3944,18 +3966,20 @@ function showMatchedPanel(driver, agreedFare) {
   document.getElementById('ar-payment').textContent = '💵 Cash (direct)';
   renderActiveWaitingFare(activeRide?.fareQuote);
 
-  // Dual call buttons — Phone + WhatsApp
-  const digits = driver.phone ? driver.phone.replace(/\D/g, '') : '';
-  const telPhone = digits ? (digits.startsWith('92') ? `+${digits}` : `+92${digits.replace(/^0/, '')}`) : '';
-  const waPhone  = digits ? (digits.startsWith('92') ? digits : `92${digits.replace(/^0/, '')}`) : '';
-  const contactHtml = telPhone
-    ? `<a class="btn-call"      href="tel:${telPhone}" onclick="return openCustomerRideContact(event, this.href)">📞 Phone Call</a>
-       <a class="btn-whatsapp"  href="https://wa.me/${waPhone}" onclick="return openCustomerRideContact(event, this.href)">💬 WhatsApp</a>`
+  // Keep contact actions visible for every assigned ride state, including
+  // rides restored directly as arrived or in-progress.
+  const contact = normalizeCustomerContactPhone(driver.phone);
+  const contactHtml = contact
+    ? `<a class="btn-call" href="tel:${contact.tel}" onclick="return openCustomerRideContact(event, this.href)">📞 Phone Call</a>
+       <a class="btn-whatsapp" href="https://wa.me/${contact.whatsapp}" onclick="return openCustomerRideContact(event, this.href)">💬 WhatsApp</a>`
     : `<div style="font-size:.78rem;color:#555;text-align:center;flex:1">Contact details not available</div>`;
   document.getElementById('ar-contact-btns').innerHTML = contactHtml;
   document.getElementById('ar-contact-btns').style.display = 'flex';
-  updateCustomerCancellationControl(activeRide?.status || 'accepted');
-  updateActiveSheetSummary('Driver on the way', 'Live tracking · swipe up for ride details');
+  updateCustomerCancellationControl(rideStatus);
+  updateActiveSheetSummary(
+    rideStatus === 'in-progress' ? 'Ride in progress' : rideStatus === 'arrived' ? 'Driver has arrived' : 'Driver on the way',
+    rideStatus === 'in-progress' ? 'Live trip · contact your driver' : 'Live tracking · swipe up for ride details'
+  );
 }
 
 function updateCustomerCancellationControl(status = activeRide?.status) {
@@ -4232,9 +4256,10 @@ function applyCustomerRideSnapshot(ride) {
   if (ride.status === 'requested') {
     driverOffers = customerOffersFromRide(ride);
     renderOffers(driverOffers);
-  } else if (ride.status === 'accepted' && activeRide.driver && typeof activeRide.driver === 'object') {
+  } else if (['accepted', 'arrived', 'in-progress'].includes(ride.status)
+      && activeRide.driver && typeof activeRide.driver === 'object') {
     activeDriverInfo = activeRide.driver;
-    showMatchedPanel(activeRide.driver, activeRide.fare);
+    showMatchedPanel(activeRide.driver, activeRide.fare, ride.status);
   }
   updateCustomerCancellationControl(ride.status);
   return true;
@@ -4435,6 +4460,11 @@ function connectToRideRoom(rideId) {
       revealRidePinIfAtPickup();
       showToast('Your driver has arrived!', 'info');
     } else if (status === 'in-progress') {
+      const contactDriver = activeDriverInfo || activeRide.driver;
+      if (contactDriver && typeof contactDriver === 'object') {
+        activeDriverInfo = contactDriver;
+        showMatchedPanel(contactDriver, activeRide.fare, 'in-progress');
+      }
       document.getElementById('ar-status-text').textContent = 'Ride in progress 🚗';
       updateCustomerCancellationControl('in-progress');
       updateLiveTripTracking(lastDriverLocation, { recenter: true });

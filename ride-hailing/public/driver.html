@@ -1643,11 +1643,20 @@ function prevRegStep() {
 function openDocumentSource(inputId, source, cameraFacing = 'environment') {
   const input = document.getElementById(`${inputId}-${source}`);
   if (!input) return;
+  input.value = '';
   if (source === 'camera') {
     input.accept = 'image/*';
     input.setAttribute('capture', cameraFacing);
   } else {
     input.removeAttribute('capture');
+  }
+  try {
+    if (typeof input.showPicker === 'function') {
+      input.showPicker();
+      return;
+    }
+  } catch {
+    // Some WebViews expose showPicker but reject it for hidden file inputs.
   }
   input.click();
 }
@@ -3517,6 +3526,14 @@ function openDriverRideContact(event, url) {
   return false;
 }
 
+function normalizeDriverContactPhone(phone) {
+  let digits = String(phone || '').replace(/\D/g, '');
+  if (digits.startsWith('00')) digits = digits.slice(2);
+  if (digits.startsWith('92')) digits = digits.slice(2);
+  digits = digits.replace(/^0+/, '');
+  return digits ? { tel: `+92${digits}`, whatsapp: `92${digits}` } : null;
+}
+
 function showActivePanel(ride) {
   activeRide = ride;
   localStorage.setItem(DRIVER_ACTIVE_RIDE_STORAGE_KEY, String(ride._id || ride.id));
@@ -3540,18 +3557,15 @@ function showActivePanel(ride) {
   updateNavigationDetails();
 
   // Dual call buttons — Phone + WhatsApp
-  const rawPhone = ride.passenger?.phone || '';
-  const digits   = rawPhone.replace(/\D/g, '');
-  const telPhone = digits ? (digits.startsWith('92') ? `+${digits}` : `+92${digits.replace(/^0/, '')}`) : '';
-  const waPhone  = digits ? (digits.startsWith('92') ? digits : `92${digits.replace(/^0/, '')}`) : '';
+  const contact = normalizeDriverContactPhone(ride.passenger?.phone || ride.passengerPhone);
   const callEl = document.getElementById('ap-call-passenger');
   if (callEl) {
-    callEl.innerHTML = telPhone
+    callEl.innerHTML = contact
       ? `<div class="ap-dual-btns">
-           <a class="btn-call-pass" href="tel:${telPhone}" onclick="return openDriverRideContact(event, this.href)">📞 Phone Call</a>
-           <a class="btn-wa-pass"   href="https://wa.me/${waPhone}" onclick="return openDriverRideContact(event, this.href)">💬 WhatsApp</a>
+           <a class="btn-call-pass" href="tel:${contact.tel}" onclick="return openDriverRideContact(event, this.href)">📞 Phone Call</a>
+           <a class="btn-wa-pass" href="https://wa.me/${contact.whatsapp}" onclick="return openDriverRideContact(event, this.href)">💬 WhatsApp</a>
          </div>`
-      : '';
+      : '<div class="ap-contact-unavailable">Passenger contact unavailable</div>';
   }
   renderActiveButtons(ride.status || 'accepted');
   startActiveRideLocationSync();
