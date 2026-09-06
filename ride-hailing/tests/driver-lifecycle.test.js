@@ -604,11 +604,20 @@ test('Long Range toggle checks the configured wallet minimum for the Driver vehi
   models.Settings.findOne = () => ({
     lean: async () => ({ value: { enabled: true, perKmRates, minimumWalletBalances } })
   });
-  let balance = 3999;
+  let realCash = 1999;
+  let bonus = 2000;
   models.User.findById = () => ({
     select: () => ({ lean: async () => driverDocument({ vehicleType: 'Toyota Highroof', longRangeEnabled: false }) })
   });
-  models.Wallet.findOne = () => ({ select: () => ({ lean: async () => ({ balance }) }) });
+  models.Wallet.findOne = () => ({
+    select: () => ({
+      lean: async () => ({
+        balance: realCash + bonus,
+        realCashAvailable: realCash,
+        bonusAvailable: bonus
+      })
+    })
+  });
   const updates = [];
   models.User.updateOne = async (_query, update) => { updates.push(update); return { acknowledged: true }; };
 
@@ -622,7 +631,7 @@ test('Long Range toggle checks the configured wallet minimum for the Driver vehi
     assert.equal(blocked.status, 403);
     assert.equal((await blocked.json()).error, 'Minimum Wallet Balance of Rs 4,000 required for Toyota Highroof to enable Long Range rides.');
 
-    balance = 4000;
+    realCash = 2000;
     const allowed = await fetch(`http://127.0.0.1:${server.address().port}/api/driver/long-range`, {
       method: 'PATCH',
       headers: { 'content-type': 'application/json', authorization: `Bearer ${driverToken()}`, 'x-session-token': 'test-session' },

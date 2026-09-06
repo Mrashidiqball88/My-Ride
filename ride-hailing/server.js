@@ -785,6 +785,16 @@ function getWalletSourceBalances(wallet) {
   };
 }
 
+function getCombinedWalletBalance(wallet) {
+  const balances = getWalletSourceBalances(wallet);
+  return roundWalletAmount(balances.realCashAvailable + balances.bonusAvailable);
+}
+
+function walletMeetsCombinedRequirement(wallet, requiredAmount) {
+  const required = Math.max(0, roundWalletAmount(requiredAmount));
+  return getCombinedWalletBalance(wallet) >= required;
+}
+
 const ADMIN_WALLET_BALANCE_FIELDS = 'user balance realCashWallet bonusWallet realCashAvailable bonusAvailable transactions';
 
 function getAdminWalletBalances(wallet) {
@@ -858,12 +868,15 @@ async function ensureWalletSourceBalances(userId, { session } = {}) {
     && Number(wallet.bonusAvailable || 0) === 0
     && Number(wallet.realCashWallet || 0) === 0
     && Number(wallet.bonusWallet || 0) === 0;
-  if (!hasTrackedFields || hasUnclassifiedAggregate) {
+  const canonicalBalance = roundWalletAmount(balances.realCashAvailable + balances.bonusAvailable);
+  const aggregateNeedsRepair = !Number.isFinite(Number(wallet.balance))
+    || roundWalletAmount(wallet.balance) !== canonicalBalance;
+  if (!hasTrackedFields || hasUnclassifiedAggregate || aggregateNeedsRepair) {
     const updateQuery = Wallet.updateOne(
       { _id: wallet._id },
       {
         $set: {
-          balance: roundWalletAmount(balances.realCashAvailable + balances.bonusAvailable),
+          balance: canonicalBalance,
           realCashAvailable: balances.realCashAvailable,
           bonusAvailable: balances.bonusAvailable
         }
@@ -901,6 +914,10 @@ async function chargeDailyFeeForOnlineDriverCore(driverId, driver, dailyFeeSetti
     return { allowed: true, charged: false, rate, alreadyPaid: true, paidUntilDate };
   }
 
+  // The transaction path also repairs legacy/stale aggregate balances before
+  // the conditional debit. Keep the disconnected test seam read-only because
+  // its lightweight wallet doubles intentionally do not implement updateOne.
+  if (session) await ensureWalletSourceBalances(driverId, { session });
   const walletSnapshotQuery = Wallet.findOne({ user: driverId })
     .select('fee_paid_at balance realCashWallet bonusWallet realCashAvailable bonusAvailable transactions');
   const walletSnapshot = await applySession(walletSnapshotQuery, session).lean();
@@ -920,7 +937,7 @@ async function chargeDailyFeeForOnlineDriverCore(driverId, driver, dailyFeeSetti
   }
 
   const allocation = allocateWalletDebit(walletSnapshot, rate);
-  if (allocation.realCashAvailable + allocation.bonusAvailable < rate) {
+  if (!walletMeetsCombinedRequirement(walletSnapshot, rate)) {
     return { allowed: false, charged: false, rate, reason: DAILY_FEE_UNPAID_MESSAGE, balance: walletSnapshot?.balance || 0 };
   }
   const wallet = await Wallet.findOneAndUpdate(
@@ -3382,10 +3399,15 @@ async function completeRideFinancialSettlement(rideId, driverId, waitingRateSett
 async function validateLongRangeDriverEligibility(driverId, settings, finalFare = null) {
   const [driver, wallet] = await Promise.all([
     User.findById(driverId).select('longRangeEnabled accountStatus vehicleType').lean(),
-    Wallet.findOne({ user: driverId }).select('balance').lean()
+    Wallet.findOne({ user: driverId })
+      .select('balance realCashWallet bonusWallet realCashAvailable bonusAvailable transactions')
+      .lean()
   ]);
   return !!(settings.enabled && driver?.accountStatus === 'active' && driver.longRangeEnabled
-     && Number(wallet?.balance || 0) >= getLongRangeRequiredWalletBalance(settings, driver.vehicleType, finalFare));
+     && walletMeetsCombinedRequirement(
+       wallet,
+       getLongRangeRequiredWalletBalance(settings, driver.vehicleType, finalFare)
+     ));
 }
 
 function emitRideRequestToDrivers(drivers, payload) {
@@ -3438,8 +3460,11 @@ async function getAvailableRidesForDriver(driver) {
     .sort({ createdAt: -1 });
   const hasLongRangeRides = rides.some(ride => ride.isLongRange);
   const wallet = hasLongRangeRides
-    ? await Wallet.findOne({ user: driver._id }).select('balance').lean()
+    ? await Wallet.findOne({ user: driver._id })
+      .select('balance realCashWallet bonusWallet realCashAvailable bonusAvailable transactions')
+      .lean()
     : null;
+  const combinedWalletBalance = getCombinedWalletBalance(wallet);
   const feeState = await getDriverDailyFeeEligibility(driver);
 
   return rides.filter(ride => hasValidCoordinates(ride.pickupLocation)
@@ -3471,11 +3496,11 @@ async function getAvailableRidesForDriver(driver) {
           allowed: feeState.allowed && (!ride.isLongRange || (
             longRangeSettings.enabled
             && driver.longRangeEnabled
-            && Number(wallet?.balance || 0) >= longRangeRequiredWalletBalance
+            && walletMeetsCombinedRequirement(wallet, longRangeRequiredWalletBalance)
           )),
           reason: !feeState.allowed
             ? feeState.reason
-            : ride.isLongRange && Number(wallet?.balance || 0) < longRangeRequiredWalletBalance
+            : ride.isLongRange && combinedWalletBalance < longRangeRequiredWalletBalance
               ? `Wallet balance must cover the Long Range commission of Rs ${longRangeCommissionAmount.toLocaleString()}.`
               : null,
           dailyFeeDue: !feeState.allowed,
@@ -5317,10 +5342,20 @@ app.get('/api/driver/long-range', authMiddleware, driverOnly, async (req, res) =
   try {
     const [driver, wallet, settings] = await Promise.all([
       User.findById(req.user.id).select('longRangeEnabled vehicleType ridePreference').lean(),
-      Wallet.findOne({ user: req.user.id }).select('balance').lean(),
+      Wallet.findOne({ user: req.user.id })
+        .select('balance realCashWallet bonusWallet realCashAvailable bonusAvailable transactions')
+        .lean(),
       getLongRangeSettings()
     ]);
-    res.json({ enabled: !!driver?.longRangeEnabled, walletBalance: Number(wallet?.balance || 0), vehicleType: normalizeFareVehicle(driver?.vehicleType || 'Car Mini Non-AC'), ridePreference: normalizeRidePreference(driver?.ridePreference), settings });
+    res.json({
+      enabled: !!driver?.longRangeEnabled,
+      walletBalance: getCombinedWalletBalance(wallet),
+      realCashAvailable: getWalletSourceBalances(wallet).realCashAvailable,
+      bonusAvailable: getWalletSourceBalances(wallet).bonusAvailable,
+      vehicleType: normalizeFareVehicle(driver?.vehicleType || 'Car Mini Non-AC'),
+      ridePreference: normalizeRidePreference(driver?.ridePreference),
+      settings
+    });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
@@ -5332,11 +5367,13 @@ app.patch('/api/driver/long-range', authMiddleware, driverOnly, async (req, res)
     if (enabled) {
       const [driver, wallet] = await Promise.all([
         User.findById(req.user.id).select('vehicleType').lean(),
-        Wallet.findOne({ user: req.user.id }).select('balance').lean()
+        Wallet.findOne({ user: req.user.id })
+          .select('balance realCashWallet bonusWallet realCashAvailable bonusAvailable transactions')
+          .lean()
       ]);
       const category = normalizeFareVehicle(driver?.vehicleType || 'Car Mini Non-AC');
       const minimumWalletBalance = getLongRangeMinimumWalletBalance(settings, category);
-      if (Number(wallet?.balance || 0) < minimumWalletBalance) {
+      if (!walletMeetsCombinedRequirement(wallet, minimumWalletBalance)) {
         return res.status(403).json({ error: `Minimum Wallet Balance of Rs ${minimumWalletBalance.toLocaleString()} required for ${category} to enable Long Range rides.` });
       }
     }
@@ -5732,9 +5769,16 @@ app.patch('/api/rides/:id/counter', authMiddleware, driverOnly, async (req, res)
       const [driverLongRange, settings, wallet] = await Promise.all([
         User.findById(req.user.id).select('longRangeEnabled vehicleType').lean(),
         getLongRangeSettings(),
-        Wallet.findOne({ user: req.user.id }).select('balance').lean()
+        Wallet.findOne({ user: req.user.id })
+          .select('balance realCashWallet bonusWallet realCashAvailable bonusAvailable transactions')
+          .lean()
       ]);
-      if (!settings.enabled || !driverLongRange?.longRangeEnabled || Number(wallet?.balance || 0) < getLongRangeMinimumWalletBalance(settings, driverLongRange.vehicleType)) {
+      if (!settings.enabled
+        || !driverLongRange?.longRangeEnabled
+        || !walletMeetsCombinedRequirement(
+          wallet,
+          getLongRangeMinimumWalletBalance(settings, driverLongRange.vehicleType)
+        )) {
         return res.status(403).json({ error: 'You are not currently eligible for Long Range rides.' });
       }
     }
@@ -10103,8 +10147,12 @@ async function connectDatabase() {
     try {
       // Preview-only persistence: this database lives for the workflow process
       // and is never used when a configured production Mongo URI is available.
-      const { MongoMemoryServer } = require('mongodb-memory-server');
-      const demoMongo = await MongoMemoryServer.create();
+      // Financial activation and fee flows use Mongo transactions. A replica
+      // set is required even for the in-memory preview database so preview
+      // exercises the same atomic wallet behavior as production.
+      const { MongoMemoryReplSet } = require('mongodb-memory-server');
+      const demoMongo = await MongoMemoryReplSet.create({ replSet: { count: 1 } });
+      await demoMongo.waitUntilRunning();
       await mongoose.connect(demoMongo.getUri(), getMongoConnectionOptions());
       dbConnected = true;
       global._demoMongoServer = demoMongo;
