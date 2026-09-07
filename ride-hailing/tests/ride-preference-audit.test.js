@@ -20,7 +20,7 @@ function dailyFees(amount = 100) {
   return Object.fromEntries(FARE_VEHICLE_CATEGORIES.map(category => [category, amount]));
 }
 
-function longRangeSettings() {
+function longRangeSettings(commissionDeductionTiming = 'started') {
   const minimumWalletBalances = Object.fromEntries(FARE_VEHICLE_CATEGORIES.map(category => [category, 500]));
   minimumWalletBalances['Toyota Highroof'] = 3000;
   minimumWalletBalances['Car Sedan'] = 2000;
@@ -28,6 +28,7 @@ function longRangeSettings() {
     enabled: true,
     distanceCutoffKm: 50,
     broadcastRadiusKm: 30,
+    commissionDeductionTiming,
     manualCommissionAmounts: Object.fromEntries(FARE_VEHICLE_CATEGORIES.map(category => [category, 12.5])),
     minimumWalletBalances,
     perKmRates: Object.fromEntries(FARE_VEHICLE_CATEGORIES.map(category => [category, 100]))
@@ -171,17 +172,21 @@ test('audits registration, scheduled fees, wallet gates, completion commission, 
     token: driverToken(driverB), method: 'PATCH'
   });
   assert.equal(accepted.response.status, 200);
+  const afterAcceptance = await models.Wallet.findOne({ user: driverB._id }).lean();
+  assert.equal(afterAcceptance.transactions.filter(tx => tx.description === 'Long Range commission').length, 0);
   const arrived = await json(`/api/rides/${longRangeRide._id}/status`, {
     token: driverToken(driverB), method: 'PATCH', body: { status: 'arrived' }
   });
   assert.equal(arrived.response.status, 200);
+  const afterArrival = await models.Wallet.findOne({ user: driverB._id }).lean();
+  assert.equal(afterArrival.transactions.filter(tx => tx.description === 'Long Range commission').length, 0);
   const storedPin = (await models.Ride.findById(longRangeRide._id).select('verificationPin').lean()).verificationPin;
   const started = await json(`/api/rides/${longRangeRide._id}/status`, {
     token: driverToken(driverB), method: 'PATCH', body: { status: 'in-progress', pin: storedPin }
   });
   assert.equal(started.response.status, 200);
   const afterStart = await models.Wallet.findOne({ user: driverB._id }).lean();
-  assert.equal(afterStart.transactions.filter(tx => tx.description === 'Long Range commission').length, 1, 'manual commission is charged at acceptance');
+  assert.equal(afterStart.transactions.filter(tx => tx.description === 'Long Range commission').length, 1, 'started timing charges after valid PIN verification');
   const completed = await json(`/api/rides/${longRangeRide._id}/status`, {
     token: driverToken(driverB), method: 'PATCH', body: { status: 'completed' }
   });
@@ -200,6 +205,68 @@ test('audits registration, scheduled fees, wallet gates, completion commission, 
   const afterOverride = await models.Wallet.findOne({ user: driverB._id }).lean();
   assert.equal(afterOverride.transactions.filter(tx => /Automatic daily fee/.test(tx.description)).length, 1);
   assert.equal((await models.User.findById(driverB._id).lean()).ridePreference, 'Both');
+});
+
+test('completion timing defers Long Range commission until successful completion', async () => {
+  const completedTimingSettings = await json('/api/admin/long-range-settings', {
+    token: adminToken, method: 'PATCH', body: { longRangeSettings: longRangeSettings('completed') }
+  });
+  assert.equal(completedTimingSettings.response.status, 200);
+  const driver = await registerDriver({
+    name: 'Completion Timing Driver', phone: '+923000001005', vehicleType: 'Toyota Highroof', ridePreference: 'Long Range Only'
+  });
+  await models.User.updateOne(
+    { _id: driver._id },
+    { $set: { isOnline: true, lastOnlineHeartbeat: new Date(), currentLocation: { lat: 31.52, lng: 74.35 } } }
+  );
+  await models.Wallet.updateOne({ user: driver._id }, { $set: { balance: 5000 } });
+  const enabled = await json('/api/driver/long-range', {
+    token: driverToken(driver), method: 'PATCH', body: { enabled: true }
+  });
+  assert.equal(enabled.response.status, 200);
+
+  const customer = await models.User.create({
+    name: 'Completion Timing Customer', email: 'completion-timing@myride.test',
+    password: 'not-used', role: 'customer', accountStatus: 'active'
+  });
+  const ride = await models.Ride.create({
+    passenger: customer._id, driver: null, status: 'requested', vehicleType: 'Toyota Highroof',
+    isLongRange: true, fare: 1000, pickupLocation: { lat: 31.52, lng: 74.35 }, dropoffLocation: { lat: 32.0, lng: 74.7 },
+    driverLocation: { lat: 31.52, lng: 74.35 }, notifiedDriverIds: [driver._id]
+  });
+
+  const accepted = await json(`/api/rides/${ride._id}/accept`, {
+    token: driverToken(driver), method: 'PATCH'
+  });
+  assert.equal(accepted.response.status, 200);
+  const afterAcceptance = await models.Wallet.findOne({ user: driver._id }).lean();
+  assert.equal(afterAcceptance.transactions.filter(tx => tx.description === 'Long Range commission').length, 0);
+
+  const arrived = await json(`/api/rides/${ride._id}/status`, {
+    token: driverToken(driver), method: 'PATCH', body: { status: 'arrived' }
+  });
+  assert.equal(arrived.response.status, 200);
+  const storedPin = (await models.Ride.findById(ride._id).select('verificationPin').lean()).verificationPin;
+  const started = await json(`/api/rides/${ride._id}/status`, {
+    token: driverToken(driver), method: 'PATCH', body: { status: 'in-progress', pin: storedPin }
+  });
+  assert.equal(started.response.status, 200);
+  const afterStart = await models.Wallet.findOne({ user: driver._id }).lean();
+  assert.equal(afterStart.transactions.filter(tx => tx.description === 'Long Range commission').length, 0);
+
+  const completed = await json(`/api/rides/${ride._id}/status`, {
+    token: driverToken(driver), method: 'PATCH', body: { status: 'completed' }
+  });
+  assert.equal(completed.response.status, 200);
+  const afterCompletion = await models.Wallet.findOne({ user: driver._id }).lean();
+  const commissions = afterCompletion.transactions.filter(tx => tx.description === 'Long Range commission');
+  assert.equal(commissions.length, 1);
+  assert.equal(commissions[0].amount, 125);
+
+  const startedTimingSettings = await json('/api/admin/long-range-settings', {
+    token: adminToken, method: 'PATCH', body: { longRangeSettings: longRangeSettings('started') }
+  });
+  assert.equal(startedTimingSettings.response.status, 200);
 });
 
 test('accepts a custom wallet recharge amount above the Admin daily fee', async () => {

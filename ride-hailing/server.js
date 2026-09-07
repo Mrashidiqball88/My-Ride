@@ -1351,6 +1351,7 @@ function mergeFareCategorySettings(existing, category, setting) {
 }
 
 const LONG_RANGE_SETTINGS_KEY = 'long_range_ride_settings';
+const LONG_RANGE_COMMISSION_TIMINGS = Object.freeze(['started', 'completed']);
 const DEFAULT_LONG_RANGE_MINIMUM_WALLET_BALANCES = Object.freeze(
   Object.fromEntries(FARE_VEHICLE_CATEGORIES.map(category => [category, 500]))
 );
@@ -1359,6 +1360,7 @@ const DEFAULT_LONG_RANGE_SETTINGS = Object.freeze({
   distanceCutoffKm: 50,
   minimumWalletBalances: DEFAULT_LONG_RANGE_MINIMUM_WALLET_BALANCES,
   broadcastRadiusKm: 30,
+  commissionDeductionTiming: 'started',
   // Long Range platform commissions are percentages configured by Admin for
   // each vehicle category. Keep the setting key stable for persisted data and
   // existing Admin API clients.
@@ -1382,6 +1384,9 @@ function normalizeLongRangeSettings(input = {}) {
       return [category, numberInRange(configuredMinimum, DEFAULT_LONG_RANGE_MINIMUM_WALLET_BALANCES[category], 0, 1000000)];
     })),
     broadcastRadiusKm: numberInRange(source.broadcastRadiusKm, DEFAULT_LONG_RANGE_SETTINGS.broadcastRadiusKm, 0.5, 500),
+    commissionDeductionTiming: LONG_RANGE_COMMISSION_TIMINGS.includes(source.commissionDeductionTiming)
+      ? source.commissionDeductionTiming
+      : DEFAULT_LONG_RANGE_SETTINGS.commissionDeductionTiming,
     manualCommissionAmounts: Object.fromEntries(FARE_VEHICLE_CATEGORIES.map(category => {
       const amount = source.manualCommissionAmounts?.[category] ??
         legacyCarMiniSetting(source.manualCommissionAmounts, category);
@@ -1397,6 +1402,12 @@ function normalizeLongRangeSettings(input = {}) {
 function validateLongRangeSettings(input) {
   const settings = normalizeLongRangeSettings(input);
   const errors = [];
+  if (
+    input?.commissionDeductionTiming !== undefined
+    && !LONG_RANGE_COMMISSION_TIMINGS.includes(input.commissionDeductionTiming)
+  ) {
+    errors.push('Commission deduction timing must be started or completed');
+  }
   if (input?.enabled === true) {
     for (const category of FARE_VEHICLE_CATEGORIES) {
       if (!settings.perKmRates[category]) errors.push(`${category}: Long Range /km rate must be greater than zero`);
@@ -1943,6 +1954,7 @@ const rideSchema = new mongoose.Schema({
   isLongRange: { type: Boolean, default: false },
   longRangeCommissionAmount: { type: Number, default: 0 },
   longRangeCommissionChargedAt: { type: Date, default: null },
+  longRangeCommissionDeductionTiming: { type: String, enum: LONG_RANGE_COMMISSION_TIMINGS, default: null },
   distance:    { type: Number, default: 0 },
   durationMinutes: { type: Number, default: 0 },
   // Once a Driver accepts, this keeps the agreed fare immutable while
@@ -3353,7 +3365,13 @@ function financialError(message, statusCode = 500, code = 'FINANCIAL_OPERATION_F
   return error;
 }
 
-async function completeRideFinancialSettlement(rideId, driverId, waitingRateSettings) {
+function getRideCommissionDeductionTiming(ride, longRangeSettings) {
+  return LONG_RANGE_COMMISSION_TIMINGS.includes(ride?.longRangeCommissionDeductionTiming)
+    ? ride.longRangeCommissionDeductionTiming
+    : longRangeSettings?.commissionDeductionTiming || DEFAULT_LONG_RANGE_SETTINGS.commissionDeductionTiming;
+}
+
+async function completeRideFinancialSettlement(rideId, driverId, waitingRateSettings, longRangeSettings = null) {
   return runFinancialTransaction(async session => {
     const ride = await Ride.findOne({ _id: rideId, driver: driverId }).session(session);
     if (!ride) return { ride: null, alreadySettled: false };
@@ -3378,6 +3396,14 @@ async function completeRideFinancialSettlement(rideId, driverId, waitingRateSett
     }
 
     const fare = Number(ride.fare);
+    if (ride.isLongRange && getRideCommissionDeductionTiming(ride, longRangeSettings) === 'completed') {
+      const commission = await chargeLongRangeCommission(ride, driverId, longRangeSettings, { session });
+      if (!commission.ok) {
+        throw financialError(commission.error, 409, 'LONG_RANGE_COMMISSION_FAILED');
+      }
+      ride.longRangeCommissionAmount = commission.amount || ride.longRangeCommissionAmount || 0;
+      ride.longRangeCommissionChargedAt = commission.chargedAt || ride.longRangeCommissionChargedAt || new Date();
+    }
     // Daily Fees are the normal platform revenue. Ordinary ride fares are
     // paid to the Driver in full; only the separately charged Long Range
     // percentage commission is a platform ride charge.
@@ -5574,17 +5600,14 @@ app.patch('/api/rides/:id/accept', authMiddleware, async (req, res) => {
 
     if (!ride) return res.status(409).json({ error: 'Ride no longer available' });
     ride.agreedFareBeforeWaiting = ride.fare;
+    let longRangeSettings = null;
     if (ride.isLongRange) {
-      const settings = await getLongRangeSettings();
-      if (!await validateLongRangeDriverEligibility(req.user.id, settings, ride.fare)) {
+      longRangeSettings = await getLongRangeSettings();
+      if (!await validateLongRangeDriverEligibility(req.user.id, longRangeSettings, ride.fare)) {
         await Ride.updateOne({ _id: ride._id, driver: req.user.id, status: 'accepted' }, { $set: { driver: null, status: 'requested' } });
         return res.status(403).json({ error: 'You are not currently eligible for Long Range rides.' });
       }
-      const commission = await chargeLongRangeCommission(ride, req.user.id, settings);
-      if (!commission.ok) {
-        await Ride.updateOne({ _id: ride._id, driver: req.user.id, status: 'accepted' }, { $set: { driver: null, status: 'requested' } });
-        return res.status(403).json({ error: commission.error });
-      }
+      ride.longRangeCommissionDeductionTiming = longRangeSettings.commissionDeductionTiming;
     }
 
     // Generate 4-digit verification PIN for ride start
@@ -5659,12 +5682,29 @@ app.patch('/api/rides/:id/status', authMiddleware, driverOnly, async (req, res) 
       }
     }
 
+    if (status === 'in-progress' && ride.isLongRange) {
+      const longRangeSettings = await getLongRangeSettings();
+      if (getRideCommissionDeductionTiming(ride, longRangeSettings) === 'started') {
+        const commission = await chargeLongRangeCommission(ride, req.user.id, longRangeSettings);
+        if (!commission.ok) {
+          return res.status(409).json({
+            error: commission.error,
+            code: 'LONG_RANGE_COMMISSION_FAILED'
+          });
+        }
+        ride.longRangeCommissionAmount = commission.amount || ride.longRangeCommissionAmount || 0;
+        ride.longRangeCommissionChargedAt = commission.chargedAt || ride.longRangeCommissionChargedAt || new Date();
+      }
+    }
+
     if (status === 'completed') {
       const waitingRateSettings = await getWaitingRateSettings({ force: true });
+      const longRangeSettings = ride.isLongRange ? await getLongRangeSettings() : null;
       const settlement = await completeRideFinancialSettlement(
         ride._id,
         req.user.id,
-        waitingRateSettings
+        waitingRateSettings,
+        longRangeSettings
       );
       if (!settlement.ride) {
         return res.status(409).json({ error: 'Ride is no longer in progress.' });
@@ -5942,23 +5982,20 @@ app.patch('/api/rides/:id/accept-driver', authMiddleware, customerOnly, customer
       ride.fare = offer.price;
     }
     ride.agreedFareBeforeWaiting = ride.fare;
+    let longRangeSettings = null;
+    if (ride.isLongRange) {
+      longRangeSettings = await getLongRangeSettings();
+      if (!await validateLongRangeDriverEligibility(driverId, longRangeSettings, ride.fare)) {
+        await Ride.updateOne({ _id: ride._id, driver: driverId, status: 'accepted' }, { $set: { driver: null, status: 'requested', verificationPin: null } });
+        return res.status(403).json({ error: 'Selected Driver is no longer eligible for Long Range rides.' });
+      }
+      ride.longRangeCommissionDeductionTiming = longRangeSettings.commissionDeductionTiming;
+    }
 
     // Generate 4-digit verification PIN for ride start
     const verificationPin = String(Math.floor(1000 + Math.random() * 9000));
     ride.verificationPin = verificationPin;
     await ride.save();
-    if (ride.isLongRange) {
-      const settings = await getLongRangeSettings();
-      if (!await validateLongRangeDriverEligibility(driverId, settings, ride.fare)) {
-        await Ride.updateOne({ _id: ride._id, driver: driverId, status: 'accepted' }, { $set: { driver: null, status: 'requested', verificationPin: null } });
-        return res.status(403).json({ error: 'Selected Driver is no longer eligible for Long Range rides.' });
-      }
-      const commission = await chargeLongRangeCommission(ride, driverId, settings);
-      if (!commission.ok) {
-        await Ride.updateOne({ _id: ride._id, driver: driverId, status: 'accepted' }, { $set: { driver: null, status: 'requested', verificationPin: null } });
-        return res.status(403).json({ error: commission.error });
-      }
-    }
 
     const driverUser = await User.findById(driverId)
       .select('name phone role accountStatus isOnline lastOnlineHeartbeat vehicleType vehicleModel vehiclePlate rating profilePhoto');

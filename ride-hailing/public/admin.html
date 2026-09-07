@@ -1763,6 +1763,16 @@ button,input,select,textarea{
           <div class="field-row">
             <div class="field-item"><div class="field-label">Long Range broadcast radius (km)</div><input class="modal-input" id="lr-radius" type="number" min=".5" step=".1"></div>
           </div>
+           <div class="field-row">
+             <div class="field-item" style="min-width:320px">
+               <div class="field-label">Commission deduction timing</div>
+               <select class="modal-input" id="lr-commission-timing" aria-label="Long Range commission deduction timing">
+                 <option value="started">When Ride Started</option>
+                 <option value="completed">When Ride Completed</option>
+               </select>
+               <small style="display:block;color:#64748b;font-size:.72rem;margin-top:.35rem">Commission is never deducted while a ride is pending or merely accepted.</small>
+             </div>
+           </div>
              <div class="field-label" style="margin-top:1rem">Long Range rate, manual commission percentage, and minimum wallet balance by vehicle</div><div id="lr-rates" class="field-row"></div>
         </div>
         <div id="long-range-settings-feedback" style="min-height:1.25rem;font-size:.8rem;margin:.8rem 0"></div>
@@ -5751,6 +5761,7 @@ async function loadLongRangeSettings() {
     document.getElementById('lr-enabled').checked = !!settings.enabled;
     document.getElementById('lr-cutoff').value = settings.distanceCutoffKm;
     document.getElementById('lr-radius').value = settings.broadcastRadiusKm;
+    document.getElementById('lr-commission-timing').value = settings.commissionDeductionTiming === 'completed' ? 'completed' : 'started';
     renderLongRangeRates(settings.perKmRates, settings.minimumWalletBalances, settings.manualCommissionAmounts);
     feedback.textContent = '';
   } catch (e) { feedback.textContent = `⚠ ${e.message}`; feedback.style.color = '#ef4444'; }
@@ -5763,6 +5774,7 @@ async function saveLongRangeSettings() {
   const longRangeSettings = {
     enabled: document.getElementById('lr-enabled').checked,
     distanceCutoffKm: document.getElementById('lr-cutoff').value,
+    commissionDeductionTiming: document.getElementById('lr-commission-timing').value,
     minimumWalletBalances,
     broadcastRadiusKm: document.getElementById('lr-radius').value,
     manualCommissionAmounts,

@@ -291,6 +291,14 @@ test('Long Range settings keep independent minimum wallet balances by vehicle ca
   assert.equal(settings.minimumWalletBalances['Car Mini Non-AC'], 500);
 });
 
+test('Long Range commission timing exposes only started and completed choices', () => {
+  assert.equal(normalizeLongRangeSettings({}).commissionDeductionTiming, 'started');
+  assert.equal(normalizeLongRangeSettings({ commissionDeductionTiming: 'started' }).commissionDeductionTiming, 'started');
+  assert.equal(normalizeLongRangeSettings({ commissionDeductionTiming: 'completed' }).commissionDeductionTiming, 'completed');
+  assert.ok(validateLongRangeSettings({ commissionDeductionTiming: 'invalid' }).errors
+    .includes('Commission deduction timing must be started or completed'));
+});
+
 test('Car Mini AC and Non-AC retain independent fares while legacy Mini data migrates safely', () => {
   assert.ok(FARE_VEHICLE_CATEGORIES.includes('Car Mini AC'));
   assert.ok(FARE_VEHICLE_CATEGORIES.includes('Car Mini Non-AC'));
@@ -448,7 +456,7 @@ test('Customer fare quote uses active Long Range rates without daily fare slabs'
   }
 });
 
-test('Long Range commission is a percentage of the final fare charged once at acceptance', async () => {
+test('Long Range commission is a percentage of the final fare and remains idempotent', async () => {
   const updates = [];
   let debitAttempt = 0;
   models.Wallet.findOneAndUpdate = async () => {
