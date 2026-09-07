@@ -875,7 +875,7 @@ body{font-family:'DM Sans','Segoe UI',sans-serif;background:var(--lr-paper);colo
       <!-- Vehicle type -->
       <div class="vehicle-grid">
         <button class="vehicle-btn active" data-type="Bike" onclick="selectVehicle(this)">
-          <div class="v-icon" data-vehicle-icon="Bike"></div><div class="v-name">Bike</div><div class="v-fare">Admin-set fare</div>
+          <div class="v-icon" data-vehicle-icon="Bike"></div><div class="v-name">Motor Bike</div><div class="v-fare">Admin-set fare</div>
         </button>
         <button class="vehicle-btn" data-type="Riksha" onclick="selectVehicle(this)">
           <div class="v-icon" data-vehicle-icon="Riksha"></div><div class="v-name">Riksha</div><div class="v-fare">Admin-set fare</div>
@@ -2133,11 +2133,14 @@ function renderCustomerPerKmRates(rates = {}) {
 }
 
 const CUSTOMER_VEHICLE_ICON_SVGS = Object.freeze({
-  Bike: `<svg class="vehicle-icon vehicle-icon--svg" viewBox="0 0 72 44" aria-hidden="true" focusable="false">
-    <circle cx="16" cy="32" r="8" fill="none" stroke="#f59e0b" stroke-width="3"/>
-    <circle cx="56" cy="32" r="8" fill="none" stroke="#f59e0b" stroke-width="3"/>
-    <path d="M16 32 27 18h12l7 14M27 18l-4-6h10l6 6m0 0h9l8 6M44 12h7" fill="none" stroke="#f59e0b" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>
-    <path d="M29 18 39 32" stroke="#f59e0b" stroke-width="3" stroke-linecap="round"/>
+  Bike: `<svg class="vehicle-icon vehicle-icon--svg" viewBox="0 0 80 44" aria-hidden="true" focusable="false">
+    <circle cx="17" cy="33" r="8" fill="#263238" stroke="#f59e0b" stroke-width="2.5"/>
+    <circle cx="63" cy="33" r="8" fill="#263238" stroke="#f59e0b" stroke-width="2.5"/>
+    <path d="M17 33h10l8-13h13l10 13h5M27 33l11-7 11 7M48 20l7-5h8l5 5" fill="none" stroke="#f59e0b" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>
+    <path d="M34 20c2-5 7-7 13-5l8 3-5 7H37Z" fill="#e85d4a" stroke="#9f3329" stroke-width="1.8" stroke-linejoin="round"/>
+    <path d="M37 29h12l2 6H34Z" fill="#455a64" stroke="#263238" stroke-width="1.5" stroke-linejoin="round"/>
+    <path d="M29 17h11M56 15l4-5h5M61 10h5" fill="none" stroke="#263238" stroke-width="2.5" stroke-linecap="round"/>
+    <path d="M49 35h13" stroke="#90a4ae" stroke-width="2" stroke-linecap="round"/>
   </svg>`,
   'Car Mini Non-AC': `<svg class="vehicle-icon vehicle-icon--svg" viewBox="0 0 72 44" aria-hidden="true" focusable="false">
     <path d="M7 28.5h58v6H7z" fill="#d95c55" stroke="#8f2d2a" stroke-width="2"/>
@@ -2198,6 +2201,10 @@ function customerVehicleIconMarkup(category, { marker = false } = {}) {
   return `<span class="vehicle-icon vehicle-icon--emoji${marker ? ' vehicle-icon--marker' : ''}" aria-hidden="true">${emoji}</span>`;
 }
 
+function customerVehicleDisplayName(category) {
+  return category === 'Bike' ? 'Motor Bike' : category;
+}
+
 function hydrateCustomerVehicleIcons(root = document) {
   root.querySelectorAll('[data-vehicle-icon]').forEach(icon => {
     icon.innerHTML = customerVehicleIconMarkup(icon.dataset.vehicleIcon);
@@ -2214,8 +2221,10 @@ function renderCustomerVehicleCategories(categories = []) {
   grid.innerHTML = activeCategories.map(item => {
     const category = String(item.category || '');
     const icon = customerVehicleIconMarkup(category);
-    const label = category === 'Off-Road Dalla (Pickup)' ? 'Off-Road Dalla' :
-      category === 'Toyota Land Cruiser V8' ? 'Land Cruiser V8' : category;
+    const label = customerVehicleDisplayName(
+      category === 'Off-Road Dalla (Pickup)' ? 'Off-Road Dalla' :
+      category === 'Toyota Land Cruiser V8' ? 'Land Cruiser V8' : category
+    );
     return `<button class="vehicle-btn${category === selectedVehicle ? ' active' : ''}" data-type="${escapeLocationText(category)}" onclick="selectVehicle(this)">
       <div class="v-icon">${icon}</div><div class="v-name">${escapeLocationText(label)}</div><div class="v-fare">Admin-set fare</div>
     </button>`;

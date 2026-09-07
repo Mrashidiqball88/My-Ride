@@ -42,8 +42,10 @@ test.describe('Customer booking-tool readiness', () => {
       };
     });
 
-    expect(initialIcons.bike.html).toContain('viewBox="0 0 72 44"');
-    expect(initialIcons.bike.html).toContain('#f59e0b');
+    expect(initialIcons.bike.html).toContain('viewBox="0 0 80 44"');
+    expect(initialIcons.bike.html).toContain('#e85d4a');
+    expect(initialIcons.bike.html).not.toContain('M16 32 27 18h12l7 14');
+    expect(initialIcons.bike.text).toBe('');
     expect(initialIcons.miniAc.text).toBe('🚙');
     expect(initialIcons.miniNonAc.html).toContain('#d95c55');
     expect(initialIcons.oldCars.html).toContain('#a77b4d');
@@ -74,6 +76,7 @@ test.describe('Customer booking-tool readiness', () => {
       ]);
     });
 
+    await expect(page.locator('.vehicle-btn[data-type="Bike"] .v-name')).toHaveText('Motor Bike');
     await expect(page.locator('.vehicle-btn[data-type="Bike"] .vehicle-icon--svg')).toHaveCount(1);
     await expect(page.locator('.vehicle-btn[data-type="Car Mini Non-AC"] .vehicle-icon--svg')).toHaveCount(1);
     await expect(page.locator('.vehicle-btn[data-type="Old Cars"] .vehicle-icon--svg')).toHaveCount(1);
