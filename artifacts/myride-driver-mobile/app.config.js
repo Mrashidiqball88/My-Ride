@@ -6,6 +6,18 @@ const mapboxPublicToken = String(
   ''
 ).trim();
 
+// Expo SDK 54 requires a project ID when exchanging the device FCM/APNs
+// token for an Expo push token. Replit supplies its stable project UUID to
+// the mobile workflow; a real EAS project ID can override it for release
+// builds.
+const expoProjectId = String(
+  process.env.EXPO_PUBLIC_EAS_PROJECT_ID ||
+  process.env.EAS_PROJECT_ID ||
+  process.env.EXPO_PUBLIC_REPL_ID ||
+  process.env.REPL_ID ||
+  ''
+).trim();
+
 module.exports = {
   ...baseConfig,
   ios: {
@@ -18,6 +30,9 @@ module.exports = {
   },
   extra: {
     ...(baseConfig.extra || {}),
+    ...(expoProjectId
+      ? { eas: { ...(baseConfig.extra?.eas || {}), projectId: expoProjectId } }
+      : {}),
     mapboxPublicToken,
   },
   plugins: [

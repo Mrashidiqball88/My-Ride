@@ -66,4 +66,18 @@ test('native push delivery uses the versioned urgent channel and offer expiry', 
   assert.match(serverSource, /channelId: NATIVE_RIDE_ALERT_CHANNEL_ID/);
   assert.match(serverSource, /ttl: Math\.max\(1, Math\.ceil\(\(new Date\(ridePayload\.broadcastExpiresAt\)/);
   assert.match(serverSource, /priority: 'high'/);
+  assert.match(serverSource, /sendExpoPush\(broadcast\.drivers\.map\(driver => driver\.expoPushToken\)/);
+});
+
+test('native Driver exchanges raw token changes for an Expo token before registration', () => {
+  assert.match(runtimeSource, /getExpoPushTokenAsync\(\{/);
+  assert.match(runtimeSource, /addPushTokenListener\(\(\) =>/);
+  assert.match(runtimeSource, /void registerExpoToken\(\)/);
+  assert.doesNotMatch(runtimeSource, /addPushTokenListener\(\(\{ data \}\) => \{\s*void registerExpoToken\(data\)/);
+});
+
+test('native app config exposes a stable Expo project ID to SDK 54', () => {
+  assert.match(appConfigSource, /EXPO_PUBLIC_EAS_PROJECT_ID/);
+  assert.match(appConfigSource, /EXPO_PUBLIC_REPL_ID/);
+  assert.match(appConfigSource, /projectId: expoProjectId/);
 });

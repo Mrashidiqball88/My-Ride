@@ -234,6 +234,18 @@ async function getDriverDeviceId() {
   return generated;
 }
 
+function getExpoProjectId() {
+  return String(
+    process.env.EXPO_PUBLIC_EAS_PROJECT_ID
+    || Constants.easConfig?.projectId
+    || Constants.expoConfig?.extra?.eas?.projectId
+    || process.env.EAS_PROJECT_ID
+    || process.env.EXPO_PUBLIC_REPL_ID
+    || process.env.REPL_ID
+    || ''
+  ).trim();
+}
+
 function normalizeRideRequest(ride: RideRequest & { _id?: string }): RideRequest {
   return { ...ride, id: String(ride.id || ride._id || '') };
 }
@@ -295,6 +307,7 @@ export function DriverRuntimeProvider({ children }: { children: ReactNode }) {
   const locationServiceMode = useRef<'stopped' | 'availability' | 'active-ride'>('stopped');
   const locationServiceTransition = useRef<Promise<void>>(Promise.resolve());
   const specialSettingPrompted = useRef<AndroidAlertSetting | null>(null);
+  const pushRegistrationError = useRef<string | null>(null);
 
   useEffect(() => { isOnlineRef.current = isOnline; }, [isOnline]);
   useEffect(() => { userRef.current = user; }, [user]);
@@ -683,23 +696,34 @@ export function DriverRuntimeProvider({ children }: { children: ReactNode }) {
     };
   }, [clearRevokedSession]);
 
-  const registerExpoToken = useCallback(async (tokenOverride?: string) => {
+  const registerExpoToken = useCallback(async () => {
     if (Platform.OS === 'web' || !tokenRef.current) return false;
     try {
       const notificationState = await configureNotifications(false);
       if (!notificationState.notificationsGranted) return false;
-      const projectId = process.env.EXPO_PUBLIC_EAS_PROJECT_ID
-        || Constants.easConfig?.projectId
-        || Constants.expoConfig?.extra?.eas?.projectId;
-      const pushToken = tokenOverride
-        ? { data: tokenOverride }
-        : await Notifications.getExpoPushTokenAsync(projectId ? { projectId } : undefined);
+      const projectId = getExpoProjectId();
+      if (!projectId) {
+        throw new Error('Expo push project ID is missing from this native build.');
+      }
+      // addPushTokenListener emits the raw device FCM/APNs token, not an
+      // ExpoPushToken. Re-exchange it through Expo so the server always stores
+      // the token accepted by exp.host.
+      const pushToken = await Notifications.getExpoPushTokenAsync({
+        projectId,
+      });
+      if (!/^ExponentPushToken\[.+\]$|^ExpoPushToken\[.+\]$/.test(String(pushToken.data || ''))) {
+        throw new Error('Expo returned an invalid push token.');
+      }
       await api('/api/driver/push-token', tokenRef.current, sessionRef.current || undefined, {
         method: 'POST', body: JSON.stringify({ token: pushToken.data }),
       });
       await SecureStore.setItemAsync(PUSH_TOKEN_KEY, pushToken.data);
+      pushRegistrationError.current = null;
       return true;
-    } catch {
+    } catch (cause) {
+      pushRegistrationError.current = cause instanceof Error
+        ? cause.message
+        : 'Expo push registration failed.';
       return false;
     }
   }, []);
@@ -791,7 +815,7 @@ export function DriverRuntimeProvider({ children }: { children: ReactNode }) {
             : !foregroundLocation.granted || !backgroundLocation.granted
               ? 'Allow precise location and background location to keep your Driver availability active.'
               : !pushTokenRegistered
-                ? 'Push registration did not complete. Check your network and retry.'
+                ? pushRegistrationError.current || 'Push registration did not complete. Check your network and retry.'
                 : !lockScreenConfirmed
                   ? 'Confirm that My Ride ride alerts are enabled on your lock screen.'
                    : 'The native foreground service could not be verified. Check system settings and retry.';
@@ -974,8 +998,10 @@ export function DriverRuntimeProvider({ children }: { children: ReactNode }) {
     void Notifications.getLastNotificationResponseAsync().then(response => {
       recoverNotificationRide(response);
     }).catch(() => undefined);
-    const tokenSubscription = Notifications.addPushTokenListener(({ data }) => {
-      void registerExpoToken(data);
+    const tokenSubscription = Notifications.addPushTokenListener(() => {
+      // The listener payload is a raw device token. Fetching the Expo token
+      // again is required before registering it with our server.
+      void registerExpoToken();
     });
     return () => {
       subscription.remove();

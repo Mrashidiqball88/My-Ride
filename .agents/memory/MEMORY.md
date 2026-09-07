@@ -31,7 +31,8 @@
 - [Pickup PIN authority](pickup-pin-authority.md) — release the ride PIN only from persisted server-side pickup proximity, never from client GPS calculations.
 - [Driver recharge amounts](driver-recharge-amounts.md) — keep Admin Daily Fee display-only; submit and credit the Driver-entered recharge amount.
 - [Admin wallet bonus separation](admin-wallet-bonus-separation.md) — manual wallet credits must not alter paid fee access; fee extensions use a separate duration flow.
-- [Native alert readiness](native-alert-readiness.md) — native Drivers must pass OS permissions, push registration, lock-screen acknowledgement, and service preflight before online.
+ - [Native alert readiness](native-alert-readiness.md) — native Drivers must pass OS permissions, push registration, lock-screen acknowledgement, and service preflight before online.
+ - [Expo push token exchange](expo-push-token-exchange.md) — addPushTokenListener emits raw FCM/APNs tokens; re-exchange through Expo before storing or dispatching.
 - [Preview Admin credential authority](preview-admin-credential-authority.md) — in-memory demo previews must let the configured Admin secret override stale ephemeral hashes; persisted production hashes remain authoritative.
 - [MongoDB Atlas connection retry](mongo-connection-retry.md) — configured Atlas connections retry with backoff and report connecting instead of silently becoming demo mode.
 - [Nested API route stubs](nested-api-route-stubs.md) — Playwright globs for a base API path may miss nested routes; use an explicit nested-path pattern or regex.
