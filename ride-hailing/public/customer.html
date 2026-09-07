@@ -2121,7 +2121,9 @@ function renderRestoredCustomerRide(ride) {
   if (!ride || !CUSTOMER_ACTIVE_RIDE_STATUSES.has(ride.status)) return false;
   activeRide = ride;
   activeLiveFare = Number(ride.fare || 0);
-  activeDriverInfo = ride.driver && typeof ride.driver === 'object' ? ride.driver : null;
+  activeDriverInfo = ride.driver && typeof ride.driver === 'object'
+    ? { ...ride.driver, phone: ride.driver.phone || ride.contactPhone || ride.contact?.phone || '' }
+    : (ride.contact ? { ...ride.contact } : null);
   driverOffers = customerOffersFromRide(ride);
   pendingVerificationPin = ride.pickupReachedAt ? (ride.verificationPin || null) : null;
 
@@ -4135,10 +4137,15 @@ function showMatchedPanel(driver = {}, agreedFare, rideStatus = activeRide?.stat
 
   // Keep contact actions visible for every assigned ride state, including
   // rides restored directly as arrived or in-progress.
-  const contact = normalizeCustomerContactPhone(driver.phone);
+  const contact = normalizeCustomerContactPhone(
+    driver.phone
+      || driver.contactPhone
+      || activeRide?.contactPhone
+      || activeRide?.contact?.phone
+  );
   const contactHtml = contact
-     ? `<a class="btn-call" href="tel:${contact.tel}">📞 Phone Call</a>
-        <a class="btn-whatsapp" href="https://wa.me/${contact.whatsapp}">💬 WhatsApp</a>`
+     ? `<a class="btn-call" href="tel:${contact.tel}" onclick="return openCustomerRideContact(event, this.href)">📞 Phone Call</a>
+        <a class="btn-whatsapp" href="https://wa.me/${contact.whatsapp}" onclick="return openCustomerRideContact(event, this.href)">💬 WhatsApp</a>`
     : `<div style="font-size:.78rem;color:#555;text-align:center;flex:1">Contact details not available</div>`;
   document.getElementById('ar-contact-btns').innerHTML = contactHtml;
   document.getElementById('ar-contact-btns').style.display = 'flex';
@@ -4407,7 +4414,7 @@ function applyCustomerRideSnapshot(ride) {
   // and GPS from the server snapshot.
   const mergedDriver = ride.driver && typeof ride.driver === 'object'
     ? { ...(previousRide.driver || {}), ...ride.driver }
-    : (ride.driver || previousRide.driver);
+    : (ride.driver || previousRide.driver || (ride.contact ? { ...ride.contact } : null));
   if (previousRide.driver && mergedDriver) {
     ['name', 'phone', 'vehicleType', 'vehicleModel', 'vehiclePlate', 'rating', 'profilePhoto']
       .forEach(field => {
@@ -4419,6 +4426,14 @@ function applyCustomerRideSnapshot(ride) {
     ...ride,
     driver: mergedDriver
   };
+  if (activeRide.driver && typeof activeRide.driver === 'object') {
+    activeRide.driver.phone = activeRide.driver.phone
+      || ride.contactPhone
+      || ride.contact?.phone
+      || previousRide.contactPhone
+      || previousRide.contact?.phone
+      || '';
+  }
   activeLiveFare = ride.fare ?? previousRide.fare;
   if (ride.status === 'requested') {
     driverOffers = customerOffersFromRide(ride);
@@ -4565,7 +4580,10 @@ function connectToRideRoom(rideId) {
   // Customer selected a driver — full driver profile arrives here
   socket.on('ride:accepted', ({ driver, rideId: acceptedRideId }) => {
     if (activeRide && String(activeRide._id) === String(acceptedRideId)) {
-      activeDriverInfo = driver;
+      activeDriverInfo = {
+        ...(activeRide.driver && typeof activeRide.driver === 'object' ? activeRide.driver : {}),
+        ...(driver && typeof driver === 'object' ? driver : {})
+      };
       activeRide.status = 'accepted';
       activeRide.pickupReachedAt = null;
       pendingVerificationPin = null;
@@ -4630,7 +4648,10 @@ function connectToRideRoom(rideId) {
       revealRidePinIfAtPickup();
       showToast('Your driver has arrived!', 'info');
     } else if (status === 'in-progress') {
-      const contactDriver = activeDriverInfo || activeRide.driver;
+      const contactDriver = {
+        ...(activeRide.driver && typeof activeRide.driver === 'object' ? activeRide.driver : {}),
+        ...(activeDriverInfo && typeof activeDriverInfo === 'object' ? activeDriverInfo : {})
+      };
       if (contactDriver && typeof contactDriver === 'object') {
         activeDriverInfo = contactDriver;
         showMatchedPanel(contactDriver, activeRide.fare, 'in-progress');

@@ -13,6 +13,18 @@ const homeSource = fs.readFileSync(
   path.join(__dirname, '../../artifacts/myride-driver-mobile/app/index.tsx'),
   'utf8',
 );
+const customerMobileSource = fs.readFileSync(
+  path.join(__dirname, '../../artifacts/myride-customer-mobile/app/index.tsx'),
+  'utf8',
+);
+const customerWebSource = fs.readFileSync(
+  path.join(__dirname, '../public/customer.html'),
+  'utf8',
+);
+const driverWebSource = fs.readFileSync(
+  path.join(__dirname, '../public/driver.html'),
+  'utf8',
+);
 const appConfig = JSON.parse(fs.readFileSync(
   path.join(__dirname, '../../artifacts/myride-driver-mobile/app.json'),
   'utf8',
@@ -80,4 +92,13 @@ test('native app config exposes a stable Expo project ID to SDK 54', () => {
   assert.match(appConfigSource, /EXPO_PUBLIC_EAS_PROJECT_ID/);
   assert.match(appConfigSource, /EXPO_PUBLIC_REPL_ID/);
   assert.match(appConfigSource, /projectId: expoProjectId/);
+});
+
+test('active ride contacts keep an explicit phone bridge across web and native clients', () => {
+  assert.match(serverSource, /payload\.contactPhone = contactPhone/);
+  assert.match(customerWebSource, /openCustomerRideContact\(event, this\.href\)/);
+  assert.match(driverWebSource, /openDriverRideContact\(event, this\.href\)/);
+  assert.match(homeSource, /Linking\.openURL\(url\)/);
+  assert.match(customerMobileSource, /ReactNativeWebView\.postMessage/);
+  assert.match(customerMobileSource, /wa\\.me/);
 });

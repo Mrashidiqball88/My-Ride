@@ -266,7 +266,11 @@ test.describe('live Mongo fare refresh', () => {
           contactBeforePin,
           cancellationLocked: document.getElementById('ar-cancel-btn').disabled,
           contactButtonsVisible: document.getElementById('ar-contact-btns').style.display === 'flex',
-          contactText: document.getElementById('ar-contact-btns').textContent
+          contactText: document.getElementById('ar-contact-btns').textContent,
+          contactTargets: [...document.querySelectorAll('#ar-contact-btns a')].map(anchor => ({
+            text: anchor.textContent.trim(),
+            href: anchor.href
+          }))
         };
       }, { pickup, dropoff });
 
@@ -283,6 +287,10 @@ test.describe('live Mongo fare refresh', () => {
       expect(customerCamera.contactButtonsVisible).toBe(true);
       expect(customerCamera.contactText).toContain('Phone Call');
       expect(customerCamera.contactText).toContain('WhatsApp');
+      expect(customerCamera.contactTargets).toEqual([
+        { text: '📞 Phone Call', href: 'tel:+923000000000' },
+        { text: '💬 WhatsApp', href: 'https://wa.me/923000000000' }
+      ]);
 
       const driverCamera = await driverPage.evaluate(async ({ pickup, dropoff }) => {
         const calls = [];
@@ -301,16 +309,31 @@ test.describe('live Mongo fare refresh', () => {
         if (!map.isStyleLoaded()) await new Promise(resolve => map.once('load', resolve));
         routeLine = null;
         drawNavigationLine([[31.521, 74.359], [31.5204, 74.3587]]);
+        activeRide = {
+          _id: 'driver-contact-test',
+          status: 'accepted',
+          passenger: { name: 'Passenger Test', phone: '03000000000' },
+          pickupLocation: pickup,
+          dropoffLocation: dropoff
+        };
+        showActivePanel(activeRide);
+        const contactTargets = [...document.querySelectorAll('#ap-call-passenger a')].map(anchor => ({
+          text: anchor.textContent.trim(),
+          href: anchor.href
+        }));
         const routeColors = [
           map.getPaintProperty(DRIVER_ROUTE_IDS.shadow, 'line-color'),
           map.getPaintProperty(DRIVER_ROUTE_IDS.line, 'line-color')
         ];
+        stopActiveRideLocationSync();
+        endActiveRide();
         clearRideMap();
         return {
           focusCall: calls[0],
           followCall,
           followingAfterZoom,
           autoCenterAfterZoom,
+          contactTargets,
           routeColors
         };
       }, { pickup, dropoff });
@@ -322,6 +345,10 @@ test.describe('live Mongo fare refresh', () => {
       expect(driverCamera.followCall.essential).toBe(true);
       expect(driverCamera.followingAfterZoom).toBe(false);
       expect(driverCamera.autoCenterAfterZoom).toBe(false);
+      expect(driverCamera.contactTargets).toEqual([
+        { text: '📞 Phone Call', href: 'tel:+923000000000' },
+        { text: '💬 WhatsApp', href: 'https://wa.me/923000000000' }
+      ]);
       expect(driverCamera.routeColors).toEqual(['#092c62', '#2688ff']);
     } finally {
       await Promise.all([customerPage.close(), driverPage.close()]);
@@ -387,6 +414,18 @@ test.describe('live Mongo fare refresh', () => {
       });
       const beforeReleaseBody = await beforeRelease.json();
       expect(beforeReleaseBody.verificationPin).toBeUndefined();
+      expect(beforeReleaseBody.driver.phone).toBe(matchingDriver.phone);
+      expect(beforeReleaseBody.contactPhone).toBe(matchingDriver.phone);
+      expect(beforeReleaseBody.contact.phone).toBe(matchingDriver.phone);
+
+      const driverRideResponse = await fetch(`${baseURL}/api/rides/${ride._id}`, {
+        headers: authHeaders(matchingDriver)
+      });
+      expect(driverRideResponse.status).toBe(200);
+      const driverRideBody = await driverRideResponse.json();
+      expect(driverRideBody.passenger.phone).toBe(customer.phone);
+      expect(driverRideBody.contactPhone).toBe(customer.phone);
+      expect(driverRideBody.contact.phone).toBe(customer.phone);
 
       const releaseEvent = customerPage.waitForFunction(() => window.__pickupEvents.length === 1);
       const atPickup = await fetch(`${baseURL}/api/driver/location`, {

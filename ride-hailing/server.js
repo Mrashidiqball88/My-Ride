@@ -3101,15 +3101,32 @@ async function rideResponseForUserWithContact(ride, role) {
     .select('name phone vehicleType vehicleModel vehiclePlate rating profilePhoto')
     .lean()
     .catch(() => null);
-  if (!contact) return payload;
+  const participantSnapshot = participant && typeof participant === 'object' ? participant : {};
+  const resolvedContact = contact || participantSnapshot;
+  const contactPhone = String(resolvedContact.phone || '').trim();
+  if (!resolvedContact || (!participantSnapshot && !contact)) return payload;
 
   payload[field] = {
-    ...(participant && typeof participant === 'object' ? participant : {}),
-    ...contact,
-    _id: contact._id || participant?._id || participantId,
-    id: String(contact._id || participant?._id || participantId),
-    phone: contact.phone || ''
+    ...participantSnapshot,
+    ...resolvedContact,
+    _id: resolvedContact._id || participantSnapshot._id || participantId,
+    id: String(resolvedContact._id || participantSnapshot._id || participantId),
+    phone: contactPhone
   };
+  // Keep an explicit contact snapshot beside the populated participant. This
+  // survives partial population and makes the REST/realtime/native bridge
+  // unambiguous for the two contact actions.
+  payload.contact = {
+    id: String(resolvedContact._id || participantSnapshot._id || participantId),
+    name: resolvedContact.name || participantSnapshot.name || '',
+    phone: contactPhone,
+    vehicleType: resolvedContact.vehicleType || participantSnapshot.vehicleType || '',
+    vehicleModel: resolvedContact.vehicleModel || participantSnapshot.vehicleModel || '',
+    vehiclePlate: resolvedContact.vehiclePlate || participantSnapshot.vehiclePlate || '',
+    rating: resolvedContact.rating ?? participantSnapshot.rating ?? null,
+    profilePhoto: resolvedContact.profilePhoto || participantSnapshot.profilePhoto || ''
+  };
+  payload.contactPhone = contactPhone;
   return payload;
 }
 

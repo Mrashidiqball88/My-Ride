@@ -54,6 +54,18 @@ export default function CustomerWebViewScreen() {
     }
   }, []);
 
+  const handleWebViewMessage = useCallback((event: { nativeEvent: { data: string } }) => {
+    try {
+      const message = JSON.parse(event.nativeEvent.data);
+      const url = String(message?.url || '');
+      if (/^tel:\+?[0-9]+$/i.test(url) || /^https:\/\/wa\.me\/[0-9]+$/i.test(url)) {
+        void openExternalUrl(url);
+      }
+    } catch {
+      // Ignore messages that are not part of the contact bridge.
+    }
+  }, [openExternalUrl]);
+
   const allowNavigation = useCallback((request: WebViewNavigation) => {
     if (!allowedOrigin) return false;
     if (/^tel:/i.test(request.url) || /^https:\/\/wa\.me\//i.test(request.url)) {
@@ -136,7 +148,23 @@ export default function CustomerWebViewScreen() {
         thirdPartyCookiesEnabled
         allowsBackForwardNavigationGestures
         setSupportMultipleWindows={false}
+        injectedJavaScript={`
+          (function() {
+            if (window.__myRideContactBridgeInstalled) return true;
+            window.__myRideContactBridgeInstalled = true;
+            document.addEventListener('click', function(event) {
+              var anchor = event.target && event.target.closest ? event.target.closest('a') : null;
+              var url = anchor && anchor.href ? anchor.href : '';
+              if (/^tel:\\+?[0-9]+$/i.test(url) || /^https:\\/\\/wa\\.me\\/[0-9]+$/i.test(url)) {
+                event.preventDefault();
+                window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'contact', url: url }));
+              }
+            }, true);
+          })();
+          true;
+        `}
         onShouldStartLoadWithRequest={allowNavigation}
+        onMessage={handleWebViewMessage}
         onNavigationStateChange={state => setCanGoBack(state.canGoBack)}
         onLoadStart={() => {
           setLoading(true);

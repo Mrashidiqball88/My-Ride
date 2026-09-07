@@ -63,11 +63,13 @@ export type RideAcceptanceEligibility = {
   longRangeCommissionAmount?: number;
 };
 export type RideRequest = {
-  id: string; fare: number; distance?: number; vehicleType?: string; createdAt?: string | Date;
+  id: string; _id?: string; fare: number; distance?: number; vehicleType?: string; createdAt?: string | Date;
   isLongRange?: boolean;
   acceptanceEligibility?: RideAcceptanceEligibility;
   status?: 'requested' | 'accepted' | 'arrived' | 'in-progress' | 'completed' | 'cancelled';
   passenger?: { id?: string; name?: string; phone?: string };
+  contactPhone?: string;
+  contact?: { id?: string; name?: string; phone?: string };
   verificationPin?: string | null;
   broadcastDurationSeconds?: number;
   broadcastExpiresAt?: string | Date;
@@ -362,19 +364,35 @@ export function DriverRuntimeProvider({ children }: { children: ReactNode }) {
       const ride = response?.ride
         ? normalizeRideRequest(response.ride as RideRequest & { _id?: string })
         : null;
+      if (!ride) {
+        setActiveRide(null);
+        setActiveRideId(null);
+        await SecureStore.deleteItemAsync(ACTIVE_RIDE_KEY);
+        return false;
+      }
       if (ride?.id && locallyClearedRideIds.current.has(ride.id)) {
         setActiveRide(null);
         setActiveRideId(null);
         return false;
       }
-      setActiveRide(ride);
-      setActiveRideId(ride?.id || null);
-      if (ride?.id) {
+      setActiveRide({
+        ...ride,
+        passenger: ride.passenger
+          ? {
+              ...ride.passenger,
+              phone: ride.passenger.phone || ride.contactPhone || ride.contact?.phone || '',
+            }
+          : ride.contact
+            ? { ...ride.contact }
+            : ride.passenger,
+      });
+      setActiveRideId(ride.id || null);
+      if (ride.id) {
         await SecureStore.setItemAsync(ACTIVE_RIDE_KEY, ride.id);
       } else {
         await SecureStore.deleteItemAsync(ACTIVE_RIDE_KEY);
       }
-      return Boolean(ride);
+      return true;
     } catch {
       // Socket reconnect and the next foreground refresh remain available.
       return false;

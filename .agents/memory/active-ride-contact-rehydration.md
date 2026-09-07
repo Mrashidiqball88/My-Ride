@@ -14,3 +14,9 @@ When a populated opposing reference is missing because the record lives in a leg
 **Why:** Mongoose population can turn an assigned legacy-partition reference into a null UI object even though the ride and account are valid.
 
 **How to apply:** Treat the raw Ride reference plus the authoritative User lookup as the source of contact identity; direct validated anchors are the most reliable web/native bridge for `tel:` and WhatsApp actions.
+
+When participant population or realtime payloads can be partial, include an explicit opposing-party contact snapshot/phone in the active-ride response and merge it with any cached participant object before rendering actions.
+
+**Why:** A cached participant object with a name but no phone can otherwise take precedence over a later authoritative phone value, leaving visible contact controls without a usable target.
+
+**How to apply:** Resolve contact phone from the fresh participant, explicit ride contact snapshot, and prior snapshot in that order; validate the final `tel:` and `https://wa.me/` targets before opening them.
