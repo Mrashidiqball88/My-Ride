@@ -21,6 +21,69 @@ async function prepareReadiness(page) {
 }
 
 test.describe('Customer booking-tool readiness', () => {
+  test('restores an active ride on launch and keeps booking locked on resume', async ({ page }) => {
+    const activeRide = {
+      _id: 'customer-recovery-ride',
+      status: 'in-progress',
+      fare: 850,
+      pickupReachedAt: null,
+      pickupLocation: { lat: 24.86, lng: 67.01, address: 'Pickup Street' },
+      dropoffLocation: { lat: 24.87, lng: 67.02, address: 'Dropoff Avenue' },
+      driverLocation: { lat: 24.865, lng: 67.015 },
+      driver: {
+        _id: 'recovery-driver',
+        name: 'Recovered Driver',
+        phone: '03001234567',
+        vehicleType: 'Car Sedan',
+        vehicleModel: 'Corolla',
+        vehiclePlate: 'ABC-123',
+        rating: 4.9
+      }
+    };
+    let activeReadCount = 0;
+
+    await page.addInitScript(() => {
+      localStorage.setItem('rh_token', 'customer-recovery-token');
+      localStorage.setItem('rh_user', JSON.stringify({
+        name: 'Recovery Customer',
+        role: 'customer',
+        accountStatus: 'active'
+      }));
+      sessionStorage.setItem('myride:customer-readiness', '1');
+    });
+    await page.route('**/api/rides/active', async route => {
+      activeReadCount++;
+      await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(activeRide) });
+    });
+    await page.route('**/api/rides/my', route =>
+      route.fulfill({ status: 200, contentType: 'application/json', body: '[]' })
+    );
+    await page.route('**/api/rides', route => {
+      if (route.request().method() === 'POST') {
+        throw new Error('A duplicate booking request was sent while the active ride was restored');
+      }
+      return route.fallback();
+    });
+
+    await page.goto('/customer');
+    await expect(page.locator('#active-ride')).toBeVisible();
+    await expect(page.locator('#bottom-panel')).toBeHidden();
+    await expect(page.locator('#ar-status-text')).toHaveText('Ride in progress 🚗');
+    await expect(page.locator('#ar-driver-name')).toHaveText('Recovered Driver');
+    await expect(page.locator('#ar-driver-vehicle')).toHaveText('Car Sedan · Corolla');
+    await expect(page.locator('#ar-driver-plate')).toHaveText('ABC-123');
+
+    await page.waitForTimeout(1300);
+    await page.evaluate(() => {
+      window.dispatchEvent(new Event('focus'));
+      return bookRide();
+    });
+    await expect.poll(() => activeReadCount).toBeGreaterThanOrEqual(2);
+    await expect(page.locator('#active-ride')).toBeVisible();
+    await expect(page.locator('#bottom-panel')).toBeHidden();
+    await expect.poll(() => page.evaluate(() => String(activeRide?._id))).toBe('customer-recovery-ride');
+  });
+
   test('uses distinct and accurate artwork for the core vehicle categories', async ({ page }) => {
     await page.goto('/customer');
 

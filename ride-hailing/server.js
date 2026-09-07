@@ -3084,6 +3084,8 @@ function rideResponseForUser(ride, role) {
   return payload;
 }
 
+const CUSTOMER_ACTIVE_RIDE_STATUSES = ['requested', 'accepted', 'arrived', 'in-progress'];
+
 async function rideResponseForUserWithContact(ride, role) {
   const payload = rideResponseForUser(ride, role);
   const field = role === 'customer' ? 'driver' : 'passenger';
@@ -5200,6 +5202,18 @@ app.get('/api/customer/vehicle-config', async (req, res) => {
 
 app.post('/api/rides', authMiddleware, customerOnly, customerCanBook, async (req, res) => {
   try {
+    const existingActiveRide = await Ride.findOne({
+      passenger: req.user.id,
+      status: { $in: CUSTOMER_ACTIVE_RIDE_STATUSES }
+    }).select('_id status').sort({ updatedAt: -1, createdAt: -1 }).lean();
+    if (existingActiveRide) {
+      return res.status(409).json({
+        error: 'You already have an active ride. Reopen it before booking another ride.',
+        code: 'ACTIVE_RIDE_EXISTS',
+        activeRideId: String(existingActiveRide._id),
+        activeRideStatus: existingActiveRide.status
+      });
+    }
     const requestedAt = new Date();
     const { pickupLocation, dropoffLocation, dropoffLocations, distance, vehicleType, notes, paymentMethod, mobileAccount, customerOffer, customerFareOffset } = req.body;
     if (!pickupLocation) {
@@ -5637,6 +5651,20 @@ app.get('/api/rides/my', authMiddleware, async (req, res) => {
       .sort({ createdAt: -1 })
       .limit(20);
     res.json(rides.map(ride => rideResponseForUser(ride, req.user.role)));
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get('/api/rides/active', authMiddleware, customerOnly, async (req, res) => {
+  try {
+    const ride = await Ride.findOne({
+      passenger: req.user.id,
+      status: { $in: CUSTOMER_ACTIVE_RIDE_STATUSES }
+    })
+      .populate('passenger driver', 'name phone vehicleType vehicleModel vehiclePlate rating profilePhoto currentLocation')
+      .sort({ updatedAt: -1, createdAt: -1 });
+    res.json(ride ? await rideResponseForUserWithContact(ride, 'customer') : null);
   } catch (err) {
     res.status(500).json({ error: err.message });
   }

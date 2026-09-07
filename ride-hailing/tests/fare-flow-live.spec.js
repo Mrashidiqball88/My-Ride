@@ -636,6 +636,71 @@ test.describe('live Mongo fare refresh', () => {
     }
   });
 
+  test('rejects duplicate active bookings without blocking driver selection on the existing ride', async ({ playwright }) => {
+    const request = await playwright.request.newContext({
+      baseURL: `http://127.0.0.1:${httpServer.address().port}`
+    });
+    const customerHeaders = authHeaders(customer);
+    try {
+      const firstResponse = await request.post('/api/rides', {
+        headers: customerHeaders,
+        data: {
+          pickupLocation: { lat: 31.5204, lng: 74.3587, address: 'Duplicate guard pickup' },
+          dropoffLocation: { lat: 31.5304, lng: 74.3687, address: 'Duplicate guard dropoff' },
+          distance: 7,
+          vehicleType: 'Car Mini',
+          fare: 1
+        }
+      });
+      expect(firstResponse.status()).toBe(201);
+      const firstRide = await firstResponse.json();
+
+      const duplicateResponse = await request.post('/api/rides', {
+        headers: customerHeaders,
+        data: {
+          pickupLocation: { lat: 31.5204, lng: 74.3587, address: 'Second pickup' },
+          dropoffLocation: { lat: 31.5304, lng: 74.3687, address: 'Second dropoff' },
+          distance: 7,
+          vehicleType: 'Car Mini',
+          fare: 1
+        }
+      });
+      expect(duplicateResponse.status()).toBe(409);
+      await expect(duplicateResponse.json()).resolves.toMatchObject({
+        code: 'ACTIVE_RIDE_EXISTS',
+        activeRideId: String(firstRide._id),
+        activeRideStatus: 'requested'
+      });
+
+      await models.User.updateOne(
+        { _id: matchingDriver._id },
+        {
+          $set: {
+            paidUntilDate: new Date(Date.now() + 24 * 60 * 60 * 1000),
+            accountStatus: 'active',
+            isOnline: true,
+            lastOnlineHeartbeat: new Date()
+          }
+        }
+      );
+      await models.Ride.updateOne(
+        { _id: firstRide._id },
+        { $push: { counterOffers: { driver: matchingDriver._id, price: firstRide.fare, type: 'accept' } } }
+      );
+      const acceptedExistingRide = await request.patch(`/api/rides/${firstRide._id}/accept-driver`, {
+        headers: customerHeaders,
+        data: { driverId: String(matchingDriver._id) }
+      });
+      expect(acceptedExistingRide.status()).toBe(200);
+      expect((await models.Ride.findById(firstRide._id).select('status driver').lean())).toMatchObject({
+        status: 'accepted',
+        driver: matchingDriver._id
+      });
+    } finally {
+      await request.dispose();
+    }
+  });
+
   test('persists settings, creates a ride, and refreshes only matching browser clients', async ({ browser, playwright }) => {
     const customerToken = token(customer);
     const adminToken = token({ _id: new mongoose.Types.ObjectId(), role: 'admin', isAdmin: true, name: 'Admin' });
@@ -928,9 +993,13 @@ test.describe('live Mongo fare refresh', () => {
         const expectedFareLabel = `Rs ${expectedFare.toLocaleString()}`;
         await expect(customerPage.locator('#fare-suggested-val')).toHaveText(expectedFareLabel);
         await expect(customerPage.locator('#book-btn')).toBeVisible();
+        await expect.poll(() => customerPage.evaluate(() => ({
+          recovering: !!customerRideRecoveryInFlight,
+          activeRide: !!activeRide
+        }))).toEqual({ recovering: false, activeRide: false });
 
         await customerPage.locator('#book-btn').evaluate(button => button.click());
-        const availableRides = await driverPage.evaluate(async () => {
+        const readAvailableRides = () => driverPage.evaluate(async () => {
           const response = await fetch('/api/rides/available', {
             headers: {
               authorization: `Bearer ${localStorage.getItem('rh_token')}`,
@@ -939,6 +1008,8 @@ test.describe('live Mongo fare refresh', () => {
           });
           return response.json();
         });
+        await expect.poll(readAvailableRides).toHaveLength(1);
+        const availableRides = await readAvailableRides();
         expect(availableRides).toHaveLength(1);
         expect(availableRides[0]).toMatchObject({
           vehicleType: category,
@@ -968,6 +1039,11 @@ test.describe('live Mongo fare refresh', () => {
         await Promise.all(unrelatedPages.map(page =>
           expect(page.locator('#ride-request')).toBeHidden()
         ));
+        const cancelled = await request.patch(`/api/rides/${ride._id}/cancel`, {
+          headers: authHeaders(customer)
+        });
+        expect(cancelled.status()).toBe(200);
+        await expect(customerPage.locator('#active-ride')).toBeHidden();
       }
     } finally {
       await Promise.all([

@@ -61,3 +61,4 @@
 - [Long Range commission percentage](long-range-commission-percentage.md) — configured Long Range commission values are percentages of the final agreed fare; minimum wallet floors remain separate.
 - [Active ride contact rehydration](active-ride-contact-rehydration.md) — render normalized opposing-party contact actions for every restored active ride status, not only the initial acceptance event.
 - [Account deletion resurrection protection](account-deletion-resurrection-protection.md) — permanent account deletion must remove legacy sources and persist tombstones that startup migration and preview seeding honor.
+- [Active booking test isolation](active-booking-test-isolation.md) — sequential Customer ride scenarios must end the prior active ride and wait for recovery to settle before booking again.

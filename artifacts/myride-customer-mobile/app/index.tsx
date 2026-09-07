@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
+  AppState,
   BackHandler,
   Linking,
   Platform,
@@ -81,6 +82,23 @@ export default function CustomerWebViewScreen() {
     });
     return () => subscription.remove();
   }, [canGoBack]);
+
+  useEffect(() => {
+    if (Platform.OS === 'web') return;
+    const subscription = AppState.addEventListener('change', state => {
+      if (state !== 'active') return;
+      // Native app suspension can resume a WebView without a reliable browser
+      // visibility/focus event. Ask the Customer page to re-read its
+      // authoritative active ride snapshot when the app becomes interactive.
+      webViewRef.current?.injectJavaScript(`
+        if (typeof restoreCustomerActiveRide === 'function') {
+          restoreCustomerActiveRide({ reason: 'resume' });
+        }
+        true;
+      `);
+    });
+    return () => subscription.remove();
+  }, []);
 
   const retry = () => {
     setLoadError(null);

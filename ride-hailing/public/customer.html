@@ -205,6 +205,7 @@ body{font-family:'Segoe UI',sans-serif;background:#0a0a0f;color:#fff;height:100d
 
 /* ── Active Ride Panel ── */
 #active-ride{display:none;position:fixed;bottom:0;left:0;right:0;z-index:50;background:#13131a;border-top:2px solid #f5c518;padding:.85rem 1rem;max-height:80vh;overflow-y:auto}
+.ride-state-recovery{display:none;position:absolute;left:50%;top:50%;z-index:35;transform:translate(-50%,-50%);width:min(320px,calc(100% - 2rem));padding:1rem 1.1rem;border:1px solid rgba(16,35,55,.12);border-radius:18px;background:rgba(255,255,255,.94);box-shadow:0 12px 32px rgba(16,35,55,.16);color:#102337;text-align:center;font-size:.82rem;font-weight:800}
 .ride-status-badge{display:inline-flex;align-items:center;gap:.4rem;background:#1a2a0a;border:1px solid #4caf50;border-radius:100px;padding:.22rem .65rem;font-size:.73rem;color:#4caf50;margin-bottom:.5rem}
 .ride-status-dot{width:6px;height:6px;background:#4caf50;border-radius:50%;animation:pulse 1.5s infinite}
 @keyframes pulse{0%,100%{opacity:1}50%{opacity:.3}}
@@ -723,6 +724,9 @@ body{font-family:'DM Sans','Segoe UI',sans-serif;background:var(--lr-paper);colo
   <div id="map">
     <div id="customer-center-pin" class="customer-center-pin" aria-hidden="true"></div>
   </div>
+  <div id="ride-state-recovery" class="ride-state-recovery" role="status" aria-live="polite">
+    <span aria-hidden="true">↻</span> Restoring your active ride…
+  </div>
 
   <section id="location-sheet" class="location-sheet" aria-label="Location suggestions" aria-hidden="true">
     <div id="location-sheet-grabber" class="sheet-grabber" aria-label="Drag suggestions"></div>
@@ -1172,6 +1176,11 @@ let locationWatchId = null;
 let driverOffers = [];
 let activeLiveFare = 0;
 let activeDriverInfo = null;
+let customerRideRoomListenersBound = false;
+let customerRideRecoveryInFlight = null;
+let customerRideRecoveryListenersInstalled = false;
+let customerRideRecoveryLastAt = 0;
+const CUSTOMER_ACTIVE_RIDE_STATUSES = new Set(['requested', 'accepted', 'arrived', 'in-progress']);
 let locTimer = {};                          // keyed by type string e.g. 'pickup','stop-0'
 let locSearchSeq = {};
 let locSearchAbort = {};
@@ -1402,7 +1411,11 @@ async function apiCall(path, method = 'GET', body = null) {
       alert('Your account was signed in on another device. You have been signed out here.');
       throw new Error('Logged in on another device');
     }
-    throw new Error(data.error || 'Request failed');
+    const error = new Error(data.error || 'Request failed');
+    error.status = r.status;
+    error.code = data.code || '';
+    error.activeRideId = data.activeRideId || null;
+    throw error;
   }
   return data;
 }
@@ -1709,6 +1722,8 @@ function doLogout() {
   localStorage.clear();
   sessionStorage.clear();
   token = null; sessionToken = null; user = null; activeRide = null;
+  customerRideRoomListenersBound = false;
+  customerRideRecoveryInFlight = null;
 
   // 2. Disconnect live connections
   if (socket) { socket.disconnect(); socket = null; }
@@ -2091,11 +2106,94 @@ async function initCustomerReadiness() {
 }
 
 // ── Boot ──────────────────────────────────────────────────────────────────
+function setCustomerRideRecoveryState(recovering) {
+  const recovery = document.getElementById('ride-state-recovery');
+  const bookingPanel = document.getElementById('bottom-panel');
+  if (recovery) {
+    recovery.style.display = recovering ? 'block' : 'none';
+    recovery.setAttribute('aria-hidden', String(!recovering));
+  }
+  if (bookingPanel && recovering && !activeRide) bookingPanel.style.display = 'none';
+  if (bookingPanel && !recovering && !activeRide) bookingPanel.style.display = 'block';
+}
+
+function renderRestoredCustomerRide(ride) {
+  if (!ride || !CUSTOMER_ACTIVE_RIDE_STATUSES.has(ride.status)) return false;
+  activeRide = ride;
+  activeLiveFare = Number(ride.fare || 0);
+  activeDriverInfo = ride.driver && typeof ride.driver === 'object' ? ride.driver : null;
+  driverOffers = customerOffersFromRide(ride);
+  pendingVerificationPin = ride.pickupReachedAt ? (ride.verificationPin || null) : null;
+
+  if (ride.status === 'requested') {
+    showWaitingPanel(ride);
+    renderOffers(driverOffers);
+  } else {
+    showMatchedPanel(activeDriverInfo || {}, ride.fare, ride.status);
+    if (ride.pickupReachedAt) revealRidePinIfAtPickup();
+    const location = ride.driverLocation;
+    if (location?.lat != null && location?.lng != null) {
+      lastDriverLocation = { lat: Number(location.lat), lng: Number(location.lng) };
+      updateLiveTripTracking(lastDriverLocation, { recenter: false });
+    }
+  }
+  connectToRideRoom(ride._id);
+  return true;
+}
+
+async function restoreCustomerActiveRide({ reason = 'resume' } = {}) {
+  if (!token || !user || user.role !== 'customer') return null;
+  const now = Date.now();
+  if (customerRideRecoveryInFlight) return customerRideRecoveryInFlight;
+  if (reason !== 'launch' && now - customerRideRecoveryLastAt < 1200) return null;
+  customerRideRecoveryLastAt = now;
+  if (!activeRide) setCustomerRideRecoveryState(true);
+  if (socket && !socket.connected) socket.connect();
+
+  const recovery = (async () => {
+    try {
+      const ride = await apiCall('/api/rides/active');
+      if (ride && renderRestoredCustomerRide(ride)) {
+        setCustomerRideRecoveryState(false);
+        return ride;
+      }
+      if (activeRide) endRide();
+      setCustomerRideRecoveryState(false);
+      return null;
+    } catch (error) {
+      // A transient resume failure must not destroy a ride already visible
+      // locally. On a cold launch, unlock booking only after the failed read
+      // has been made explicit rather than leaving the app permanently blank.
+      console.warn('Customer active ride recovery failed:', error.message);
+      setCustomerRideRecoveryState(false);
+      return activeRide;
+    }
+  })();
+  customerRideRecoveryInFlight = recovery.finally(() => {
+    customerRideRecoveryInFlight = null;
+  });
+  return customerRideRecoveryInFlight;
+}
+
+function installCustomerRideRecoveryListeners() {
+  if (customerRideRecoveryListenersInstalled) return;
+  customerRideRecoveryListenersInstalled = true;
+  const recover = () => {
+    if (document.visibilityState === 'hidden') return;
+    void restoreCustomerActiveRide({ reason: 'resume' });
+  };
+  document.addEventListener('visibilitychange', recover);
+  window.addEventListener('pageshow', recover);
+  window.addEventListener('focus', recover);
+}
+
 function bootApp() {
   document.getElementById('auth-screen').style.display = 'none';
   document.getElementById('app').style.display = 'flex';
   document.getElementById('avatar-init').textContent = (user.name || '?')[0].toUpperCase();
   document.getElementById('header-name').textContent = user.name || user.phone || user.email || 'User';
+  installCustomerRideRecoveryListeners();
+  setCustomerRideRecoveryState(true);
   connectSocket(); loadRideHistory();
   loadCustomerPerKmRates();
   loadEmergencyContacts();   // pre-cache for SOS
@@ -2105,6 +2203,7 @@ function bootApp() {
   // initMap() materializes the state-owned marker afterward.
   startCustomerGpsTracking();
   void initCustomerReadiness();
+  void restoreCustomerActiveRide({ reason: 'launch' });
   // Double rAF ensures the browser has fully painted the flex layout before
   // Mapbox measures #map — fixes the 0×0 container race condition.
   requestAnimationFrame(() => requestAnimationFrame(() => {
@@ -3912,6 +4011,8 @@ function removeStop(idx) {
 
 // ── Book Ride ─────────────────────────────────────────────────────────────
 async function bookRide() {
+  if (customerRideRecoveryInFlight) return showToast('Checking for an existing active ride…', 'info');
+  if (activeRide) return showToast('You already have an active ride. Reopen it before booking another ride.', 'info');
   if (!pickup)       return showToast('Set pickup location first', 'error');
   if (!dropoffs[0])  return showToast('Set at least one dropoff location', 'error');
   if (!currentFareQuote || !offeredFare) return showToast('Wait for the Admin-configured fare calculation', 'error');
@@ -3958,7 +4059,10 @@ async function bookRide() {
     connectToRideRoom(ride._id);
     const stopStr = activeDropoffsList.length > 1 ? ` · ${activeDropoffsList.length} stops` : '';
     showToast(`Offer broadcast${stopStr}! Waiting for drivers…`, 'success');
-  } catch (e) { showToast(e.message, 'error'); }
+  } catch (e) {
+    if (e.code === 'ACTIVE_RIDE_EXISTS') void restoreCustomerActiveRide({ reason: 'resume' });
+    showToast(e.message, 'error');
+  }
 }
 
 // ── Waiting Panel (post-booking, before driver selection) ──────────────────
@@ -3996,7 +4100,7 @@ function normalizeCustomerContactPhone(phone) {
   return digits ? { tel: `+92${digits}`, whatsapp: `92${digits}` } : null;
 }
 
-function showMatchedPanel(driver, agreedFare, rideStatus = activeRide?.status || 'accepted') {
+function showMatchedPanel(driver = {}, agreedFare, rideStatus = activeRide?.status || 'accepted') {
   document.getElementById('active-ride').style.display = 'block';
   document.getElementById('bottom-panel').style.display = 'none';
   setupCustomerActiveRideSheet();
@@ -4432,6 +4536,9 @@ function connectToRideRoom(rideId) {
   // authoritative ride snapshot immediately so an offer emitted before the
   // room was joined still appears in the Customer UI.
   void syncCustomerRideState(rideId);
+
+  if (customerRideRoomListenersBound) return;
+  customerRideRoomListenersBound = true;
 
   // Driver offers / counter-offers arriving in real time
   socket.on('ride:offers', (offers) => {
