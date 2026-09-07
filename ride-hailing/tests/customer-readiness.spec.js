@@ -21,6 +21,67 @@ async function prepareReadiness(page) {
 }
 
 test.describe('Customer booking-tool readiness', () => {
+  test('uses distinct and accurate artwork for the core vehicle categories', async ({ page }) => {
+    await page.goto('/customer');
+
+    const initialIcons = await page.evaluate(() => {
+      const readIcon = category => {
+        const icon = document.querySelector(`.vehicle-btn[data-type="${category}"] .v-icon`);
+        return {
+          html: icon?.innerHTML || '',
+          text: icon?.textContent?.trim() || ''
+        };
+      };
+      return {
+        bike: readIcon('Bike'),
+        miniAc: readIcon('Car Mini AC'),
+        miniNonAc: readIcon('Car Mini Non-AC'),
+        oldCars: readIcon('Old Cars'),
+        caryDibba: readIcon('Cary Dibba'),
+        electricScooty: readIcon('Electric Scooty')
+      };
+    });
+
+    expect(initialIcons.bike.html).toContain('viewBox="0 0 72 44"');
+    expect(initialIcons.bike.html).toContain('#f59e0b');
+    expect(initialIcons.miniAc.text).toBe('🚙');
+    expect(initialIcons.miniNonAc.html).toContain('#d95c55');
+    expect(initialIcons.oldCars.html).toContain('#a77b4d');
+    expect(initialIcons.caryDibba.html).toContain('#3a9b83');
+    expect(initialIcons.electricScooty.text).toBe('🛵');
+
+    const markerIcons = await page.evaluate(() => ({
+      bike: customerVehicleIconMarkup('Bike', { marker: true }),
+      nonAc: customerVehicleIconMarkup('Car Mini Non-AC', { marker: true }),
+      oldCars: customerVehicleIconMarkup('Old Cars', { marker: true }),
+      caryDibba: customerVehicleIconMarkup('Cary Dibba', { marker: true }),
+      electricScooty: customerVehicleIconMarkup('Electric Scooty', { marker: true })
+    }));
+    expect(markerIcons.bike).toContain('vehicle-icon--marker');
+    expect(markerIcons.nonAc).toContain('vehicle-icon--marker');
+    expect(markerIcons.oldCars).toContain('vehicle-icon--marker');
+    expect(markerIcons.caryDibba).toContain('vehicle-icon--marker');
+    expect(markerIcons.electricScooty).toContain('vehicle-icon--marker');
+
+    await page.evaluate(() => {
+      renderCustomerVehicleCategories([
+        { category: 'Bike', active: true },
+        { category: 'Car Mini AC', active: true },
+        { category: 'Car Mini Non-AC', active: true },
+        { category: 'Old Cars', active: true },
+        { category: 'Cary Dibba', active: true },
+        { category: 'Electric Scooty', active: true }
+      ]);
+    });
+
+    await expect(page.locator('.vehicle-btn[data-type="Bike"] .vehicle-icon--svg')).toHaveCount(1);
+    await expect(page.locator('.vehicle-btn[data-type="Car Mini Non-AC"] .vehicle-icon--svg')).toHaveCount(1);
+    await expect(page.locator('.vehicle-btn[data-type="Old Cars"] .vehicle-icon--svg')).toHaveCount(1);
+    await expect(page.locator('.vehicle-btn[data-type="Cary Dibba"] .vehicle-icon--svg')).toHaveCount(1);
+    await expect(page.locator('.vehicle-btn[data-type="Car Mini AC"] .vehicle-icon--emoji')).toHaveText('🚙');
+    await expect(page.locator('.vehicle-btn[data-type="Electric Scooty"] .vehicle-icon--emoji')).toHaveText('🛵');
+  });
+
   test('Continue dismisses the modal after permission prompts hang', async ({ page }) => {
     await page.addInitScript(() => {
       window.__CUSTOMER_PERMISSION_TIMEOUT_MS = 40;
