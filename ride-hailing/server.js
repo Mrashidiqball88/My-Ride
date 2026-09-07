@@ -326,6 +326,27 @@ function deletePrivateIdentityDocuments(filenames = []) {
     try { fs.unlinkSync(path.join(CUSTOMER_ID_UPLOADS_DIR, path.basename(filename))); } catch {}
   }
 }
+
+function deleteStoredAccountFiles(account = {}) {
+  deletePrivateIdentityDocuments([
+    account.customerIdFront,
+    account.customerIdBack,
+    account.studentIdImage
+  ]);
+  for (const [fieldName, value] of Object.entries({
+    profilePhoto: account.profilePhoto,
+    cnicFront: account.cnicFront,
+    cnicBack: account.cnicBack,
+    licensePhoto: account.licensePhoto,
+    vehicleRegPhoto: account.vehicleRegPhoto
+  })) {
+    const storedPath = resolveStoredDriverDocument(value, fieldName);
+    if (storedPath) {
+      try { fs.unlinkSync(storedPath); } catch {}
+    }
+  }
+}
+
 function loadPage(file) {
   const full = path.resolve(PUBLIC_DIR, file);
   try {
@@ -2217,6 +2238,19 @@ const studentRideResponseLogSchema = new mongoose.Schema({
 studentRideResponseLogSchema.index({ ride: 1, driver: 1 }, { unique: true });
 studentRideResponseLogSchema.index({ occurredAt: -1 });
 const StudentRideResponseLog = mongoose.model('StudentRideResponseLog', studentRideResponseLogSchema);
+const accountDeletionTombstoneSchema = new mongoose.Schema({
+  accountId: { type: mongoose.Schema.Types.ObjectId, required: true, unique: true },
+  role: { type: String, enum: ['customer', 'driver'], required: true },
+  email: { type: String, default: null, lowercase: true, trim: true },
+  phone: { type: String, default: '' },
+  seedKey: { type: String, default: undefined },
+  deletedAt: { type: Date, default: Date.now }
+}, { timestamps: true });
+accountDeletionTombstoneSchema.index(
+  { seedKey: 1 },
+  { unique: true, sparse: true, name: 'account_deletion_seed_key_unique' }
+);
+const AccountDeletionTombstone = mongoose.model('AccountDeletionTombstone', accountDeletionTombstoneSchema);
 const nativeSettingsFindOne = Settings.findOne;
 
 // Compatibility facade for the pre-partition server surface. It deliberately
@@ -2378,15 +2412,75 @@ const User = {
   }
 };
 
+function accountSeedKey(account = {}) {
+  const role = account.role;
+  if (!['customer', 'driver'].includes(role)) return null;
+  const email = String(account.email || '').trim().toLowerCase();
+  const phoneValues = new Set(phoneLookupValues(account.phone));
+  const definitions = [
+    ...Object.entries(DEMO_ACCOUNTS).map(([definitionRole, value]) => ({
+      key: `demo:${definitionRole}`,
+      role: definitionRole,
+      email: value.email,
+      phone: value.phone
+    })),
+    ...Object.entries(TEST_ACCOUNTS).map(([definitionRole, value]) => ({
+      key: `test:${definitionRole}`,
+      role: definitionRole,
+      email: value.email,
+      phone: value.phone
+    }))
+  ];
+  const match = definitions.find(definition =>
+    definition.role === role
+    && (
+      (email && email === String(definition.email || '').trim().toLowerCase())
+      || phoneValues.has(normalizePhoneNumber(definition.phone))
+    )
+  );
+  return match?.key || null;
+}
+
+function buildAccountDeletionTombstoneUpdate(account, seedKey = accountSeedKey(account)) {
+  const tombstoneSet = {
+    role: account.role,
+    email: account.email || null,
+    phone: account.phone || '',
+    deletedAt: new Date()
+  };
+  if (seedKey) tombstoneSet.seedKey = seedKey;
+  return {
+    $set: tombstoneSet,
+    ...(seedKey ? {} : { $unset: { seedKey: 1 } })
+  };
+}
+
+async function accountDeletionTombstoneFor(account) {
+  if (!account?._id) return null;
+  const seedKey = accountSeedKey(account);
+  const filters = [{ accountId: account._id }];
+  if (seedKey) filters.push({ seedKey });
+  return AccountDeletionTombstone.findOne({ $or: filters }).lean();
+}
+
 // Copy legacy role records into their isolated collections without changing
-// their ObjectIds. The legacy collection is intentionally never used for
-// authentication after this migration and is not deleted automatically.
+// their ObjectIds. Deleted records are removed from the legacy source and
+// never copied back into the active collections.
 async function migrateLegacyUserData() {
   const legacyUsers = await LegacyUser.find().lean();
   let migrated = 0;
   for (const legacy of legacyUsers) {
     if (!['customer', 'driver'].includes(legacy.role)) continue;
     const target = legacy.role === 'driver' ? Driver : Customer;
+    const tombstone = await accountDeletionTombstoneFor(legacy);
+    if (tombstone) {
+      await Promise.all([
+        LegacyUser.deleteOne({ _id: legacy._id }),
+        Customer.deleteOne({ _id: legacy._id }),
+        Driver.deleteOne({ _id: legacy._id })
+      ]);
+      continue;
+    }
     const { _id, isAdmin, createdAt, updatedAt, ...safeLegacy } = legacy;
     const insertValue = {
       ...safeLegacy,
@@ -7498,36 +7592,183 @@ async function verifyAdminFlushPassword(password) {
   return verifySuperAdminPassword(password, security);
 }
 
-async function flushRoleData(role) {
-  const Model = role === 'driver' ? Driver : Customer;
-  const users = await Model.find({}).select('_id').lean();
-  const ids = users.map(user => user._id);
-  const userResult = await Model.deleteMany({});
-  const related = await Promise.all([
-    ...(role === 'driver'
-      ? [
-          Wallet.deleteMany({ user: { $in: ids } }),
-          Payment.deleteMany({ driver: { $in: ids } }),
-          PushSub.deleteMany({ user: { $in: ids } })
-        ]
-      : []),
-    Ticket.deleteMany({ user: { $in: ids }, role }),
-    SOS.deleteMany({ user: { $in: ids }, userModel: role === 'driver' ? 'Driver' : 'Customer' })
+async function findAccountForPurge(accountId) {
+  const [customer, driver, legacy] = await Promise.all([
+    Customer.findById(accountId)
+      .select('name role email phone profilePhoto cnicFront cnicBack licensePhoto vehicleRegPhoto +customerIdFront +customerIdBack +studentIdImage')
+      .lean(),
+    Driver.findById(accountId)
+      .select('name role email phone profilePhoto cnicFront cnicBack licensePhoto vehicleRegPhoto +customerIdFront +customerIdBack +studentIdImage')
+      .lean(),
+    LegacyUser.findById(accountId)
+      .select('name role email phone profilePhoto cnicFront cnicBack licensePhoto vehicleRegPhoto +customerIdFront +customerIdBack +studentIdImage')
+      .lean()
   ]);
-  const offset = role === 'driver' ? 3 : 0;
+  return {
+    target: driver || customer || legacy,
+    records: [customer, driver, legacy].filter(Boolean)
+  };
+}
+
+function clearAccountOtpState(account = {}) {
+  const role = String(account.role || '');
+  const phones = new Set(phoneLookupValues(account.phone));
+  if (!role || !phones.size) return;
+  for (const key of PHONE_OTP_CHALLENGES.keys()) {
+    const [keyRole, _purpose, ...phoneParts] = key.split(':');
+    if (keyRole === role && phones.has(phoneParts.join(':'))) {
+      PHONE_OTP_CHALLENGES.delete(key);
+    }
+  }
+}
+
+async function purgeUserAccount(accountId) {
+  const { target, records } = await findAccountForPurge(accountId);
+  if (!target) return null;
+  const role = target.role;
+  if (!['customer', 'driver'].includes(role)) {
+    throw new Error('Only Customer and Driver accounts can be deleted');
+  }
+  const seedKey = accountSeedKey(target);
+  const result = {
+    users: 0,
+    legacyUsers: 0,
+    wallets: 0,
+    payments: 0,
+    pushSubscriptions: 0,
+    supportTickets: 0,
+    sosAlerts: 0,
+    rides: 0,
+    studentRideResponses: 0
+  };
+
+  await runFinancialTransaction(async session => {
+    const userId = target._id;
+    const identityFilters = [];
+    const email = String(target.email || '').trim().toLowerCase();
+    const phoneValues = phoneLookupValues(target.phone);
+    if (email) identityFilters.push({ email });
+    if (phoneValues.length) identityFilters.push({ phone: { $in: phoneValues } });
+    if (identityFilters.length) {
+      const duplicateFilter = {
+        _id: { $ne: userId },
+        role,
+        $or: identityFilters
+      };
+      const legacyDuplicates = await LegacyUser.find(duplicateFilter).session(session).lean();
+      for (const duplicate of legacyDuplicates) {
+        const duplicateSeedKey = accountSeedKey(duplicate);
+        if (!duplicateSeedKey || duplicateSeedKey !== seedKey) {
+          await AccountDeletionTombstone.updateOne(
+            { accountId: duplicate._id },
+            buildAccountDeletionTombstoneUpdate(duplicate, duplicateSeedKey),
+            { upsert: true, session }
+          );
+        }
+      }
+      const duplicateResult = await LegacyUser.deleteMany(duplicateFilter, { session });
+      result.legacyUsers += duplicateResult.deletedCount || 0;
+    }
+    const customerResult = await Customer.deleteOne({ _id: userId }, { session });
+    const driverResult = await Driver.deleteOne({ _id: userId }, { session });
+    const legacyResult = await LegacyUser.deleteOne({ _id: userId }, { session });
+    result.users = (customerResult.deletedCount || 0) + (driverResult.deletedCount || 0);
+    result.legacyUsers = legacyResult.deletedCount || 0;
+
+    const walletResult = await Wallet.deleteMany({ user: userId }, { session });
+    const paymentResult = await Payment.deleteMany({ driver: userId }, { session });
+    const pushResult = await PushSub.deleteMany({ user: userId }, { session });
+    const ticketResult = await Ticket.deleteMany({ user: userId }, { session });
+    const sosResult = await SOS.deleteMany({ user: userId }, { session });
+    const rideResult = await Ride.deleteMany({
+      $or: [{ passenger: userId }, { driver: userId }]
+    }, { session });
+    const studentResponseResult = await StudentRideResponseLog.deleteMany({ driver: userId }, { session });
+    result.wallets = walletResult.deletedCount || 0;
+    result.payments = paymentResult.deletedCount || 0;
+    result.pushSubscriptions = pushResult.deletedCount || 0;
+    result.supportTickets = ticketResult.deletedCount || 0;
+    result.sosAlerts = sosResult.deletedCount || 0;
+    result.rides = rideResult.deletedCount || 0;
+    result.studentRideResponses = studentResponseResult.deletedCount || 0;
+
+    await AccountDeletionTombstone.updateOne(
+      { accountId: userId },
+      buildAccountDeletionTombstoneUpdate(target, seedKey),
+      { upsert: true, session }
+    );
+  });
+
+  io.to(`user:${accountId}`).emit('account:deleted', {
+    reason: 'Your account has been permanently deleted.'
+  });
+  io.in(`user:${accountId}`).disconnectSockets(true);
+  clearAccountOtpState(target);
+  if (role === 'driver') await removeDriverPresence(accountId).catch(() => false);
+  records.forEach(deleteStoredAccountFiles);
+  return { name: target.name, role, counts: result };
+}
+
+async function flushRoleData(role) {
+  const roleFilter = { role };
+  const [customerUsers, driverUsers, legacyUsers] = await Promise.all([
+    Customer.find(roleFilter).lean(),
+    Driver.find(roleFilter).lean(),
+    LegacyUser.find(roleFilter).lean()
+  ]);
+  const allUsers = [...customerUsers, ...driverUsers, ...legacyUsers];
+  const ids = [...new Map(allUsers.map(user => [String(user._id), user._id])).values()];
+  const seedRecords = allUsers
+    .map(user => ({ user, seedKey: accountSeedKey(user) }))
+    .filter(entry => entry.seedKey);
+  for (const { user, seedKey } of seedRecords) {
+    await AccountDeletionTombstone.updateOne(
+      { accountId: user._id },
+      {
+        $set: {
+          role,
+          email: user.email || null,
+          phone: user.phone || '',
+          seedKey,
+          deletedAt: new Date()
+        }
+      },
+      { upsert: true }
+    );
+  }
+
+  const userResult = await Customer.deleteMany(roleFilter);
+  const driverResult = await Driver.deleteMany(roleFilter);
+  const legacyResult = await LegacyUser.deleteMany(roleFilter);
+  const walletResult = await Wallet.deleteMany({ user: { $in: ids } });
+  const paymentResult = await Payment.deleteMany({ driver: { $in: ids } });
+  const pushResult = await PushSub.deleteMany({ user: { $in: ids } });
+  const ticketResult = await Ticket.deleteMany({ user: { $in: ids } });
+  const sosResult = await SOS.deleteMany({ user: { $in: ids } });
+  const studentResponseResult = await StudentRideResponseLog.deleteMany({ driver: { $in: ids } });
+
   if (role === 'driver') {
     await Promise.all(ids.map(id => {
+      io.in(`user:${id}`).emit('account:deleted', { reason: 'Your account has been permanently deleted.' });
       io.in(`user:${id}`).disconnectSockets(true);
       return removeDriverPresence(id).catch(() => undefined);
     }));
+  } else {
+    ids.forEach(id => {
+      io.in(`user:${id}`).emit('account:deleted', { reason: 'Your account has been permanently deleted.' });
+      io.in(`user:${id}`).disconnectSockets(true);
+    });
   }
+  allUsers.forEach(deleteStoredAccountFiles);
   return {
-    users: userResult.deletedCount || 0,
-    wallets: related[0]?.deletedCount || 0,
-    payments: related[1]?.deletedCount || 0,
-    pushSubscriptions: related[2]?.deletedCount || 0,
-    supportTickets: related[offset]?.deletedCount || 0,
-    sosAlerts: related[offset + 1]?.deletedCount || 0
+    users: (userResult.deletedCount || 0) + (driverResult.deletedCount || 0),
+    legacyUsers: legacyResult.deletedCount || 0,
+    wallets: walletResult.deletedCount || 0,
+    payments: paymentResult.deletedCount || 0,
+    pushSubscriptions: pushResult.deletedCount || 0,
+    supportTickets: ticketResult.deletedCount || 0,
+    sosAlerts: sosResult.deletedCount || 0,
+    studentRideResponses: studentResponseResult.deletedCount || 0
   };
 }
 
@@ -8219,12 +8460,17 @@ app.get('/api/admin/account-deletion-requests', adminJwt, requireSuperAdmin, asy
 // DELETE /api/admin/users/:id — permanently purge a user account
 app.delete('/api/admin/users/:id', adminJwt, requireSuperAdmin, async (req, res) => {
   try {
-    const user = await User.findById(req.params.id).select('name role');
-    if (!user) return res.status(404).json({ error: 'User not found' });
-    // Disconnect live socket session
-    io.to(`user:${req.params.id}`).emit('account:deleted', { reason: 'Your account has been permanently deleted.' });
-    await User.deleteOne({ _id: req.params.id });
-    res.json({ success: true, name: user.name });
+    if (!mongoose.isValidObjectId(req.params.id)) {
+      return res.status(400).json({ error: 'Invalid user ID' });
+    }
+    const purged = await purgeUserAccount(req.params.id);
+    if (!purged) return res.status(404).json({ error: 'User not found' });
+    res.json({
+      success: true,
+      name: purged.name,
+      role: purged.role,
+      counts: purged.counts
+    });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
@@ -10364,90 +10610,94 @@ async function seedDemoAccounts() {
   const driverPassword = await bcrypt.hash(DEMO_ACCOUNTS.driver.password, 12);
   const subAdminPassword = await bcrypt.hash('DemoOps-2026!', 12);
 
-  const customer = await User.findOneAndUpdate(
-    { phone: DEMO_ACCOUNTS.customer.phone },
-    {
-      $set: {
-        name: DEMO_ACCOUNTS.customer.name,
-        email: DEMO_ACCOUNTS.customer.email,
-        password: customerPassword,
-        role: 'customer',
-        accountStatus: 'active',
-        nationalIdHash: crypto.createHmac('sha256', JWT_SECRET).update('demo-customer-national-id').digest('hex'),
-        nationalIdLast4: '0001',
-        identityVerificationStatus: 'approved',
-        identityVerifiedAt: now
-      }
-    },
-    { upsert: true, new: true, setDefaultsOnInsert: true }
-  );
-  const driver = await User.findOneAndUpdate(
-    { phone: DEMO_ACCOUNTS.driver.phone },
-    {
-      $set: {
-        name: DEMO_ACCOUNTS.driver.name,
-        email: DEMO_ACCOUNTS.driver.email,
-        password: driverPassword,
-        role: 'driver',
-        accountStatus: 'active',
-        nationalIdHash: crypto.createHmac('sha256', JWT_SECRET).update('demo-driver-national-id').digest('hex'),
-        nationalIdLast4: '0002',
-        vehicleType: 'Car Mini Non-AC',
-        vehicleModel: 'Toyota Corolla',
-        vehiclePlate: 'DEMO-2026',
-        isOnline: false,
-        lastDailyFeePaidAt: null,
-        paidUntilDate: null,
-        isFreeTrial: false
-      }
-    },
-    { upsert: true, new: true, setDefaultsOnInsert: true }
-  );
+  const customerDeleted = await AccountDeletionTombstone.exists({ seedKey: 'demo:customer' });
+  const driverDeleted = await AccountDeletionTombstone.exists({ seedKey: 'demo:driver' });
+  const customer = customerDeleted ? null : await User.findOneAndUpdate(
+      { phone: DEMO_ACCOUNTS.customer.phone },
+      {
+        $set: {
+          name: DEMO_ACCOUNTS.customer.name,
+          email: DEMO_ACCOUNTS.customer.email,
+          password: customerPassword,
+          role: 'customer',
+          accountStatus: 'active',
+          nationalIdHash: crypto.createHmac('sha256', JWT_SECRET).update('demo-customer-national-id').digest('hex'),
+          nationalIdLast4: '0001',
+          identityVerificationStatus: 'approved',
+          identityVerifiedAt: now
+        }
+      },
+      { upsert: true, new: true, setDefaultsOnInsert: true }
+    );
+  const driver = driverDeleted ? null : await User.findOneAndUpdate(
+      { phone: DEMO_ACCOUNTS.driver.phone },
+      {
+        $set: {
+          name: DEMO_ACCOUNTS.driver.name,
+          email: DEMO_ACCOUNTS.driver.email,
+          password: driverPassword,
+          role: 'driver',
+          accountStatus: 'active',
+          nationalIdHash: crypto.createHmac('sha256', JWT_SECRET).update('demo-driver-national-id').digest('hex'),
+          nationalIdLast4: '0002',
+          vehicleType: 'Car Mini Non-AC',
+          vehicleModel: 'Toyota Corolla',
+          vehiclePlate: 'DEMO-2026',
+          isOnline: false,
+          lastDailyFeePaidAt: null,
+          paidUntilDate: null,
+          isFreeTrial: false
+        }
+      },
+      { upsert: true, new: true, setDefaultsOnInsert: true }
+    );
 
-  await Wallet.findOneAndUpdate(
-    { user: driver._id },
-    {
-      // Demo state must never advertise a paid pass without the matching
-      // negative Daily Fee ledger entry. The first online activation will use
-      // the same atomic debit path as every real Driver.
-      $set: {
-        balance: 5000,
-        realCashWallet: 5000,
-        realCashAvailable: 5000,
-        bonusAvailable: 0,
-        fee_paid_at: null,
-        transactions: []
-      }
-    },
-    { upsert: true, new: true }
-  );
-  await Payment.findOneAndUpdate(
-    { trxId: 'DEMO-APPROVED-2026' },
-    {
-      $set: {
-        driver: driver._id,
-        amount: 500,
-        vehicleCategory: 'Car Mini Non-AC',
-        paymentType: 'jazzcash',
-        status: 'approved',
-        proofScreenshot: 'data:image/png;base64,DEMO_PROOF',
-        submittedDate: todayUTC(),
-        approvedBy: 'demo-seed',
-        approvedAt: now,
-        auditLog: [{
-          action: 'approved',
-          actorId: 'demo-seed',
-          actorRole: 'super-admin',
-          reason: 'Preview demo account seed',
-          balanceBefore: 4500,
-          balanceAfter: 5000,
-          passValidUntil: new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000),
-          createdAt: now
-        }]
-      }
-    },
-    { upsert: true, new: true, setDefaultsOnInsert: true }
-  );
+  if (driver) {
+    await Wallet.findOneAndUpdate(
+      { user: driver._id },
+      {
+        // Demo state must never advertise a paid pass without the matching
+        // negative Daily Fee ledger entry. The first online activation will use
+        // the same atomic debit path as every real Driver.
+        $set: {
+          balance: 5000,
+          realCashWallet: 5000,
+          realCashAvailable: 5000,
+          bonusAvailable: 0,
+          fee_paid_at: null,
+          transactions: []
+        }
+      },
+      { upsert: true, new: true }
+    );
+    await Payment.findOneAndUpdate(
+      { trxId: 'DEMO-APPROVED-2026' },
+      {
+        $set: {
+          driver: driver._id,
+          amount: 500,
+          vehicleCategory: 'Car Mini Non-AC',
+          paymentType: 'jazzcash',
+          status: 'approved',
+          proofScreenshot: 'data:image/png;base64,DEMO_PROOF',
+          submittedDate: todayUTC(),
+          approvedBy: 'demo-seed',
+          approvedAt: now,
+          auditLog: [{
+            action: 'approved',
+            actorId: 'demo-seed',
+            actorRole: 'super-admin',
+            reason: 'Preview demo account seed',
+            balanceBefore: 4500,
+            balanceAfter: 5000,
+            passValidUntil: new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000),
+            createdAt: now
+          }]
+        }
+      },
+      { upsert: true, new: true, setDefaultsOnInsert: true }
+    );
+  }
   await SubAdmin.findOneAndUpdate(
     { username: 'demo-ops' },
     {
@@ -10474,49 +10724,55 @@ async function seedDemoAccounts() {
 
 async function seedTestAccounts() {
   const now = new Date();
-  const customer = await User.findOneAndUpdate(
-    { email: TEST_ACCOUNTS.customer.email },
-    {
-      $set: {
-        name: TEST_ACCOUNTS.customer.name,
-        email: TEST_ACCOUNTS.customer.email,
-        phone: TEST_ACCOUNTS.customer.phone,
-        password: TEST_ACCOUNT_PASSWORD_HASH,
-        role: 'customer',
-        accountStatus: 'active',
-        identityVerificationStatus: 'approved',
-        identityVerifiedAt: now
-      }
-    },
-    { upsert: true, new: true, setDefaultsOnInsert: true }
-  );
-  const driver = await User.findOneAndUpdate(
-    { email: TEST_ACCOUNTS.driver.email },
-    {
-      $set: {
-        name: TEST_ACCOUNTS.driver.name,
-        email: TEST_ACCOUNTS.driver.email,
-        phone: TEST_ACCOUNTS.driver.phone,
-        password: TEST_ACCOUNT_PASSWORD_HASH,
-        role: 'driver',
-        accountStatus: 'active',
-        vehicleType: 'Car Mini Non-AC',
-        vehicleModel: 'Toyota Corolla',
-        vehiclePlate: 'TEST-2026',
-        isOnline: false,
-        lastDailyFeePaidAt: now,
-        paidUntilDate: new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000),
-        isFreeTrial: true,
-        trialStartDate: now
-      }
-    },
-    { upsert: true, new: true, setDefaultsOnInsert: true }
-  );
-  await Wallet.findOneAndUpdate(
-    { user: driver._id },
-    { $setOnInsert: { balance: 0, transactions: [] } },
-    { upsert: true, new: true }
-  );
+  const customer = await AccountDeletionTombstone.exists({ seedKey: 'test:customer' })
+    ? null
+    : await User.findOneAndUpdate(
+        { email: TEST_ACCOUNTS.customer.email },
+        {
+          $set: {
+            name: TEST_ACCOUNTS.customer.name,
+            email: TEST_ACCOUNTS.customer.email,
+            phone: TEST_ACCOUNTS.customer.phone,
+            password: TEST_ACCOUNT_PASSWORD_HASH,
+            role: 'customer',
+            accountStatus: 'active',
+            identityVerificationStatus: 'approved',
+            identityVerifiedAt: now
+          }
+        },
+        { upsert: true, new: true, setDefaultsOnInsert: true }
+      );
+  const driver = await AccountDeletionTombstone.exists({ seedKey: 'test:driver' })
+    ? null
+    : await User.findOneAndUpdate(
+        { email: TEST_ACCOUNTS.driver.email },
+        {
+          $set: {
+            name: TEST_ACCOUNTS.driver.name,
+            email: TEST_ACCOUNTS.driver.email,
+            phone: TEST_ACCOUNTS.driver.phone,
+            password: TEST_ACCOUNT_PASSWORD_HASH,
+            role: 'driver',
+            accountStatus: 'active',
+            vehicleType: 'Car Mini Non-AC',
+            vehicleModel: 'Toyota Corolla',
+            vehiclePlate: 'TEST-2026',
+            isOnline: false,
+            lastDailyFeePaidAt: now,
+            paidUntilDate: new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000),
+            isFreeTrial: true,
+            trialStartDate: now
+          }
+        },
+        { upsert: true, new: true, setDefaultsOnInsert: true }
+      );
+  if (driver) {
+    await Wallet.findOneAndUpdate(
+      { user: driver._id },
+      { $setOnInsert: { balance: 0, transactions: [] } },
+      { upsert: true, new: true }
+    );
+  }
   console.log('✓ Test customer and driver accounts seeded');
   return { customer, driver };
 }
@@ -10739,8 +10995,10 @@ module.exports = {
   getDatabaseStatus,
   connectDatabase,
   migrateLegacyUserData,
+  seedDemoAccounts,
+  seedTestAccounts,
   models: {
     User, LegacyUser, Customer, Driver, Admin, Ride, Wallet, Payment, Settings,
-    SubAdmin, StudentRideResponseLog
+    SOS, Ticket, PushSub, SubAdmin, StudentRideResponseLog, AccountDeletionTombstone
   }
 };
