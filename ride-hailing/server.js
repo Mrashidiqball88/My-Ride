@@ -135,8 +135,10 @@ const io     = new Server(server, {
 const SMTP_HOST = process.env.SMTP_HOST || (
   process.env.GMAIL_USER || process.env.GMAIL_PASS ? 'smtp.gmail.com' : ''
 );
-const SMTP_PORT = Number(process.env.SMTP_PORT || 587);
-const SMTP_SECURE = process.env.SMTP_SECURE === 'true' || SMTP_PORT === 465;
+const SMTP_PORT = Number(process.env.SMTP_PORT || 465);
+const SMTP_SECURE = SMTP_HOST === 'smtp.gmail.com'
+  ? true
+  : process.env.SMTP_SECURE === 'true' || SMTP_PORT === 465;
 const SMTP_USER = process.env.GMAIL_USER || process.env.SMTP_USER || '';
 const SMTP_PASS = process.env.GMAIL_PASS || process.env.SMTP_PASS || '';
 const EMAIL_FROM = process.env.EMAIL_FROM || SMTP_USER;
