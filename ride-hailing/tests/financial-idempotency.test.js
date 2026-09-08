@@ -18,6 +18,7 @@ const {
   getDriverTodayIncome,
   completeRideFinancialSettlement,
   approveDriverPayment,
+  runIdempotentFinancialOperation,
 } = service;
 
 let mongo;
@@ -62,6 +63,7 @@ beforeEach(async () => {
     models.Ride.deleteMany({}),
     models.Wallet.deleteMany({}),
     models.Payment.deleteMany({}),
+    models.FinancialOperation.deleteMany({}),
     models.Settings.deleteMany({}),
     models.SubAdmin.deleteMany({}),
   ]);
@@ -286,6 +288,92 @@ test('Driver payment approval rolls back the wallet when the Driver update fails
   assert.equal(storedPayment.walletCreditedAt, null);
   assert.equal(wallet.balance, 100);
   assert.equal(wallet.transactions.length, 0);
+});
+
+test('wallet idempotency commits a retry once and rejects a changed payload', async () => {
+  const driver = await createParticipant('driver', 'idempotency');
+  const request = key => ({
+    body: {},
+    get(name) {
+      return name.toLowerCase() === 'idempotency-key' ? key : undefined;
+    }
+  });
+  let executions = 0;
+  const work = async session => {
+    executions += 1;
+    const wallet = await models.Wallet.findOneAndUpdate(
+      { user: driver._id },
+      {
+        $inc: { balance: 500, realCashWallet: 500, realCashAvailable: 500 },
+        $push: {
+          transactions: {
+            amount: 500,
+            type: 'credit',
+            description: 'Idempotent test recharge',
+            fundingSource: 'real',
+            realAmount: 500,
+            bonusAmount: 0
+          }
+        }
+      },
+      { upsert: true, new: true, session }
+    );
+    return { walletId: String(wallet._id), balance: wallet.balance };
+  };
+
+  const [first, retry] = await Promise.all([
+    runIdempotentFinancialOperation({
+      req: request('wallet-retry-1'),
+      scope: 'test-wallet-credit',
+      actorId: driver._id,
+      request: { amount: 500 },
+      work
+    }),
+    runIdempotentFinancialOperation({
+      req: request('wallet-retry-1'),
+      scope: 'test-wallet-credit',
+      actorId: driver._id,
+      request: { amount: 500 },
+      work
+    })
+  ]);
+
+  assert.equal(executions, 1);
+  assert.equal([first.replayed, retry.replayed].filter(Boolean).length, 1);
+  const wallet = await models.Wallet.findOne({ user: driver._id }).lean();
+  assert.equal(wallet.balance, 500);
+  assert.equal(wallet.transactions.length, 1);
+
+  await assert.rejects(
+    runIdempotentFinancialOperation({
+      req: request('wallet-retry-1'),
+      scope: 'test-wallet-credit',
+      actorId: driver._id,
+      request: { amount: 501 },
+      work
+    }),
+    error => error.code === 'IDEMPOTENCY_KEY_REUSED' && error.statusCode === 409
+  );
+  assert.equal(executions, 1);
+});
+
+test('payment TIDs are rejected by the database unique index across Drivers', async () => {
+  const firstDriver = await createParticipant('driver', 'tid-first');
+  const secondDriver = await createParticipant('driver', 'tid-second');
+  const payment = {
+    trxId: 'UNIQUE-TID-2026',
+    amount: 1000,
+    vehicleCategory: 'Car Sedan',
+    paymentType: 'bank',
+    proofScreenshot: 'data:image/png;base64,AA==',
+    submittedDate: '2026-09-08',
+    status: 'pending'
+  };
+  await models.Payment.create({ ...payment, driver: firstDriver._id });
+  await assert.rejects(
+    models.Payment.create({ ...payment, driver: secondDriver._id, submittedDate: '2026-09-09' }),
+    error => error.code === 11000
+  );
 });
 
 test('wallet debits consume real cash first, then bonus, and record mixed funding precisely', async () => {

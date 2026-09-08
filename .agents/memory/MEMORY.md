@@ -63,3 +63,4 @@
 - [Active ride contact rehydration](active-ride-contact-rehydration.md) — render normalized opposing-party contact actions for every restored active ride status, not only the initial acceptance event.
 - [Account deletion resurrection protection](account-deletion-resurrection-protection.md) — permanent account deletion must remove legacy sources and persist tombstones that startup migration and preview seeding honor.
 - [Active booking test isolation](active-booking-test-isolation.md) — sequential Customer ride scenarios must end the prior active ride and wait for recovery to settle before booking again.
+- [Wallet mutation idempotency](wallet-idempotency.md) — commit persisted request identity and the financial write in one transaction; reject changed payloads under the same key.

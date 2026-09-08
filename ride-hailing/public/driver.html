@@ -1557,8 +1557,8 @@ function switchTab(t) {
   document.getElementById('auth-error').textContent = '';
 }
 
-async function apiCall(path, method = 'GET', body = null, timeoutMs = 0) {
-  const headers = { 'Content-Type': 'application/json' };
+async function apiCall(path, method = 'GET', body = null, timeoutMs = 0, extraHeaders = {}) {
+  const headers = { 'Content-Type': 'application/json', ...extraHeaders };
   if (token)        headers['Authorization']   = `Bearer ${token}`;
   if (sessionToken) headers['X-Session-Token'] = sessionToken;
   const opts = { method, headers };
@@ -1585,6 +1585,16 @@ async function apiCall(path, method = 'GET', body = null, timeoutMs = 0) {
     throw new Error(d.error || d.message || `Server error (${r.status})`);
   }
   return d;
+}
+
+function persistedWalletIdempotencyKey(storageKey) {
+  const keyName = `myride:wallet-operation:${storageKey}`;
+  let key = sessionStorage.getItem(keyName);
+  if (!key) {
+    key = `${storageKey}-${crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}-${Math.random().toString(36).slice(2)}`}`;
+    sessionStorage.setItem(keyName, key);
+  }
+  return { key, clear: () => sessionStorage.removeItem(keyName) };
 }
 
 async function doLogin() {
@@ -4084,12 +4094,14 @@ async function submitTrxPayment() {
       reader.onload = () => resolve(reader.result);
       reader.readAsDataURL(proofFile);
     });
+    const idempotency = persistedWalletIdempotencyKey(`payment-submit-${trxId.toUpperCase()}`);
     await apiCall('/api/payments/submit', 'POST', {
       trxId,
       amount,
       paymentType: selectedPayType || 'jazzcash',
       proofScreenshot
-    });
+    }, 0, { 'Idempotency-Key': idempotency.key });
+    idempotency.clear();
     showToast('⏳ Payment submitted for Admin verification.', 'info');
     document.getElementById('trx-id-input').value     = '';
     document.getElementById('trx-amount-input').value = '';

@@ -2260,6 +2260,20 @@ paymentSchema.index({ trxId: 1 }, { unique: true });
 paymentSchema.index({ driver: 1, submittedDate: 1 }, { unique: true });
 paymentSchema.index({ walletCreditOperationId: 1 }, { unique: true, sparse: true });
 
+// Persisted request-level idempotency records make wallet mutations safe across
+// process restarts and mobile retries. The financial mutation and the completed
+// result marker are committed in the same MongoDB transaction.
+const financialOperationSchema = new mongoose.Schema({
+  scope:       { type: String, required: true, trim: true },
+  actorId:     { type: String, required: true, trim: true },
+  key:         { type: String, required: true, trim: true },
+  requestHash: { type: String, required: true },
+  status:      { type: String, enum: ['processing', 'completed'], required: true, default: 'processing' },
+  result:      { type: mongoose.Schema.Types.Mixed, default: null }
+}, { timestamps: true });
+financialOperationSchema.index({ scope: 1, actorId: 1, key: 1 }, { unique: true });
+financialOperationSchema.index({ createdAt: 1 }, { expireAfterSeconds: 30 * 24 * 60 * 60 });
+
 // Key-value settings store
 const settingsSchema = new mongoose.Schema({
   key:   { type: String, required: true, unique: true },
@@ -2283,6 +2297,7 @@ const Ride     = mongoose.model('Ride',     rideSchema);
 const Wallet   = mongoose.model('Wallet',   walletSchema);
 const SOS      = mongoose.model('SOS',      sosSchema);
 const Payment  = mongoose.model('Payment',  paymentSchema);
+const FinancialOperation = mongoose.model('FinancialOperation', financialOperationSchema);
 const Ticket   = mongoose.model('Ticket',   ticketSchema);
 const Settings = mongoose.model('Settings', settingsSchema);
 const PushSub  = mongoose.model('PushSub',  pushSubSchema);
@@ -3412,7 +3427,7 @@ async function findLongRangeBroadcastDrivers(
   return { drivers: selectedDrivers, radiusKm };
 }
 
-async function chargeLongRangeCommission(ride, driverId, longRangeSettings, { session } = {}) {
+async function chargeLongRangeCommissionCore(ride, driverId, longRangeSettings, { session } = {}) {
   if (!ride.isLongRange || ride.longRangeCommissionChargedAt) {
     return { ok: true, alreadyCharged: !!ride.longRangeCommissionChargedAt };
   }
@@ -3491,6 +3506,45 @@ async function chargeLongRangeCommission(ride, driverId, longRangeSettings, { se
   };
 }
 
+async function chargeLongRangeCommission(ride, driverId, longRangeSettings, options = {}) {
+  if (options?.session || mongoose.connection.readyState !== 1) {
+    return chargeLongRangeCommissionCore(ride, driverId, longRangeSettings, options);
+  }
+  // Direct callers must receive the same atomic guarantee as ride settlement
+  // callers that already provide a session. The disconnected branch preserves
+  // the existing lightweight unit-test seam.
+  return runFinancialTransaction(session =>
+    chargeLongRangeCommissionCore(ride, driverId, longRangeSettings, { session })
+  );
+}
+
+async function startLongRangeRideWithCommission(rideId, driverId, longRangeSettings) {
+  return runFinancialTransaction(async session => {
+    const ride = await Ride.findOne({
+      _id: rideId,
+      driver: driverId,
+      status: 'arrived'
+    }).session(session);
+    if (!ride) return null;
+
+    const commission = await chargeLongRangeCommissionCore(
+      ride,
+      driverId,
+      longRangeSettings,
+      { session }
+    );
+    if (!commission.ok) {
+      throw financialError(commission.error, 409, 'LONG_RANGE_COMMISSION_FAILED');
+    }
+    ride.longRangeCommissionAmount = commission.amount || ride.longRangeCommissionAmount || 0;
+    ride.longRangeCommissionChargedAt =
+      commission.chargedAt || ride.longRangeCommissionChargedAt || new Date();
+    ride.status = 'in-progress';
+    await ride.save({ session });
+    return { ride, commission };
+  });
+}
+
 class FinancialTransactionRequiredError extends Error {
   constructor(message = 'A transaction-capable MongoDB connection is required for financial operations.') {
     super(message);
@@ -3533,6 +3587,88 @@ async function runFinancialTransaction(work) {
     throw error;
   } finally {
     await session.endSession();
+  }
+}
+
+const MAX_IDEMPOTENCY_KEY_LENGTH = 128;
+function requestIdempotencyKey(req) {
+  const raw = req.get('Idempotency-Key') || req.body?.idempotencyKey || '';
+  const key = String(raw).trim();
+  if (!key) return '';
+  if (key.length > MAX_IDEMPOTENCY_KEY_LENGTH || !/^[A-Za-z0-9._:-]+$/.test(key)) {
+    throw financialError(
+      `Idempotency-Key must be 1-${MAX_IDEMPOTENCY_KEY_LENGTH} characters using letters, numbers, ".", "_", ":", or "-".`,
+      400,
+      'INVALID_IDEMPOTENCY_KEY'
+    );
+  }
+  return key;
+}
+
+function hashFinancialRequest(value) {
+  return crypto.createHash('sha256').update(JSON.stringify(value)).digest('hex');
+}
+
+function idempotencyConflict(message, code = 'IDEMPOTENCY_KEY_REUSED') {
+  return financialError(message, 409, code);
+}
+
+function financialOperationReplay(existing, requestHash) {
+  if (existing.requestHash !== requestHash) {
+    throw idempotencyConflict('This Idempotency-Key was already used for a different wallet request.');
+  }
+  if (existing.status !== 'completed') {
+    throw idempotencyConflict('This wallet request is still being processed. Retry with the same Idempotency-Key shortly.', 'IDEMPOTENCY_OPERATION_IN_PROGRESS');
+  }
+  return { replayed: true, result: existing.result };
+}
+
+async function runIdempotentFinancialOperation({
+  req,
+  scope,
+  actorId,
+  request,
+  work
+}) {
+  const key = requestIdempotencyKey(req);
+  const normalizedActorId = String(actorId || 'unknown-actor');
+  if (!key) {
+    // Preserve the existing disconnected unit-test seam. A real financial
+    // operation with Mongo connected always takes the transaction branch.
+    if (mongoose.connection.readyState !== 1) {
+      return { replayed: false, result: await work(null) };
+    }
+    return { replayed: false, result: await runFinancialTransaction(work) };
+  }
+
+  const filter = { scope, actorId: normalizedActorId, key };
+  const requestHash = hashFinancialRequest(request);
+  const existing = await FinancialOperation.findOne(filter).lean();
+  if (existing) return financialOperationReplay(existing, requestHash);
+
+  try {
+    const result = await runFinancialTransaction(async session => {
+      const [operation] = await FinancialOperation.create([{
+        ...filter,
+        requestHash,
+        status: 'processing'
+      }], { session });
+      const operationResult = await work(session);
+      operation.status = 'completed';
+      operation.result = operationResult;
+      await operation.save({ session });
+      return operationResult;
+    });
+    return { replayed: false, result };
+  } catch (error) {
+    // Two retries can both observe no record before one transaction inserts it.
+    // The losing transaction rolls back; replay the committed winner instead
+    // of applying the financial work a second time.
+    if (error?.code === 11000) {
+      const committed = await FinancialOperation.findOne(filter).lean();
+      if (committed) return financialOperationReplay(committed, requestHash);
+    }
+    throw error;
   }
 }
 
@@ -5157,7 +5293,9 @@ app.post('/api/auth/forgot-password', async (req, res) => {
       otpExpiry: new Date(Date.now() + 10 * 60 * 1000)
     });
     return res.json({ success: true, message: 'A verification code was sent to your email address' });
-  } catch (err) { res.status(500).json({ error: err.message }); }
+  } catch (err) {
+    res.status(err.statusCode || 500).json({ error: err.message, ...(err.code ? { code: err.code } : {}) });
+  }
 });
 
 app.post('/api/auth/reset-password', async (req, res) => {
@@ -5184,7 +5322,9 @@ app.post('/api/auth/reset-password', async (req, res) => {
     );
     io.in(`user:${user._id}`).disconnectSockets(true);
     res.json({ success: true });
-  } catch (err) { res.status(500).json({ error: err.message }); }
+  } catch (err) {
+    res.status(err.statusCode || 500).json({ error: err.message, ...(err.code ? { code: err.code } : {}) });
+  }
 });
 
 // ── Emergency Contacts ─────────────────────────────────────────────────────
@@ -5284,10 +5424,12 @@ app.get('/api/customer/vehicle-config', async (req, res) => {
 
 app.post('/api/rides', authMiddleware, customerOnly, customerCanBook, async (req, res) => {
   try {
-    const existingActiveRide = await Ride.findOne({
-      passenger: req.user.id,
-      status: { $in: CUSTOMER_ACTIVE_RIDE_STATUSES }
-    }).select('_id status').sort({ updatedAt: -1, createdAt: -1 }).lean();
+    const existingActiveRide = mongoose.isValidObjectId(req.user.id)
+      ? await Ride.findOne({
+        passenger: req.user.id,
+        status: { $in: CUSTOMER_ACTIVE_RIDE_STATUSES }
+      }).select('_id status').sort({ updatedAt: -1, createdAt: -1 }).lean()
+      : null;
     if (existingActiveRide) {
       return res.status(409).json({
         error: 'You already have an active ride. Reopen it before booking another ride.',
@@ -5889,15 +6031,13 @@ app.patch('/api/rides/:id/status', authMiddleware, driverOnly, async (req, res) 
     if (status === 'in-progress' && ride.isLongRange) {
       const longRangeSettings = await getLongRangeSettings();
       if (getRideCommissionDeductionTiming(ride, longRangeSettings) === 'started') {
-        const commission = await chargeLongRangeCommission(ride, req.user.id, longRangeSettings);
-        if (!commission.ok) {
-          return res.status(409).json({
-            error: commission.error,
-            code: 'LONG_RANGE_COMMISSION_FAILED'
-          });
-        }
-        ride.longRangeCommissionAmount = commission.amount || ride.longRangeCommissionAmount || 0;
-        ride.longRangeCommissionChargedAt = commission.chargedAt || ride.longRangeCommissionChargedAt || new Date();
+        const started = await startLongRangeRideWithCommission(
+          ride._id,
+          req.user.id,
+          longRangeSettings
+        );
+        if (!started) return res.status(409).json({ error: 'Ride is no longer at the pickup point.' });
+        ride = started.ride;
       }
     }
 
@@ -6438,42 +6578,75 @@ app.post('/api/payments/submit', authMiddleware, async (req, res) => {
       return res.status(422).json({ error: 'Daily Fee is not configured for your vehicle category. Please contact Admin.' });
     }
 
-    // ── Global TRX ID uniqueness (prevents reuse across drivers) ───────────
-    const trxDuplicate = await Payment.findOne({ trxId: cleanTrx });
-    if (trxDuplicate) {
-      return res.status(409).json({ error: 'This Transaction ID has already been used. If you believe this is an error, contact admin.' });
-    }
-
     const dateStr = todayUTC();
-    // Uniqueness: one submission per driver per day
-    const existing = await Payment.findOne({ driver: req.user.id, submittedDate: dateStr });
-    if (existing) {
-      return res.status(409).json({ error: 'You have already submitted a payment for today. Wait for admin review before resubmitting.' });
-    }
-
     const validTypes = ['jazzcash', 'easypaisa', 'bank', 'sadapay'];
-    const payment = await Payment.create({
-      driver:          req.user.id,
-      trxId:           cleanTrx,
-      amount:          submittedAmount,
-      paymentType:     validTypes.includes(paymentType) ? paymentType : 'jazzcash',
-      vehicleCategory: normalizeFareVehicle(driver.vehicleType || 'Car Mini Non-AC'),
-      submittedDate:   dateStr,
-      proofScreenshot,
-      auditLog: [{
-        action: 'pending',
-        actorId: String(req.user.id),
-        actorRole: 'driver',
-        reason: 'Driver submitted payment proof'
-      }]
+    const normalizedPaymentType = validTypes.includes(paymentType) ? paymentType : 'jazzcash';
+    const operation = await runIdempotentFinancialOperation({
+      req,
+      scope: 'driver-payment-submit',
+      actorId: req.user.id,
+      request: {
+        trxId: cleanTrx,
+        amount: submittedAmount,
+        paymentType: normalizedPaymentType,
+        vehicleCategory: normalizeFareVehicle(driver.vehicleType || 'Car Mini Non-AC'),
+        submittedDate: dateStr,
+        proofHash: hashFinancialRequest(proofScreenshot)
+      },
+      work: async session => {
+        // These checks are repeated inside the transaction so two concurrent
+        // submissions cannot both pass the preflight reads.
+        const trxDuplicate = await Payment.findOne({ trxId: cleanTrx }).session(session);
+        if (trxDuplicate) {
+          throw financialError(
+            'This Transaction ID has already been used. If you believe this is an error, contact admin.',
+            409,
+            'PAYMENT_TID_ALREADY_USED'
+          );
+        }
+        const existing = await Payment.findOne({
+          driver: req.user.id,
+          submittedDate: dateStr
+        }).session(session);
+        if (existing) {
+          throw financialError(
+            'You have already submitted a payment for today. Wait for admin review before resubmitting.',
+            409,
+            'PAYMENT_ALREADY_SUBMITTED'
+          );
+        }
+
+        const [payment] = await Payment.create([{
+          driver:          req.user.id,
+          trxId:           cleanTrx,
+          amount:          submittedAmount,
+          paymentType:     normalizedPaymentType,
+          vehicleCategory: normalizeFareVehicle(driver.vehicleType || 'Car Mini Non-AC'),
+          status:          'pending',
+          submittedDate:   dateStr,
+          proofScreenshot,
+          auditLog: [{
+            action: 'pending',
+            actorId: String(req.user.id),
+            actorRole: 'driver',
+            reason: 'Driver submitted payment proof'
+          }]
+        }], { session });
+        return { paymentId: String(payment._id) };
+      }
     });
 
-    res.status(201).json(payment);
+    const payment = await Payment.findById(operation.result.paymentId)
+      .select('+proofScreenshot');
+    if (!payment) {
+      return res.status(503).json({ error: 'Payment submission could not be reloaded.' });
+    }
+    res.status(operation.replayed ? 200 : 201).json(payment);
   } catch (err) {
     if (err.code === 11000) {
       return res.status(409).json({ error: 'This TRX ID or today’s payment submission already exists.' });
     }
-    res.status(500).json({ error: err.message });
+    res.status(err.statusCode || 500).json({ error: err.message, ...(err.code ? { code: err.code } : {}) });
   }
 });
 
@@ -6494,8 +6667,7 @@ function paymentAdminActor(admin) {
   };
 }
 
-async function approveDriverPayment(paymentId, admin, adminNote = '') {
-  return runFinancialTransaction(async session => {
+async function approveDriverPaymentCore(paymentId, admin, adminNote = '', session) {
     const payment = await Payment.findById(paymentId).session(session);
     if (!payment) return null;
 
@@ -6623,15 +6795,26 @@ async function approveDriverPayment(paymentId, admin, adminNote = '') {
       feeResult,
       actor
     };
-  });
 }
 
-async function rejectDriverPayment(paymentId, admin, reason = '') {
+async function approveDriverPayment(paymentId, admin, adminNote = '', options = {}) {
+  if (options?.session) {
+    return approveDriverPaymentCore(paymentId, admin, adminNote, options.session);
+  }
+  return runFinancialTransaction(session =>
+    approveDriverPaymentCore(paymentId, admin, adminNote, session)
+  );
+}
+
+async function rejectDriverPaymentCore(paymentId, admin, reason = '', session) {
   const actor = paymentAdminActor(admin);
-  const wallet = await Wallet.findOne({ user: (await Payment.findById(paymentId).select('driver'))?.driver })
-    .select('balance').lean();
+  const paymentQuery = Payment.findById(paymentId).select('driver');
+  const paymentRecord = await applySession(paymentQuery, session).lean();
+  if (!paymentRecord) return null;
+  const walletQuery = Wallet.findOne({ user: paymentRecord?.driver }).select('balance');
+  const wallet = await applySession(walletQuery, session).lean();
   const balance = Number(wallet?.balance || 0);
-  return Payment.findOneAndUpdate(
+  const updateQuery = Payment.findOneAndUpdate(
     { _id: paymentId, status: 'pending' },
     {
       $set: {
@@ -6653,6 +6836,16 @@ async function rejectDriverPayment(paymentId, admin, reason = '') {
       }
     },
     { new: true }
+  );
+  return applySession(updateQuery, session);
+}
+
+async function rejectDriverPayment(paymentId, admin, reason = '', options = {}) {
+  if (options?.session) {
+    return rejectDriverPaymentCore(paymentId, admin, reason, options.session);
+  }
+  return runFinancialTransaction(session =>
+    rejectDriverPaymentCore(paymentId, admin, reason, session)
   );
 }
 
@@ -7590,7 +7783,9 @@ app.post('/api/admin/login', async (req, res) => {
       JWT_SECRET, { expiresIn: '12h' }
     );
     res.json({ token, admin: { email: adminEmail, recoveryKeyConfigured: !!security.recoveryKeyHash } });
-  } catch (err) { res.status(500).json({ error: err.message }); }
+  } catch (err) {
+    res.status(err.statusCode || 500).json({ error: err.message, ...(err.code ? { code: err.code } : {}) });
+  }
 });
 
 app.post('/api/admin/security/otp/request', adminJwt, requireSuperAdmin, async (req, res) => {
@@ -7625,7 +7820,9 @@ app.get('/api/admin/security/status', adminJwt, requireSuperAdmin, async (_req, 
       passwordManaged: environmentAdminPasswordIsAuthoritative(),
       recoveryKeyManaged: environmentAdminRecoveryKeyIsAuthoritative()
     });
-  } catch (err) { res.status(500).json({ error: err.message }); }
+  } catch (err) {
+    res.status(err.statusCode || 500).json({ error: err.message, ...(err.code ? { code: err.code } : {}) });
+  }
 });
 
 app.patch('/api/admin/security/password', adminJwt, requireSuperAdmin, async (req, res) => {
@@ -8689,8 +8886,54 @@ app.get('/api/admin/payments', adminJwt, requirePerm('viewPayments'), async (req
 
 app.patch('/api/admin/payments/:id/approve', adminJwt, requirePerm('approveWalletTopups'), async (req, res) => {
   try {
-    const approved = await approveDriverPayment(req.params.id, req.admin, req.body?.note);
-    if (!approved) return res.status(409).json({ error: 'Payment is no longer pending and cannot be approved again.' });
+    const adminActor = paymentAdminActor(req.admin);
+    const operation = await runIdempotentFinancialOperation({
+      req,
+      scope: 'admin-payment-approve',
+      actorId: adminActor.id,
+      request: {
+        paymentId: String(req.params.id),
+        note: String(req.body?.note || '').trim()
+      },
+      work: async session => {
+        const approved = await approveDriverPayment(
+          req.params.id,
+          req.admin,
+          req.body?.note,
+          { session }
+        );
+        if (!approved) return null;
+        return {
+          paymentId: String(approved.payment._id),
+          balanceBefore: approved.balanceBefore,
+          passValidUntil: approved.passValidUntil?.toISOString() || null,
+          feeResult: approved.feeResult ? {
+            charged: !!approved.feeResult.charged,
+            rate: approved.feeResult.rate ?? null,
+            fundingSource: approved.feeResult.fundingSource || null
+          } : null
+        };
+      }
+    });
+    if (!operation.result) {
+      return res.status(409).json({ error: 'Payment is no longer pending and cannot be approved again.' });
+    }
+    const [payment, wallet] = await Promise.all([
+      Payment.findById(operation.result.paymentId),
+      Wallet.findOne({ user: (await Payment.findById(operation.result.paymentId).select('driver'))?.driver })
+    ]);
+    if (!payment || !wallet) {
+      return res.status(503).json({ error: 'Approved payment requires reconciliation before it can be displayed.' });
+    }
+    const approved = {
+      payment,
+      wallet,
+      balanceBefore: operation.result.balanceBefore,
+      passValidUntil: operation.result.passValidUntil
+        ? new Date(operation.result.passValidUntil)
+        : null,
+      feeResult: operation.result.feeResult
+    };
     const notification = {
       paymentId: String(approved.payment._id),
       trxId: approved.payment.trxId,
@@ -8702,8 +8945,10 @@ app.patch('/api/admin/payments/:id/approve', adminJwt, requirePerm('approveWalle
         fundingSource: approved.feeResult.fundingSource
       } : null
     };
-    io.to(`user:${approved.payment.driver}`).emit('payment:approved', notification);
-    io.to('admin-room').emit('payment:approved', notification);
+    if (!operation.replayed) {
+      io.to(`user:${approved.payment.driver}`).emit('payment:approved', notification);
+      io.to('admin-room').emit('payment:approved', notification);
+    }
     res.json({
       success: true,
       payment: approved.payment,
@@ -8719,11 +8964,35 @@ app.patch('/api/admin/payments/:id/approve', adminJwt, requirePerm('approveWalle
 app.patch('/api/admin/payments/:id/reject', adminJwt, requirePerm('approveWalletTopups'), async (req, res) => {
   try {
     const { reason } = req.body;
-    const payment = await rejectDriverPayment(req.params.id, req.admin, reason);
+    const operation = await runIdempotentFinancialOperation({
+      req,
+      scope: 'admin-payment-reject',
+      actorId: paymentAdminActor(req.admin).id,
+      request: {
+        paymentId: String(req.params.id),
+        reason: String(reason || '').trim()
+      },
+      work: async session => {
+        const payment = await rejectDriverPayment(
+          req.params.id,
+          req.admin,
+          reason,
+          { session }
+        );
+        return payment ? { paymentId: String(payment._id) } : null;
+      }
+    });
+    const payment = operation.result
+      ? await Payment.findById(operation.result.paymentId)
+      : null;
     if (!payment) return res.status(409).json({ error: 'Payment is no longer pending and cannot be rejected.' });
-    io.to(`user:${payment.driver}`).emit('payment:rejected', { reason: reason || 'Rejected' });
+    if (!operation.replayed) {
+      io.to(`user:${payment.driver}`).emit('payment:rejected', { reason: reason || 'Rejected' });
+    }
     res.json({ success: true, payment });
-  } catch (err) { res.status(500).json({ error: err.message }); }
+  } catch (err) {
+    res.status(err.statusCode || 500).json({ error: err.message, ...(err.code ? { code: err.code } : {}) });
+  }
 });
 
 // Read-only operational audit view. Private proof images are never included
@@ -9030,42 +9299,81 @@ app.post('/api/admin/drivers/grant-trial', adminJwt, requirePerm('manageDriverPa
     paidUntilDate.setDate(paidUntilDate.getDate() + trialDays);
     paidUntilDate.setUTCHours(23, 59, 59, 999);
 
-    const drivers = await User.find({ _id: { $in: driverIds }, role: 'driver' }).select('vehicleType name');
-    const results = [];
-    for (const driver of drivers) {
-      await Wallet.findOneAndUpdate(
-        { user: driver._id },
-        {
-          $inc: {
-            balance: bonusAmount,
-            bonusWallet: bonusAmount,
-            bonusAvailable: bonusAmount
-          },
-          $push: {
-            transactions: {
-              amount: bonusAmount,
-              type: 'credit',
-              description: `Admin Free Bonus Credit (Rs ${bonusAmount.toLocaleString('en-PK', { maximumFractionDigits: 2 })})`,
-              fundingSource: WALLET_FUNDING_SOURCES.BONUS,
-              realAmount: 0,
-              bonusAmount
-            }
+    const operation = await runIdempotentFinancialOperation({
+      req,
+      scope: 'admin-grant-trial',
+      actorId: paymentAdminActor(req.admin).id,
+      request: {
+        driverIds: [...new Set(driverIds.map(String))].sort(),
+        trialDays,
+        bonusAmount
+      },
+      work: async session => {
+        let driverQuery = session
+          ? Driver.find({ _id: { $in: driverIds } }).select('vehicleType name').session(session)
+          : User.find({ _id: { $in: driverIds }, role: 'driver' }).select('vehicleType name');
+        const drivers = await driverQuery;
+        const driverModel = session ? Driver : User;
+        const results = [];
+        for (const driver of drivers) {
+          const wallet = await Wallet.findOneAndUpdate(
+            { user: driver._id },
+            {
+              $inc: {
+                balance: bonusAmount,
+                bonusWallet: bonusAmount,
+                bonusAvailable: bonusAmount
+              },
+              $push: {
+                transactions: {
+                  amount: bonusAmount,
+                  type: 'credit',
+                  description: `Admin Free Bonus Credit (Rs ${bonusAmount.toLocaleString('en-PK', { maximumFractionDigits: 2 })})`,
+                  fundingSource: WALLET_FUNDING_SOURCES.BONUS,
+                  realAmount: 0,
+                  bonusAmount
+                }
+              }
+            },
+            { upsert: true, new: true, session }
+          );
+          if (!wallet) {
+            throw financialError('Driver wallet could not be credited; the trial grant was rolled back.', 503, 'DRIVER_WALLET_UNAVAILABLE');
           }
-        },
-        { upsert: true, new: true }
-      );
-      await User.updateOne({ _id: driver._id }, { paidUntilDate, isFreeTrial: true, trialStartDate });
-      // Notify driver via socket instantly
-      io.to(`user:${driver._id}`).emit('fee:waived', {
-        paidUntilDate:  paidUntilDate.toISOString(),
-        bonusAmount,
-        isFreeTrial:    true,
-        trialStartDate: trialStartDate.toISOString()
+          const driverUpdate = await driverModel.updateOne(
+            { _id: driver._id },
+            { paidUntilDate, isFreeTrial: true, trialStartDate },
+            { session }
+          );
+          if (driverUpdate.matchedCount === 0 && driverUpdate.n === 0) {
+            throw financialError('Driver account could not be updated; the trial grant was rolled back.', 503, 'DRIVER_UPDATE_FAILED');
+          }
+          results.push({ id: String(driver._id), name: driver.name, amount: bonusAmount });
+        }
+        return {
+          success: true,
+          credited: results.length,
+          results,
+          trialDays,
+          bonusAmount,
+          paidUntilDate: paidUntilDate.toISOString()
+        };
+      }
+    });
+    if (!operation.replayed) {
+      operation.result.results.forEach(result => {
+        io.to(`user:${result.id}`).emit('fee:waived', {
+          paidUntilDate: operation.result.paidUntilDate,
+          bonusAmount,
+          isFreeTrial: true,
+          trialStartDate: trialStartDate.toISOString()
+        });
       });
-      results.push({ id: driver._id, name: driver.name, amount: bonusAmount });
     }
-    res.json({ success: true, credited: results.length, results, trialDays, bonusAmount, paidUntilDate });
-  } catch (err) { res.status(500).json({ error: err.message }); }
+    res.json(operation.result);
+  } catch (err) {
+    res.status(err.statusCode || 500).json({ error: err.message, ...(err.code ? { code: err.code } : {}) });
+  }
 });
 
 // POST /api/admin/drivers/grant-wallet-bonus — credit a manual amount without changing fee access
@@ -9078,35 +9386,59 @@ app.post('/api/admin/drivers/grant-wallet-bonus', adminJwt, requirePerm('manageD
     if (!Number.isFinite(bonusAmount) || bonusAmount <= 0)
       return res.status(400).json({ error: 'A valid bonus amount greater than Rs 0 is required' });
 
-    const drivers = await User.find({ _id: { $in: driverIds }, role: 'driver' }).select('name');
-    const results = [];
-    for (const driver of drivers) {
-      await Wallet.findOneAndUpdate(
-        { user: driver._id },
-        {
-          $inc: {
-            balance: bonusAmount,
-            bonusWallet: bonusAmount,
-            bonusAvailable: bonusAmount
-          },
-          $push: {
-            transactions: {
-              amount: bonusAmount,
-              type: 'credit',
-              description: `Admin Wallet Bonus Credit (Rs ${bonusAmount.toLocaleString('en-PK', { maximumFractionDigits: 2 })})`,
-              fundingSource: WALLET_FUNDING_SOURCES.BONUS,
-              realAmount: 0,
-              bonusAmount
-            }
+    const operation = await runIdempotentFinancialOperation({
+      req,
+      scope: 'admin-grant-wallet-bonus',
+      actorId: paymentAdminActor(req.admin).id,
+      request: {
+        driverIds: [...new Set(driverIds.map(String))].sort(),
+        bonusAmount
+      },
+      work: async session => {
+        let driverQuery = session
+          ? Driver.find({ _id: { $in: driverIds } }).select('name').session(session)
+          : User.find({ _id: { $in: driverIds }, role: 'driver' }).select('name');
+        const drivers = await driverQuery;
+        const results = [];
+        for (const driver of drivers) {
+          const wallet = await Wallet.findOneAndUpdate(
+            { user: driver._id },
+            {
+              $inc: {
+                balance: bonusAmount,
+                bonusWallet: bonusAmount,
+                bonusAvailable: bonusAmount
+              },
+              $push: {
+                transactions: {
+                  amount: bonusAmount,
+                  type: 'credit',
+                  description: `Admin Wallet Bonus Credit (Rs ${bonusAmount.toLocaleString('en-PK', { maximumFractionDigits: 2 })})`,
+                  fundingSource: WALLET_FUNDING_SOURCES.BONUS,
+                  realAmount: 0,
+                  bonusAmount
+                }
+              }
+            },
+            { upsert: true, new: true, session }
+          );
+          if (!wallet) {
+            throw financialError('Driver wallet could not be credited; the bonus was rolled back.', 503, 'DRIVER_WALLET_UNAVAILABLE');
           }
-        },
-        { upsert: true, new: true }
-      );
-      io.to(`user:${driver._id}`).emit('wallet:bonus-credited', { bonusAmount });
-      results.push({ id: driver._id, name: driver.name, amount: bonusAmount });
+          results.push({ id: String(driver._id), name: driver.name, amount: bonusAmount });
+        }
+        return { success: true, credited: results.length, results, bonusAmount };
+      }
+    });
+    if (!operation.replayed) {
+      operation.result.results.forEach(result => {
+        io.to(`user:${result.id}`).emit('wallet:bonus-credited', { bonusAmount });
+      });
     }
-    res.json({ success: true, credited: results.length, results, bonusAmount });
-  } catch (err) { res.status(500).json({ error: err.message }); }
+    res.json(operation.result);
+  } catch (err) {
+    res.status(err.statusCode || 500).json({ error: err.message, ...(err.code ? { code: err.code } : {}) });
+  }
 });
 
 // GET /api/admin/daily-fee-compliance — active drivers grouped by paid / unpaid for today
@@ -10590,6 +10922,14 @@ function installMongoConnectionHandlers() {
   });
 }
 
+async function ensureFinancialIndexes() {
+  // Explicitly build the persisted safety constraints in environments where
+  // Mongoose autoIndex is disabled. Existing duplicate TIDs must fail startup
+  // rather than leave the service accepting unverifiable recharges.
+  await Payment.createIndexes();
+  await FinancialOperation.createIndexes();
+}
+
 async function connectDatabase() {
   const { uri: rawUri, source } = getConfiguredMongoUri();
   console.log(`MongoDB URI attached: ${Boolean(rawUri)}${source ? ` (source: ${source})` : ''}`);
@@ -10613,6 +10953,7 @@ async function connectDatabase() {
       await demoMongo.waitUntilRunning();
       await mongoose.connect(demoMongo.getUri(), getMongoConnectionOptions());
       dbConnected = true;
+      await ensureFinancialIndexes();
       global._demoMongoServer = demoMongo;
       await removeCustomerEmailIndex();
       await migrateLegacyUserData();
@@ -10633,6 +10974,7 @@ async function connectDatabase() {
     dbConnected = true;
     console.log('✓ MongoDB Atlas connected');
 
+    await ensureFinancialIndexes();
     await removeCustomerEmailIndex();
     await migrateLegacyUserData();
     await initializeAdminSecurity();
@@ -11092,8 +11434,12 @@ module.exports = {
   emitRideLifecycle,
   ADMIN_ACTIVE_RIDE_STATUSES,
   chargeLongRangeCommission,
+  startLongRangeRideWithCommission,
   completeRideFinancialSettlement,
   approveDriverPayment,
+  rejectDriverPayment,
+  runFinancialTransaction,
+  runIdempotentFinancialOperation,
   refreshPendingRideFares,
   SUB_ADMIN_PERMISSION_CATALOG,
   normalizeSubAdminPermissions,
@@ -11109,6 +11455,7 @@ module.exports = {
   seedTestAccounts,
   models: {
     User, LegacyUser, Customer, Driver, Admin, Ride, Wallet, Payment, Settings,
-    SOS, Ticket, PushSub, SubAdmin, StudentRideResponseLog, AccountDeletionTombstone
+    SOS, Ticket, PushSub, SubAdmin, StudentRideResponseLog, AccountDeletionTombstone,
+    FinancialOperation
   }
 };
