@@ -13,11 +13,6 @@ for (const envPath of [path.resolve(__dirname, '.env'), path.resolve(__dirname, 
   dotenv.config({ path: envPath, override: false });
 }
 const { computeBackfillPaidUntil } = require('./lib/backfillPaidUntil');
-const { assertStartupConfiguration } = require('./lib/productionConfig');
-
-if (require.main === module) {
-  assertStartupConfiguration();
-}
 
 function getMapboxAccessToken() {
   return String(

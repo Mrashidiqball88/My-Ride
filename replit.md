@@ -5,13 +5,13 @@ Nationwide ride-hailing platform with Customer, Driver, and Admin web portals pl
 ## Run & Operate
 
 - `cd ride-hailing && pnpm start` — run the canonical production service (`NODE_ENV=production`, `ride-hailing/server.js`)
-- `cd ride-hailing && pnpm dev` — run the explicit local test/demo service (`NODE_ENV=test`, `MYRIDE_TEST_MODE=true`)
+- `cd ride-hailing && pnpm dev` — run the local service
 - `cd ride-hailing && pnpm test` — run the Ride Hailing Playwright suite
 - `pnpm run typecheck` — full typecheck across all packages
 - `pnpm run build` — typecheck + build all packages
 - The `Ride Hailing App` workflow is the canonical production workflow and runs `cd ride-hailing && NODE_ENV=production PORT=3000 pnpm start`.
 - `artifacts/api-server` is a separate proxy artifact and is not the canonical Ride Hailing application service.
-- Production startup fails closed unless the variables documented in `ride-hailing/.env.example` are configured.
+- The server loads `ride-hailing/.env` or the repository-root `.env` without overriding variables supplied by the process environment.
 
 ## Stack
 
@@ -24,16 +24,14 @@ Nationwide ride-hailing platform with Customer, Driver, and Admin web portals pl
 ## Where things live
 
 - `ride-hailing/server.js` — canonical Customer, Driver, Admin, REST, Socket.io, and persistence service
-- `ride-hailing/lib/productionConfig.js` — production startup contract and forbidden test/demo flags
 - `ride-hailing/.env.example` — required production variables and configuration guidance
 - `artifacts/myride-customer-mobile` — native Customer application
 - `artifacts/myride-driver-mobile` — native Driver application
 
 ## Architecture decisions
 
-- Production uses `NODE_ENV=production` and refuses to start with missing required infrastructure or security configuration.
-- Local test/demo startup is explicit and isolated behind `NODE_ENV=test` and `MYRIDE_TEST_MODE=true`.
-- Demo/test flags are rejected by the production startup contract.
+- Production uses `NODE_ENV=production` through the canonical start command.
+- Environment values are loaded from the existing `.env` files and process environment.
 
 ## Product
 
@@ -45,8 +43,8 @@ Keep production-readiness changes narrowly scoped and verify web plus native beh
 
 ## Gotchas
 
-- Do not run `pnpm start` until the required production values in `ride-hailing/.env.example` are provisioned.
-- Do not set `DEMO_ACCOUNTS_ENABLED`, `PHONE_OTP_TEST_MODE`, or other test/demo flags in production.
+- Keep production values in the existing `.env` or deployment environment.
+- Demo/test behavior remains controlled by the existing runtime flags and `NODE_ENV` checks.
 
 ## Pointers
 

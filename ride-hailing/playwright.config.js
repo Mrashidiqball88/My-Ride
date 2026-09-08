@@ -21,7 +21,7 @@ module.exports = defineConfig({
     // production 600 s budget.  Playwright UI tests are unaffected because
     // they intercept /api/auth/register via page.route() before the request
     // reaches the server.
-    command: 'NODE_ENV=test MYRIDE_TEST_MODE=true DEMO_ACCOUNTS_ENABLED=true PORT=3000 REQUEST_TIMEOUT_MS=8000 node server.js',
+    command: 'PORT=3000 REQUEST_TIMEOUT_MS=8000 node server.js',
     port: 3000,
     timeout: 20_000,
     reuseExistingServer: true,  // use already-running server if available
