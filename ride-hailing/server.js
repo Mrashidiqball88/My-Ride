@@ -63,6 +63,53 @@ const {
 const app    = express();
 app.disable('x-powered-by');
 
+const configuredCorsOrigins = new Set(
+  String(process.env.CORS_ORIGIN || '')
+    .split(',')
+    .map(origin => origin.trim().replace(/\/+$/, ''))
+    .filter(origin => origin && origin !== '*')
+);
+function allowConfiguredOrigin(origin, callback) {
+  // Requests without an Origin include same-origin web requests and native
+  // clients. CORS does not apply to those requests.
+  if (!origin) return callback(null, true);
+  const normalizedOrigin = String(origin).trim().replace(/\/+$/, '');
+  if (configuredCorsOrigins.has(normalizedOrigin)) return callback(null, true);
+  // Do not opt into wildcard cross-origin access. The browser will block the
+  // response when the origin is not explicitly configured.
+  return callback(null, false);
+}
+const corsPolicy = {
+  origin: allowConfiguredOrigin,
+  methods: ['GET', 'HEAD', 'PUT', 'PATCH', 'POST', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Accept', 'Content-Type', 'Authorization', 'X-Session-Token', 'X-Requested-With'],
+  exposedHeaders: ['RateLimit-Limit', 'RateLimit-Remaining', 'RateLimit-Reset', 'Retry-After'],
+  credentials: false,
+  maxAge: 600,
+  optionsSuccessStatus: 204
+};
+function applySecurityHeaders(req, res, next) {
+  // Helmet-equivalent baseline. Content-Security-Policy is intentionally not
+  // enabled here because the existing Customer, Driver, and Admin shells use
+  // inline scripts and Mapbox/browser capabilities that require a separate CSP
+  // migration to avoid breaking the application.
+  res.removeHeader('X-Powered-By');
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
+  res.setHeader('X-Frame-Options', 'SAMEORIGIN');
+  res.setHeader('X-DNS-Prefetch-Control', 'off');
+  res.setHeader('X-Download-Options', 'noopen');
+  res.setHeader('X-Permitted-Cross-Domain-Policies', 'none');
+  res.setHeader('Permissions-Policy', 'camera=(), microphone=(self), geolocation=(self)');
+  const forwardedProtocol = String(req.get('x-forwarded-proto') || '').split(',')[0].trim();
+  if (process.env.NODE_ENV === 'production' && (req.secure || forwardedProtocol === 'https')) {
+    res.setHeader('Strict-Transport-Security', 'max-age=31536000; includeSubDomains');
+  }
+  next();
+}
+app.use(applySecurityHeaders);
+app.use(cors(corsPolicy));
+
 // ── 3. HEALTHCHECK ROUTES — FIRST lines after express(), zero dependencies
 // Replit deployment probes / immediately on startup; this must win before
 // any other route, middleware, or DB work is registered.
@@ -71,20 +118,8 @@ app.get('/health', (_req, res) => res.status(200).send('OK'));
 app.get('/api',    (_req, res) => res.status(200).json({ status: 'ok' }));
 
 const server = http.createServer(app);
-const configuredCorsOrigins = String(process.env.CORS_ORIGIN || '')
-  .split(',')
-  .map(origin => origin.trim())
-  .filter(Boolean);
-function allowConfiguredOrigin(origin, callback) {
-  // Requests without an Origin include native clients and same-origin tools.
-  // They do not need an Access-Control-Allow-Origin response header.
-  if (!origin) return callback(null, true);
-  if (configuredCorsOrigins.includes(origin)) return callback(null, true);
-  // With no configured allowlist, do not opt into cross-origin browser access.
-  return callback(null, false);
-}
 const io     = new Server(server, {
-  cors: { origin: allowConfiguredOrigin, methods: ['GET', 'POST'] },
+  cors: corsPolicy,
   // Keep the transport-level connection responsive while allowing the
   // application-level driver heartbeat to remain the source of truth for
   // online eligibility.
@@ -156,17 +191,6 @@ if (require.main === module) {
 }
 
 // ── 5. MIDDLEWARES & STATIC FILES ─────────────────────────────────────────
-app.use(cors({ origin: allowConfiguredOrigin }));
-app.use((_req, res, next) => {
-  res.setHeader('X-Content-Type-Options', 'nosniff');
-  res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
-  res.setHeader('X-Frame-Options', 'SAMEORIGIN');
-  // The Customer voice-search flow needs microphone access from this same
-  // origin. Keep camera disabled while allowing the explicitly requested
-  // browser capabilities.
-  res.setHeader('Permissions-Policy', 'camera=(), microphone=(self), geolocation=(self)');
-  next();
-});
 // Route handlers log their internal exception details server-side but should
 // never disclose database, filesystem, or provider errors to API clients.
 app.use((_req, res, next) => {
@@ -228,16 +252,46 @@ app.use('/uploads/driver_profiles', express.static(DRIVER_PROFILE_UPLOADS_DIR));
 // front of autoscaled instances, but this prevents a single instance from
 // being trivially exhausted and fails closed for malformed bursts.
 const RATE_LIMIT_BUCKETS = new Map();
-function rateLimit({ windowMs, max, key = req => req.ip }) {
+const RATE_LIMIT_MAX_BUCKETS = 20_000;
+let lastRateLimitPruneAt = 0;
+function requestIpKey(req) {
+  return String(req.ip || req.socket?.remoteAddress || 'unknown');
+}
+function pruneRateLimitBuckets(now) {
+  if (now - lastRateLimitPruneAt < 15_000 && RATE_LIMIT_BUCKETS.size <= RATE_LIMIT_MAX_BUCKETS) {
+    return;
+  }
+  lastRateLimitPruneAt = now;
+  for (const [bucketKey, bucket] of RATE_LIMIT_BUCKETS) {
+    if (bucket.resetAt <= now) RATE_LIMIT_BUCKETS.delete(bucketKey);
+  }
+  if (RATE_LIMIT_BUCKETS.size > RATE_LIMIT_MAX_BUCKETS) {
+    const excess = RATE_LIMIT_BUCKETS.size - RATE_LIMIT_MAX_BUCKETS;
+    let removed = 0;
+    for (const bucketKey of RATE_LIMIT_BUCKETS.keys()) {
+      RATE_LIMIT_BUCKETS.delete(bucketKey);
+      removed += 1;
+      if (removed >= excess) break;
+    }
+  }
+}
+function rateLimit({ name = 'default', windowMs, max, key = requestIpKey }) {
   return (req, res, next) => {
     const now = Date.now();
-    const bucketKey = `${req.path}:${key(req)}`;
+    pruneRateLimitBuckets(now);
+    const bucketKey = `${name}:${key(req)}`;
     const current = RATE_LIMIT_BUCKETS.get(bucketKey);
     if (!current || current.resetAt <= now) {
       RATE_LIMIT_BUCKETS.set(bucketKey, { count: 1, resetAt: now + windowMs });
+      res.setHeader('RateLimit-Limit', String(max));
+      res.setHeader('RateLimit-Remaining', String(Math.max(0, max - 1)));
+      res.setHeader('RateLimit-Reset', String(Math.ceil((now + windowMs) / 1000)));
       return next();
     }
     current.count += 1;
+    res.setHeader('RateLimit-Limit', String(max));
+    res.setHeader('RateLimit-Remaining', String(Math.max(0, max - current.count)));
+    res.setHeader('RateLimit-Reset', String(Math.ceil(current.resetAt / 1000)));
     if (current.count > max) {
       res.setHeader('Retry-After', Math.ceil((current.resetAt - now) / 1000));
       return res.status(429).json({ error: 'Too many requests. Please try again later.' });
@@ -245,16 +299,30 @@ function rateLimit({ windowMs, max, key = req => req.ip }) {
     return next();
   };
 }
-const identityRateKey = req => `${req.ip}:${String(req.body?.email || req.body?.username || '').trim().toLowerCase()}`;
+const identityRateKey = req => `${requestIpKey(req)}:${String(
+  req.body?.email || req.body?.username || req.body?.phone || ''
+).trim().toLowerCase() || 'anonymous'}`;
+app.use('/api', rateLimit({
+  name: 'api-ip',
+  windowMs: 60 * 1000,
+  max: 600,
+  key: requestIpKey
+}));
 app.use(['/api/auth/login', '/api/admin/login', '/api/admin/sub-user/login'],
-  rateLimit({ windowMs: 15 * 60 * 1000, max: 30, key: identityRateKey }));
+  rateLimit({ name: 'auth-login', windowMs: 15 * 60 * 1000, max: 12, key: identityRateKey }));
 app.use(['/api/auth/register', '/api/auth/forgot-password', '/api/auth/reset-password', '/api/admin/forgot-password'],
-  rateLimit({ windowMs: 15 * 60 * 1000, max: 20, key: identityRateKey }));
+  rateLimit({ name: 'auth-recovery', windowMs: 15 * 60 * 1000, max: 10, key: identityRateKey }));
 app.use('/api/auth/phone-otp/request',
-  rateLimit({ windowMs: 10 * 60 * 1000, max: 5, key: identityRateKey }));
-app.use('/api/geocode', rateLimit({ windowMs: 60 * 1000, max: 120 }));
-app.use('/api/fare/calculate', rateLimit({ windowMs: 60 * 1000, max: 120 }));
-app.use('/api/sos', rateLimit({ windowMs: 10 * 60 * 1000, max: 20 }));
+  rateLimit({ name: 'auth-phone-otp', windowMs: 10 * 60 * 1000, max: 5, key: identityRateKey }));
+app.use('/api/geocode', rateLimit({ name: 'geocode', windowMs: 60 * 1000, max: 120 }));
+app.use('/api/fare/calculate', rateLimit({ name: 'fare-calculate', windowMs: 60 * 1000, max: 120 }));
+app.use('/api/sos', rateLimit({ name: 'sos', windowMs: 10 * 60 * 1000, max: 20 }));
+app.post('/api/rides', rateLimit({
+  name: 'ride-create',
+  windowMs: 10 * 60 * 1000,
+  max: 10,
+  key: requestIpKey
+}));
 
 const MAX_ID_DOCUMENT_BYTES = 6 * 1024 * 1024;
 const ID_DOCUMENT_DATA_URL = /^data:image\/(jpeg|jpg|png|webp);base64,([A-Za-z0-9+/=\s]+)$/s;
