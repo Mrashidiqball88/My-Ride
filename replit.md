@@ -1,45 +1,53 @@
-# [Project name]
+# My Ride
 
-_Replace the heading above with the project's name, and this line with one sentence describing what this app does for users._
+Nationwide ride-hailing platform with Customer, Driver, and Admin web portals plus native Customer and Driver applications.
 
 ## Run & Operate
 
-- `pnpm --filter @workspace/api-server run dev` — run the API server (port 5000)
+- `cd ride-hailing && pnpm start` — run the canonical production service (`NODE_ENV=production`, `ride-hailing/server.js`)
+- `cd ride-hailing && pnpm dev` — run the explicit local test/demo service (`NODE_ENV=test`, `MYRIDE_TEST_MODE=true`)
+- `cd ride-hailing && pnpm test` — run the Ride Hailing Playwright suite
 - `pnpm run typecheck` — full typecheck across all packages
 - `pnpm run build` — typecheck + build all packages
-- `pnpm --filter @workspace/api-spec run codegen` — regenerate API hooks and Zod schemas from the OpenAPI spec
-- `pnpm --filter @workspace/db run push` — push DB schema changes (dev only)
-- Required env: `DATABASE_URL` — Postgres connection string
+- The `Ride Hailing App` workflow is the canonical production workflow and runs `cd ride-hailing && NODE_ENV=production PORT=3000 pnpm start`.
+- `artifacts/api-server` is a separate proxy artifact and is not the canonical Ride Hailing application service.
+- Production startup fails closed unless the variables documented in `ride-hailing/.env.example` are configured.
 
 ## Stack
 
-- pnpm workspaces, Node.js 24, TypeScript 5.9
-- API: Express 5
-- DB: PostgreSQL + Drizzle ORM
-- Validation: Zod (`zod/v4`), `drizzle-zod`
-- API codegen: Orval (from OpenAPI spec)
-- Build: esbuild (CJS bundle)
+- pnpm workspace, Node.js, JavaScript
+- Canonical service: Express + Mongoose + Socket.io
+- Database: MongoDB
+- Shared infrastructure: Redis, SMTP, Mapbox, Web Push, DigitalOcean Spaces
+- Native clients: Expo Customer and Driver applications
 
 ## Where things live
 
-_Populate as you build — short repo map plus pointers to the source-of-truth file for DB schema, API contracts, theme files, etc._
+- `ride-hailing/server.js` — canonical Customer, Driver, Admin, REST, Socket.io, and persistence service
+- `ride-hailing/lib/productionConfig.js` — production startup contract and forbidden test/demo flags
+- `ride-hailing/.env.example` — required production variables and configuration guidance
+- `artifacts/myride-customer-mobile` — native Customer application
+- `artifacts/myride-driver-mobile` — native Driver application
 
 ## Architecture decisions
 
-_Populate as you build — non-obvious choices a reader couldn't infer from the code (3-5 bullets)._
+- Production uses `NODE_ENV=production` and refuses to start with missing required infrastructure or security configuration.
+- Local test/demo startup is explicit and isolated behind `NODE_ENV=test` and `MYRIDE_TEST_MODE=true`.
+- Demo/test flags are rejected by the production startup contract.
 
 ## Product
 
-_Describe the high-level user-facing capabilities of this app once they exist._
+Customers book rides and track trips, Drivers receive and manage ride requests, and Admins manage operations, identity verification, fares, wallets, and payments.
 
 ## User preferences
 
-_Populate as you build — explicit user instructions worth remembering across sessions._
+Keep production-readiness changes narrowly scoped and verify web plus native behavior where applicable.
 
 ## Gotchas
 
-_Populate as you build — sharp edges, "always run X before Y" rules._
+- Do not run `pnpm start` until the required production values in `ride-hailing/.env.example` are provisioned.
+- Do not set `DEMO_ACCOUNTS_ENABLED`, `PHONE_OTP_TEST_MODE`, or other test/demo flags in production.
 
 ## Pointers
 
-- See the `pnpm-workspace` skill for workspace structure, TypeScript setup, and package details
+- See `ride-hailing/.env.example` before configuring DigitalOcean or another production host.

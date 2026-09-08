@@ -29,7 +29,7 @@ outputType = "console"
 
 [[workflows.workflow.tasks]]
 task = "shell.exec"
-args = "cd ride-hailing && PORT=3000 DEMO_ACCOUNTS_ENABLED=true pnpm dev"
+args = "cd ride-hailing && NODE_ENV=production PORT=3000 pnpm start"
 
 [agent]
 stack = "PNPM_WORKSPACE"
