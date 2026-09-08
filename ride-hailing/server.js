@@ -129,11 +129,16 @@ const io     = new Server(server, {
   transports: ['websocket', 'polling']
 });
 
-const SMTP_HOST = process.env.SMTP_HOST || '';
+// Gmail app-password configuration is supported through GMAIL_USER/GMAIL_PASS,
+// while the existing SMTP_* names remain supported for other providers and
+// existing deployments.
+const SMTP_HOST = process.env.SMTP_HOST || (
+  process.env.GMAIL_USER || process.env.GMAIL_PASS ? 'smtp.gmail.com' : ''
+);
 const SMTP_PORT = Number(process.env.SMTP_PORT || 587);
 const SMTP_SECURE = process.env.SMTP_SECURE === 'true' || SMTP_PORT === 465;
-const SMTP_USER = process.env.SMTP_USER || '';
-const SMTP_PASS = process.env.SMTP_PASS || '';
+const SMTP_USER = process.env.GMAIL_USER || process.env.SMTP_USER || '';
+const SMTP_PASS = process.env.GMAIL_PASS || process.env.SMTP_PASS || '';
 const EMAIL_FROM = process.env.EMAIL_FROM || SMTP_USER;
 const smtpPassword = SMTP_HOST === 'smtp.gmail.com' ? SMTP_PASS.replace(/\s/g, '') : SMTP_PASS;
 let emailTransporter = nodemailer.createTransport({
@@ -142,15 +147,25 @@ let emailTransporter = nodemailer.createTransport({
   secure: SMTP_SECURE,
   auth: SMTP_USER && smtpPassword ? { user: SMTP_USER, pass: smtpPassword } : undefined
 });
+function currentEmailFrom() {
+  return process.env.EMAIL_FROM
+    || process.env.GMAIL_USER
+    || process.env.SMTP_USER
+    || EMAIL_FROM;
+}
 function emailOtpConfigured() {
   // Read the environment at request time as well as startup time so tests and
   // deployments that attach SMTP configuration after module loading do not
   // incorrectly report the service as unavailable.
+  const host = process.env.SMTP_HOST
+    || (process.env.GMAIL_USER || process.env.GMAIL_PASS ? 'smtp.gmail.com' : SMTP_HOST);
+  const user = process.env.GMAIL_USER || process.env.SMTP_USER || SMTP_USER;
+  const pass = process.env.GMAIL_PASS || process.env.SMTP_PASS || SMTP_PASS;
   return Boolean(
-    (process.env.SMTP_HOST || SMTP_HOST) &&
-    (process.env.SMTP_USER || SMTP_USER) &&
-    (process.env.SMTP_PASS || SMTP_PASS) &&
-    (process.env.EMAIL_FROM || EMAIL_FROM || process.env.SMTP_USER || SMTP_USER)
+    host &&
+    user &&
+    pass &&
+    (process.env.EMAIL_FROM || user || currentEmailFrom())
   );
 }
 function setEmailTransporterForTests(transporter) {
@@ -4266,7 +4281,7 @@ async function sendAdminSecurityOtp({ action, email, sessionVersion = 0, ip = 'u
 
   try {
     await emailTransporter.sendMail({
-      from: process.env.EMAIL_FROM || EMAIL_FROM || process.env.SMTP_USER || SMTP_USER,
+      from: currentEmailFrom(),
       to: normalizedEmail,
       subject: 'My Ride Admin security verification code',
       text: `Your My Ride Admin ${actionLabel} verification code is ${otp}. It expires in 10 minutes. If you did not request this, ignore this email.`,
@@ -5282,7 +5297,7 @@ app.post('/api/auth/forgot-password', async (req, res) => {
     const otp = String(crypto.randomInt(100000, 1000000));
     const otpHash = await bcrypt.hash(otp, 10);
     await emailTransporter.sendMail({
-      from: EMAIL_FROM,
+      from: currentEmailFrom(),
       to: email,
       subject: 'My Ride password reset code',
       text: `Your My Ride password reset code is ${otp}. It expires in 10 minutes. If you did not request this, ignore this email.`,
