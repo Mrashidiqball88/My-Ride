@@ -164,16 +164,19 @@ function emailOtpConfigured() {
   // Read the environment at request time as well as startup time so tests and
   // deployments that attach SMTP configuration after module loading do not
   // incorrectly report the service as unavailable.
-  const host = process.env.SMTP_HOST
-    || (process.env.GMAIL_USER || process.env.GMAIL_PASS ? 'smtp.gmail.com' : SMTP_HOST);
-  const user = process.env.GMAIL_USER || process.env.SMTP_USER || SMTP_USER;
-  const pass = process.env.GMAIL_PASS || process.env.SMTP_PASS || SMTP_PASS;
-  return Boolean(
-    host &&
-    user &&
-    pass &&
-    (process.env.EMAIL_FROM || user || currentEmailFrom())
-  );
+  const gmailUser = String(process.env.GMAIL_USER || '').trim();
+  const smtpUser = String(process.env.SMTP_USER || '').trim();
+  const gmailPass = String(process.env.GMAIL_PASS || '').trim();
+  const smtpPass = String(process.env.SMTP_PASS || '').trim();
+  const host = String(
+    process.env.SMTP_HOST
+      || (gmailUser || gmailPass ? 'smtp.gmail.com' : SMTP_HOST)
+      || ''
+  ).trim();
+  const user = gmailUser || smtpUser || String(SMTP_USER || '').trim();
+  const pass = gmailPass || smtpPass || String(SMTP_PASS || '').trim();
+  const from = String(process.env.EMAIL_FROM || user || currentEmailFrom() || '').trim();
+  return Boolean(host && user && pass && from);
 }
 function setEmailTransporterForTests(transporter) {
   emailTransporter = transporter;
@@ -4399,8 +4402,7 @@ async function sendAdminSecurityOtp({ action, email, sessionVersion = 0, ip = 'u
       html: `<p>Your My Ride Admin ${actionLabel} verification code is <strong>${otp}</strong>.</p><p>It expires in 10 minutes. If you did not request this, ignore this email.</p>`
     });
   } catch (err) {
-    // Never log the code, email credentials, or the provider's full error.
-    console.error('Admin security OTP delivery failed');
+    console.error('Admin security OTP delivery failed:', err);
     return { ok: false, status: 503, error: 'Unable to send the Admin verification code' };
   }
 
