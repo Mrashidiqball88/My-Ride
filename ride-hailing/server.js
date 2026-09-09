@@ -147,6 +147,9 @@ const smtpPassword = SMTP_HOST === 'smtp.gmail.com' ? SMTP_PASS.replace(/\s/g, '
 let emailTransporter = nodemailer.createTransport({
   host: SMTP_HOST,
   port: SMTP_PORT,
+  // Some DigitalOcean hosts advertise IPv6 but do not have a usable outbound
+  // IPv6 route. Force Nodemailer's underlying DNS/socket connection to IPv4.
+  // Do not set localAddress here: the correct local interface varies by host.
   family: 4,
   secure: SMTP_SECURE,
   auth: SMTP_USER && smtpPassword ? { user: SMTP_USER, pass: smtpPassword } : undefined
