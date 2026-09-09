@@ -146,6 +146,7 @@ const smtpPassword = SMTP_HOST === 'smtp.gmail.com' ? SMTP_PASS.replace(/\s/g, '
 let emailTransporter = nodemailer.createTransport({
   host: SMTP_HOST,
   port: SMTP_PORT,
+  family: 4,
   secure: SMTP_SECURE,
   auth: SMTP_USER && smtpPassword ? { user: SMTP_USER, pass: smtpPassword } : undefined
 });
