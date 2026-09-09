@@ -41,12 +41,12 @@ const bcrypt   = require('bcryptjs');
 const jwt      = require('jsonwebtoken');
 const cors     = require('cors');
 const http     = require('http');
+const https    = require('https');
 const { Server } = require('socket.io');
 const webpush  = require('web-push');
 const crypto   = require('crypto');
 const Tesseract = require('tesseract.js');
 const sharp    = require('sharp');
-const nodemailer = require('nodemailer');
 const {
   startRedisAcceleration,
   isRedisReady,
@@ -130,62 +130,99 @@ const io     = new Server(server, {
   transports: ['websocket', 'polling']
 });
 
-// Gmail app-password configuration is supported through GMAIL_USER/GMAIL_PASS,
-// while the existing SMTP_* names remain supported for other providers and
-// existing deployments.
-const SMTP_HOST = process.env.SMTP_HOST || (
-  process.env.GMAIL_USER || process.env.GMAIL_PASS ? 'smtp.gmail.com' : ''
-);
-const SMTP_PORT = Number(process.env.SMTP_PORT || 465);
-const SMTP_SECURE = SMTP_HOST === 'smtp.gmail.com'
-  ? true
-  : process.env.SMTP_SECURE === 'true' || SMTP_PORT === 465;
-const SMTP_USER = process.env.GMAIL_USER || process.env.SMTP_USER || '';
-const SMTP_PASS = process.env.GMAIL_PASS || process.env.SMTP_PASS || '';
-const EMAIL_FROM = process.env.EMAIL_FROM || SMTP_USER;
-const smtpPassword = SMTP_HOST === 'smtp.gmail.com' ? SMTP_PASS.replace(/\s/g, '') : SMTP_PASS;
-let emailTransporter = nodemailer.createTransport({
-  host: SMTP_HOST,
-  port: SMTP_PORT,
-  // Some DigitalOcean hosts advertise IPv6 but do not have a usable outbound
-  // IPv6 route. Force Nodemailer's underlying DNS/socket connection to IPv4.
-  // Do not set localAddress here: the correct local interface varies by host.
-  family: 4,
-  secure: SMTP_SECURE,
-  auth: SMTP_USER && smtpPassword ? { user: SMTP_USER, pass: smtpPassword } : undefined
-});
+const RESEND_API_HOST = 'api.resend.com';
+const RESEND_API_PATH = '/emails';
+const RESEND_REQUEST_TIMEOUT_MS = 15_000;
+
+function resendApiKey() {
+  return String(process.env.RESEND_API_KEY || '').trim();
+}
+
 function currentEmailFrom() {
-  return process.env.EMAIL_FROM
-    || process.env.GMAIL_USER
-    || process.env.SMTP_USER
-    || EMAIL_FROM;
+  return String(process.env.EMAIL_FROM || '').trim();
 }
+
 function emailOtpConfigured() {
-  // Read the environment at request time as well as startup time so tests and
-  // deployments that attach SMTP configuration after module loading do not
-  // incorrectly report the service as unavailable.
-  const gmailUser = String(process.env.GMAIL_USER || '').trim();
-  const smtpUser = String(process.env.SMTP_USER || '').trim();
-  const gmailPass = String(process.env.GMAIL_PASS || '').trim();
-  const smtpPass = String(process.env.SMTP_PASS || '').trim();
-  const host = String(
-    process.env.SMTP_HOST
-      || (gmailUser || gmailPass ? 'smtp.gmail.com' : SMTP_HOST)
-      || ''
-  ).trim();
-  const user = gmailUser || smtpUser || String(SMTP_USER || '').trim();
-  const pass = gmailPass || smtpPass || String(SMTP_PASS || '').trim();
-  const from = String(process.env.EMAIL_FROM || user || currentEmailFrom() || '').trim();
-  return Boolean(host && user && pass && from);
+  // Read the environment at request time so tests and deployments that attach
+  // secrets after module loading do not report the HTTPS email service as
+  // unavailable. No SMTP or Gmail variables are consulted.
+  return Boolean(resendApiKey() && currentEmailFrom());
 }
-function setEmailTransporterForTests(transporter) {
-  emailTransporter = transporter;
+
+function resendError(message, code = 'RESEND_REQUEST_FAILED') {
+  const error = new Error(message);
+  error.statusCode = 503;
+  error.code = code;
+  return error;
 }
-if (emailOtpConfigured()) {
-  emailTransporter.verify()
-    .then(() => console.log('✓ Email OTP SMTP connection verified'))
-    .catch((err) => console.error('Email OTP SMTP connection failed:', err.message));
+
+function sendEmailViaResend({ from, to, subject, text, html }) {
+  const apiKey = resendApiKey();
+  if (!apiKey) return Promise.reject(resendError('Resend API key is not configured', 'RESEND_NOT_CONFIGURED'));
+
+  const body = JSON.stringify({
+    from: String(from || currentEmailFrom()).trim(),
+    to,
+    subject,
+    text,
+    html
+  });
+
+  return new Promise((resolve, reject) => {
+    const request = https.request({
+      hostname: RESEND_API_HOST,
+      path: RESEND_API_PATH,
+      method: 'POST',
+      timeout: RESEND_REQUEST_TIMEOUT_MS,
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        'Content-Type': 'application/json',
+        'Content-Length': Buffer.byteLength(body)
+      }
+    }, response => {
+      let responseBody = '';
+      response.setEncoding('utf8');
+      response.on('data', chunk => {
+        if (responseBody.length < 8192) responseBody += chunk;
+      });
+      response.on('end', () => {
+        const statusCode = Number(response.statusCode || 0);
+        if (statusCode >= 200 && statusCode < 300) {
+          let payload = {};
+          try { payload = responseBody ? JSON.parse(responseBody) : {}; } catch (_err) {}
+          return resolve(payload);
+        }
+
+        let providerMessage = responseBody.trim();
+        try {
+          const parsed = JSON.parse(responseBody);
+          providerMessage = parsed?.message || parsed?.error || providerMessage;
+        } catch (_err) {}
+        const detail = providerMessage ? `: ${providerMessage}` : '';
+        const error = resendError(
+          `Resend email API request failed with HTTP ${statusCode || 'unknown'}${detail}`,
+          `RESEND_HTTP_${statusCode || 'UNKNOWN'}`
+        );
+        error.providerStatusCode = statusCode;
+        reject(error);
+      });
+    });
+
+    request.on('timeout', () => {
+      request.destroy(resendError('Resend email API request timed out', 'RESEND_ETIMEDOUT'));
+    });
+    request.on('error', reject);
+    request.write(body);
+    request.end();
+  });
 }
+
+let emailSender = { sendMail: sendEmailViaResend };
+function setEmailSenderForTests(sender) {
+  emailSender = sender;
+}
+
+if (emailOtpConfigured()) console.log('✓ Resend email API configured over HTTPS');
 
 // ── Request body timeout ──────────────────────────────────────────────────
 // Drivers on 2G/3G can take 30–90 s to push four compressed photos (~1 MB
@@ -4394,7 +4431,7 @@ async function sendAdminSecurityOtp({ action, email, sessionVersion = 0, ip = 'u
       : 'password change';
 
   try {
-    await emailTransporter.sendMail({
+    await emailSender.sendMail({
       from: currentEmailFrom(),
       to: normalizedEmail,
       subject: 'My Ride Admin security verification code',
@@ -5410,7 +5447,7 @@ app.post('/api/auth/forgot-password', async (req, res) => {
     if (!emailOtpConfigured()) return res.status(503).json({ error: 'Email OTP service is not configured' });
     const otp = String(crypto.randomInt(100000, 1000000));
     const otpHash = await bcrypt.hash(otp, 10);
-    await emailTransporter.sendMail({
+    await emailSender.sendMail({
       from: currentEmailFrom(),
       to: email,
       subject: 'My Ride password reset code',
@@ -5423,6 +5460,7 @@ app.post('/api/auth/forgot-password', async (req, res) => {
     });
     return res.json({ success: true, message: 'A verification code was sent to your email address' });
   } catch (err) {
+    console.error('Customer/Driver password reset email delivery failed:', err);
     res.status(err.statusCode || 500).json({ error: err.message, ...(err.code ? { code: err.code } : {}) });
   }
 });
@@ -11573,7 +11611,9 @@ module.exports = {
   SUB_ADMIN_PERMISSION_CATALOG,
   normalizeSubAdminPermissions,
   hasAdminPermission,
-  setEmailTransporterForTests,
+  emailOtpConfigured,
+  sendEmailViaResend,
+  setEmailSenderForTests,
   getMongoConnectionOptions,
   getMongoRetryOptions,
   getConfiguredMongoUri,

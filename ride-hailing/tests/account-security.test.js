@@ -7,7 +7,7 @@ const crypto = require('crypto');
 const bcrypt = require('bcryptjs');
 
 const rideHailing = require('../server');
-const { app, models, setEmailTransporterForTests } = rideHailing;
+const { app, models, setEmailSenderForTests } = rideHailing;
 
 const JWT_SECRET = 'ride-hailing-secret-fallback';
 const original = {
@@ -36,7 +36,7 @@ afterEach(() => {
     findById: original.adminFindById,
     findOneAndUpdate: original.adminFindOneAndUpdate
   });
-  setEmailTransporterForTests(rideHailing.emailTransporter || { sendMail: async () => {} });
+  setEmailSenderForTests({ sendMail: async () => {} });
 });
 
 function query(value) {
@@ -245,18 +245,14 @@ test('driver identity documents are private and unsafe document URLs are rejecte
 });
 
 test('recovery-key setup works, rate limits attempts, and invalidates old Super Admin sessions', async () => {
-  const previousSmtp = {
-    SMTP_HOST: process.env.SMTP_HOST,
-    SMTP_USER: process.env.SMTP_USER,
-    SMTP_PASS: process.env.SMTP_PASS,
+  const previousEmail = {
+    RESEND_API_KEY: process.env.RESEND_API_KEY,
     EMAIL_FROM: process.env.EMAIL_FROM
   };
-  process.env.SMTP_HOST = 'smtp.test';
-  process.env.SMTP_USER = 'admin@example.test';
-  process.env.SMTP_PASS = 'test-smtp-password';
+  process.env.RESEND_API_KEY = 're_test_key';
   process.env.EMAIL_FROM = 'admin@example.test';
   const sentMail = [];
-  setEmailTransporterForTests({ sendMail: async mail => { sentMail.push(mail); } });
+  setEmailSenderForTests({ sendMail: async mail => { sentMail.push(mail); } });
   const security = {
     passwordHash: bcrypt.hashSync('admin1234', 4),
     recoveryKeyHash: '',
@@ -365,7 +361,7 @@ test('recovery-key setup works, rate limits attempts, and invalidates old Super 
       assert.equal(newTokenClaims.adminSessionVersion, 2);
     });
   } finally {
-    for (const [key, value] of Object.entries(previousSmtp)) {
+    for (const [key, value] of Object.entries(previousEmail)) {
       if (value === undefined) delete process.env[key];
       else process.env[key] = value;
     }
@@ -741,9 +737,7 @@ test('Admin password changes require a fresh emailed OTP and throttle resend req
     ADMIN_EMAIL: process.env.ADMIN_EMAIL,
     ADMIN_PASSWORD: process.env.ADMIN_PASSWORD,
     ADMIN_RECOVERY_KEY: process.env.ADMIN_RECOVERY_KEY,
-    SMTP_HOST: process.env.SMTP_HOST,
-    SMTP_USER: process.env.SMTP_USER,
-    SMTP_PASS: process.env.SMTP_PASS,
+    RESEND_API_KEY: process.env.RESEND_API_KEY,
     EMAIL_FROM: process.env.EMAIL_FROM,
     NODE_ENV: process.env.NODE_ENV,
     MONGO_URI: process.env.MONGO_URI,
@@ -752,9 +746,7 @@ test('Admin password changes require a fresh emailed OTP and throttle resend req
   process.env.ADMIN_EMAIL = 'admin-otp@example.test';
   delete process.env.ADMIN_PASSWORD;
   delete process.env.ADMIN_RECOVERY_KEY;
-  process.env.SMTP_HOST = 'smtp.test';
-  process.env.SMTP_USER = 'admin@example.test';
-  process.env.SMTP_PASS = 'test-smtp-password';
+  process.env.RESEND_API_KEY = 're_test_key';
   process.env.EMAIL_FROM = 'admin@example.test';
   process.env.NODE_ENV = 'development';
   delete process.env.MONGO_URI;
@@ -774,7 +766,7 @@ test('Admin password changes require a fresh emailed OTP and throttle resend req
     Object.assign(security, update.$set);
     return { ...security };
   };
-  setEmailTransporterForTests({ sendMail: async mail => { sentMail.push(mail); } });
+  setEmailSenderForTests({ sendMail: async mail => { sentMail.push(mail); } });
 
   try {
     await withServer(async server => {
