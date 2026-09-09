@@ -28,7 +28,7 @@ function token(overrides = {}) {
 }
 
 async function request(server, path, options = {}) {
-  models.Admin.findById = () => ({ lean: async () => ({ email: 'admin@myride.com', sessionVersion: 0 }) });
+  models.Admin.findById = () => ({ lean: async () => ({ email: 'admin@example.test', sessionVersion: 0 }) });
   const response = await fetch(`http://127.0.0.1:${server.address().port}${path}`, {
     ...options,
     headers: { 'content-type': 'application/json', authorization: `Bearer ${token()}`, ...(options.headers || {}) }

@@ -69,11 +69,11 @@ async function withServer(callback) {
 }
 
 function adminToken(version = 0) {
-  return jwt.sign({ isAdmin: true, email: 'admin@myride.com', adminSessionVersion: version }, JWT_SECRET);
+  return jwt.sign({ isAdmin: true, email: configuredAdminEmail(), adminSessionVersion: version }, JWT_SECRET);
 }
 
 function configuredAdminEmail() {
-  return process.env.ADMIN_EMAIL || 'admin@myride.com';
+  return process.env.ADMIN_EMAIL || process.env.GMAIL_USER || 'admin@example.test';
 }
 
 function subAdminToken() {
@@ -380,7 +380,7 @@ test('preview Admin password secret overrides a stale ephemeral database hash', 
     NODE_ENV: process.env.NODE_ENV,
     MONGO_URI: process.env.MONGO_URI
   };
-  process.env.ADMIN_EMAIL = 'machinescarelab@gmail.com';
+  process.env.ADMIN_EMAIL = 'preview-admin@example.test';
   process.env.ADMIN_PASSWORD = 'preview-admin-password';
   process.env.DEMO_ACCOUNTS_ENABLED = 'true';
   process.env.NODE_ENV = 'development';
@@ -395,13 +395,13 @@ test('preview Admin password secret overrides a stale ephemeral database hash', 
     await withServer(async server => {
       const staleLogin = await request(server, '/api/admin/login', {
         method: 'POST',
-        body: JSON.stringify({ email: 'machinescarelab@gmail.com', password: 'old-preview-password' })
+        body: JSON.stringify({ email: 'preview-admin@example.test', password: 'old-preview-password' })
       });
       assert.equal(staleLogin.response.status, 401);
 
       const currentLogin = await request(server, '/api/admin/login', {
         method: 'POST',
-        body: JSON.stringify({ email: 'machinescarelab@gmail.com', password: 'preview-admin-password' })
+        body: JSON.stringify({ email: 'preview-admin@example.test', password: 'preview-admin-password' })
       });
       assert.equal(currentLogin.response.status, 200);
     });
@@ -413,7 +413,7 @@ test('preview Admin password secret overrides a stale ephemeral database hash', 
   }
 });
 
-test('pre-login Admin configuration uses the clean fallback without credential fields', async () => {
+test('pre-login Admin configuration uses GMAIL_USER without credential fields', async () => {
   const previousEmail = process.env.ADMIN_EMAIL;
   delete process.env.ADMIN_EMAIL;
   models.Admin.findById = () => query({
@@ -427,7 +427,7 @@ test('pre-login Admin configuration uses the clean fallback without credential f
     await withServer(async server => {
       const result = await request(server, '/api/admin/login-config');
       assert.equal(result.response.status, 200);
-       assert.deepEqual(result.body, { email: 'admin@myride.com' });
+       assert.deepEqual(result.body, { email: configuredAdminEmail() });
       assert.equal(result.body.password, undefined);
       assert.equal(result.body.recoveryKey, undefined);
       assert.equal(result.body.passwordHash, undefined);
@@ -447,14 +447,14 @@ test('legacy Settings and shared User Admin-shaped records cannot authenticate',
   models.Settings.findOne = () => query({
     key: 'admin_security',
     value: {
-      email: 'admin@myride.com',
+      email: 'legacy-admin@example.test',
       passwordHash: legacyPasswordHash,
       sessionVersion: 0
     }
   });
   models.User.findOne = () => query({
     _id: 'legacy-admin',
-    email: 'admin@myride.com',
+    email: 'legacy-admin@example.test',
     isAdmin: true,
     password: legacyPasswordHash
   });
@@ -463,7 +463,7 @@ test('legacy Settings and shared User Admin-shaped records cannot authenticate',
     await withServer(async server => {
       const result = await request(server, '/api/admin/login', {
         method: 'POST',
-        body: JSON.stringify({ email: 'admin@myride.com', password: 'legacy-admin-password' })
+        body: JSON.stringify({ email: 'legacy-admin@example.test', password: 'legacy-admin-password' })
       });
       assert.equal(result.response.status, 401);
     });
@@ -598,9 +598,10 @@ test('Admin credential sync repairs stale backup hashes and invalidates old sess
   }
 });
 
-test('dedicated Admin credentials remain usable when environment bootstrap values are absent', async () => {
+test('Admin credential synchronization rejects a missing environment identity', async () => {
   const previousEnv = {
     ADMIN_EMAIL: process.env.ADMIN_EMAIL,
+    GMAIL_USER: process.env.GMAIL_USER,
     ADMIN_PASSWORD: process.env.ADMIN_PASSWORD,
     ADMIN_RECOVERY_KEY: process.env.ADMIN_RECOVERY_KEY,
     NODE_ENV: process.env.NODE_ENV,
@@ -608,43 +609,18 @@ test('dedicated Admin credentials remain usable when environment bootstrap value
     DEMO_ACCOUNTS_ENABLED: process.env.DEMO_ACCOUNTS_ENABLED
   };
   delete process.env.ADMIN_EMAIL;
+  delete process.env.GMAIL_USER;
   delete process.env.ADMIN_PASSWORD;
   delete process.env.ADMIN_RECOVERY_KEY;
   process.env.NODE_ENV = 'production';
   process.env.MONGO_URI = 'mongodb://admin-sync.test';
   delete process.env.DEMO_ACCOUNTS_ENABLED;
 
-  const stored = {
-    email: 'admin@myride.com',
-    passwordHash: await bcrypt.hash('database-admin-password', 4),
-    recoveryKeyHash: await bcrypt.hash('database-recovery-key', 4),
-    sessionVersion: 2
-  };
-  let updateCount = 0;
-  models.Admin.findById = () => query(stored);
-  models.Admin.findOneAndUpdate = async () => {
-    updateCount += 1;
-    return stored;
-  };
-
   try {
-    const result = await rideHailing.syncAdminSecurity();
-    assert.equal(result.updated, false);
-     assert.equal(result.email, 'admin@myride.com');
-    assert.equal(result.passwordConfigured, true);
-    assert.equal(result.recoveryKeyConfigured, true);
-    assert.equal(updateCount, 0);
-
-    await withServer(async server => {
-      const login = await request(server, '/api/admin/login', {
-        method: 'POST',
-        body: JSON.stringify({
-         email: 'admin@myride.com',
-          password: 'database-admin-password'
-        })
-      });
-      assert.equal(login.response.status, 200);
-    });
+    await assert.rejects(
+      () => rideHailing.syncAdminSecurity(),
+      /ADMIN_EMAIL or GMAIL_USER must be configured/
+    );
   } finally {
     for (const [key, value] of Object.entries(previousEnv)) {
       if (value === undefined) delete process.env[key];

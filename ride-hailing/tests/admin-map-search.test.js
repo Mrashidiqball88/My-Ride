@@ -36,7 +36,7 @@ function driverOnlySubAdminToken() {
 }
 
 function adminSecurityStub() {
-  models.Admin.findById = () => ({ lean: async () => ({ email: 'admin@myride.com', sessionVersion: 0 }) });
+  models.Admin.findById = () => ({ lean: async () => ({ email: 'admin@example.test', sessionVersion: 0 }) });
 }
 
 function listQuery(items) {

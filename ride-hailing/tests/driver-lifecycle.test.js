@@ -48,7 +48,7 @@ function superAdminToken() {
 }
 
 function stubAdminSecurity() {
-  models.Admin.findById = () => ({ lean: async () => ({ email: 'admin@myride.com', sessionVersion: 0 }) });
+  models.Admin.findById = () => ({ lean: async () => ({ email: 'admin@example.test', sessionVersion: 0 }) });
 }
 
 async function adminRequest(server, path, token, method = 'GET') {

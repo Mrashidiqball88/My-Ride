@@ -3292,9 +3292,9 @@ function clearAdminRecoveryThrottle(req) {
 }
 
 function configuredAdminEmail(_persistedEmail = '') {
-  // The environment value is authoritative. When it is absent, use the clean
-  // My Ride identity rather than inheriting an email from another collection.
-  return String(process.env.ADMIN_EMAIL || '').trim() || 'admin@myride.com';
+  // The Admin identity is environment-controlled. Never inherit an email from
+  // another collection or silently fall back to a hardcoded address.
+  return String(process.env.ADMIN_EMAIL || process.env.GMAIL_USER || '').trim();
 }
 
 function adminEnvironmentModeEnabled() {
@@ -3314,13 +3314,15 @@ function environmentAdminRecoveryKeyIsAuthoritative() {
 }
 
 function validateAdminCredentialEnvironment() {
-  const configuredEmail = String(process.env.ADMIN_EMAIL || '').trim();
+  const configuredEmail = configuredAdminEmail();
   const configuredPassword = String(process.env.ADMIN_PASSWORD || '');
   const configuredRecoveryKey = String(process.env.ADMIN_RECOVERY_KEY || '').trim();
   const errors = [];
 
-  if (configuredEmail && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(configuredEmail)) {
-    errors.push('ADMIN_EMAIL must be a valid email address');
+  if (!configuredEmail) {
+    errors.push('ADMIN_EMAIL or GMAIL_USER must be configured');
+  } else if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(configuredEmail)) {
+    errors.push('ADMIN_EMAIL or GMAIL_USER must be a valid email address');
   }
   if (configuredPassword && !validateStrongPassword(configuredPassword)) {
     errors.push('ADMIN_PASSWORD must be at least 10 characters');
@@ -3368,7 +3370,6 @@ async function syncAdminSecurity() {
   }
 
   const current = await getAdminSecurity();
-  const configuredEmail = String(process.env.ADMIN_EMAIL || '').trim();
   const configuredPassword = String(process.env.ADMIN_PASSWORD || '');
   const configuredRecoveryKey = String(process.env.ADMIN_RECOVERY_KEY || '').trim();
   const next = {
