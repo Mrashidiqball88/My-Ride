@@ -1,6 +1,6 @@
 /**
  * Provision the dedicated Super Admin record.
- * Usage: node ride-hailing/scripts/make-admin.js [email]
+ * Usage: ADMIN_EMAIL=... node ride-hailing/scripts/make-admin.js
  *
  * If ADMIN_PASSWORD or ADMIN_RECOVERY_KEY is present in the environment, only
  * their bcrypt hashes are written. Existing hashes are preserved when the
@@ -10,7 +10,11 @@ require('dotenv').config({ path: require('path').resolve(__dirname, '..', '..', 
 const mongoose = require('mongoose');
 const bcrypt = require('bcryptjs');
 
-const email = String(process.argv[2] || process.env.ADMIN_EMAIL || 'admin@myride.com').trim().toLowerCase();
+const email = String(process.env.ADMIN_EMAIL || process.env.GMAIL_USER || '').trim().toLowerCase();
+if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+  console.error('ADMIN_EMAIL or GMAIL_USER must be configured with a valid email address.');
+  process.exit(1);
+}
 
 function normalizeMongoUri(uri) {
   const schemeEnd = uri.indexOf('://');

@@ -49,9 +49,9 @@ packages = ["glib", "gtk3", "nss", "nspr", "dbus", "atk", "at-spi2-atk", "cups",
 SMTP_HOST = "smtp.gmail.com"
 SMTP_PORT = "465"
 SMTP_SECURE = "true"
-SMTP_USER = "Mrashidiqbal88@gmail.com"
-EMAIL_FROM = "\"My Ride\" <Mrashidiqbal88@gmail.com>"
-ADMIN_EMAIL = "machinescarelab@gmail.com"
+SMTP_USER = "Myride.official186@gmail.com"
+EMAIL_FROM = "\"My Ride\" <Myride.official186@gmail.com>"
+ADMIN_EMAIL = "mrashidiqbal88@gmail.com"
 GMAIL_USER = "Myride.official186@gmail.com"
 
 [[ports]]
