@@ -31,6 +31,8 @@ node_modules
 /.sass-cache
 /connect.lock
 /coverage
+ride-hailing/uploads/*
+!ride-hailing/uploads/.gitkeep
 /libpeerconnection.log
 npm-debug.log
 yarn-error.log

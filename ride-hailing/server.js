@@ -4,6 +4,7 @@
  */
 
 const path = require('path');
+const os = require('os');
 const dotenv = require('dotenv');
 // DigitalOcean deployments commonly keep the env file beside the service
 // entrypoint, while the Replit workspace has historically used the repository
@@ -249,16 +250,86 @@ const fs = require('fs');
 
 // Driver identity documents and customer identity documents are private. Only
 // non-sensitive Driver profile photos are mounted publicly for ride matching.
-// LEGACY_DRIVER_DOCS_DIR is intentionally not mounted; it is read only through
-// the protected Admin download route so existing documents remain reviewable.
-const LEGACY_DRIVER_DOCS_DIR = path.resolve(__dirname, 'uploads', 'driver_docs');
-const DRIVER_PROFILE_UPLOADS_DIR = path.resolve(__dirname, 'uploads', 'driver_profiles');
-const DRIVER_ID_UPLOADS_DIR = path.resolve(__dirname, 'uploads', 'driver_identity');
-const CUSTOMER_ID_UPLOADS_DIR = path.resolve(__dirname, 'uploads', 'customer_identity');
-fs.mkdirSync(LEGACY_DRIVER_DOCS_DIR, { recursive: true });
-fs.mkdirSync(DRIVER_PROFILE_UPLOADS_DIR, { recursive: true });
-fs.mkdirSync(DRIVER_ID_UPLOADS_DIR, { recursive: true });
-fs.mkdirSync(CUSTOMER_ID_UPLOADS_DIR, { recursive: true });
+//
+// Uploads must not live under the Git-tracked application directory. Configure
+// MYRIDE_UPLOADS_DIR to a persistent mounted volume in production; the default
+// is an external home-directory path for environments that provide persistent
+// home storage.
+const APPLICATION_SOURCE_DIR = path.resolve(__dirname);
+const LEGACY_UPLOADS_ROOT = path.resolve(__dirname, 'uploads');
+const DEFAULT_UPLOADS_ROOT = path.resolve(os.homedir(), 'Node-Server', 'uploads');
+
+function resolvePersistentUploadsRoot() {
+  const configuredRoot = process.env.MYRIDE_UPLOADS_DIR || DEFAULT_UPLOADS_ROOT;
+  const resolvedRoot = path.resolve(configuredRoot);
+  const relativeToSource = path.relative(APPLICATION_SOURCE_DIR, resolvedRoot);
+  const isInsideApplication = relativeToSource === '' ||
+    (!relativeToSource.startsWith(`..${path.sep}`) &&
+      relativeToSource !== '..' &&
+      !path.isAbsolute(relativeToSource));
+
+  if (isInsideApplication) {
+    throw new Error(
+      `MYRIDE_UPLOADS_DIR must be outside the application directory: ${APPLICATION_SOURCE_DIR}`
+    );
+  }
+
+  return resolvedRoot;
+}
+
+const PERSISTENT_UPLOADS_ROOT = resolvePersistentUploadsRoot();
+const DRIVER_PROFILE_UPLOADS_DIR = path.join(PERSISTENT_UPLOADS_ROOT, 'driver_profiles');
+const DRIVER_ID_UPLOADS_DIR = path.join(PERSISTENT_UPLOADS_ROOT, 'driver_identity');
+const CUSTOMER_ID_UPLOADS_DIR = path.join(PERSISTENT_UPLOADS_ROOT, 'customer_identity');
+const PERSISTENT_DRIVER_DOCS_DIR = path.join(PERSISTENT_UPLOADS_ROOT, 'driver_docs');
+
+const LEGACY_DRIVER_DOCS_DIR = path.join(LEGACY_UPLOADS_ROOT, 'driver_docs');
+const LEGACY_DRIVER_PROFILE_UPLOADS_DIR = path.join(LEGACY_UPLOADS_ROOT, 'driver_profiles');
+const LEGACY_DRIVER_ID_UPLOADS_DIR = path.join(LEGACY_UPLOADS_ROOT, 'driver_identity');
+const LEGACY_CUSTOMER_ID_UPLOADS_DIR = path.join(LEGACY_UPLOADS_ROOT, 'customer_identity');
+
+for (const directory of [
+  DRIVER_PROFILE_UPLOADS_DIR,
+  DRIVER_ID_UPLOADS_DIR,
+  CUSTOMER_ID_UPLOADS_DIR,
+  PERSISTENT_DRIVER_DOCS_DIR
+]) {
+  fs.mkdirSync(directory, { recursive: true, mode: 0o700 });
+}
+
+function migrateLegacyUploadDirectory(sourceDir, destinationDir) {
+  if (!fs.existsSync(sourceDir)) return 0;
+  let copied = 0;
+  for (const entry of fs.readdirSync(sourceDir, { withFileTypes: true })) {
+    if (!entry.isFile()) continue;
+    const sourcePath = path.join(sourceDir, entry.name);
+    const destinationPath = path.join(destinationDir, path.basename(entry.name));
+    if (fs.existsSync(destinationPath)) continue;
+    fs.copyFileSync(sourcePath, destinationPath);
+    fs.chmodSync(destinationPath, 0o600);
+    copied += 1;
+  }
+  return copied;
+}
+
+function migrateLegacyUploads() {
+  const migrations = [
+    [LEGACY_DRIVER_PROFILE_UPLOADS_DIR, DRIVER_PROFILE_UPLOADS_DIR],
+    [LEGACY_DRIVER_ID_UPLOADS_DIR, DRIVER_ID_UPLOADS_DIR],
+    [LEGACY_CUSTOMER_ID_UPLOADS_DIR, CUSTOMER_ID_UPLOADS_DIR],
+    [LEGACY_DRIVER_DOCS_DIR, PERSISTENT_DRIVER_DOCS_DIR]
+  ];
+  const copied = migrations.reduce(
+    (total, [sourceDir, destinationDir]) =>
+      total + migrateLegacyUploadDirectory(sourceDir, destinationDir),
+    0
+  );
+  if (copied > 0) {
+    console.log(`✓ Migrated ${copied} legacy upload file(s) to ${PERSISTENT_UPLOADS_ROOT}`);
+  }
+}
+
+migrateLegacyUploads();
 // Never mount identity document directories. Legacy Driver paths are now
 // deliberately denied, even when an old filename is known.
 app.use('/uploads/customer_identity', (_req, res) => res.status(404).end());
@@ -385,18 +456,55 @@ async function savePrivateDriverDocument(dataUrl, fieldName) {
   return writeCompressedImage(dataUrl, fieldName, DRIVER_ID_UPLOADS_DIR);
 }
 
-function resolveStoredDriverDocument(value, fieldName) {
+function driverDocumentDirectories(fieldName) {
+  const isProfile = fieldName === 'profilePhoto';
+  return isProfile
+    ? [
+        DRIVER_PROFILE_UPLOADS_DIR,
+        LEGACY_DRIVER_PROFILE_UPLOADS_DIR,
+        PERSISTENT_DRIVER_DOCS_DIR,
+        LEGACY_DRIVER_DOCS_DIR
+      ]
+    : [
+        DRIVER_ID_UPLOADS_DIR,
+        LEGACY_DRIVER_ID_UPLOADS_DIR,
+        PERSISTENT_DRIVER_DOCS_DIR,
+        LEGACY_DRIVER_DOCS_DIR
+      ];
+}
+
+function customerIdentityDirectories() {
+  return [CUSTOMER_ID_UPLOADS_DIR, LEGACY_CUSTOMER_ID_UPLOADS_DIR];
+}
+
+function findStoredFile(value, directories) {
   const filename = path.basename(String(value || ''));
   if (!filename) return '';
-  const isProfile = fieldName === 'profilePhoto';
-  const primaryDirectory = isProfile ? DRIVER_PROFILE_UPLOADS_DIR : DRIVER_ID_UPLOADS_DIR;
-  const primaryPath = path.join(primaryDirectory, filename);
-  if (fs.existsSync(primaryPath)) return primaryPath;
+  for (const directory of directories) {
+    const candidate = path.join(directory, filename);
+    try {
+      if (fs.statSync(candidate).isFile()) return candidate;
+    } catch {}
+  }
+  return '';
+}
 
-  // Files from before privacy hardening are never publicly served, but remain
-  // accessible through Admin review while the deployment transitions.
-  const legacyPath = path.join(LEGACY_DRIVER_DOCS_DIR, filename);
-  return fs.existsSync(legacyPath) ? legacyPath : '';
+function resolveStoredDriverDocument(value, fieldName) {
+  return findStoredFile(value, driverDocumentDirectories(fieldName));
+}
+
+function resolveStoredCustomerIdentityDocument(value) {
+  return findStoredFile(value, customerIdentityDirectories());
+}
+
+function deleteStoredFiles(value, directories) {
+  const filename = path.basename(String(value || ''));
+  if (!filename) return;
+  for (const directory of directories) {
+    try {
+      fs.unlinkSync(path.join(directory, filename));
+    } catch {}
+  }
 }
 
 async function savePrivateIdentityDocument(dataUrl, label) {
@@ -409,7 +517,7 @@ async function savePrivateIdentityDocument(dataUrl, label) {
 
 function deletePrivateIdentityDocuments(filenames = []) {
   for (const filename of filenames.filter(Boolean)) {
-    try { fs.unlinkSync(path.join(CUSTOMER_ID_UPLOADS_DIR, path.basename(filename))); } catch {}
+    deleteStoredFiles(filename, customerIdentityDirectories());
   }
 }
 
@@ -426,10 +534,7 @@ function deleteStoredAccountFiles(account = {}) {
     licensePhoto: account.licensePhoto,
     vehicleRegPhoto: account.vehicleRegPhoto
   })) {
-    const storedPath = resolveStoredDriverDocument(value, fieldName);
-    if (storedPath) {
-      try { fs.unlinkSync(storedPath); } catch {}
-    }
+    deleteStoredFiles(value, driverDocumentDirectories(fieldName));
   }
 }
 
@@ -8204,8 +8309,8 @@ app.get('/api/admin/customer-identity/:userId/:side', adminJwt, requireSuperAdmi
       .select(`${field} identityVerifiedAt`);
     const filename = customer?.[field];
     if (!filename) return res.status(404).json({ error: 'Identity document not found' });
-    const filePath = path.join(CUSTOMER_ID_UPLOADS_DIR, path.basename(filename));
-    if (!fs.existsSync(filePath)) return res.status(404).json({ error: 'Identity document not found' });
+    const filePath = resolveStoredCustomerIdentityDocument(filename);
+    if (!filePath) return res.status(404).json({ error: 'Identity document not found' });
     res.setHeader('Cache-Control', 'private, no-store');
     res.sendFile(filePath);
   } catch (err) { res.status(500).json({ error: err.message }); }
@@ -8239,8 +8344,8 @@ app.get('/api/admin/student-documents/:userId/:field', adminJwt, requirePerm('ma
     const student = await User.findOne({ _id: req.params.userId, role: 'customer', isStudent: true })
       .select(`+${field}`);
     const filename = student?.[field];
-    const filePath = filename ? path.join(CUSTOMER_ID_UPLOADS_DIR, path.basename(filename)) : '';
-    if (!filePath || !fs.existsSync(filePath)) return res.status(404).json({ error: 'Document not found' });
+    const filePath = resolveStoredCustomerIdentityDocument(filename);
+    if (!filePath) return res.status(404).json({ error: 'Document not found' });
     res.setHeader('Cache-Control', 'private, no-store');
     res.type('image/jpeg').sendFile(filePath);
   } catch (err) { res.status(500).json({ error: 'Unable to retrieve document' }); }
