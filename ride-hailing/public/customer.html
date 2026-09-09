@@ -4090,6 +4090,13 @@ function showWaitingPanel(ride) {
 function openCustomerRideContact(event, url) {
   event?.preventDefault();
   if (!url) return false;
+  // The native Customer shell owns tel:/WhatsApp launches. Send the target
+  // directly instead of asking the WebView to navigate first; this prevents
+  // the inline handler and the WebView navigation interceptor from racing.
+  if (window.ReactNativeWebView?.postMessage) {
+    window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'contact', url }));
+    return false;
+  }
   window.location.href = url;
   return false;
 }

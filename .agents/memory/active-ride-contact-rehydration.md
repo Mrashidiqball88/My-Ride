@@ -20,3 +20,9 @@ When participant population or realtime payloads can be partial, include an expl
 **Why:** A cached participant object with a name but no phone can otherwise take precedence over a later authoritative phone value, leaving visible contact controls without a usable target.
 
 **How to apply:** Resolve contact phone from the fresh participant, explicit ride contact snapshot, and prior snapshot in that order; validate the final `tel:` and `https://wa.me/` targets before opening them.
+
+Status-transition responses may be intentionally unpopulated, so native active-ride merges must preserve the previously hydrated opposing participant and phone.
+
+**Why:** The Driver status endpoint can return an assigned ride without populated passenger fields; replacing the cached participant at Arrived or In Progress removes both contact actions.
+
+**How to apply:** Merge status responses into the prior active ride through the same contact resolver used during hydration, and let the native Customer shell post contact targets directly to React Native instead of racing WebView navigation.

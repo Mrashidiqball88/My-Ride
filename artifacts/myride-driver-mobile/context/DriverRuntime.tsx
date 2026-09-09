@@ -68,6 +68,7 @@ export type RideRequest = {
   acceptanceEligibility?: RideAcceptanceEligibility;
   status?: 'requested' | 'accepted' | 'arrived' | 'in-progress' | 'completed' | 'cancelled';
   passenger?: { id?: string; name?: string; phone?: string };
+  passengerPhone?: string;
   contactPhone?: string;
   contact?: { id?: string; name?: string; phone?: string };
   verificationPin?: string | null;
@@ -252,6 +253,38 @@ function normalizeRideRequest(ride: RideRequest & { _id?: string }): RideRequest
   return { ...ride, id: String(ride.id || ride._id || '') };
 }
 
+function rideContactPhone(ride: RideRequest | null | undefined) {
+  return String(
+    ride?.passenger?.phone
+    || ride?.passengerPhone
+    || ride?.contactPhone
+    || ride?.contact?.phone
+    || ''
+  ).trim();
+}
+
+function mergeRideContact(ride: RideRequest, previousRide?: RideRequest | null): RideRequest {
+  const phone = rideContactPhone(ride) || rideContactPhone(previousRide);
+  const previousPassenger = previousRide?.passenger;
+  const ridePassenger = ride.passenger && typeof ride.passenger === 'object'
+    ? ride.passenger
+    : null;
+  const passenger = phone
+    ? {
+        ...(previousPassenger || {}),
+        ...(ridePassenger || {}),
+        phone,
+      }
+    : ridePassenger || previousPassenger || (ride.contact ? { ...ride.contact } : ride.passenger);
+
+  return {
+    ...(previousRide || {}),
+    ...ride,
+    ...(passenger ? { passenger } : {}),
+    ...(phone ? { contactPhone: phone } : {}),
+  };
+}
+
 function isRideOfferLive(ride: RideRequest | null | undefined) {
   const expiresAt = new Date(ride?.broadcastExpiresAt || ride?.offerExpiresAt || 0).getTime();
   return Boolean(ride?.id) && Number.isFinite(expiresAt) && expiresAt > Date.now();
@@ -375,17 +408,7 @@ export function DriverRuntimeProvider({ children }: { children: ReactNode }) {
         setActiveRideId(null);
         return false;
       }
-      setActiveRide({
-        ...ride,
-        passenger: ride.passenger
-          ? {
-              ...ride.passenger,
-              phone: ride.passenger.phone || ride.contactPhone || ride.contact?.phone || '',
-            }
-          : ride.contact
-            ? { ...ride.contact }
-            : ride.passenger,
-      });
+      setActiveRide(mergeRideContact(ride));
       setActiveRideId(ride.id || null);
       if (ride.id) {
         await SecureStore.setItemAsync(ACTIVE_RIDE_KEY, ride.id);
@@ -1276,7 +1299,7 @@ export function DriverRuntimeProvider({ children }: { children: ReactNode }) {
           void startLocationService(false).catch(() => undefined);
         }
       } else {
-        setActiveRide(current => current?.id === ride.id ? { ...current, ...ride } : current);
+        setActiveRide(current => current?.id === ride.id ? mergeRideContact(ride, current) : current);
       }
     } finally {
       setUpdatingRideStatus(false);

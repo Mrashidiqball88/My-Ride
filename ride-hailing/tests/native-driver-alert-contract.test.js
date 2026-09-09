@@ -102,3 +102,16 @@ test('active ride contacts keep an explicit phone bridge across web and native c
   assert.match(customerMobileSource, /ReactNativeWebView\.postMessage/);
   assert.match(customerMobileSource, /wa\\.me/);
 });
+
+test('native Driver preserves contact data when status responses omit populated passenger data', () => {
+  assert.match(runtimeSource, /function rideContactPhone\(ride/);
+  assert.match(runtimeSource, /function mergeRideContact\(ride: RideRequest, previousRide/);
+  assert.match(runtimeSource, /mergeRideContact\(ride, current\)/);
+  assert.match(homeSource, /function passengerPhoneForRide\(ride/);
+  assert.match(homeSource, /passengerPhoneForRide\(ride\)/);
+});
+
+test('native Customer sends contact actions directly through the WebView bridge', () => {
+  assert.match(customerWebSource, /window\.ReactNativeWebView\?\.postMessage/);
+  assert.match(customerWebSource, /JSON\.stringify\(\{ type: 'contact', url \}\)/);
+});

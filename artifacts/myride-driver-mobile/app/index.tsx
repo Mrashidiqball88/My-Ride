@@ -58,6 +58,16 @@ function passengerContactUrls(phone?: string | null) {
   };
 }
 
+function passengerPhoneForRide(ride: RideRequest | null | undefined) {
+  return String(
+    ride?.passenger?.phone
+    || ride?.passengerPhone
+    || ride?.contactPhone
+    || ride?.contact?.phone
+    || ''
+  ).trim();
+}
+
 function openPassengerContact(phone: string | null | undefined, action: 'Phone Call' | 'WhatsApp') {
   const contact = passengerContactUrls(phone);
   if (!contact) {
@@ -113,9 +123,8 @@ function ActiveRideSheet({
     ? ride.status
     : 'accepted';
   const passengerName = ride.passenger?.name || 'Passenger';
-  const passengerContact = passengerContactUrls(
-    ride.passenger?.phone || ride.contactPhone || ride.contact?.phone
-  );
+  const passengerPhone = passengerPhoneForRide(ride);
+  const passengerContact = passengerContactUrls(passengerPhone);
 
   const snapTo = (next: SheetState) => {
     const target = next === 'expanded' ? 0 : next === 'compact' ? compactOffset : collapsedOffset;
@@ -238,10 +247,7 @@ function ActiveRideSheet({
           <Pressable
             accessibilityRole="button"
             accessibilityLabel={`Phone Call ${passengerName}`}
-            onPress={() => openPassengerContact(
-              ride.passenger?.phone || ride.contactPhone || ride.contact?.phone,
-              'Phone Call'
-            )}
+            onPress={() => openPassengerContact(passengerPhone, 'Phone Call')}
             style={({ pressed }) => [styles.contactButton, { backgroundColor: colors.primary, borderColor: colors.primary, opacity: pressed ? .75 : 1 }]}
           >
             <Ionicons name="call-outline" size={18} color={colors.primaryForeground} />
@@ -250,10 +256,7 @@ function ActiveRideSheet({
           <Pressable
             accessibilityRole="button"
             accessibilityLabel={`WhatsApp ${passengerName}`}
-            onPress={() => openPassengerContact(
-              ride.passenger?.phone || ride.contactPhone || ride.contact?.phone,
-              'WhatsApp'
-            )}
+            onPress={() => openPassengerContact(passengerPhone, 'WhatsApp')}
             style={({ pressed }) => [styles.contactButton, { backgroundColor: colors.secondary, borderColor: colors.border, opacity: pressed ? .75 : 1 }]}
           >
             <Ionicons name="logo-whatsapp" size={18} color={colors.primary} />
