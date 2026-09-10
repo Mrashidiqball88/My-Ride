@@ -542,22 +542,26 @@ function DriverAdvanceBookingsPanel({
               <Text numberOfLines={2} style={[styles.historyLocation, styles.historyDropoff, { color: colors.foreground }]}>{booking.dropoffLocation?.address || 'Drop-off'}</Text>
             </View>
             <Text style={[styles.historyDate, { color: colors.mutedForeground, marginTop: 8 }]}>{formatDriverDateTime(booking.scheduledFor)}</Text>
-            <Text style={[styles.historyPassenger, { color: colors.mutedForeground, marginTop: 4 }]}>{booking.passenger?.name || 'Customer'} · {booking.passenger?.phone || ''}</Text>
+             <Text style={[styles.historyPassenger, { color: colors.mutedForeground, marginTop: 4 }]}>{booking.passenger?.name || 'Customer'} · {booking.passenger?.phone || ''} · {Number(booking.passengerCount || 1)} passenger{Number(booking.passengerCount || 1) === 1 ? '' : 's'}</Text>
             <View style={[styles.historyMeta, { marginTop: 8 }]}>
               <Text style={[styles.historyFare, { color: colors.primary }]}>Rs {fare.toLocaleString('en-PK', { maximumFractionDigits: 0 })}</Text>
-              <Pressable disabled={blocked} onPress={() => onAccept(booking.id)} style={[styles.acceptButton, { backgroundColor: colors.primary, opacity: blocked ? .45 : 1 }]}><Text style={[styles.buttonText, { color: colors.primaryForeground }]}>{blocked ? 'Fee required' : 'Accept'}</Text></Pressable>
+               {booking.status === 'assigned'
+                 ? <Text style={[styles.historyFare, { color: colors.primary }]}>Assigned to you</Text>
+                 : booking.myOffer
+                   ? <Text style={[styles.historyFare, { color: colors.primary }]}>Offer sent</Text>
+                   : <Pressable disabled={blocked} onPress={() => onAccept(booking.id)} style={[styles.acceptButton, { backgroundColor: colors.primary, opacity: blocked ? .45 : 1 }]}><Text style={[styles.buttonText, { color: colors.primaryForeground }]}>{blocked ? 'Fee required' : 'Offer'}</Text></Pressable>}
             </View>
-            <View style={{ flexDirection: 'row', gap: 8, marginTop: 8 }}>
-              <TextInput
-                value={counterPrices[booking.id] ?? String(Math.round(fare))}
-                onChangeText={value => setCounterPrices(current => ({ ...current, [booking.id]: value }))}
-                keyboardType="number-pad"
-                placeholder="Counter price"
-                placeholderTextColor={colors.mutedForeground}
-                style={[styles.input, { flex: 1, minHeight: 44, color: colors.foreground, borderColor: colors.input }]}
-              />
-              <Pressable onPress={() => onCounter(booking.id, Number(counterPrices[booking.id] || fare))} style={[styles.secondaryButton, { borderColor: colors.border }]}><Text style={{ color: colors.foreground }}>Counter</Text></Pressable>
-            </View>
+             {booking.status !== 'assigned' && !booking.myOffer && <View style={{ flexDirection: 'row', gap: 8, marginTop: 8 }}>
+               <TextInput
+                 value={counterPrices[booking.id] ?? String(Math.round(fare))}
+                 onChangeText={value => setCounterPrices(current => ({ ...current, [booking.id]: value }))}
+                 keyboardType="number-pad"
+                 placeholder="Counter price"
+                 placeholderTextColor={colors.mutedForeground}
+                 style={[styles.input, { flex: 1, minHeight: 44, color: colors.foreground, borderColor: colors.input }]}
+               />
+               <Pressable onPress={() => onCounter(booking.id, Number(counterPrices[booking.id] || fare))} style={[styles.secondaryButton, { borderColor: colors.border }]}><Text style={{ color: colors.foreground }}>Counter</Text></Pressable>
+             </View>}
           </View>;
         })}</View>}
   </View>;

@@ -65,6 +65,7 @@ export type RideAcceptanceEligibility = {
 export type RideRequest = {
   id: string; _id?: string; fare: number; distance?: number; vehicleType?: string; createdAt?: string | Date;
   scheduledFor?: string | Date; advanceBookingId?: string;
+  passengerCount?: number;
   isLongRange?: boolean;
   acceptanceEligibility?: RideAcceptanceEligibility;
   status?: 'requested' | 'accepted' | 'arrived' | 'in-progress' | 'completed' | 'cancelled';
@@ -79,11 +80,13 @@ export type RideRequest = {
   pickupLocation?: { address?: string; lat: number; lng: number };
   dropoffLocation?: { address?: string; lat: number; lng: number };
 };
-export type AdvanceBooking = RideRequest & {
+export type AdvanceBooking = Omit<RideRequest, 'status'> & {
   scheduledFor: string | Date;
   status?: 'pending' | 'assigned' | 'dispatching' | 'converted' | 'cancelled' | 'failed';
+  passengerCount?: number;
   passenger?: { id?: string; name?: string; phone?: string };
   counterOffers?: Array<{ driver?: string; driverName?: string; price?: number; type?: 'accept' | 'counter' }>;
+  myOffer?: { driver?: string; driverName?: string; price?: number; type?: 'accept' | 'counter' } | null;
 };
 export type DriverPayment = {
   _id?: string;
@@ -578,7 +581,10 @@ export function DriverRuntimeProvider({ children }: { children: ReactNode }) {
       void hydrateAvailableRides();
       void refreshAdvanceBookings();
     });
+    nextSocket.on('advance-booking:new', () => void refreshAdvanceBookings());
+    nextSocket.on('advance-booking:offer-submitted', () => void refreshAdvanceBookings());
     nextSocket.on('advance-booking:assigned', () => void refreshAdvanceBookings());
+    nextSocket.on('advance-booking:cancelled', () => void refreshAdvanceBookings());
     nextSocket.on('ride:new', handleRideOffer);
     nextSocket.on('ride:taken', ({ rideId }: { rideId: string }) => {
       clearRideAlert(rideId);
@@ -1058,7 +1064,8 @@ export function DriverRuntimeProvider({ children }: { children: ReactNode }) {
       const data = notification.request.content.data as {
         type?: string; ride?: RideRequest & { _id?: string }; rideId?: string;
       };
-      if (data.type === 'ride:new' && data.ride) handleRideOffer(data.ride, { fromPush: true });
+       if (data.type === 'advance-booking:new') void refreshAdvanceBookings();
+       else if (data.type === 'ride:new' && data.ride) handleRideOffer(data.ride, { fromPush: true });
       else if (data.type === 'ride:new' && data.rideId) {
         pendingNotificationRideId.current = String(data.rideId);
         if (tokenRef.current && isOnlineRef.current) {

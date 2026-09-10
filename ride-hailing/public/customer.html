@@ -966,6 +966,8 @@ body{font-family:'DM Sans','Segoe UI',sans-serif;background:var(--lr-paper);colo
         <div id="schedule-booking-fields" style="display:none;margin-top:.65rem">
           <label for="scheduled-for-input" style="display:block;font-size:.7rem;color:var(--lr-muted);font-weight:800;margin-bottom:.3rem">DATE AND TIME</label>
           <input type="datetime-local" id="scheduled-for-input" style="width:100%;min-height:44px;border:1px solid var(--lr-line);border-radius:11px;padding:.6rem;background:#fff;color:var(--lr-ink)">
+          <label for="scheduled-passenger-count" style="display:block;font-size:.7rem;color:var(--lr-muted);font-weight:800;margin:.6rem 0 .3rem">PASSENGERS</label>
+          <input type="number" id="scheduled-passenger-count" min="1" max="8" step="1" value="1" inputmode="numeric" style="width:100%;min-height:44px;border:1px solid var(--lr-line);border-radius:11px;padding:.6rem;background:#fff;color:var(--lr-ink)">
           <div style="font-size:.68rem;color:var(--lr-muted);margin-top:.35rem">Book up to 30 days ahead. A Driver will be assigned before the ride starts.</div>
           <button type="button" class="btn-secondary" onclick="scheduleRide()" style="width:100%;margin-top:.6rem">Create Advance Booking</button>
         </div>
@@ -4024,6 +4026,7 @@ async function scheduleRide() {
       paymentMethod: 'cash',
       customerFareOffset,
       customerOffer: offeredFare,
+      passengerCount: Math.min(8, Math.max(1, Math.trunc(Number(document.getElementById('scheduled-passenger-count')?.value) || 1))),
       scheduledFor: new Date(scheduledForInput.value).toISOString()
     });
     showToast('Advance booking created. We will assign a Driver before pickup.', 'success');
@@ -4064,16 +4067,24 @@ function renderAdvanceBookings(bookings = []) {
     const offerMarkup = booking.status === 'pending' && offers.length
       ? `<div style="margin-top:.55rem;padding-top:.55rem;border-top:1px solid var(--lr-line);font-size:.7rem"><strong>Driver offers</strong>${offers.map(offer => `
         <div style="display:flex;align-items:center;justify-content:space-between;gap:.5rem;margin-top:.35rem">
-          <span>${escapeLocationText(offer.driverName || 'Driver')} · Rs ${Number(offer.price || 0).toLocaleString()}</span>
+          <span>${escapeLocationText(offer.driverName || 'Driver')} · ${escapeLocationText(offer.vehicleModel || offer.vehiclePlate || '')} · Rs ${Number(offer.price || 0).toLocaleString()}</span>
           <button type="button" class="btn-primary" style="padding:.35rem .55rem;font-size:.68rem" onclick="acceptAdvanceDriver('${String(booking._id)}','${String(offer.driver || '')}')">Choose</button>
         </div>`).join('')}</div>`
+      : '';
+    const assignedDriverMarkup = booking.driver?.name
+      ? `<div style="margin-top:.55rem;padding-top:.55rem;border-top:1px solid var(--lr-line);font-size:.72rem">
+          <strong>Assigned Driver</strong>
+          <div style="margin-top:.25rem">${escapeLocationText(booking.driver.name)} · ${escapeLocationText(booking.driver.vehicleModel || booking.driver.vehicleType || '')}</div>
+          <div style="color:var(--lr-muted);margin-top:.15rem">☎ ${escapeLocationText(booking.driver.phone || 'Contact unavailable')} · ${escapeLocationText(when)}</div>
+        </div>`
       : '';
     return `<article style="border:1px solid var(--lr-line);border-radius:13px;padding:.75rem;margin-bottom:.55rem;background:#fff">
       <div style="display:flex;justify-content:space-between;gap:.6rem;font-size:.75rem;font-weight:800">
         <span>📅 ${escapeLocationText(when)}</span><span style="color:var(--lr-coral-dark)">${status}</span>
       </div>
       <div style="font-size:.76rem;margin-top:.45rem" dir="auto">${escapeLocationText(booking.pickupLocation?.address || 'Pickup')} → ${escapeLocationText(booking.dropoffLocation?.address || 'Dropoff')}</div>
-      <div style="font-size:.7rem;color:var(--lr-muted);margin-top:.35rem">Rs ${Number(booking.fare || 0).toLocaleString()} · ${escapeLocationText(booking.vehicleType || '')}${booking.driver?.name ? ` · ${escapeLocationText(booking.driver.name)}` : ''}</div>
+       <div style="font-size:.7rem;color:var(--lr-muted);margin-top:.35rem">Rs ${Number(booking.fare || 0).toLocaleString()} · ${Number(booking.passengerCount || 1)} passenger${Number(booking.passengerCount || 1) === 1 ? '' : 's'} · ${escapeLocationText(booking.vehicleType || '')}</div>
+       ${assignedDriverMarkup}
       ${offerMarkup}
       ${canCancel ? `<button type="button" class="btn-danger" style="margin-top:.55rem;padding:.45rem .65rem;font-size:.7rem" onclick="cancelAdvanceBooking('${String(booking._id)}')">Cancel booking</button>` : ''}
     </article>`;
@@ -4720,6 +4731,14 @@ function connectSocket() {
   });
   socket.on('advance-booking:offer', () => {
     showToast('A Driver responded to your advance booking.', 'info');
+    loadAdvanceBookings();
+  });
+  socket.on('advance-booking:assigned', booking => {
+    showToast(`Advance booking assigned to ${booking?.driver?.name || 'your Driver'}.`, 'success');
+    loadAdvanceBookings();
+  });
+  socket.on('advance-booking:cancelled', () => {
+    showToast('Advance booking cancelled.', 'info');
     loadAdvanceBookings();
   });
 }

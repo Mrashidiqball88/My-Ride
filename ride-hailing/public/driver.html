@@ -1333,6 +1333,12 @@ if ('serviceWorker' in navigator && !window.__myRideDriverWorkerMessagesBound) {
       registerDriverBackgroundSync();
       return;
     }
+    if (data.type === 'PUSH_ADVANCE_BOOKING_ALERT') {
+      loadDriverAdvanceBookings();
+      if (document.visibilityState === 'visible') showToast('New scheduled ride request nearby.', 'info');
+      registerDriverBackgroundSync();
+      return;
+    }
     if (data.type === 'RECONCILE_RIDE_REQUESTS' || data.type === 'ACCEPT_RIDE') {
       reconcileRideRequestsAfterReconnect().then(() => {
         if (data.type === 'ACCEPT_RIDE' && data.rideId
@@ -2829,6 +2835,17 @@ function connectSocket() {
     loadDriverAdvanceBookings();
     showToast('You have been assigned an advance booking.', 'success');
   });
+  socket.on('advance-booking:new', () => {
+    loadDriverAdvanceBookings();
+    showToast('New scheduled ride request nearby.', 'info');
+  });
+  socket.on('advance-booking:offer-submitted', () => {
+    loadDriverAdvanceBookings();
+  });
+  socket.on('advance-booking:cancelled', () => {
+    loadDriverAdvanceBookings();
+    showToast('An advance booking was cancelled by the Customer.', 'info');
+  });
 
   // Account approved by Admin (was pending)
   socket.on('account:activated', () => {
@@ -3787,14 +3804,20 @@ function renderDriverAdvanceBookings(bookings = []) {
     const when = new Date(booking.scheduledFor).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' });
     const offer = Number(booking.fare || 0);
     const blocked = booking.acceptanceEligibility?.allowed === false;
+      const assigned = booking.status === 'assigned';
+      const hasOffer = Boolean(booking.myOffer);
     return `<article class="driver-history-item requested">
       <div class="driver-history-route"><span class="driver-history-location" dir="auto">${formatStopAddr(booking.pickupLocation)}</span><span class="driver-history-arrow">→</span><span class="driver-history-location" dir="auto">${formatStopAddr(booking.dropoffLocation)}</span></div>
-      <div class="driver-history-meta"><span>📅 ${escapeDriverText(when)}</span><span>${escapeDriverText(booking.vehicleType || '')}</span><span class="driver-history-fare">Rs ${offer.toLocaleString()}</span></div>
-      <div style="font-size:.72rem;color:#94a3b8;margin-top:.45rem">Customer: ${escapeDriverText(booking.passenger?.name || 'Customer')} · ${escapeDriverText(booking.passenger?.phone || '')}</div>
-      <div style="display:flex;gap:.45rem;margin-top:.65rem">
-        <button class="btn-accept" style="flex:1" ${blocked ? 'disabled title="Daily Fee required"' : ''} onclick="acceptAdvanceBooking('${id}')">${blocked ? 'Daily Fee required' : 'Accept Rs ' + offer.toLocaleString()}</button>
-        <button class="btn-counter" style="flex:1" onclick="counterAdvanceBooking('${id}', ${offer})">Counter</button>
-      </div>
+       <div class="driver-history-meta"><span>📅 ${escapeDriverText(when)}</span><span>👥 ${Number(booking.passengerCount || 1)} passenger${Number(booking.passengerCount || 1) === 1 ? '' : 's'}</span><span>${escapeDriverText(booking.vehicleType || '')}</span><span class="driver-history-fare">Rs ${offer.toLocaleString()}</span></div>
+       <div style="font-size:.72rem;color:#94a3b8;margin-top:.45rem">Customer: ${escapeDriverText(booking.passenger?.name || 'Customer')} · ${escapeDriverText(booking.passenger?.phone || '')}</div>
+       ${assigned
+         ? '<div style="margin-top:.65rem;color:#36d399;font-size:.78rem;font-weight:800">✓ Booking assigned to you. It will start at the scheduled time.</div>'
+         : hasOffer
+           ? `<div style="margin-top:.65rem;color:#66aaff;font-size:.78rem;font-weight:800">⇄ ${escapeDriverText(booking.myOffer.type === 'counter' ? 'Counter-offer' : 'Offer')} sent · Rs ${Number(booking.myOffer.price || offer).toLocaleString()} · waiting for Customer</div>`
+           : `<div style="display:flex;gap:.45rem;margin-top:.65rem">
+             <button class="btn-accept" style="flex:1" ${blocked ? 'disabled title="Daily Fee required"' : ''} onclick="acceptAdvanceBooking('${id}')">${blocked ? 'Daily Fee required' : 'Offer Rs ' + offer.toLocaleString()}</button>
+             <button class="btn-counter" style="flex:1" onclick="counterAdvanceBooking('${id}', ${offer})">Counter</button>
+           </div>`}
     </article>`;
   }).join('');
 }

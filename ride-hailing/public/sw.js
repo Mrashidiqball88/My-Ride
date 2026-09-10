@@ -1,7 +1,7 @@
-// MyRide Service Worker — v32
+// MyRide Service Worker — v34
 // Strategy: network-first for API/socket, cache-first for static assets.
 
-const CACHE_NAME = 'myride-v33';
+const CACHE_NAME = 'myride-v34';
 
 // Static assets worth caching for fast repeat loads
 const PRECACHE = [
@@ -39,23 +39,29 @@ self.addEventListener('activate', event => {
 self.addEventListener('push', event => {
   let data = {};
   try { data = event.data ? event.data.json() : {}; } catch (_) {}
-  const title   = data.title || '🚗 New Ride Request!';
+  const isAdvance = data.type === 'advance-booking:new';
+  const title   = data.title || (isAdvance ? '🗓️ Scheduled ride request' : '🚗 New Ride Request!');
   const options = {
     body:               data.body  || 'A new ride request is waiting for you.',
     icon:               '/icon-192.png',
     badge:              '/icon-192.png',
-    tag:                'ride-request',
+    tag:                isAdvance ? `advance-booking-${data.bookingId || data.advanceBookingId || 'request'}` : 'ride-request',
     requireInteraction: true,
     silent: false,
     vibrate:            [400, 150, 400, 150, 400],
     data:               {
       url: data.url || '/driver',
+      type: data.type || 'ride:new',
       rideId: data.rideId || null,
       ride: data.ride || null,
+      bookingId: data.bookingId || data.advanceBookingId || null,
+      booking: data.booking || null,
       broadcastDurationSeconds: data.broadcastDurationSeconds || null,
       broadcastExpiresAt: data.broadcastExpiresAt || null
     },
-    actions: [
+      actions: isAdvance ? [
+        { action: 'open', title: '📱 Open Advance Bookings' }
+      ] : [
       { action: 'accept', title: '✅ Accept Ride' },
       { action: 'reject', title: '❌ Reject Ride' },
       { action: 'open',   title: '📱 Go to App'  }
@@ -67,9 +73,11 @@ self.addEventListener('push', event => {
         client.url.includes('/driver') && client.visibilityState === 'visible'
       );
       const relay = Promise.all(list.map(client => client.postMessage({
-        type: 'PUSH_RIDE_ALERT',
+        type: isAdvance ? 'PUSH_ADVANCE_BOOKING_ALERT' : 'PUSH_RIDE_ALERT',
         rideId: options.data.rideId,
-        ride: options.data.ride
+        ride: options.data.ride,
+        bookingId: options.data.bookingId,
+        booking: options.data.booking
       })));
       // A visible Driver page already has the Socket.io/audio path. Let that
       // page own the foreground presentation so a simultaneous Web Push event
