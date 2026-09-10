@@ -1,0 +1,25 @@
+Context & Objective:
+We are expanding our existing Node.js & MongoDB-based ride-hailing application running on a DigitalOcean VPS. We need to implement an Advanced/Scheduled Booking (Pre-Booking) System without disrupting any existing live ride features, database schemas, bidding logic, or commission calculations. Everything currently working must remain completely intact.
+​Core Requirements & Workflow:
+​Customer Side (Advance Booking Form & Broadcast):
+​Add a dedicated "Advance Booking" section/box in the customer interface.
+​Customers can submit a scheduled ride request containing the following fields:
+​Pickup Location
+​Drop-off Location
+​Number of Passengers
+​Scheduled Date & Time
+​When the customer submits this form, it should be broadcasted as an advanced/scheduled ride (stored distinctly in MongoDB with an appropriate status like scheduled or advance, so it does not interfere with live matching pools).
+​Driver Side (Dedicated Advance Bookings Section):
+​Create a separate "Advance Bookings" section inside the driver’s application/panel where drivers can view all available scheduled rides.
+​When a driver opens this section, all details must be clearly visible before taking any action:
+​Pickup & Drop-off locations
+​Number of passengers
+​Specific scheduled Date and Time
+​Interaction & Bidding: The driver can review these details and choose to Accept or Counter-offer the ride (utilizing the existing bidding/negotiation and rate-adjustment logic already present in the app).
+​Execution & Subsequent Workflow:
+​Once a driver accepts/finalizes the advance booking, it gets securely assigned to that driver.
+​On the scheduled date and time, the driver can access this saved ride from their accepted bookings list, open the map routing to the customer, navigate to the pickup point, and start the ride normally using the existing Start Ride flow.
+​Backend Architecture & Constraints:
+​Preserve all existing core mechanics: commission structures, daily fee deductions, user authentication, and live ride dispatch logic must remain untouched.
+​Ensure database schema updates are non-destructive, cleanly adding fields for scheduling (isAdvance, scheduledDate, etc.) without dropping or corrupting any legacy customer/driver records.
+​Please write clean, modular, and production-ready code implementing this feature precisely as specified while ensuring full backward compatibility.
