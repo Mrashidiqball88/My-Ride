@@ -2355,6 +2355,7 @@ const advanceBookingSchema = new mongoose.Schema({
   }],
   notifiedDriverIds: [{ type: mongoose.Schema.Types.ObjectId, ref: 'Driver' }],
   broadcastExpiresAt: { type: Date, default: null },
+  broadcastLastAttemptAt: { type: Date, default: null },
   ride: { type: mongoose.Schema.Types.ObjectId, ref: 'Ride', default: null },
   assignedAt: { type: Date, default: null },
   dispatchingAt: { type: Date, default: null },
@@ -5740,6 +5741,7 @@ async function broadcastAdvanceBooking(booking) {
     );
 
   booking.notifiedDriverIds = broadcast.drivers.map(driver => driver._id);
+  booking.broadcastLastAttemptAt = new Date();
   await booking.save();
 
   const payload = advanceBookingResponse(booking);
@@ -5800,6 +5802,41 @@ async function broadcastAdvanceBooking(booking) {
     });
   }
   return { booking, drivers: broadcast.drivers, radiusKm: broadcast.radiusKm };
+}
+
+async function runAdvanceBookingBroadcastRecovery() {
+  if (!(dbConnected || mongoose.connection.readyState === 1)) return;
+  const retryBefore = new Date(Date.now() - 30_000);
+  for (let attempt = 0; attempt < 25; attempt++) {
+    const booking = await AdvanceBooking.findOneAndUpdate(
+      {
+        status: 'pending',
+        scheduledFor: { $gt: new Date() },
+        $and: [
+          {
+            $or: [
+              { notifiedDriverIds: { $exists: false } },
+              { notifiedDriverIds: { $size: 0 } }
+            ]
+          },
+          {
+            $or: [
+              { broadcastLastAttemptAt: null },
+              { broadcastLastAttemptAt: { $lte: retryBefore } }
+            ]
+          }
+        ]
+      },
+      { $set: { broadcastLastAttemptAt: new Date() } },
+      { new: true, sort: { scheduledFor: 1, createdAt: 1 } }
+    );
+    if (!booking) break;
+    try {
+      await broadcastAdvanceBooking(booking);
+    } catch (error) {
+      console.warn(`[advance-booking] broadcast recovery failed for ${booking._id}: ${error.message}`);
+    }
+  }
 }
 
 function formatAdvanceBookingReminderTime(value) {
@@ -6235,20 +6272,61 @@ app.patch('/api/advance-bookings/:id/accept', authMiddleware, driverOnly, async 
       scheduledFor: { $gt: new Date() }
     });
     if (!booking) return res.status(409).json({ error: 'Advance booking is no longer available' });
-    const alreadyOffered = booking.counterOffers.some(offer => String(offer.driver) === String(req.user.id));
-    if (alreadyOffered) {
-      const response = advanceBookingDriverResponse(booking, req.user.id);
-      io.to(`user:${booking.passenger}`).emit('advance-booking:offer', response);
-      return res.json(response);
-    }
-    booking.counterOffers.push({
-      driver: req.user.id, driverName: driver.name, vehicleModel: driver.vehicleModel || '',
-      vehiclePlate: driver.vehiclePlate || '', rating: driver.rating || 5, price: booking.fare, type: 'accept'
+    const existingOffer = booking.counterOffers.find(
+      offer => String(offer.driver) === String(req.user.id)
+    );
+    const overlap = await AdvanceBooking.exists({
+      driver: req.user.id,
+      status: 'assigned',
+      scheduledFor: {
+        $gte: new Date(booking.scheduledFor.getTime() - 90 * 60 * 1000),
+        $lte: new Date(booking.scheduledFor.getTime() + 90 * 60 * 1000)
+      }
     });
-    await booking.save();
-    const response = advanceBookingDriverResponse(booking, req.user.id);
-    io.to(`user:${booking.passenger}`).emit('advance-booking:offer', response);
-    io.to(`user:${req.user.id}`).emit('advance-booking:offer-submitted', response);
+    if (overlap) return res.status(409).json({ error: 'You already have an advance booking near this time.' });
+
+    const acceptOffer = {
+      driver: req.user.id,
+      driverName: driver.name,
+      vehicleModel: driver.vehicleModel || '',
+      vehiclePlate: driver.vehiclePlate || '',
+      rating: driver.rating || 5,
+      price: booking.fare,
+      type: 'accept'
+    };
+    const assignmentUpdate = {
+      $set: {
+        driver: req.user.id,
+        status: 'assigned',
+        assignedAt: new Date(),
+        fare: existingOffer?.type === 'counter' && Number(existingOffer.price) > 0
+          ? Number(existingOffer.price)
+          : booking.fare
+      }
+    };
+    if (!existingOffer) assignmentUpdate.$push = { counterOffers: acceptOffer };
+
+    const assignedBooking = await AdvanceBooking.findOneAndUpdate(
+      {
+        _id: booking._id,
+        status: 'pending',
+        driver: null,
+        notifiedDriverIds: req.user.id,
+        scheduledFor: { $gt: new Date() }
+      },
+      assignmentUpdate,
+      { new: true }
+    )
+      .populate('passenger', 'name phone')
+      .populate('driver', 'name phone vehicleType vehicleModel vehiclePlate rating profilePhoto');
+    if (!assignedBooking) {
+      return res.status(409).json({ error: 'Advance booking was already assigned to another Driver' });
+    }
+
+    const response = advanceBookingResponse(assignedBooking);
+    io.to(`user:${req.user.id}`).emit('advance-booking:assigned', response);
+    io.to(`user:${assignedBooking.passenger?._id || booking.passenger}`).emit('advance-booking:assigned', response);
+    io.to('admin-room').emit('advance-booking:assigned', response);
     res.json(response);
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -6340,6 +6418,7 @@ app.patch('/api/advance-bookings/:id/accept-driver', authMiddleware, customerOnl
     const response = advanceBookingResponse(assignedBooking);
     io.to(`user:${driverId}`).emit('advance-booking:assigned', response);
     io.to(`user:${req.user.id}`).emit('advance-booking:assigned', response);
+    io.to('admin-room').emit('advance-booking:assigned', response);
     res.json(response);
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -11977,6 +12056,7 @@ async function connectDatabase() {
       await initializeAdminSecurity();
       await seedDemoAccounts();
        void runAdvanceBookingDispatcher().catch(err => console.warn('[advance-booking] initial sweep failed:', err.message));
+       void runAdvanceBookingBroadcastRecovery().catch(err => console.warn('[advance-booking] initial broadcast recovery failed:', err.message));
       console.log('✓ Preview demo database connected and demo accounts seeded');
       await initVapidKeys();
       await rebuildRedisDriverIndex();
@@ -11997,6 +12077,7 @@ async function connectDatabase() {
     await migrateLegacyUserData();
     await initializeAdminSecurity();
     void runAdvanceBookingDispatcher().catch(err => console.warn('[advance-booking] initial sweep failed:', err.message));
+      void runAdvanceBookingBroadcastRecovery().catch(err => console.warn('[advance-booking] initial broadcast recovery failed:', err.message));
 
     // Migrate email index to sparse (one-time, safe to re-run)
     try {
@@ -12262,6 +12343,12 @@ if (require.main === module) {
     );
   }, 15_000);
   advanceBookingSweep.unref?.();
+  const advanceBookingBroadcastRecovery = setInterval(() => {
+    runAdvanceBookingBroadcastRecovery().catch(err =>
+      console.warn(`[advance-booking] broadcast recovery sweep failed: ${err.message}`)
+    );
+  }, 30_000);
+  advanceBookingBroadcastRecovery.unref?.();
   const advanceBookingReminderSweep = setInterval(() => {
     runAdvanceBookingReminderSweep().catch(err =>
       console.warn(`[advance-booking] reminder sweep failed: ${err.message}`)
@@ -12468,6 +12555,7 @@ module.exports = {
   broadcastAdvanceBooking,
   advanceBookingDriverResponse,
   runAdvanceBookingDispatcher,
+  runAdvanceBookingBroadcastRecovery,
   dispatchAdvanceBooking,
   sendAdvanceBookingReminder,
   runAdvanceBookingReminderSweep,

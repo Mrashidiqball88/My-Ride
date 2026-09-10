@@ -2597,6 +2597,12 @@ function connectSocket() {
 
   socket.on('ride:new', () => { loadStats(); });
   socket.on('admin:stats:refresh', () => { loadStats(); });
+  socket.on('advance-booking:assigned', booking => {
+    if (document.getElementById('sec-advance-bookings')?.classList.contains('active')) {
+      loadAdvanceBookings(currentAdvanceBookingStatus);
+    }
+    showToast(`Advance booking assigned to ${booking?.driver?.name || 'a Driver'}.`, 'success');
+  });
   socket.on('student-ride-log:updated', () => {
     if (document.getElementById('sec-student-ride-operations')?.classList.contains('active')) {
       loadStudentRideOperations();
