@@ -3,7 +3,7 @@ import { ActivityIndicator, Alert, Animated, Linking, PanResponder, Platform, Pr
 import { Ionicons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useColors } from '@/hooks/useColors';
-import { DriverLocation, DriverPayment, DriverWalletSummary, RideRequest, useDriverRuntime } from '@/context/DriverRuntime';
+import { AdvanceBooking, DriverLocation, DriverPayment, DriverWalletSummary, RideRequest, useDriverRuntime } from '@/context/DriverRuntime';
 import { DriverMapboxWebView } from '@/components/DriverMapboxWebView';
 
 const RTL_TEXT_PATTERN = /[\u0590-\u08ff]/;
@@ -322,7 +322,7 @@ function ActiveRideSheet({
   </View>;
 }
 
-type DriverTab = 'history' | 'home' | 'payments';
+type DriverTab = 'history' | 'home' | 'advance' | 'payments';
 type DriverColors = ReturnType<typeof useColors>;
 
 function formatDriverDate(value?: string | Date) {
@@ -502,6 +502,67 @@ function DriverPaymentsPanel({
   </View>;
 }
 
+function DriverAdvanceBookingsPanel({
+  colors,
+  bookings,
+  loading,
+  onRefresh,
+  onAccept,
+  onCounter,
+}: {
+  colors: DriverColors;
+  bookings: AdvanceBooking[] | null;
+  loading: boolean;
+  onRefresh: () => void;
+  onAccept: (id: string) => void;
+  onCounter: (id: string, suggested: number) => void;
+}) {
+  const [counterPrices, setCounterPrices] = useState<Record<string, string>>({});
+  return <View style={styles.destinationPanel}>
+    <View style={styles.destinationHeader}>
+      <View style={{ flex: 1 }}>
+        <Text style={[styles.destinationTitle, { color: colors.foreground }]}>Advance Bookings</Text>
+        <Text style={[styles.destinationSubtitle, { color: colors.mutedForeground }]}>Agree future trips before pickup</Text>
+      </View>
+      <Pressable accessibilityLabel="Refresh advance bookings" disabled={loading} onPress={onRefresh} style={[styles.refreshButton, { backgroundColor: colors.secondary, borderColor: colors.border, opacity: loading ? .6 : 1 }]}>
+        <Ionicons name="refresh-outline" size={17} color={colors.primary} />
+      </Pressable>
+    </View>
+    {loading && !bookings
+      ? <View style={styles.destinationEmpty}><ActivityIndicator color={colors.primary} /><Text style={[styles.destinationEmptyText, { color: colors.mutedForeground }]}>Loading advance bookings…</Text></View>
+      : !bookings?.length
+        ? <View style={styles.destinationEmpty}><Ionicons name="calendar-outline" size={28} color={colors.mutedForeground} /><Text style={[styles.destinationEmptyText, { color: colors.mutedForeground }]}>No open advance bookings match your vehicle.</Text></View>
+        : <View style={styles.historyList}>{bookings.map(booking => {
+          const fare = Number(booking.fare || 0);
+          const blocked = booking.acceptanceEligibility?.allowed === false;
+          return <View key={booking.id} style={[styles.historyItem, { backgroundColor: colors.card, borderColor: colors.border, borderLeftColor: colors.primary }]}>
+            <View style={styles.historyRoute}>
+              <Text numberOfLines={2} style={[styles.historyLocation, { color: colors.foreground }]}>{booking.pickupLocation?.address || 'Pickup'}</Text>
+              <Ionicons name="arrow-forward" size={15} color={colors.primary} />
+              <Text numberOfLines={2} style={[styles.historyLocation, styles.historyDropoff, { color: colors.foreground }]}>{booking.dropoffLocation?.address || 'Drop-off'}</Text>
+            </View>
+            <Text style={[styles.historyDate, { color: colors.mutedForeground, marginTop: 8 }]}>{formatDriverDateTime(booking.scheduledFor)}</Text>
+            <Text style={[styles.historyPassenger, { color: colors.mutedForeground, marginTop: 4 }]}>{booking.passenger?.name || 'Customer'} · {booking.passenger?.phone || ''}</Text>
+            <View style={[styles.historyMeta, { marginTop: 8 }]}>
+              <Text style={[styles.historyFare, { color: colors.primary }]}>Rs {fare.toLocaleString('en-PK', { maximumFractionDigits: 0 })}</Text>
+              <Pressable disabled={blocked} onPress={() => onAccept(booking.id)} style={[styles.acceptButton, { backgroundColor: colors.primary, opacity: blocked ? .45 : 1 }]}><Text style={[styles.buttonText, { color: colors.primaryForeground }]}>{blocked ? 'Fee required' : 'Accept'}</Text></Pressable>
+            </View>
+            <View style={{ flexDirection: 'row', gap: 8, marginTop: 8 }}>
+              <TextInput
+                value={counterPrices[booking.id] ?? String(Math.round(fare))}
+                onChangeText={value => setCounterPrices(current => ({ ...current, [booking.id]: value }))}
+                keyboardType="number-pad"
+                placeholder="Counter price"
+                placeholderTextColor={colors.mutedForeground}
+                style={[styles.input, { flex: 1, minHeight: 44, color: colors.foreground, borderColor: colors.input }]}
+              />
+              <Pressable onPress={() => onCounter(booking.id, Number(counterPrices[booking.id] || fare))} style={[styles.secondaryButton, { borderColor: colors.border }]}><Text style={{ color: colors.foreground }}>Counter</Text></Pressable>
+            </View>
+          </View>;
+        })}</View>}
+  </View>;
+}
+
 function DriverBottomNavigation({
   colors,
   activeTab,
@@ -516,6 +577,7 @@ function DriverBottomNavigation({
   const items: Array<{ tab: DriverTab; label: string; icon: keyof typeof Ionicons.glyphMap }> = [
     { tab: 'history', label: 'Total Ride History', icon: 'receipt-outline' },
     { tab: 'home', label: 'Home', icon: 'home-outline' },
+    { tab: 'advance', label: 'Advance', icon: 'calendar-outline' },
     { tab: 'payments', label: 'Payments', icon: 'card-outline' },
   ];
   return <View style={[styles.bottomNavigation, { backgroundColor: colors.card, borderTopColor: colors.border, paddingBottom: Math.max(7, bottomInset) }]}>
@@ -577,7 +639,8 @@ function DriverHome() {
   useEffect(() => {
     if (runtime.user && runtime.rideHistory === null) void runtime.refreshRideHistory().catch(() => undefined);
     if (runtime.user && runtime.walletSummary === null) void runtime.refreshPayments().catch(() => undefined);
-  }, [runtime.refreshPayments, runtime.refreshRideHistory, runtime.rideHistory, runtime.user, runtime.walletSummary]);
+    if (runtime.user && runtime.advanceBookings === null) void runtime.refreshAdvanceBookings().catch(() => undefined);
+  }, [runtime.advanceBookings, runtime.refreshAdvanceBookings, runtime.refreshPayments, runtime.refreshRideHistory, runtime.rideHistory, runtime.user, runtime.walletSummary]);
 
   const signIn = async () => {
     setBusy(true);
@@ -641,7 +704,17 @@ function DriverHome() {
   const selectTab = (tab: DriverTab) => {
     setActiveTab(tab);
     if (tab === 'history') void runtime.refreshRideHistory().catch(() => undefined);
+    if (tab === 'advance') void runtime.refreshAdvanceBookings().catch(() => undefined);
     if (tab === 'payments') void runtime.refreshPayments().catch(() => undefined);
+  };
+
+  const acceptAdvance = async (bookingId: string) => {
+    try { await runtime.acceptAdvanceBooking(bookingId); report('Advance booking accepted.'); }
+    catch (error) { report(error instanceof Error ? error.message : 'Unable to accept advance booking'); }
+  };
+  const counterAdvance = (bookingId: string, price: number) => {
+    if (!Number.isFinite(price) || price < 1) return report('Enter a valid counter price.');
+    void runtime.counterAdvanceBooking(bookingId, price).then(() => report('Counter-offer sent.')).catch(error => report(error instanceof Error ? error.message : 'Unable to send counter-offer'));
   };
 
   if (!runtime.ready) return <View style={[styles.center, { backgroundColor: colors.background }]}><ActivityIndicator color={colors.primary} /></View>;
@@ -798,7 +871,16 @@ function DriverHome() {
         loading={runtime.rideHistoryLoading}
         onRefresh={() => void runtime.refreshRideHistory().catch(() => undefined)}
       />
-      : <DriverPaymentsPanel
+      : activeTab === 'advance'
+        ? <DriverAdvanceBookingsPanel
+          colors={colors}
+          bookings={runtime.advanceBookings}
+          loading={runtime.advanceBookingsLoading}
+          onRefresh={() => void runtime.refreshAdvanceBookings().catch(() => undefined)}
+          onAccept={id => void acceptAdvance(id)}
+          onCounter={counterAdvance}
+        />
+        : <DriverPaymentsPanel
         colors={colors}
         summary={runtime.walletSummary}
         payments={runtime.paymentHistory}
@@ -819,6 +901,14 @@ function DriverHome() {
       >
         <Ionicons name="home-outline" size={19} color={colors.primary} />
         <Text style={[styles.nativeDriverMenuLabel, { color: colors.foreground }]}>Home</Text>
+      </Pressable>
+      <Pressable
+        accessibilityRole="menuitem"
+        onPress={() => { setMenuOpen(false); setActiveTab('advance'); }}
+        style={({ pressed }) => [styles.nativeDriverMenuItem, { opacity: pressed ? .7 : 1 }]}
+      >
+        <Ionicons name="calendar-outline" size={19} color={colors.primary} />
+        <Text style={[styles.nativeDriverMenuLabel, { color: colors.foreground }]}>Advance bookings</Text>
       </Pressable>
       <Pressable
         accessibilityRole="menuitem"

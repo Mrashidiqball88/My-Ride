@@ -64,3 +64,4 @@
 - [Account deletion resurrection protection](account-deletion-resurrection-protection.md) — permanent account deletion must remove legacy sources and persist tombstones that startup migration and preview seeding honor.
 - [Active booking test isolation](active-booking-test-isolation.md) — sequential Customer ride scenarios must end the prior active ride and wait for recovery to settle before booking again.
 - [Wallet mutation idempotency](wallet-idempotency.md) — commit persisted request identity and the financial write in one transaction; reject changed payloads under the same key.
+- [Expo static export constraint](expo-static-export-constraint.md) — this workspace's Expo Router static export can fail before app code with an invalid process.env require.context root; dev Metro and typecheck remain valid.

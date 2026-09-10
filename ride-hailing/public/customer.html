@@ -958,11 +958,28 @@ body{font-family:'DM Sans','Segoe UI',sans-serif;background:var(--lr-paper);colo
         <div class="fare-min-note customer-fare-breakdown" id="fare-min-note"></div>
       </div>
 
+      <div id="advance-booking-controls" style="display:none;margin-top:.8rem;padding:.75rem;border:1px solid var(--lr-line);border-radius:14px;background:rgba(255,255,255,.5)">
+        <label style="display:flex;align-items:center;gap:.5rem;font-weight:800;font-size:.8rem;color:var(--lr-ink)">
+          <input type="checkbox" id="schedule-booking-toggle" onchange="toggleAdvanceBookingControls()">
+          Schedule this ride for later
+        </label>
+        <div id="schedule-booking-fields" style="display:none;margin-top:.65rem">
+          <label for="scheduled-for-input" style="display:block;font-size:.7rem;color:var(--lr-muted);font-weight:800;margin-bottom:.3rem">DATE AND TIME</label>
+          <input type="datetime-local" id="scheduled-for-input" style="width:100%;min-height:44px;border:1px solid var(--lr-line);border-radius:11px;padding:.6rem;background:#fff;color:var(--lr-ink)">
+          <div style="font-size:.68rem;color:var(--lr-muted);margin-top:.35rem">Book up to 30 days ahead. A Driver will be assigned before the ride starts.</div>
+          <button type="button" class="btn-secondary" onclick="scheduleRide()" style="width:100%;margin-top:.6rem">Create Advance Booking</button>
+        </div>
+      </div>
       <button class="btn-primary" id="book-btn" onclick="bookRide()" style="display:none;margin-top:.75rem">Book Ride 🚗</button>
     </div>
 
     <!-- RIDES TAB -->
     <div class="tab-content" id="tab-rides">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:.7rem">
+        <strong style="font-size:.85rem">Advance Bookings</strong>
+        <button type="button" class="btn-secondary" onclick="loadAdvanceBookings()" style="padding:.45rem .65rem;font-size:.72rem">↻ Refresh</button>
+      </div>
+      <div id="advance-booking-list" style="margin-bottom:1rem"><div class="empty-msg">Loading advance bookings…</div></div>
       <div id="ride-history-list"><div class="empty-msg">Loading your rides…</div></div>
     </div>
 
@@ -2196,7 +2213,7 @@ function bootApp() {
   document.getElementById('header-name').textContent = user.name || user.phone || user.email || 'User';
   installCustomerRideRecoveryListeners();
   setCustomerRideRecoveryState(true);
-  connectSocket(); loadRideHistory();
+  connectSocket(); loadRideHistory(); loadAdvanceBookings();
   loadCustomerPerKmRates();
   loadEmergencyContacts();   // pre-cache for SOS
   loadCustomerTerms();
@@ -3780,6 +3797,9 @@ async function updateFare() {
   document.getElementById('fare-row').style.display = 'block';
   document.getElementById('fare-meta').textContent = 'Calculating from Admin fare rules…';
   document.getElementById('book-btn').style.display = 'none';
+  document.getElementById('advance-booking-controls').style.display = 'none';
+  document.getElementById('schedule-booking-toggle').checked = false;
+  toggleAdvanceBookingControls();
   try {
     const quote = await apiCall('/api/fare/calculate', 'POST', {
       vehicleType: selectedVehicle,
@@ -3818,12 +3838,14 @@ async function updateFare() {
     document.getElementById('dist-badge').style.display = 'inline-flex';
     document.getElementById('dist-badge').title = distLabel;
     renderOfferedFare();
+    document.getElementById('advance-booking-controls').style.display = 'block';
     document.getElementById('book-btn').style.display = 'block';
   } catch (e) {
     if (requestId !== fareQuoteRequest) return;
     currentFareQuote = null;
     customerFareOffset = 0;
     offeredFare = 0;
+    document.getElementById('advance-booking-controls').style.display = 'none';
     document.getElementById('fare-meta').textContent = `Fare unavailable: ${e.message}`;
     document.getElementById('fare-suggested-val').textContent = '—';
     document.getElementById('fare-display').textContent = '—';
@@ -3950,6 +3972,140 @@ function selectVehicle(btn) {
   selectedVehicle = btn.dataset.type;
   updateBookingSheetSummary();
   if (pickup && dropoffs[0]) updateFare();
+}
+
+function toggleAdvanceBookingControls() {
+  const enabled = document.getElementById('schedule-booking-toggle')?.checked === true;
+  const fields = document.getElementById('schedule-booking-fields');
+  if (fields) fields.style.display = enabled ? 'block' : 'none';
+  const input = document.getElementById('scheduled-for-input');
+  if (enabled && input && !input.value) {
+    const minimum = new Date(Date.now() + 30 * 60 * 1000);
+    minimum.setSeconds(0, 0);
+    input.min = new Date(Date.now() + 20 * 60 * 1000).toISOString().slice(0, 16);
+    input.value = minimum.toISOString().slice(0, 16);
+  }
+}
+
+function advanceBookingPayload() {
+  const activeDropoffsList = dropoffs.slice(0, activeStops).filter(Boolean);
+  const dist = routeDistanceKm !== null ? routeDistanceKm : (() => {
+    const points = [pickup, ...activeDropoffsList];
+    return points.slice(0, -1).reduce((total, point, index) => total + haversine(
+      point.lat, point.lng, points[index + 1].lat, points[index + 1].lng
+    ), 0);
+  })();
+  return { activeDropoffsList, dist };
+}
+
+async function scheduleRide() {
+  if (customerRideRecoveryInFlight) return showToast('Checking for an existing active ride…', 'info');
+  if (!pickup) return showToast('Set pickup location first', 'error');
+  if (!dropoffs[0]) return showToast('Set at least one dropoff location', 'error');
+  if (!currentFareQuote || !offeredFare) return showToast('Wait for the fare calculation', 'error');
+  const scheduledForInput = document.getElementById('scheduled-for-input');
+  if (!scheduledForInput?.value) return showToast('Choose the booking date and time', 'error');
+  const { activeDropoffsList, dist } = advanceBookingPayload();
+  try {
+    const pickupInputAddress = document.getElementById('pickup-input')?.value.trim() || '';
+    const pickupLocation = await resolveRideLocationAddress(
+      pickupInputAddress && !isGenericRideLocationAddress(pickupInputAddress)
+        ? { ...pickup, address: pickupInputAddress }
+        : pickup
+    );
+    const preciseDropoffs = await Promise.all(activeDropoffsList.map(resolveRideLocationAddress));
+    const booking = await apiCall('/api/advance-bookings', 'POST', {
+      pickupLocation,
+      dropoffLocation: preciseDropoffs[0],
+      dropoffLocations: preciseDropoffs,
+      distance: +dist.toFixed(2),
+      durationMinutes: Number(routeDurationMinutes || 0).toFixed(2),
+      vehicleType: selectedVehicle,
+      paymentMethod: 'cash',
+      customerFareOffset,
+      customerOffer: offeredFare,
+      scheduledFor: new Date(scheduledForInput.value).toISOString()
+    });
+    showToast('Advance booking created. We will assign a Driver before pickup.', 'success');
+    document.getElementById('schedule-booking-toggle').checked = false;
+    toggleAdvanceBookingControls();
+    loadAdvanceBookings();
+    switchAppTab('rides');
+  } catch (error) {
+    showToast(error.message || 'Could not create advance booking', 'error');
+  }
+}
+
+function formatAdvanceBookingStatus(status) {
+  return {
+    pending: 'Finding a Driver',
+    assigned: 'Driver assigned',
+    dispatching: 'Preparing ride',
+    converted: 'Ride released',
+    cancelled: 'Cancelled',
+    failed: 'Needs attention'
+  }[status] || status;
+}
+
+function renderAdvanceBookings(bookings = []) {
+  const el = document.getElementById('advance-booking-list');
+  if (!el) return;
+  if (!bookings.length) {
+    el.innerHTML = '<div class="empty-msg">No advance bookings yet.</div>';
+    return;
+  }
+  el.innerHTML = bookings.map(booking => {
+    const status = escapeLocationText(formatAdvanceBookingStatus(booking.status));
+    const when = new Date(booking.scheduledFor).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' });
+    const canCancel = ['pending', 'assigned'].includes(booking.status);
+    const offers = Array.isArray(booking.counterOffers)
+      ? booking.counterOffers.filter(offer => offer?.type === 'counter' || offer?.type === 'accept')
+      : [];
+    const offerMarkup = booking.status === 'pending' && offers.length
+      ? `<div style="margin-top:.55rem;padding-top:.55rem;border-top:1px solid var(--lr-line);font-size:.7rem"><strong>Driver offers</strong>${offers.map(offer => `
+        <div style="display:flex;align-items:center;justify-content:space-between;gap:.5rem;margin-top:.35rem">
+          <span>${escapeLocationText(offer.driverName || 'Driver')} · Rs ${Number(offer.price || 0).toLocaleString()}</span>
+          <button type="button" class="btn-primary" style="padding:.35rem .55rem;font-size:.68rem" onclick="acceptAdvanceDriver('${String(booking._id)}','${String(offer.driver || '')}')">Choose</button>
+        </div>`).join('')}</div>`
+      : '';
+    return `<article style="border:1px solid var(--lr-line);border-radius:13px;padding:.75rem;margin-bottom:.55rem;background:#fff">
+      <div style="display:flex;justify-content:space-between;gap:.6rem;font-size:.75rem;font-weight:800">
+        <span>📅 ${escapeLocationText(when)}</span><span style="color:var(--lr-coral-dark)">${status}</span>
+      </div>
+      <div style="font-size:.76rem;margin-top:.45rem" dir="auto">${escapeLocationText(booking.pickupLocation?.address || 'Pickup')} → ${escapeLocationText(booking.dropoffLocation?.address || 'Dropoff')}</div>
+      <div style="font-size:.7rem;color:var(--lr-muted);margin-top:.35rem">Rs ${Number(booking.fare || 0).toLocaleString()} · ${escapeLocationText(booking.vehicleType || '')}${booking.driver?.name ? ` · ${escapeLocationText(booking.driver.name)}` : ''}</div>
+      ${offerMarkup}
+      ${canCancel ? `<button type="button" class="btn-danger" style="margin-top:.55rem;padding:.45rem .65rem;font-size:.7rem" onclick="cancelAdvanceBooking('${String(booking._id)}')">Cancel booking</button>` : ''}
+    </article>`;
+  }).join('');
+}
+
+async function acceptAdvanceDriver(bookingId, driverId) {
+  if (!driverId) return showToast('Driver offer is missing its identity', 'error');
+  try {
+    await apiCall(`/api/advance-bookings/${encodeURIComponent(bookingId)}/accept-driver`, 'PATCH', { driverId });
+    showToast('Driver assigned to your advance booking.', 'success');
+    loadAdvanceBookings();
+  } catch (error) { showToast(error.message || 'Unable to choose Driver', 'error'); }
+}
+
+async function loadAdvanceBookings() {
+  const el = document.getElementById('advance-booking-list');
+  if (!el || !token) return;
+  try {
+    renderAdvanceBookings(await apiCall('/api/advance-bookings/my'));
+  } catch (error) {
+    el.innerHTML = `<div class="empty-msg">${escapeLocationText(error.message || 'Unable to load advance bookings')}</div>`;
+  }
+}
+
+async function cancelAdvanceBooking(id) {
+  if (!confirm('Cancel this advance booking?')) return;
+  try {
+    await apiCall(`/api/advance-bookings/${encodeURIComponent(id)}/cancel`, 'PATCH');
+    showToast('Advance booking cancelled', 'success');
+    loadAdvanceBookings();
+  } catch (error) { showToast(error.message || 'Unable to cancel booking', 'error'); }
 }
 
 // ── Add / Remove Stops ───────────────────────────────────────────────────
@@ -4549,6 +4705,23 @@ function connectSocket() {
     // immediately so the Customer map never presents a stale availability view.
     if (!activeRide) startNearbyDrivers();
   });
+  socket.on('advance-booking:converted', ({ bookingId, rideId }) => {
+    showToast('Your advance booking is now active. Driver matching has started.', 'success');
+    loadAdvanceBookings();
+    if (rideId) {
+      apiCall(`/api/rides/${rideId}`).then(ride => {
+        activeRide = ride;
+        activeLiveFare = ride.fare;
+        driverOffers = [];
+        connectToRideRoom(rideId);
+        showWaitingPanel(ride);
+      }).catch(() => undefined);
+    }
+  });
+  socket.on('advance-booking:offer', () => {
+    showToast('A Driver responded to your advance booking.', 'info');
+    loadAdvanceBookings();
+  });
 }
 
 function connectToRideRoom(rideId) {
@@ -4993,7 +5166,7 @@ function switchAppTab(name) {
   document.querySelectorAll('.tab:not(.sos-tab)').forEach(b => b.classList.toggle('active', b.textContent.trim().toLowerCase().includes(name)));
   document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
   document.getElementById(`tab-${name}`).classList.add('active');
-  if (name === 'rides') loadRideHistory();
+  if (name === 'rides') { loadRideHistory(); loadAdvanceBookings(); }
   // Repaint map tiles after the bottom panel reflows (50 ms is too short)
   setTimeout(() => map?.resize(), 150);
 }
