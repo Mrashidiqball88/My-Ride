@@ -3686,6 +3686,37 @@ async function findLongRangeBroadcastDrivers(
   return { drivers: selectedDrivers, radiusKm };
 }
 
+// Scheduled rides are future reservations, not immediate proximity requests.
+// Do not gate their distribution on the Driver's current GPS radius, Redis GEO
+// membership, or an already-created Wallet document. A Driver can be online
+// now while being away from the future pickup, and online availability already
+// passed the daily-fee gate. Persisting this audience is what makes the booking
+// visible in /api/advance-bookings/available even if the Driver misses the
+// Socket.io event.
+async function findAdvanceBookingBroadcastDrivers(
+  vehicleType,
+  isLongRange,
+  { isStudentRide = false } = {}
+) {
+  const drivers = await findDriverDocuments({
+    isOnline: true,
+    accountStatus: 'active',
+    vehicleType: { $in: storedVehicleTypesForFareCategory(vehicleType) },
+    lastOnlineHeartbeat: { $gte: new Date(Date.now() - DRIVER_HEARTBEAT_MAX_AGE_MS) }
+  }, {
+    select: '_id name phone vehicleType ridePreference longRangeEnabled expoPushToken studentRideLastAssignedAt'
+  });
+
+  const eligible = drivers.filter(driver => (
+    canDriverReceiveRideForPreference(driver.ridePreference, isLongRange)
+    && (!isLongRange || driver.longRangeEnabled === true)
+  ));
+
+  return isStudentRide
+    ? selectFairStudentRideDrivers(eligible)
+    : eligible;
+}
+
 async function chargeLongRangeCommissionCore(ride, driverId, longRangeSettings, { session } = {}) {
   if (!ride.isLongRange || ride.longRangeCommissionChargedAt) {
     return { ok: true, alreadyCharged: !!ride.longRangeCommissionChargedAt };
@@ -5724,25 +5755,32 @@ async function broadcastAdvanceBooking(booking) {
     getLongRangeSettings(),
     User.findById(booking.passenger).select('name').lean()
   ]);
-  const broadcast = booking.isLongRange
-    ? await findLongRangeBroadcastDrivers(
-      booking.pickupLocation,
-      booking.vehicleType,
-      longRangeSettings,
-      vehicleCategoryDoc?.value,
-      { isStudentRide: booking.isStudentRide }
-    )
-    : await findRideBroadcastDrivers(
-      booking.pickupLocation,
-      booking.vehicleType,
-      rideBroadcastSettings,
-      vehicleCategoryDoc?.value,
-      { isStudentRide: booking.isStudentRide }
-    );
+  const scheduledDrivers = await findAdvanceBookingBroadcastDrivers(
+    booking.vehicleType,
+    !!booking.isLongRange,
+    { isStudentRide: booking.isStudentRide }
+  );
+  const broadcast = {
+    drivers: scheduledDrivers,
+    radiusKm: booking.isLongRange
+      ? longRangeSettings.broadcastRadiusKm
+      : rideBroadcastSettings.maximumRideBroadcastRadiusKm
+  };
 
   booking.notifiedDriverIds = broadcast.drivers.map(driver => driver._id);
   booking.broadcastLastAttemptAt = new Date();
   await booking.save();
+  if (!broadcast.drivers.length) {
+    console.warn(
+      `[advance-booking] no eligible online Drivers for ${booking._id} ` +
+      `(vehicle=${booking.vehicleType}, longRange=${!!booking.isLongRange})`
+    );
+  } else {
+    console.log(
+      `[advance-booking] broadcasting ${booking._id} to ` +
+      `${broadcast.drivers.length} online Driver(s)`
+    );
+  }
 
   const payload = advanceBookingResponse(booking);
   payload.id = String(booking._id);
