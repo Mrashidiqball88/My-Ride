@@ -2603,6 +2603,12 @@ function connectSocket() {
     }
     showToast(`Advance booking assigned to ${booking?.driver?.name || 'a Driver'}.`, 'success');
   });
+  socket.on('advance-booking:converted', () => {
+    if (document.getElementById('sec-advance-bookings')?.classList.contains('active')) {
+      loadAdvanceBookings(currentAdvanceBookingStatus);
+    }
+    showToast('Scheduled ride activated by the assigned Driver.', 'info');
+  });
   socket.on('student-ride-log:updated', () => {
     if (document.getElementById('sec-student-ride-operations')?.classList.contains('active')) {
       loadStudentRideOperations();
@@ -3495,7 +3501,7 @@ function advanceBookingBadge(status) {
     accepted: ['badge-live', 'Accepted'],
     arrived: ['badge-live', 'Driver arrived'],
     'in-progress': ['badge-live', 'In progress'],
-    converted: ['badge-active', 'Converted to ride'],
+    converted: ['badge-active', 'Ride active'],
     completed: ['badge-active', 'Completed'],
     cancelled: ['badge-blocked', 'Cancelled'],
     failed: ['badge-rejected', 'Dispatch failed']

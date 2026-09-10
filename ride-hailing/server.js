@@ -6004,6 +6004,14 @@ async function dispatchAdvanceBooking(booking) {
       { _id: booking._id, status: 'dispatching' },
       { $set: { status: 'converted', ride: existingRide._id, dispatchedAt: existingRide.createdAt || new Date() } }
     );
+    const activatedPayload = {
+      bookingId: String(booking._id),
+      rideId: String(existingRide._id),
+      scheduledFor: booking.scheduledFor
+    };
+    io.to(`user:${booking.passenger}`).emit('advance-booking:converted', activatedPayload);
+    if (booking.driver) io.to(`user:${booking.driver}`).emit('advance-booking:converted', activatedPayload);
+    io.to('admin-room').emit('advance-booking:converted', activatedPayload);
     return existingRide;
   }
   const [rideBroadcastSettings, vehicleCategoryDoc, longRangeSettings] = await Promise.all([
@@ -6105,40 +6113,22 @@ async function dispatchAdvanceBooking(booking) {
     { _id: booking._id, status: 'dispatching' },
     { $set: { status: 'converted', ride: ride._id, dispatchedAt: new Date() } }
   );
-  io.to(`user:${booking.passenger}`).emit('advance-booking:converted', {
+  const activatedPayload = {
     bookingId: String(booking._id),
     rideId: String(ride._id),
     scheduledFor: booking.scheduledFor
-  });
+  };
+  io.to(`user:${booking.passenger}`).emit('advance-booking:converted', activatedPayload);
+  if (assignedDriverId) io.to(`user:${assignedDriverId}`).emit('advance-booking:converted', activatedPayload);
+  io.to('admin-room').emit('advance-booking:converted', activatedPayload);
   return ride;
 }
 
 async function runAdvanceBookingDispatcher() {
-  if (!(dbConnected || mongoose.connection.readyState === 1)) return;
-  const dueBefore = new Date(Date.now() + ADVANCE_BOOKING_MIN_LEAD_MS);
-  for (let attempt = 0; attempt < 25; attempt++) {
-    const booking = await AdvanceBooking.findOneAndUpdate(
-      {
-        $or: [
-          { status: { $in: ['pending', 'assigned'] } },
-          { status: 'dispatching', dispatchingAt: { $lte: new Date(Date.now() - 5 * 60 * 1000) } }
-        ],
-        scheduledFor: { $lte: dueBefore }
-      },
-      { $set: { status: 'dispatching', dispatchingAt: new Date() } },
-      { new: true, sort: { scheduledFor: 1, createdAt: 1 } }
-    );
-    if (!booking) break;
-    try {
-      await dispatchAdvanceBooking(booking);
-    } catch (err) {
-      console.error(`[advance-booking] dispatch failed for ${booking._id}:`, err.message);
-      await AdvanceBooking.updateOne(
-        { _id: booking._id, status: 'dispatching' },
-        { $set: { status: 'failed', failureReason: 'Unable to dispatch reservation' } }
-      );
-    }
-  }
+  // Advance bookings are intentionally not activated by a timer. They remain
+  // assigned in the dedicated scheduled-rides section until the assigned
+  // Driver explicitly presses Start Ride at or after scheduledFor.
+  return { processed: 0, automaticActivationDisabled: true };
 }
 
 app.post('/api/advance-bookings', authMiddleware, customerOnly, customerCanBook, async (req, res) => {
@@ -6241,11 +6231,14 @@ app.get('/api/advance-bookings/available', authMiddleware, driverOnly, async (re
         {
           status: 'pending',
           notifiedDriverIds: req.user.id,
-          vehicleType: { $in: storedVehicleTypesForFareCategory(driver.vehicleType) }
+          vehicleType: { $in: storedVehicleTypesForFareCategory(driver.vehicleType) },
+          scheduledFor: { $gt: new Date() }
         },
-        { driver: req.user.id, status: 'assigned' }
-      ],
-      scheduledFor: { $gt: new Date() }
+        {
+          driver: req.user.id,
+          status: 'assigned'
+        }
+      ]
     }).populate('passenger', 'name phone').sort({ scheduledFor: 1 }).limit(50);
     res.json(bookings
       .filter(booking => canDriverReceiveRideForPreference(driver.ridePreference, booking.isLongRange))
@@ -6330,6 +6323,75 @@ app.patch('/api/advance-bookings/:id/accept', authMiddleware, driverOnly, async 
     res.json(response);
   } catch (err) {
     res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/advance-bookings/:id/start', authMiddleware, driverOnly, async (req, res) => {
+  try {
+    const now = new Date();
+    const staleDispatchBefore = new Date(now.getTime() - 5 * 60 * 1000);
+    const current = await AdvanceBooking.findOne({
+      _id: req.params.id,
+      driver: req.user.id
+    });
+    if (!current) return res.status(404).json({ error: 'Assigned advance booking not found' });
+
+    if (current.status === 'converted' && current.ride) {
+      const ride = await Ride.findById(current.ride);
+      if (!ride) return res.status(409).json({ error: 'The activated ride could not be recovered' });
+      return res.json({
+        booking: advanceBookingResponse(current),
+        ride: await rideResponseForUserWithContact(ride, 'driver')
+      });
+    }
+
+    if (!['assigned', 'dispatching'].includes(current.status)) {
+      return res.status(409).json({ error: 'This advance booking is not ready to start' });
+    }
+    if (new Date(current.scheduledFor).getTime() > now.getTime()) {
+      return res.status(409).json({
+        error: `This scheduled ride can start at ${formatAdvanceBookingReminderTime(current.scheduledFor)}.`,
+        code: 'ADVANCE_BOOKING_NOT_DUE',
+        scheduledFor: current.scheduledFor
+      });
+    }
+
+    const claimFilter = current.status === 'assigned'
+      ? { _id: current._id, driver: req.user.id, status: 'assigned' }
+      : {
+        _id: current._id,
+        driver: req.user.id,
+        status: 'dispatching',
+        dispatchingAt: { $lte: staleDispatchBefore }
+      };
+    const claimedBooking = await AdvanceBooking.findOneAndUpdate(
+      claimFilter,
+      { $set: { status: 'dispatching', dispatchingAt: now } },
+      { new: true }
+    );
+    if (!claimedBooking) {
+      return res.status(409).json({ error: 'Ride activation is already in progress. Refresh your Advance Rides tab.' });
+    }
+
+    let ride;
+    try {
+      ride = await dispatchAdvanceBooking(claimedBooking);
+    } catch (error) {
+      await AdvanceBooking.updateOne(
+        { _id: claimedBooking._id, status: 'dispatching', ride: null },
+        { $set: { status: 'assigned', dispatchingAt: null, failureReason: 'Activation failed; try again.' } }
+      ).catch(() => {});
+      throw error;
+    }
+
+    const activatedBooking = await AdvanceBooking.findById(claimedBooking._id)
+      .populate('passenger driver', 'name phone vehicleType vehicleModel vehiclePlate rating profilePhoto');
+    res.json({
+      booking: advanceBookingResponse(activatedBooking || claimedBooking),
+      ride: await rideResponseForUserWithContact(ride, 'driver')
+    });
+  } catch (err) {
+    res.status(err.statusCode || 500).json({ error: err.message });
   }
 });
 

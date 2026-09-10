@@ -508,6 +508,7 @@ function DriverAdvanceBookingsPanel({
   loading,
   onRefresh,
   onAccept,
+  onStart,
   onCounter,
 }: {
   colors: DriverColors;
@@ -515,9 +516,15 @@ function DriverAdvanceBookingsPanel({
   loading: boolean;
   onRefresh: () => void;
   onAccept: (id: string) => void;
+  onStart: (id: string) => void;
   onCounter: (id: string, suggested: number) => void;
 }) {
   const [counterPrices, setCounterPrices] = useState<Record<string, string>>({});
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const timer = setInterval(() => setNow(Date.now()), 15_000);
+    return () => clearInterval(timer);
+  }, []);
   return <View style={styles.destinationPanel}>
     <View style={styles.destinationHeader}>
       <View style={{ flex: 1 }}>
@@ -535,6 +542,10 @@ function DriverAdvanceBookingsPanel({
         : <View style={styles.historyList}>{bookings.map(booking => {
           const fare = Number(booking.fare || 0);
           const blocked = booking.acceptanceEligibility?.allowed === false;
+          const scheduledAt = new Date(booking.scheduledFor).getTime();
+          const canStart = booking.status === 'assigned'
+            && Number.isFinite(scheduledAt)
+            && scheduledAt <= now;
           return <View key={booking.id} style={[styles.historyItem, { backgroundColor: colors.card, borderColor: colors.border, borderLeftColor: colors.primary }]}>
             <View style={styles.historyRoute}>
               <Text numberOfLines={2} style={[styles.historyLocation, { color: colors.foreground }]}>{booking.pickupLocation?.address || 'Pickup'}</Text>
@@ -546,7 +557,9 @@ function DriverAdvanceBookingsPanel({
             <View style={[styles.historyMeta, { marginTop: 8 }]}>
               <Text style={[styles.historyFare, { color: colors.primary }]}>Rs {fare.toLocaleString('en-PK', { maximumFractionDigits: 0 })}</Text>
                {booking.status === 'assigned'
-                 ? <Text style={[styles.historyFare, { color: colors.primary }]}>Assigned to you</Text>
+                 ? canStart
+                   ? <Pressable onPress={() => onStart(booking.id)} style={[styles.acceptButton, { backgroundColor: colors.primary }]}><Text style={[styles.buttonText, { color: colors.primaryForeground }]}>Start Ride</Text></Pressable>
+                   : <Text style={[styles.historyFare, { color: colors.primary }]}>Assigned · starts at scheduled time</Text>
                  : booking.myOffer
                    ? <Text style={[styles.historyFare, { color: colors.primary }]}>Offer sent</Text>
                    : <Pressable disabled={blocked} onPress={() => onAccept(booking.id)} style={[styles.acceptButton, { backgroundColor: colors.primary, opacity: blocked ? .45 : 1 }]}><Text style={[styles.buttonText, { color: colors.primaryForeground }]}>{blocked ? 'Fee required' : 'Offer'}</Text></Pressable>}
@@ -716,6 +729,10 @@ function DriverHome() {
     try { await runtime.acceptAdvanceBooking(bookingId); report('Advance booking accepted.'); }
     catch (error) { report(error instanceof Error ? error.message : 'Unable to accept advance booking'); }
   };
+  const startAdvance = async (bookingId: string) => {
+    try { await runtime.startAdvanceBooking(bookingId); report('Scheduled ride activated.'); }
+    catch (error) { report(error instanceof Error ? error.message : 'Unable to start scheduled ride'); }
+  };
   const counterAdvance = (bookingId: string, price: number) => {
     if (!Number.isFinite(price) || price < 1) return report('Enter a valid counter price.');
     void runtime.counterAdvanceBooking(bookingId, price).then(() => report('Counter-offer sent.')).catch(error => report(error instanceof Error ? error.message : 'Unable to send counter-offer'));
@@ -882,6 +899,7 @@ function DriverHome() {
           loading={runtime.advanceBookingsLoading}
           onRefresh={() => void runtime.refreshAdvanceBookings().catch(() => undefined)}
           onAccept={id => void acceptAdvance(id)}
+          onStart={id => void startAdvance(id)}
           onCounter={counterAdvance}
         />
         : <DriverPaymentsPanel

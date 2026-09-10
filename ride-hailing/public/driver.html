@@ -3804,14 +3804,18 @@ function renderDriverAdvanceBookings(bookings = []) {
     const when = new Date(booking.scheduledFor).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' });
     const offer = Number(booking.fare || 0);
     const blocked = booking.acceptanceEligibility?.allowed === false;
-      const assigned = booking.status === 'assigned';
+    const assigned = booking.status === 'assigned';
+    const scheduledAt = new Date(booking.scheduledFor).getTime();
+    const canStart = assigned && Number.isFinite(scheduledAt) && scheduledAt <= Date.now();
       const hasOffer = Boolean(booking.myOffer);
     return `<article class="driver-history-item requested">
       <div class="driver-history-route"><span class="driver-history-location" dir="auto">${formatStopAddr(booking.pickupLocation)}</span><span class="driver-history-arrow">→</span><span class="driver-history-location" dir="auto">${formatStopAddr(booking.dropoffLocation)}</span></div>
        <div class="driver-history-meta"><span>📅 ${escapeDriverText(when)}</span><span>👥 ${Number(booking.passengerCount || 1)} passenger${Number(booking.passengerCount || 1) === 1 ? '' : 's'}</span><span>${escapeDriverText(booking.vehicleType || '')}</span><span class="driver-history-fare">Rs ${offer.toLocaleString()}</span></div>
        <div style="font-size:.72rem;color:#94a3b8;margin-top:.45rem">Customer: ${escapeDriverText(booking.passenger?.name || 'Customer')} · ${escapeDriverText(booking.passenger?.phone || '')}</div>
        ${assigned
-         ? '<div style="margin-top:.65rem;color:#36d399;font-size:.78rem;font-weight:800">✓ Booking assigned to you. It will start at the scheduled time.</div>'
+         ? canStart
+           ? `<button class="btn-accept" style="width:100%;margin-top:.65rem" onclick="startAdvanceBooking('${id}')">▶ Start Ride</button>`
+           : '<div style="margin-top:.65rem;color:#36d399;font-size:.78rem;font-weight:800">✓ Assigned to you. Start Ride will unlock at the scheduled time.</div>'
          : hasOffer
            ? `<div style="margin-top:.65rem;color:#66aaff;font-size:.78rem;font-weight:800">⇄ ${escapeDriverText(booking.myOffer.type === 'counter' ? 'Counter-offer' : 'Offer')} sent · Rs ${Number(booking.myOffer.price || offer).toLocaleString()} · waiting for Customer</div>`
            : `<div style="display:flex;gap:.45rem;margin-top:.65rem">
@@ -3835,6 +3839,18 @@ async function acceptAdvanceBooking(id) {
     showToast('Advance booking accepted.', 'success');
     loadDriverAdvanceBookings();
   } catch (error) { showToast(error.message || 'Unable to accept booking', 'error'); }
+}
+
+async function startAdvanceBooking(id) {
+  try {
+    const result = await apiCall(`/api/advance-bookings/${encodeURIComponent(id)}/start`, 'POST');
+    showToast('Scheduled ride activated.', 'success');
+    loadDriverAdvanceBookings();
+    if (result?.ride) {
+      showActivePanel(result.ride);
+      socket.emit('ride:join', String(result.ride._id || result.ride.id));
+    }
+  } catch (error) { showToast(error.message || 'Unable to start scheduled ride', 'error'); }
 }
 
 async function counterAdvanceBooking(id, suggested) {

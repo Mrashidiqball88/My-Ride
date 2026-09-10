@@ -4044,7 +4044,7 @@ function formatAdvanceBookingStatus(status) {
     pending: 'Finding a Driver',
     assigned: 'Driver assigned',
     dispatching: 'Preparing ride',
-    converted: 'Ride released',
+    converted: 'Ride active',
     cancelled: 'Cancelled',
     failed: 'Needs attention'
   }[status] || status;
@@ -4717,7 +4717,7 @@ function connectSocket() {
     if (!activeRide) startNearbyDrivers();
   });
   socket.on('advance-booking:converted', ({ bookingId, rideId }) => {
-    showToast('Your advance booking is now active. Driver matching has started.', 'success');
+    showToast('Your assigned Driver has started the scheduled ride.', 'success');
     loadAdvanceBookings();
     if (rideId) {
       apiCall(`/api/rides/${rideId}`).then(ride => {
