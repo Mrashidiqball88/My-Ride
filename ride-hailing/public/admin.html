@@ -901,7 +901,8 @@ button,input,select,textarea{
       <div class="sb-item"        onclick="showSection('app-settings')" data-sec="app-settings"><span class="sb-icon">⚙️</span> App Settings / Pricing</div>
       <div class="sb-item"        onclick="showSection('location-aliases')" data-sec="location-aliases"><span class="sb-icon">📍</span> Customer Location Aliases</div>
        <div class="sb-item"        onclick="showSection('terms-settings')" data-sec="terms-settings"><span class="sb-icon">📜</span> Terms & Conditions Settings</div>
-      <div class="sb-item"        onclick="showSection('live-rides')"   data-sec="live-rides">  <span class="sb-icon">🗺️</span> Live Rides</div>
+       <div class="sb-item"        onclick="showSection('live-rides')"   data-sec="live-rides">  <span class="sb-icon">🗺️</span> Live Rides</div>
+       <div class="sb-item"        onclick="showSection('advance-bookings')" data-sec="advance-bookings"><span class="sb-icon">🗓️</span> Advance Bookings <span class="sb-badge-count" id="advance-booking-cnt" style="display:none">0</span></div>
        <div class="sb-item"        onclick="showSection('ride-retention')" data-sec="ride-retention"><span class="sb-icon">🧹</span> Rides Data Retention</div>
        <div class="sb-item"        onclick="showSection('data-management')" data-sec="data-management"><span class="sb-icon">⚠️</span> Data Management</div>
       <div class="sb-item"        onclick="showSection('sos')"          data-sec="sos">         <span class="sb-icon">🆘</span> SOS Monitor <span class="sb-badge-count" id="sos-cnt" style="display:none">0</span></div>
@@ -1270,7 +1271,33 @@ button,input,select,textarea{
         </table></div>
       </div>
 
-      <!-- ════ 9. RIDE DATA RETENTION ════ -->
+      <!-- ════ 9. ADVANCE BOOKINGS ════ -->
+      <div class="section-panel" id="sec-advance-bookings">
+        <div class="sec-hdr">
+          <div>
+            <h2>🗓️ Advance / Scheduled Bookings</h2>
+            <p class="section-intro" style="margin:.35rem 0 0">Review future rides, assigned parties, and reminder delivery. Automatic reminders run once during the 45-minute pre-pickup window.</p>
+          </div>
+          <div class="sec-hdr-actions">
+            <div class="filter-tabs">
+              <div class="ftab active" onclick="loadAdvanceBookings('all');setFTab(this)">All</div>
+              <div class="ftab" onclick="loadAdvanceBookings('pending');setFTab(this)">Scheduled</div>
+              <div class="ftab" onclick="loadAdvanceBookings('assigned');setFTab(this)">Assigned</div>
+              <div class="ftab" onclick="loadAdvanceBookings('converted');setFTab(this)">Converted</div>
+              <div class="ftab" onclick="loadAdvanceBookings('cancelled');setFTab(this)">Cancelled</div>
+            </div>
+            <button class="btn-refresh" type="button" onclick="loadAdvanceBookings(currentAdvanceBookingStatus)">↻ Refresh</button>
+          </div>
+        </div>
+        <div class="table-wrap">
+          <table class="data-table" id="advance-bookings-table">
+            <thead><tr><th>Customer</th><th>Driver</th><th>Pickup → Drop-off</th><th>Passengers</th><th>Scheduled Date / Time</th><th>Status</th><th>Reminder</th></tr></thead>
+            <tbody id="advance-bookings-tbody"><tr><td colspan="7" class="loading-row">Loading…</td></tr></tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- ════ 10. RIDE DATA RETENTION ════ -->
       <div class="section-panel" id="sec-ride-retention">
         <div class="sec-hdr">
           <h2>🧹 Rides Data Retention</h2>
@@ -2134,6 +2161,7 @@ let currentDriverStatus = 'all';
 let currentPassStatus   = 'all';
 let currentStudentStatus = 'pending';
 let currentRideStatus   = 'active';
+let currentAdvanceBookingStatus = 'all';
 let currentSOSFilter    = 'false';
 let currentSupStatus    = 'open';
 let maxIncome = 0;
@@ -2174,6 +2202,8 @@ const SUB_ADMIN_PERMISSION_CATALOG = [
   ['Customers', 'viewCustomers', 'View customer accounts'],
   ['Customers', 'manageCustomers', 'Block, restore, or reject customers'],
   ['Rides', 'viewRides', 'View live rides & ride history'],
+  ['Rides', 'viewAdvanceBookings', 'View Advance / Scheduled Bookings'],
+  ['Rides', 'manageAdvanceBookingReminders', 'Send scheduled-ride reminders'],
   ['Wallet recharges', 'viewPayments', 'View Driver recharge requests'],
   ['Wallet recharges', 'viewPaymentProofs', 'View recharge proof screenshots'],
   ['Wallet recharges', 'approveWalletTopups', 'Approve or reject Driver recharges'],
@@ -2193,7 +2223,7 @@ const SECTION_PERMISSION = {
   overview: 'viewOverview', payments: 'viewPayments', drivers: 'viewDrivers',
   'new-requests': 'manageDriverApprovals', 'fee-compliance': 'viewDriverPasses',
    'temp-blocked': 'manageDriverStatus', passengers: 'viewCustomers', 'student-approvals': 'manageCustomers', 'student-ride-operations': 'manageFareSettings',
-  'blk-pass': 'manageCustomers', 'live-rides': 'viewRides', sos: 'viewSOS',
+  'blk-pass': 'manageCustomers', 'live-rides': 'viewRides', 'advance-bookings': 'viewAdvanceBookings', sos: 'viewSOS',
   ratings: 'viewRatings', support: 'viewSupport', 'audit-logs': 'viewAuditLogs',
   'ride-settings': 'manageRideSettings', 'fare-settings': 'manageFareSettings', 'waiting-rate-settings': 'manageFareSettings', 'customer-fare-display-settings': 'manageFareSettings', 'student-discount-settings': 'manageFareSettings', 'long-range-settings': 'manageFareSettings', 'terms-settings': 'manageFareSettings', 'location-aliases': 'manageLocationAliases',
   'pay-settings': 'managePaymentSettings'
@@ -2615,7 +2645,7 @@ const SECTION_TITLES = {
   overview:'Overview Dashboard', payments:'Payments Management', drivers:'Driver Management',
   passengers:'Customer Management', 'student-approvals':'Student Approvals', 'new-requests':'Driver Approvals & Documents',
   'temp-blocked':'Driver Status', 'blk-pass':'Blocked Customers',
-  'live-rides':'Live Rides & History', sos:'SOS Alert Monitor',
+  'live-rides':'Live Rides & History', 'advance-bookings':'Advance / Scheduled Bookings', sos:'SOS Alert Monitor',
   'fee-compliance':'Driver Wallets & Daily Fees',
   'app-settings':'App Settings / Pricing', 'student-ride-operations':'Student Ride Operations', 'terms-settings':'Terms & Conditions Settings', 'location-aliases':'Customer Location Aliases',
   'ride-settings':'Ride Settings', 'fare-settings':'Daily Fare Settings', 'waiting-rate-settings':'Per-Minute Waiting / Stop Rates', 'customer-fare-display-settings':'Customer Fare Display', 'student-discount-settings':'Student Discount', 'long-range-settings':'Long Range Ride Settings', 'pay-settings':'Payment Settings', 'ride-retention':'Rides Data Retention', 'data-management':'Data Management', ratings:'Ratings & Feedback', support:'Support Tickets', 'audit-logs':'Payment & Pass Audit Logs',
@@ -2747,6 +2777,7 @@ function showSection(name) {
     drivers: () => loadDrivers(currentDriverStatus), passengers: () => loadPassengers(currentPassStatus),
     'new-requests': loadNewRequests, 'student-approvals': () => loadStudentApprovals(currentStudentStatus), 'student-ride-operations': loadStudentRideOperations, 'temp-blocked': loadTempBlocked,
     'blk-pass': loadBlockedPass, 'live-rides': () => loadRides(currentRideStatus),
+    'advance-bookings': () => loadAdvanceBookings(currentAdvanceBookingStatus),
      'ride-retention': loadRideRetention, 'data-management': () => undefined,
     sos: () => loadSOS(currentSOSFilter), 'ride-settings': loadRideSettings, 'fare-settings': loadFareSettings, 'customer-fare-display-settings': loadCustomerFareDisplaySettings, 'student-discount-settings': loadStudentDiscountSettings, 'long-range-settings': loadLongRangeSettings, 'terms-settings': loadTermsSettings, 'location-aliases': loadLocationAliases, 'pay-settings': loadPaymentSettings,
     'fee-compliance': loadFeeCompliance, 'waiting-rate-settings': loadWaitingRateSettings,
@@ -3446,6 +3477,92 @@ async function loadRides(status = 'active') {
       </tr>`;
     }).join('');
   } catch (e) { tbody.innerHTML = `<tr><td colspan="7" style="text-align:center;color:#ef4444;padding:1rem">${e.message}</td></tr>`; }
+}
+
+// ── 9. ADVANCE / SCHEDULED BOOKINGS ──────────────────────────────────────────
+function advanceBookingBadge(status) {
+  const map = {
+    pending: ['badge-pending', 'Scheduled'],
+    assigned: ['badge-live', 'Accepted / Assigned'],
+    dispatching: ['badge-live', 'Dispatching'],
+    requested: ['badge-live', 'Driver search active'],
+    accepted: ['badge-live', 'Accepted'],
+    arrived: ['badge-live', 'Driver arrived'],
+    'in-progress': ['badge-live', 'In progress'],
+    converted: ['badge-active', 'Converted to ride'],
+    completed: ['badge-active', 'Completed'],
+    cancelled: ['badge-blocked', 'Cancelled'],
+    failed: ['badge-rejected', 'Dispatch failed']
+  };
+  const [className, label] = map[status] || ['badge-pending', status || 'Unknown'];
+  return `<span class="badge ${className}">${escHtml(label)}</span>`;
+}
+
+async function loadAdvanceBookings(status = 'all') {
+  currentAdvanceBookingStatus = status;
+  const tbody = document.getElementById('advance-bookings-tbody');
+  if (!tbody) return;
+  tbody.innerHTML = '<tr><td colspan="7" class="loading-row">Loading scheduled bookings…</td></tr>';
+  try {
+    const bookings = await api(`/api/admin/advance-bookings?status=${encodeURIComponent(status)}`);
+    const upcomingCount = bookings.filter(booking =>
+      ['pending', 'assigned'].includes(booking.status)
+      && new Date(booking.scheduledFor).getTime() > Date.now()
+    ).length;
+    const countBadge = document.getElementById('advance-booking-cnt');
+    if (countBadge) {
+      countBadge.textContent = upcomingCount;
+      countBadge.style.display = upcomingCount ? 'inline' : 'none';
+    }
+    if (!bookings.length) {
+      tbody.innerHTML = '<tr><td colspan="7"><div class="empty-state"><span class="empty-icon">🗓️</span>No scheduled bookings found</div></td></tr>';
+      return;
+    }
+    tbody.innerHTML = bookings.map(booking => {
+      const customer = booking.customer || {};
+      const driver = booking.driver || {};
+      const scheduledAt = new Date(booking.scheduledFor);
+      const canRemind = hasPermission('manageAdvanceBookingReminders')
+        && booking.status === 'assigned'
+        && driver.id
+        && scheduledAt.getTime() > Date.now();
+      const reminderLabel = booking.reminderLastSentAt
+        ? `Sent ${fmtDate(booking.reminderLastSentAt)}`
+        : booking.reminderLastError
+          ? 'Delivery failed'
+          : 'Not sent';
+      const reminderAction = canRemind
+        ? `<button class="btn btn-blue" type="button" onclick="sendAdvanceBookingReminder('${escHtml(booking._id)}')">${booking.reminderLastSentAt ? '↻ Send Again' : '🔔 Send Reminder'}</button>`
+        : `<span style="font-size:.72rem;color:${booking.reminderLastError ? '#ff9da7' : '#64748b'}">${escHtml(reminderLabel)}${!driver.id && ['pending', 'assigned'].includes(booking.status) ? '<br>Waiting for Driver' : ''}</span>`;
+      const dropoff = booking.dropoffLocation?.address || 'Drop-off';
+      return `<tr>
+        <td><div style="font-weight:700;color:#e2e8f0">${escHtml(customer.name || 'Unknown Customer')}</div><div style="font-size:.7rem;color:#64748b">${escHtml(customer.phone || customer.email || '—')}</div></td>
+        <td><div style="font-weight:600">${escHtml(driver.name || 'Not assigned')}</div><div style="font-size:.7rem;color:#64748b">${escHtml(driver.phone || driver.vehiclePlate || '—')}</div></td>
+        <td style="font-size:.75rem;max-width:220px"><div style="color:#94a3b8">${escHtml(booking.pickupLocation?.address || 'Pickup')}</div><div>→ ${escHtml(dropoff)}</div></td>
+        <td>${Number(booking.passengerCount || 1)}</td>
+        <td style="font-size:.75rem;color:#cbd5e1">${escHtml(fmtDate(booking.scheduledFor))}<div style="font-size:.68rem;color:#64748b">${escHtml(booking.vehicleType || '')}</div></td>
+        <td>${advanceBookingBadge(booking.status)}</td>
+        <td><div style="display:flex;flex-direction:column;align-items:flex-start;gap:.35rem">${reminderAction}${booking.reminderLastSentAt && canRemind ? `<span style="font-size:.68rem;color:#64748b">${escHtml(reminderLabel)}</span>` : ''}</div></td>
+      </tr>`;
+    }).join('');
+  } catch (e) {
+    tbody.innerHTML = `<tr><td colspan="7" style="text-align:center;color:#ef4444;padding:1rem">${escHtml(e.message)}</td></tr>`;
+  }
+}
+
+async function sendAdvanceBookingReminder(bookingId) {
+  if (!hasPermission('manageAdvanceBookingReminders')) {
+    showToast('You do not have permission to send scheduled-ride reminders.', 'error');
+    return;
+  }
+  if (!confirm('Send a reminder to the assigned Driver and Customer now?')) return;
+  try {
+    const result = await api(`/api/admin/advance-bookings/${encodeURIComponent(bookingId)}/reminder`, 'POST', { notifyCustomer: true });
+    showToast(result.sent ? 'Reminder push sent ✓' : 'Reminder alert delivered to the connected app ✓', 'success');
+    await loadAdvanceBookings(currentAdvanceBookingStatus);
+  } catch (e) {
+    showToast(e.message || 'Unable to send reminder', 'error');
+  }
 }
 
 function rideBadge(status) {

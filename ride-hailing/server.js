@@ -2160,6 +2160,8 @@ const adminSchema = new mongoose.Schema({
 
 const ADVANCE_BOOKING_MIN_LEAD_MS = 20 * 60 * 1000;
 const ADVANCE_BOOKING_MAX_DAYS = 30;
+const ADVANCE_BOOKING_REMINDER_LEAD_MS = 45 * 60 * 1000;
+const ADVANCE_BOOKING_REMINDER_LOCK_MS = 2 * 60 * 1000;
 
 const rideSchema = new mongoose.Schema({
   passenger: { type: mongoose.Schema.Types.ObjectId, ref: 'Customer', required: true },
@@ -2309,6 +2311,7 @@ const advanceBookingSchema = new mongoose.Schema({
     lng: { type: Number, required: true },
     address: { type: String, default: 'Stop' }
   }],
+  passengerCount: { type: Number, default: 1, min: 1, max: 8 },
   scheduledFor: {
     type: Date,
     required: true,
@@ -2353,6 +2356,11 @@ const advanceBookingSchema = new mongoose.Schema({
   assignedAt: { type: Date, default: null },
   dispatchingAt: { type: Date, default: null },
   dispatchedAt: { type: Date, default: null },
+  reminderSentAt: { type: Date, default: null },
+  reminderLastSentAt: { type: Date, default: null },
+  reminderInFlightAt: { type: Date, default: null },
+  reminderCount: { type: Number, default: 0 },
+  reminderLastError: { type: String, default: '' },
   failureReason: { type: String, default: '' }
 }, { timestamps: true });
 
@@ -2398,6 +2406,8 @@ const SUB_ADMIN_PERMISSION_CATALOG = Object.freeze([
   { key: 'viewCustomers',         group: 'Customers',          label: 'View customer accounts' },
   { key: 'manageCustomers',       group: 'Customers',          label: 'Block, restore, or reject customers' },
   { key: 'viewRides',             group: 'Rides',              label: 'View live rides & ride history' },
+  { key: 'viewAdvanceBookings',   group: 'Rides',              label: 'View Advance / Scheduled Bookings' },
+  { key: 'manageAdvanceBookingReminders', group: 'Rides',       label: 'Send scheduled-ride reminders' },
   { key: 'viewPayments',          group: 'Wallet recharges',   label: 'View Driver recharge requests' },
   { key: 'viewPaymentProofs',     group: 'Wallet recharges',   label: 'View recharge proof screenshots' },
   { key: 'approveWalletTopups',   group: 'Wallet recharges',   label: 'Approve or reject Driver recharges' },
@@ -5685,7 +5695,166 @@ function parseAdvanceBookingDate(value, now = new Date()) {
 function advanceBookingResponse(booking) {
   const payload = typeof booking?.toObject === 'function' ? booking.toObject() : { ...booking };
   delete payload.__v;
+  payload.passengerCount = Math.min(8, Math.max(1, Math.trunc(Number(payload.passengerCount) || 1)));
   return payload;
+}
+
+function formatAdvanceBookingReminderTime(value) {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return 'the scheduled time';
+  return date.toLocaleString('en-PK', {
+    timeZone: 'Asia/Karachi',
+    dateStyle: 'medium',
+    timeStyle: 'short'
+  });
+}
+
+async function sendAdvanceBookingReminder(bookingId, { force = false, notifyCustomer = true } = {}) {
+  const now = new Date();
+  const staleLockBefore = new Date(now.getTime() - ADVANCE_BOOKING_REMINDER_LOCK_MS);
+  const claimFilter = {
+    _id: bookingId,
+    status: 'assigned',
+    driver: { $ne: null },
+    scheduledFor: { $gt: now },
+    $or: [
+      { reminderInFlightAt: null },
+      { reminderInFlightAt: { $exists: false } },
+      { reminderInFlightAt: { $lt: staleLockBefore } }
+    ]
+  };
+  if (!force) {
+    claimFilter.$and = [
+      { $or: [{ reminderSentAt: null }, { reminderSentAt: { $exists: false } }] }
+    ];
+  }
+  const booking = await AdvanceBooking.findOneAndUpdate(
+    claimFilter,
+    { $set: { reminderInFlightAt: now } },
+    { new: true }
+  );
+  if (!booking) {
+    const current = await AdvanceBooking.findById(bookingId).select('status driver reminderSentAt').lean();
+    if (current?.reminderSentAt && !force) return { alreadySent: true, sent: 0, failed: 0 };
+    if (!current) throw new Error('Advance booking not found');
+    if (current.status !== 'assigned' || !current.driver) {
+      throw new Error('A reminder can only be sent after a Driver is assigned.');
+    }
+    throw new Error('A reminder is already being sent. Please try again shortly.');
+  }
+
+  try {
+    const [driver, customer] = await Promise.all([
+      User.findById(booking.driver).select('name phone expoPushToken').lean(),
+      notifyCustomer
+        ? User.findById(booking.passenger).select('name phone expoPushToken').lean()
+        : null
+    ]);
+    if (!driver) throw new Error('The assigned Driver account could not be found.');
+
+    const pickup = booking.pickupLocation?.address || 'the pickup location';
+    const scheduledTime = formatAdvanceBookingReminderTime(booking.scheduledFor);
+    const reminderPayload = {
+      type: 'advance-booking:reminder',
+      bookingId: String(booking._id),
+      scheduledFor: booking.scheduledFor,
+      pickupLocation: booking.pickupLocation,
+      dropoffLocation: booking.dropoffLocation,
+      passengerCount: booking.passengerCount || 1,
+      message: `Reminder: scheduled ride at ${scheduledTime} from ${pickup}.`
+    };
+    io.to(`user:${booking.driver}`).emit('advance-booking:reminder', reminderPayload);
+    const driverPush = await sendExpoPush([driver.expoPushToken], {
+      title: 'Scheduled ride reminder',
+      body: reminderPayload.message,
+      data: reminderPayload,
+      categoryId: 'ride-request',
+      interruptionLevel: 'timeSensitive',
+      ttl: 120
+    });
+
+    let customerPush = { sent: 0, failed: 0 };
+    if (notifyCustomer && customer) {
+      io.to(`user:${booking.passenger}`).emit('advance-booking:reminder', reminderPayload);
+      customerPush = await sendExpoPush([customer.expoPushToken], {
+        title: 'Scheduled ride reminder',
+        body: reminderPayload.message,
+        data: reminderPayload,
+        ttl: 120
+      });
+    }
+
+    await AdvanceBooking.updateOne(
+      { _id: booking._id, reminderInFlightAt: now },
+      {
+        $set: {
+          reminderSentAt: booking.reminderSentAt || now,
+          reminderLastSentAt: now,
+          reminderInFlightAt: null,
+          reminderLastError: ''
+        },
+        $inc: { reminderCount: 1 }
+      }
+    );
+    return {
+      alreadySent: false,
+      sent: driverPush.sent + customerPush.sent,
+      failed: driverPush.failed + customerPush.failed,
+      driverNotified: true,
+      customerNotified: !!customer
+    };
+  } catch (error) {
+    await AdvanceBooking.updateOne(
+      { _id: booking._id, reminderInFlightAt: now },
+      { $set: { reminderInFlightAt: null, reminderLastError: 'Reminder delivery failed' } }
+    ).catch(() => {});
+    throw error;
+  }
+}
+
+async function runAdvanceBookingReminderSweep() {
+  if (!(dbConnected || mongoose.connection.readyState === 1)) return;
+  const now = new Date();
+  const reminderWindowEnd = new Date(now.getTime() + ADVANCE_BOOKING_REMINDER_LEAD_MS);
+  const bookings = await AdvanceBooking.find({
+    status: 'assigned',
+    driver: { $ne: null },
+    scheduledFor: { $gt: now, $lte: reminderWindowEnd },
+    $or: [{ reminderSentAt: null }, { reminderSentAt: { $exists: false } }]
+  }).select('_id').sort({ scheduledFor: 1 }).limit(100).lean();
+  for (const booking of bookings) {
+    try {
+      await sendAdvanceBookingReminder(booking._id);
+    } catch (error) {
+      console.warn(`[advance-booking] reminder failed for ${booking._id}: ${error.message}`);
+    }
+  }
+}
+
+function adminAdvanceBookingResponse(booking, customer, driver, ride = null) {
+  const payload = advanceBookingResponse(booking);
+  return {
+    ...payload,
+    status: booking.status === 'converted' && ride?.status ? ride.status : payload.status,
+    reservationStatus: payload.status,
+    rideStatus: ride?.status || null,
+    passengerCount: Math.min(8, Math.max(1, Math.trunc(Number(payload.passengerCount) || 1))),
+    customer: customer ? {
+      id: String(customer._id),
+      name: customer.name || '',
+      phone: customer.phone || '',
+      email: customer.email || ''
+    } : null,
+    driver: driver ? {
+      id: String(driver._id),
+      name: driver.name || '',
+      phone: driver.phone || '',
+      vehicleType: driver.vehicleType || '',
+      vehicleModel: driver.vehicleModel || '',
+      vehiclePlate: driver.vehiclePlate || '',
+      rating: driver.rating ?? null
+    } : null
+  };
 }
 
 async function dispatchAdvanceBooking(booking) {
@@ -5835,6 +6004,7 @@ app.post('/api/advance-bookings', authMiddleware, customerOnly, customerCanBook,
     const schedule = parseAdvanceBookingDate(req.body?.scheduledFor);
     if (schedule.error) return res.status(422).json({ error: schedule.error });
     const { pickupLocation, dropoffLocation, dropoffLocations, distance, vehicleType, notes, paymentMethod, mobileAccount, customerOffer, customerFareOffset } = req.body;
+    const passengerCount = Math.min(8, Math.max(1, Math.trunc(Number(req.body?.passengerCount) || 1)));
     if (!pickupLocation) return res.status(400).json({ error: 'Pickup is required' });
     const stops = Array.isArray(dropoffLocations) && dropoffLocations.length
       ? dropoffLocations
@@ -5880,6 +6050,7 @@ app.post('/api/advance-bookings', authMiddleware, customerOnly, customerCanBook,
       pickupLocation: precisePickupLocation,
       dropoffLocation: preciseStops[0],
       dropoffLocations: preciseStops,
+      passengerCount,
       scheduledFor: schedule.value,
       fare: offerResult.value,
       customerFareOffset: offerResult.offset,
@@ -9002,6 +9173,75 @@ app.get('/api/admin/stats', adminJwt, requirePerm('viewOverview'), async (req, r
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
+// GET /api/admin/advance-bookings — permission-scoped scheduled ride operations.
+// Customer and Driver contact details are returned only to authenticated Admins;
+// push tokens and private identity documents never leave the server.
+app.get('/api/admin/advance-bookings', adminJwt, requirePerm('viewAdvanceBookings'), async (req, res) => {
+  try {
+    const allowedStatuses = new Set(['pending', 'assigned', 'dispatching', 'converted', 'cancelled', 'failed']);
+    const requestedStatus = String(req.query.status || 'all').trim().toLowerCase();
+    if (requestedStatus !== 'all' && !allowedStatuses.has(requestedStatus)) {
+      return res.status(400).json({ error: 'Unsupported advance-booking status' });
+    }
+    const query = requestedStatus === 'all' ? {} : { status: requestedStatus };
+    const from = req.query.from ? new Date(String(req.query.from)) : null;
+    const to = req.query.to ? new Date(String(req.query.to)) : null;
+    if (from && Number.isNaN(from.getTime())) return res.status(400).json({ error: 'Invalid start date' });
+    if (to && Number.isNaN(to.getTime())) return res.status(400).json({ error: 'Invalid end date' });
+    if (from || to) {
+      query.scheduledFor = {};
+      if (from) query.scheduledFor.$gte = from;
+      if (to) {
+        to.setHours(23, 59, 59, 999);
+        query.scheduledFor.$lte = to;
+      }
+    }
+
+    const bookings = await AdvanceBooking.find(query)
+      .sort({ scheduledFor: 1, createdAt: -1 })
+      .limit(500)
+      .lean();
+    const customerIds = bookings.map(booking => booking.passenger).filter(id => mongoose.isValidObjectId(id));
+    const rideIds = bookings.map(booking => booking.ride).filter(id => mongoose.isValidObjectId(id));
+    const [customers, rides] = await Promise.all([
+      Customer.find({ _id: { $in: customerIds } }).select('name phone email').lean(),
+      Ride.find({ _id: { $in: rideIds } }).select('status driver').lean()
+    ]);
+    const driverIds = [
+      ...bookings.map(booking => booking.driver),
+      ...rides.map(ride => ride.driver)
+    ].filter(id => mongoose.isValidObjectId(id));
+    const drivers = await Driver.find({ _id: { $in: driverIds } })
+      .select('name phone email vehicleType vehicleModel vehiclePlate rating')
+      .lean();
+    const customerMap = new Map(customers.map(customer => [String(customer._id), customer]));
+    const driverMap = new Map(drivers.map(driver => [String(driver._id), driver]));
+    const rideMap = new Map(rides.map(ride => [String(ride._id), ride]));
+    res.json(bookings.map(booking => adminAdvanceBookingResponse(
+      booking,
+      customerMap.get(String(booking.passenger)),
+      driverMap.get(String(booking.driver || rideMap.get(String(booking.ride))?.driver)),
+      rideMap.get(String(booking.ride))
+    )));
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/admin/advance-bookings/:id/reminder', adminJwt, requirePerm('manageAdvanceBookingReminders'), async (req, res) => {
+  try {
+    if (!mongoose.isValidObjectId(req.params.id)) return res.status(400).json({ error: 'Valid booking id required' });
+    const result = await sendAdvanceBookingReminder(req.params.id, {
+      force: true,
+      notifyCustomer: req.body?.notifyCustomer !== false
+    });
+    res.json({ bookingId: req.params.id, ...result });
+  } catch (err) {
+    const status = /not found|assigned|already being sent|after a Driver/i.test(err.message) ? 409 : 500;
+    res.status(status).json({ error: err.message });
+  }
+});
+
 // GET /api/admin/search?q= — permission-scoped profile search. Private
 // customer identity files are represented only by availability flags; their
 // bytes remain behind the Super Admin-only download endpoint.
@@ -11783,6 +12023,8 @@ async function seedDemoAccounts() {
           viewPayments: true,
           approveWalletTopups: true,
           viewRides: true,
+          viewAdvanceBookings: true,
+          manageAdvanceBookingReminders: true,
           viewDriverPasses: true
         })
       }
@@ -11860,6 +12102,12 @@ if (require.main === module) {
     );
   }, 15_000);
   advanceBookingSweep.unref?.();
+  const advanceBookingReminderSweep = setInterval(() => {
+    runAdvanceBookingReminderSweep().catch(err =>
+      console.warn(`[advance-booking] reminder sweep failed: ${err.message}`)
+    );
+  }, 60_000);
+  advanceBookingReminderSweep.unref?.();
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -12059,6 +12307,8 @@ module.exports = {
   parseAdvanceBookingDate,
   runAdvanceBookingDispatcher,
   dispatchAdvanceBooking,
+  sendAdvanceBookingReminder,
+  runAdvanceBookingReminderSweep,
   sendExpoPush,
   getAvailableRidesForDriver,
   driverRidePayload,
