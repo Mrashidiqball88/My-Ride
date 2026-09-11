@@ -5747,13 +5747,19 @@ function canCancelAdvanceBooking(booking, now = new Date()) {
 function advanceBookingResponse(booking) {
   const payload = typeof booking?.toObject === 'function' ? booking.toObject() : { ...booking };
   delete payload.__v;
-  delete payload.counterOffers;
   payload.passengerCount = Math.min(8, Math.max(1, Math.trunc(Number(payload.passengerCount) || 1)));
   return payload;
 }
 
-function advanceBookingDriverResponse(booking) {
-  return advanceBookingResponse(booking);
+function advanceBookingDriverResponse(booking, driverId) {
+  const payload = advanceBookingResponse(booking);
+  const ownOffer = (payload.counterOffers || []).find(
+    offer => String(offer?.driver?._id || offer?.driver || '') === String(driverId)
+  );
+  return {
+    ...payload,
+    myOffer: ownOffer || null
+  };
 }
 
 async function broadcastAdvanceBooking(booking) {
@@ -6323,15 +6329,29 @@ app.patch('/api/advance-bookings/:id/accept', authMiddleware, driverOnly, async 
     });
     if (overlap) return res.status(409).json({ error: 'You already have an advance booking near this time.' });
 
+    const existingOffer = booking.counterOffers.find(
+      offer => String(offer.driver) === String(req.user.id)
+    );
+    const acceptOffer = {
+      driver: req.user.id,
+      driverName: driver.name,
+      vehicleModel: driver.vehicleModel || '',
+      vehiclePlate: driver.vehiclePlate || '',
+      rating: driver.rating || 5,
+      price: booking.fare,
+      type: 'accept'
+    };
     const assignmentUpdate = {
       $set: {
         driver: req.user.id,
         status: 'assigned',
         assignedAt: new Date(),
-        fare: booking.fare,
-        counterOffers: []
+        fare: existingOffer?.type === 'counter' && Number(existingOffer.price) > 0
+          ? Number(existingOffer.price)
+          : booking.fare
       }
     };
+    if (!existingOffer) assignmentUpdate.$push = { counterOffers: acceptOffer };
 
     const assignedBooking = await AdvanceBooking.findOneAndUpdate(
       {
@@ -6430,10 +6450,6 @@ app.post('/api/advance-bookings/:id/start', authMiddleware, driverOnly, async (r
 });
 
 app.patch('/api/advance-bookings/:id/counter', authMiddleware, driverOnly, async (req, res) => {
-  return res.status(410).json({
-    error: 'Counter-offers are disabled. The first valid Driver acceptance locks the original fare.'
-  });
-  /*
   try {
     const price = Number(req.body?.price);
     if (!Number.isFinite(price) || price < 1 || price > 1000000) return res.status(400).json({ error: 'Valid price required' });
@@ -6463,14 +6479,9 @@ app.patch('/api/advance-bookings/:id/counter', authMiddleware, driverOnly, async
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
-  */
 });
 
 app.patch('/api/advance-bookings/:id/accept-driver', authMiddleware, customerOnly, customerCanBook, async (req, res) => {
-  return res.status(410).json({
-    error: 'Customer Driver selection is disabled. The first valid Driver acceptance locks the booking.'
-  });
-  /*
   try {
     const driverId = String(req.body?.driverId || '');
     if (!mongoose.isValidObjectId(driverId)) return res.status(400).json({ error: 'Valid driverId required' });
@@ -6528,7 +6539,6 @@ app.patch('/api/advance-bookings/:id/accept-driver', authMiddleware, customerOnl
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
-  */
 });
 
 app.patch('/api/advance-bookings/:id/cancel', authMiddleware, async (req, res) => {

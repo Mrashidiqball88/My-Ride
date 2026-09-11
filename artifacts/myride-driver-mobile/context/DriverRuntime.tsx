@@ -85,6 +85,8 @@ export type AdvanceBooking = Omit<RideRequest, 'status'> & {
   status?: 'pending' | 'assigned' | 'dispatching' | 'converted' | 'cancelled' | 'failed';
   passengerCount?: number;
   passenger?: { id?: string; name?: string; phone?: string };
+  counterOffers?: Array<{ driver?: string; driverName?: string; price?: number; type?: 'accept' | 'counter' }>;
+  myOffer?: { driver?: string; driverName?: string; price?: number; type?: 'accept' | 'counter' } | null;
 };
 export type DriverPayment = {
   _id?: string;
@@ -163,6 +165,7 @@ type RuntimeContext = {
   refreshPayments(): Promise<void>;
   acceptRide(): Promise<void>;
   acceptAdvanceBooking(bookingId: string): Promise<void>;
+  counterAdvanceBooking(bookingId: string, price: number): Promise<void>;
   startAdvanceBooking(bookingId: string): Promise<void>;
   cancelAdvanceBooking(bookingId: string): Promise<void>;
   acceptingRide: boolean;
@@ -1323,6 +1326,16 @@ export function DriverRuntimeProvider({ children }: { children: ReactNode }) {
     await refreshAdvanceBookings();
   }, [refreshAdvanceBookings]);
 
+  const counterAdvanceBooking = useCallback(async (bookingId: string, price: number) => {
+    if (!tokenRef.current || !bookingId) return;
+    if (!Number.isFinite(price) || price < 1) throw new Error('Enter a valid counter price.');
+    await api(`/api/advance-bookings/${encodeURIComponent(bookingId)}/counter`, tokenRef.current, sessionRef.current || undefined, {
+      method: 'PATCH',
+      body: JSON.stringify({ price, type: 'counter' }),
+    });
+    await refreshAdvanceBookings();
+  }, [refreshAdvanceBookings]);
+
   const cancelAdvanceBooking = useCallback(async (bookingId: string) => {
     if (!tokenRef.current || !bookingId) return;
     await api(`/api/advance-bookings/${encodeURIComponent(bookingId)}/cancel`, tokenRef.current, sessionRef.current || undefined, {
@@ -1395,10 +1408,10 @@ export function DriverRuntimeProvider({ children }: { children: ReactNode }) {
     pendingRideBlockReason: pendingRideAcceptability.reason || null,
     sentOffer, activeRide, activeRideId, driverLocation, error, longRange, alertReadiness,
     rideHistory, rideHistoryLoading, walletSummary, paymentHistory, paymentsLoading,
-    acceptingRide, updateRideStatus, updatingRideStatus, requestPhoneOtp, signIn, signOut, setOnline: setOnlineState, prepareAlertReadiness, confirmLockScreenAlerts, openAlertSetting, setLongRange, refreshRideHistory, refreshAdvanceBookings, refreshPayments, acceptRide, acceptAdvanceBooking, startAdvanceBooking, cancelAdvanceBooking,
+    acceptingRide, updateRideStatus, updatingRideStatus, requestPhoneOtp, signIn, signOut, setOnline: setOnlineState, prepareAlertReadiness, confirmLockScreenAlerts, openAlertSetting, setLongRange, refreshRideHistory, refreshAdvanceBookings, refreshPayments, acceptRide, acceptAdvanceBooking, counterAdvanceBooking, startAdvanceBooking, cancelAdvanceBooking,
     advanceBookings, advanceBookingsLoading,
     dismissRide: () => setPendingRide(null), emergencyClearRide, clearError: () => setError(null),
-  }), [acceptAdvanceBooking, acceptRide, acceptingRide, activeRide, activeRideId, advanceBookings, advanceBookingsLoading, alertReadiness, cancelAdvanceBooking, confirmLockScreenAlerts, driverLocation, emergencyClearRide, error, getRideAcceptability, hydrateActiveRide, isOnline, openAlertSetting, pendingRide, pendingRideAcceptability.allowed, pendingRideAcceptability.reason, paymentHistory, paymentsLoading, prepareAlertReadiness, ready, refreshAdvanceBookings, refreshPayments, refreshRideHistory, requestPhoneOtp, rideHistory, rideHistoryLoading, sentOffer, setOnlineState, setLongRange, signIn, signOut, startAdvanceBooking, updateRideStatus, updatingRideStatus, user, connection, longRange, walletSummary]);
+  }), [acceptAdvanceBooking, acceptRide, acceptingRide, activeRide, activeRideId, advanceBookings, advanceBookingsLoading, alertReadiness, cancelAdvanceBooking, confirmLockScreenAlerts, counterAdvanceBooking, driverLocation, emergencyClearRide, error, getRideAcceptability, hydrateActiveRide, isOnline, openAlertSetting, pendingRide, pendingRideAcceptability.allowed, pendingRideAcceptability.reason, paymentHistory, paymentsLoading, prepareAlertReadiness, ready, refreshAdvanceBookings, refreshPayments, refreshRideHistory, requestPhoneOtp, rideHistory, rideHistoryLoading, sentOffer, setOnlineState, setLongRange, signIn, signOut, startAdvanceBooking, updateRideStatus, updatingRideStatus, user, connection, longRange, walletSummary]);
   return <DriverContext.Provider value={value}>{children}</DriverContext.Provider>;
 }
 

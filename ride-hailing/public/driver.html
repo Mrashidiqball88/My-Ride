@@ -3810,15 +3810,22 @@ function renderDriverAdvanceBookings(bookings = []) {
     const canCancel = assigned
       && Number.isFinite(scheduledAt)
       && scheduledAt - Date.now() >= 60 * 60 * 1000;
+    const hasOffer = Boolean(booking.myOffer);
     return `<article class="driver-history-item requested">
+      <div style="font-size:.7rem;letter-spacing:.08em;text-transform:uppercase;color:#66aaff;font-weight:900;margin-bottom:.4rem">Advance Booking</div>
       <div class="driver-history-route"><span class="driver-history-location" dir="auto">${formatStopAddr(booking.pickupLocation)}</span><span class="driver-history-arrow">→</span><span class="driver-history-location" dir="auto">${formatStopAddr(booking.dropoffLocation)}</span></div>
-       <div class="driver-history-meta"><span>📅 ${escapeDriverText(when)}</span><span>👥 ${Number(booking.passengerCount || 1)} passenger${Number(booking.passengerCount || 1) === 1 ? '' : 's'}</span><span>${escapeDriverText(booking.vehicleType || '')}</span><span class="driver-history-fare">Rs ${offer.toLocaleString()}</span></div>
+       <div class="driver-history-meta"><span>📅 ${escapeDriverText(when)}</span><span>👥 ${Number(booking.passengerCount || 1)} passenger${Number(booking.passengerCount || 1) === 1 ? '' : 's'}</span><span>📏 ${Number(booking.distance || 0).toFixed(1)} km</span><span>${escapeDriverText(booking.vehicleType || '')}</span><span class="driver-history-fare">Rs ${offer.toLocaleString()}</span></div>
        <div style="font-size:.72rem;color:#94a3b8;margin-top:.45rem">Customer: ${escapeDriverText(booking.passenger?.name || 'Customer')} · ${escapeDriverText(booking.passenger?.phone || '')}</div>
        ${assigned
          ? canStart
            ? `<div style="display:flex;gap:.45rem;margin-top:.65rem"><button class="btn-accept" style="flex:1" onclick="startAdvanceBooking('${id}')">▶ Start Ride</button>${canCancel ? `<button class="btn-danger" style="flex:1" onclick="cancelAdvanceBooking('${id}')">Cancel</button>` : ''}</div>`
            : `<div style="margin-top:.65rem;color:#36d399;font-size:.78rem;font-weight:800">✓ Assigned to you. Start Ride will unlock at the scheduled time.</div>${canCancel ? `<button class="btn-danger" style="width:100%;margin-top:.45rem" onclick="cancelAdvanceBooking('${id}')">Cancel booking</button>` : '<div style="margin-top:.45rem;color:#94a3b8;font-size:.72rem">Cancellation is locked within one hour of pickup.</div>'}`
-        : `<div style="margin-top:.65rem"><button class="btn-accept" style="width:100%" ${blocked ? 'disabled title="Daily Fee required"' : ''} onclick="acceptAdvanceBooking('${id}')">${blocked ? 'Daily Fee required' : 'Accept · Rs ' + offer.toLocaleString()}</button></div>`}
+       : hasOffer
+         ? `<div style="margin-top:.65rem;color:#66aaff;font-size:.78rem;font-weight:800">⇄ Counter-offer sent · Rs ${Number(booking.myOffer.price || offer).toLocaleString()} · waiting for Customer</div>`
+         : `<div style="display:flex;gap:.45rem;margin-top:.65rem">
+            <button class="btn-accept" style="flex:1" ${blocked ? 'disabled title="Daily Fee required"' : ''} onclick="acceptAdvanceBooking('${id}')">${blocked ? 'Daily Fee required' : 'Accept · Rs ' + offer.toLocaleString()}</button>
+            <button class="btn-counter" style="flex:1" onclick="counterAdvanceBooking('${id}', ${offer})">Counter</button>
+          </div>`}
     </article>`;
   }).join('');
 }
@@ -3848,6 +3855,18 @@ async function startAdvanceBooking(id) {
       socket.emit('ride:join', String(result.ride._id || result.ride.id));
     }
   } catch (error) { showToast(error.message || 'Unable to start scheduled ride', 'error'); }
+}
+
+async function counterAdvanceBooking(id, suggested) {
+  const value = prompt('Enter your counter-offer in Rs', String(Math.round(suggested)));
+  if (value === null) return;
+  const price = Number(value);
+  if (!Number.isFinite(price) || price < 1) return showToast('Enter a valid counter price', 'error');
+  try {
+    await apiCall(`/api/advance-bookings/${encodeURIComponent(id)}/counter`, 'PATCH', { price, type: 'counter' });
+    showToast('Counter-offer sent to the Customer.', 'success');
+    loadDriverAdvanceBookings();
+  } catch (error) { showToast(error.message || 'Unable to send counter-offer', 'error'); }
 }
 
 async function cancelAdvanceBooking(id) {
