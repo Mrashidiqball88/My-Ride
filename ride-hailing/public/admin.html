@@ -1291,8 +1291,8 @@ button,input,select,textarea{
         </div>
         <div class="table-wrap">
           <table class="data-table" id="advance-bookings-table">
-            <thead><tr><th>Customer</th><th>Driver</th><th>Pickup → Drop-off</th><th>Passengers</th><th>Scheduled Date / Time</th><th>Status</th><th>Reminder</th></tr></thead>
-            <tbody id="advance-bookings-tbody"><tr><td colspan="7" class="loading-row">Loading…</td></tr></tbody>
+            <thead><tr><th>Customer</th><th>Driver</th><th>Pickup → Drop-off</th><th>Passengers</th><th>Scheduled Date / Time</th><th>Status</th><th>Reminder</th><th>Assignment</th></tr></thead>
+            <tbody id="advance-bookings-tbody"><tr><td colspan="8" class="loading-row">Loading…</td></tr></tbody>
           </table>
         </div>
       </div>
@@ -2203,6 +2203,7 @@ const SUB_ADMIN_PERMISSION_CATALOG = [
   ['Customers', 'manageCustomers', 'Block, restore, or reject customers'],
   ['Rides', 'viewRides', 'View live rides & ride history'],
   ['Rides', 'viewAdvanceBookings', 'View Advance / Scheduled Bookings'],
+  ['Rides', 'manageAdvanceBookings', 'Assign Advance / Scheduled Bookings'],
   ['Rides', 'manageAdvanceBookingReminders', 'Send scheduled-ride reminders'],
   ['Wallet recharges', 'viewPayments', 'View Driver recharge requests'],
   ['Wallet recharges', 'viewPaymentProofs', 'View recharge proof screenshots'],
@@ -3514,7 +3515,7 @@ async function loadAdvanceBookings(status = 'all') {
   currentAdvanceBookingStatus = status;
   const tbody = document.getElementById('advance-bookings-tbody');
   if (!tbody) return;
-  tbody.innerHTML = '<tr><td colspan="7" class="loading-row">Loading scheduled bookings…</td></tr>';
+  tbody.innerHTML = '<tr><td colspan="8" class="loading-row">Loading scheduled bookings…</td></tr>';
   try {
     const bookings = await api(`/api/admin/advance-bookings?status=${encodeURIComponent(status)}`);
     const upcomingCount = bookings.filter(booking =>
@@ -3527,7 +3528,7 @@ async function loadAdvanceBookings(status = 'all') {
       countBadge.style.display = upcomingCount ? 'inline' : 'none';
     }
     if (!bookings.length) {
-      tbody.innerHTML = '<tr><td colspan="7"><div class="empty-state"><span class="empty-icon">🗓️</span>No scheduled bookings found</div></td></tr>';
+      tbody.innerHTML = '<tr><td colspan="8"><div class="empty-state"><span class="empty-icon">🗓️</span>No scheduled bookings found</div></td></tr>';
       return;
     }
     tbody.innerHTML = bookings.map(booking => {
@@ -3546,6 +3547,10 @@ async function loadAdvanceBookings(status = 'all') {
       const reminderAction = canRemind
         ? `<button class="btn btn-blue" type="button" onclick="sendAdvanceBookingReminder('${escHtml(booking._id)}')">${booking.reminderLastSentAt ? '↻ Send Again' : '🔔 Send Reminder'}</button>`
         : `<span style="font-size:.72rem;color:${booking.reminderLastError ? '#ff9da7' : '#64748b'}">${escHtml(reminderLabel)}${!driver.id && ['pending', 'assigned'].includes(booking.status) ? '<br>Waiting for Driver' : ''}</span>`;
+      const canAssign = hasPermission('manageAdvanceBookings') && booking.status === 'pending' && !driver.id;
+      const assignmentAction = canAssign
+        ? `<div style="display:flex;flex-direction:column;gap:.35rem;min-width:170px"><select id="advance-driver-${escHtml(booking._id)}" class="admin-select"><option value="">Loading active Drivers…</option></select><button class="btn btn-green" type="button" onclick="assignAdvanceBooking('${escHtml(booking._id)}')">Assign Driver</button></div>`
+        : `<span style="font-size:.72rem;color:#64748b">${driver.id ? 'Assigned' : '—'}</span>`;
       const dropoff = booking.dropoffLocation?.address || 'Drop-off';
       return `<tr>
         <td><div style="font-weight:700;color:#e2e8f0">${escHtml(customer.name || 'Unknown Customer')}</div><div style="font-size:.7rem;color:#64748b">${escHtml(customer.phone || customer.email || '—')}</div></td>
@@ -3555,10 +3560,37 @@ async function loadAdvanceBookings(status = 'all') {
         <td style="font-size:.75rem;color:#cbd5e1">${escHtml(fmtDate(booking.scheduledFor))}<div style="font-size:.68rem;color:#64748b">${escHtml(booking.vehicleType || '')}</div></td>
         <td>${advanceBookingBadge(booking.status)}</td>
         <td><div style="display:flex;flex-direction:column;align-items:flex-start;gap:.35rem">${reminderAction}${booking.reminderLastSentAt && canRemind ? `<span style="font-size:.68rem;color:#64748b">${escHtml(reminderLabel)}</span>` : ''}</div></td>
+        <td>${assignmentAction}</td>
       </tr>`;
     }).join('');
+    await Promise.all(bookings.filter(booking => hasPermission('manageAdvanceBookings') && booking.status === 'pending' && !booking.driver?.id).map(async booking => {
+      const select = document.getElementById(`advance-driver-${booking._id}`);
+      if (!select) return;
+      try {
+        const drivers = await api(`/api/admin/advance-bookings/${encodeURIComponent(booking._id)}/assignment-options`);
+        select.innerHTML = drivers.length
+          ? `<option value="">Select active Driver</option>${drivers.map(option => `<option value="${escHtml(option.id)}">${escHtml(option.name)} · ${escHtml(option.vehicleModel || option.vehicleType || option.vehiclePlate || '')}</option>`).join('')}`
+          : '<option value="">No eligible active Drivers</option>';
+      } catch (error) {
+        select.innerHTML = `<option value="">${escHtml(error.message || 'Unable to load Drivers')}</option>`;
+      }
+    }));
   } catch (e) {
-    tbody.innerHTML = `<tr><td colspan="7" style="text-align:center;color:#ef4444;padding:1rem">${escHtml(e.message)}</td></tr>`;
+    tbody.innerHTML = `<tr><td colspan="8" style="text-align:center;color:#ef4444;padding:1rem">${escHtml(e.message)}</td></tr>`;
+  }
+}
+
+async function assignAdvanceBooking(bookingId) {
+  if (!hasPermission('manageAdvanceBookings')) return showToast('You do not have permission to assign scheduled bookings.', 'error');
+  const select = document.getElementById(`advance-driver-${bookingId}`);
+  const driverId = select?.value || '';
+  if (!driverId) return showToast('Select an eligible Driver first.', 'error');
+  try {
+    await api(`/api/admin/advance-bookings/${encodeURIComponent(bookingId)}/assign`, 'PATCH', { driverId });
+    showToast('Driver assigned to the scheduled booking.', 'success');
+    loadAdvanceBookings(currentAdvanceBookingStatus);
+  } catch (error) {
+    showToast(error.message || 'Unable to assign Driver', 'error');
   }
 }
 

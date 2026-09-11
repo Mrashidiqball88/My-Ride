@@ -2279,6 +2279,8 @@ const rideSchema = new mongoose.Schema({
   // Scheduled reservations are converted into ordinary Ride documents only
   // when their execution window opens. Existing live rides keep these fields
   // unset, so all legacy matching and lifecycle behavior remains unchanged.
+  isAdvanceBooking: { type: Boolean, default: false },
+  scheduledTime: { type: Date, default: null },
   scheduledFor: { type: Date, default: null },
   advanceBookingId: { type: mongoose.Schema.Types.ObjectId, ref: 'AdvanceBooking', default: null },
   // Financial settlement is committed in the same MongoDB transaction as the
@@ -2411,6 +2413,7 @@ const SUB_ADMIN_PERMISSION_CATALOG = Object.freeze([
   { key: 'manageCustomers',       group: 'Customers',          label: 'Block, restore, or reject customers' },
   { key: 'viewRides',             group: 'Rides',              label: 'View live rides & ride history' },
   { key: 'viewAdvanceBookings',   group: 'Rides',              label: 'View Advance / Scheduled Bookings' },
+  { key: 'manageAdvanceBookings', group: 'Rides',              label: 'Assign Advance / Scheduled Bookings' },
   { key: 'manageAdvanceBookingReminders', group: 'Rides',       label: 'Send scheduled-ride reminders' },
   { key: 'viewPayments',          group: 'Wallet recharges',   label: 'View Driver recharge requests' },
   { key: 'viewPaymentProofs',     group: 'Wallet recharges',   label: 'View recharge proof screenshots' },
@@ -3080,6 +3083,7 @@ const MAX_RIDE_BROADCAST_RADIUS_KM = 100;
 const DEFAULT_RIDE_BROADCAST_REQUEST_DURATION_SECONDS = 60;
 const MIN_RIDE_BROADCAST_REQUEST_DURATION_SECONDS = 30;
 const MAX_RIDE_BROADCAST_REQUEST_DURATION_SECONDS = 120;
+const ADVANCE_BOOKING_CANCELLATION_CUTOFF_MS = 60 * 60 * 1000;
 const PICKUP_PIN_REVEAL_DISTANCE_KM = 0.1;
 const NATIVE_RIDE_ALERT_CHANNEL_ID = 'ride-alerts-critical-v2';
 
@@ -5730,22 +5734,26 @@ function parseAdvanceBookingDate(value, now = new Date()) {
   return { value: scheduledFor };
 }
 
+function advanceBookingCancellationCutoff(now = new Date()) {
+  return new Date(now.getTime() + ADVANCE_BOOKING_CANCELLATION_CUTOFF_MS);
+}
+
+function canCancelAdvanceBooking(booking, now = new Date()) {
+  const scheduledFor = new Date(booking?.scheduledFor);
+  return Number.isFinite(scheduledFor.getTime())
+    && scheduledFor.getTime() - now.getTime() >= ADVANCE_BOOKING_CANCELLATION_CUTOFF_MS;
+}
+
 function advanceBookingResponse(booking) {
   const payload = typeof booking?.toObject === 'function' ? booking.toObject() : { ...booking };
   delete payload.__v;
+  delete payload.counterOffers;
   payload.passengerCount = Math.min(8, Math.max(1, Math.trunc(Number(payload.passengerCount) || 1)));
   return payload;
 }
 
-function advanceBookingDriverResponse(booking, driverId) {
-  const payload = advanceBookingResponse(booking);
-  const ownOffer = (payload.counterOffers || []).find(
-    offer => String(offer?.driver?._id || offer?.driver || '') === String(driverId)
-  );
-  return {
-    ...payload,
-    myOffer: ownOffer || null
-  };
+function advanceBookingDriverResponse(booking) {
+  return advanceBookingResponse(booking);
 }
 
 async function broadcastAdvanceBooking(booking) {
@@ -6082,6 +6090,8 @@ async function dispatchAdvanceBooking(booking) {
     paymentMethod: booking.paymentMethod || 'cash',
     mobileAccount: booking.mobileAccount || '',
     status: assignedDriverId ? 'accepted' : 'requested',
+    isAdvanceBooking: true,
+    scheduledTime: booking.scheduledFor,
     verificationPin,
     advanceBookingId: booking._id,
     scheduledFor: booking.scheduledFor,
@@ -6303,9 +6313,6 @@ app.patch('/api/advance-bookings/:id/accept', authMiddleware, driverOnly, async 
       scheduledFor: { $gt: new Date() }
     });
     if (!booking) return res.status(409).json({ error: 'Advance booking is no longer available' });
-    const existingOffer = booking.counterOffers.find(
-      offer => String(offer.driver) === String(req.user.id)
-    );
     const overlap = await AdvanceBooking.exists({
       driver: req.user.id,
       status: 'assigned',
@@ -6316,26 +6323,15 @@ app.patch('/api/advance-bookings/:id/accept', authMiddleware, driverOnly, async 
     });
     if (overlap) return res.status(409).json({ error: 'You already have an advance booking near this time.' });
 
-    const acceptOffer = {
-      driver: req.user.id,
-      driverName: driver.name,
-      vehicleModel: driver.vehicleModel || '',
-      vehiclePlate: driver.vehiclePlate || '',
-      rating: driver.rating || 5,
-      price: booking.fare,
-      type: 'accept'
-    };
     const assignmentUpdate = {
       $set: {
         driver: req.user.id,
         status: 'assigned',
         assignedAt: new Date(),
-        fare: existingOffer?.type === 'counter' && Number(existingOffer.price) > 0
-          ? Number(existingOffer.price)
-          : booking.fare
+        fare: booking.fare,
+        counterOffers: []
       }
     };
-    if (!existingOffer) assignmentUpdate.$push = { counterOffers: acceptOffer };
 
     const assignedBooking = await AdvanceBooking.findOneAndUpdate(
       {
@@ -6434,6 +6430,10 @@ app.post('/api/advance-bookings/:id/start', authMiddleware, driverOnly, async (r
 });
 
 app.patch('/api/advance-bookings/:id/counter', authMiddleware, driverOnly, async (req, res) => {
+  return res.status(410).json({
+    error: 'Counter-offers are disabled. The first valid Driver acceptance locks the original fare.'
+  });
+  /*
   try {
     const price = Number(req.body?.price);
     if (!Number.isFinite(price) || price < 1 || price > 1000000) return res.status(400).json({ error: 'Valid price required' });
@@ -6463,9 +6463,14 @@ app.patch('/api/advance-bookings/:id/counter', authMiddleware, driverOnly, async
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
+  */
 });
 
 app.patch('/api/advance-bookings/:id/accept-driver', authMiddleware, customerOnly, customerCanBook, async (req, res) => {
+  return res.status(410).json({
+    error: 'Customer Driver selection is disabled. The first valid Driver acceptance locks the booking.'
+  });
+  /*
   try {
     const driverId = String(req.body?.driverId || '');
     if (!mongoose.isValidObjectId(driverId)) return res.status(400).json({ error: 'Valid driverId required' });
@@ -6523,16 +6528,35 @@ app.patch('/api/advance-bookings/:id/accept-driver', authMiddleware, customerOnl
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
+  */
 });
 
-app.patch('/api/advance-bookings/:id/cancel', authMiddleware, customerOnly, async (req, res) => {
+app.patch('/api/advance-bookings/:id/cancel', authMiddleware, async (req, res) => {
   try {
+    const isCustomer = req.user.role === 'customer';
+    const isDriver = req.user.role === 'driver';
+    if (!isCustomer && !isDriver) return res.status(403).json({ error: 'Only the Customer or assigned Driver can cancel this booking' });
+    const now = new Date();
+    const actorFilter = isCustomer
+      ? { passenger: req.user.id }
+      : { driver: req.user.id, status: 'assigned' };
     const booking = await AdvanceBooking.findOneAndUpdate(
-      { _id: req.params.id, passenger: req.user.id, status: { $in: ['pending', 'assigned'] } },
+      {
+        _id: req.params.id,
+        ...actorFilter,
+        status: isCustomer ? { $in: ['pending', 'assigned'] } : 'assigned',
+        scheduledFor: { $gte: advanceBookingCancellationCutoff(now) }
+      },
       { $set: { status: 'cancelled' } },
       { new: true }
     );
-    if (!booking) return res.status(409).json({ error: 'Advance booking cannot be cancelled now' });
+    if (!booking) {
+      const existing = await AdvanceBooking.findOne({ _id: req.params.id, ...actorFilter }).select('scheduledFor status').lean();
+      if (existing && !canCancelAdvanceBooking(existing, now)) {
+        return res.status(409).json({ error: 'Advance bookings cannot be cancelled within one hour of pickup' });
+      }
+      return res.status(409).json({ error: 'Advance booking cannot be cancelled now' });
+    }
     const response = advanceBookingResponse(booking);
     const driverIds = new Set([
       ...(booking.notifiedDriverIds || []).map(id => String(id)),
@@ -6542,6 +6566,7 @@ app.patch('/api/advance-bookings/:id/cancel', authMiddleware, customerOnly, asyn
       io.to(`user:${driverId}`).emit('advance-booking:cancelled', response);
     }
     io.to(`user:${booking.passenger}`).emit('advance-booking:cancelled', response);
+    io.to('admin-room').emit('advance-booking:cancelled', response);
     res.json(response);
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -9562,6 +9587,120 @@ app.get('/api/admin/advance-bookings', adminJwt, requirePerm('viewAdvanceBooking
       driverMap.get(String(booking.driver || rideMap.get(String(booking.ride))?.driver)),
       rideMap.get(String(booking.ride))
     )));
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get('/api/admin/advance-bookings/:id/assignment-options', adminJwt, requirePerm('manageAdvanceBookings'), async (req, res) => {
+  try {
+    if (!mongoose.isValidObjectId(req.params.id)) return res.status(400).json({ error: 'Valid booking id required' });
+    const booking = await AdvanceBooking.findOne({
+      _id: req.params.id,
+      status: 'pending',
+      driver: null
+    }).lean();
+    if (!booking) return res.status(409).json({ error: 'Only unassigned pending bookings can be assigned' });
+    const vehicleTypes = storedVehicleTypesForFareCategory(booking.vehicleType);
+    const drivers = await findDriverDocuments({
+      accountStatus: 'active',
+      isOnline: true,
+      lastOnlineHeartbeat: { $gte: new Date(Date.now() - DRIVER_HEARTBEAT_MAX_AGE_MS) },
+      vehicleType: { $in: vehicleTypes }
+    }, {
+      select: '_id name phone vehicleType vehicleModel vehiclePlate rating ridePreference longRangeEnabled paidUntilDate lastDailyFeePaidAt isOnline lastOnlineHeartbeat'
+    });
+    const feeEligibleDrivers = [];
+    for (const driver of drivers) {
+      if (!canDriverReceiveRideForPreference(driver.ridePreference, booking.isLongRange)) continue;
+      const fee = await getDriverDailyFeeEligibility(driver);
+      if (fee.allowed) {
+        feeEligibleDrivers.push({
+          id: String(driver._id),
+          name: driver.name || 'Driver',
+          phone: driver.phone || '',
+          vehicleType: driver.vehicleType || '',
+          vehicleModel: driver.vehicleModel || '',
+          vehiclePlate: driver.vehiclePlate || '',
+          rating: driver.rating ?? null
+        });
+      }
+    }
+    res.json(feeEligibleDrivers);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.patch('/api/admin/advance-bookings/:id/assign', adminJwt, requirePerm('manageAdvanceBookings'), async (req, res) => {
+  try {
+    if (!mongoose.isValidObjectId(req.params.id)) return res.status(400).json({ error: 'Valid booking id required' });
+    const driverId = String(req.body?.driverId || '');
+    if (!mongoose.isValidObjectId(driverId)) return res.status(400).json({ error: 'Valid driverId required' });
+    const booking = await AdvanceBooking.findOne({
+      _id: req.params.id,
+      status: 'pending',
+      driver: null,
+      scheduledFor: { $gt: new Date() }
+    }).lean();
+    if (!booking) return res.status(409).json({ error: 'Advance booking is no longer available for assignment' });
+    const [driver] = await findDriverDocuments({
+      _id: driverId,
+      accountStatus: 'active',
+      isOnline: true,
+      lastOnlineHeartbeat: { $gte: new Date(Date.now() - DRIVER_HEARTBEAT_MAX_AGE_MS) }
+    }, {
+      select: '_id name phone vehicleType vehicleModel vehiclePlate rating ridePreference longRangeEnabled paidUntilDate lastDailyFeePaidAt isOnline lastOnlineHeartbeat'
+    });
+    if (!driver) return res.status(409).json({ error: 'Selected Driver is not active' });
+    if (!storedVehicleTypesForFareCategory(booking.vehicleType).includes(driver.vehicleType)) {
+      return res.status(409).json({ error: 'Selected Driver does not match the booking vehicle category' });
+    }
+    if (!canDriverReceiveRideForPreference(driver.ridePreference, booking.isLongRange)) {
+      return res.status(409).json({ error: 'Selected Driver ride preference does not support this booking' });
+    }
+    const fee = await getDriverDailyFeeEligibility(driver);
+    if (!fee.allowed) return res.status(403).json({ error: fee.reason, code: 'DAILY_FEE_REQUIRED' });
+    const overlap = await AdvanceBooking.exists({
+      driver: driverId,
+      status: 'assigned',
+      scheduledFor: {
+        $gte: new Date(booking.scheduledFor.getTime() - 90 * 60 * 1000),
+        $lte: new Date(booking.scheduledFor.getTime() + 90 * 60 * 1000)
+      }
+    });
+    if (overlap) return res.status(409).json({ error: 'That Driver already has an advance booking near this time.' });
+    const activeRide = await Ride.exists({
+      driver: driverId,
+      status: { $in: ADMIN_ACTIVE_RIDE_STATUSES }
+    });
+    if (activeRide) return res.status(409).json({ error: 'That Driver is currently on an active ride.' });
+    const assignedBooking = await AdvanceBooking.findOneAndUpdate(
+      {
+        _id: booking._id,
+        status: 'pending',
+        driver: null,
+        scheduledFor: { $gt: new Date() }
+      },
+      {
+        $set: {
+          driver: driverId,
+          status: 'assigned',
+          assignedAt: new Date(),
+          fare: booking.fare,
+          counterOffers: []
+        }
+      },
+      { new: true }
+    )
+      .populate('passenger', 'name phone')
+      .populate('driver', 'name phone vehicleType vehicleModel vehiclePlate rating profilePhoto');
+    if (!assignedBooking) return res.status(409).json({ error: 'Advance booking was already assigned to another Driver' });
+    const response = advanceBookingResponse(assignedBooking);
+    io.to(`user:${driverId}`).emit('advance-booking:assigned', response);
+    io.to(`user:${assignedBooking.passenger?._id || booking.passenger}`).emit('advance-booking:assigned', response);
+    io.to('admin-room').emit('advance-booking:assigned', response);
+    res.json(response);
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
