@@ -352,6 +352,7 @@ export function DriverRuntimeProvider({ children }: { children: ReactNode }) {
   const activeRideIdRef = useRef<string | null>(null);
   const pendingRideRef = useRef<RideRequest | null>(null);
   const sentOfferRef = useRef<RideRequest | null>(null);
+  const advanceBookingsEventVersion = useRef(0);
   const alertedRideIds = useRef(new Set<string>());
   const localRideNotificationIds = useRef(new Map<string, string>());
   const receivedRideEvents = useRef(new Map<string, number>());
@@ -525,14 +526,70 @@ export function DriverRuntimeProvider({ children }: { children: ReactNode }) {
 
   const refreshAdvanceBookings = useCallback(async () => {
     if (!tokenRef.current) return;
+    const requestEventVersion = advanceBookingsEventVersion.current;
     setAdvanceBookingsLoading(true);
     try {
       const result = await api('/api/advance-bookings/available', tokenRef.current, sessionRef.current || undefined);
+      if (requestEventVersion !== advanceBookingsEventVersion.current) return;
       setAdvanceBookings(Array.isArray(result) ? result as AdvanceBooking[] : []);
     } finally {
       setAdvanceBookingsLoading(false);
     }
   }, []);
+
+  const handleAdvanceBookingEvent = useCallback((payload: {
+    id?: string;
+    _id?: string;
+    bookingId?: string;
+    advanceBookingId?: string;
+    scheduledFor?: string | Date;
+    status?: AdvanceBooking['status'];
+    booking?: Partial<AdvanceBooking> & { _id?: string; advanceBookingId?: string };
+    ride?: Partial<AdvanceBooking> & { _id?: string; advanceBookingId?: string };
+    [key: string]: unknown;
+  } = {}, lifecycleStatus?: AdvanceBooking['status']) => {
+    advanceBookingsEventVersion.current += 1;
+    const rawBooking = payload.booking || payload.ride || payload;
+    const bookingId = String(
+      rawBooking.id
+      || rawBooking._id
+      || rawBooking.advanceBookingId
+      || payload.bookingId
+      || payload.advanceBookingId
+      || ''
+    ).trim();
+    const scheduledFor = rawBooking.scheduledFor || payload.scheduledFor;
+
+    // Some lifecycle events currently contain only bookingId/rideId. Keep the
+    // authoritative read as a fallback for those events, but never make a
+    // complete advance-booking event wait for REST before showing it.
+    if (!bookingId || !scheduledFor) {
+      void refreshAdvanceBookings();
+      return;
+    }
+
+    const nextBooking = {
+      ...rawBooking,
+      id: bookingId,
+      scheduledFor,
+      ...(lifecycleStatus ? { status: lifecycleStatus } : {}),
+    } as AdvanceBooking;
+    const terminalStatus = new Set(['converted', 'cancelled', 'failed']);
+
+    setAdvanceBookings(current => {
+      const existing = current || [];
+      if (terminalStatus.has(String(nextBooking.status || ''))) {
+        return existing.filter(booking => booking.id !== bookingId);
+      }
+
+      const index = existing.findIndex(booking => booking.id === bookingId);
+      if (index === -1) return [nextBooking, ...existing];
+
+      const merged = [...existing];
+      merged[index] = { ...existing[index], ...nextBooking, id: bookingId };
+      return merged;
+    });
+  }, [refreshAdvanceBookings]);
 
   const refreshPayments = useCallback(async () => {
     if (!tokenRef.current) return;
@@ -583,14 +640,21 @@ export function DriverRuntimeProvider({ children }: { children: ReactNode }) {
       void hydrateAvailableRides();
       void refreshAdvanceBookings();
     });
-    nextSocket.on('advance-booking:new', () => void refreshAdvanceBookings());
-    nextSocket.on('advance-booking:offer-submitted', () => void refreshAdvanceBookings());
-    nextSocket.on('advance-booking:assigned', () => void refreshAdvanceBookings());
-    nextSocket.on('advance-booking:converted', () => {
+    nextSocket.on('advance-booking:new', handleAdvanceBookingEvent);
+    nextSocket.on('advance-booking:offer-submitted', handleAdvanceBookingEvent);
+    nextSocket.on('advance-booking:assigned', handleAdvanceBookingEvent);
+    nextSocket.on('advance-booking:converted', (payload: {
+      bookingId?: string;
+      advanceBookingId?: string;
+      scheduledFor?: string | Date;
+      booking?: Partial<AdvanceBooking> & { _id?: string; advanceBookingId?: string };
+      ride?: Partial<AdvanceBooking> & { _id?: string; advanceBookingId?: string };
+    }) => {
+      handleAdvanceBookingEvent(payload, 'converted');
       void refreshAdvanceBookings();
       void hydrateActiveRide();
     });
-    nextSocket.on('advance-booking:cancelled', () => void refreshAdvanceBookings());
+    nextSocket.on('advance-booking:cancelled', handleAdvanceBookingEvent);
     nextSocket.on('ride:new', handleRideOffer);
     nextSocket.on('ride:taken', ({ rideId }: { rideId: string }) => {
       clearRideAlert(rideId);
@@ -667,7 +731,7 @@ export function DriverRuntimeProvider({ children }: { children: ReactNode }) {
     });
   // setOnlineState is stable through declaration below at execution time.
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [clearRideAlert, handleRideOffer, hydrateActiveRide, hydrateAvailableRides, refreshAdvanceBookings]);
+  }, [clearRideAlert, handleAdvanceBookingEvent, handleRideOffer, hydrateActiveRide, hydrateAvailableRides, refreshAdvanceBookings]);
 
   const sendCurrentLocation = useCallback(async (location: Location.LocationObject) => {
     if (!tokenRef.current || !isOnlineRef.current) return;
@@ -1068,9 +1132,21 @@ export function DriverRuntimeProvider({ children }: { children: ReactNode }) {
     const subscription = Notifications.addNotificationResponseReceivedListener(recoverNotificationRide);
     const receivedSubscription = Notifications.addNotificationReceivedListener(notification => {
       const data = notification.request.content.data as {
-        type?: string; ride?: RideRequest & { _id?: string }; rideId?: string;
+        type?: string;
+        ride?: RideRequest & { _id?: string };
+        booking?: Partial<AdvanceBooking> & { _id?: string; advanceBookingId?: string };
+        bookingId?: string;
+        advanceBookingId?: string;
+        rideId?: string;
       };
-       if (data.type === 'advance-booking:new') void refreshAdvanceBookings();
+       if (data.type === 'advance-booking:new') {
+         handleAdvanceBookingEvent({
+           ...(data.booking || {}),
+           booking: data.booking,
+           bookingId: data.bookingId,
+           advanceBookingId: data.advanceBookingId,
+         });
+       }
        else if (data.type === 'ride:new' && data.ride) handleRideOffer(data.ride, { fromPush: true });
       else if (data.type === 'ride:new' && data.rideId) {
         pendingNotificationRideId.current = String(data.rideId);
@@ -1093,7 +1169,7 @@ export function DriverRuntimeProvider({ children }: { children: ReactNode }) {
       receivedSubscription.remove();
       tokenSubscription.remove();
     };
-  }, [handleRideOffer, recoverNotificationRide, registerExpoToken]);
+  }, [handleAdvanceBookingEvent, handleRideOffer, recoverNotificationRide, registerExpoToken]);
 
   useEffect(() => {
     if (!ready || !tokenRef.current) return;
