@@ -979,9 +979,17 @@ body{font-family:'DM Sans','Segoe UI',sans-serif;background:var(--lr-paper);colo
     <div class="tab-content" id="tab-rides">
       <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:.7rem">
         <strong style="font-size:.85rem">Advance Bookings</strong>
-        <button type="button" class="btn-secondary" onclick="loadAdvanceBookings()" style="padding:.45rem .65rem;font-size:.72rem">↻ Refresh</button>
+        <button
+          type="button"
+          class="btn-secondary"
+          id="advance-bookings-refresh"
+          data-testid="scheduled-rides-refresh"
+          aria-label="Refresh scheduled rides"
+          onclick="refreshAdvanceBookings()"
+          style="padding:.45rem .65rem;font-size:.72rem"
+        >↻ Refresh</button>
       </div>
-      <div id="advance-booking-list" style="margin-bottom:1rem"><div class="empty-msg">Loading advance bookings…</div></div>
+      <div id="advance-booking-list" aria-live="polite" aria-busy="false" style="margin-bottom:1rem"><div class="empty-msg">Loading advance bookings…</div></div>
       <div id="ride-history-list"><div class="empty-msg">Loading your rides…</div></div>
     </div>
 
@@ -1249,6 +1257,8 @@ let liveTripFreshnessTimer = null;
 let customerSheetDrag = null;
 let liveTripRouteRequest = 0;
 let liveTripRouteInFlight = false;
+let advanceBookingsLoadInFlight = null;
+let advanceBookingsHasLoaded = false;
 
 function syncLocationSheetViewport() {
   const sheet = document.getElementById('location-sheet');
@@ -4108,14 +4118,48 @@ async function acceptAdvanceDriver(bookingId, driverId) {
   } catch (error) { showToast(error.message || 'Unable to choose Driver', 'error'); }
 }
 
-async function loadAdvanceBookings() {
+function setAdvanceBookingsLoading(loading) {
+  const button = document.getElementById('advance-bookings-refresh');
+  const list = document.getElementById('advance-booking-list');
+  if (button) {
+    button.disabled = loading;
+    button.setAttribute('aria-busy', String(loading));
+    button.setAttribute('aria-label', loading ? 'Refreshing scheduled rides' : 'Refresh scheduled rides');
+    button.textContent = loading ? '↻ Refreshing…' : '↻ Refresh';
+  }
+  if (list) list.setAttribute('aria-busy', String(loading));
+}
+
+function refreshAdvanceBookings() {
+  return loadAdvanceBookings({ userInitiated: true });
+}
+
+async function loadAdvanceBookings({ userInitiated = false } = {}) {
   const el = document.getElementById('advance-booking-list');
   if (!el || !token) return;
-  try {
-    renderAdvanceBookings(await apiCall('/api/advance-bookings/my'));
-  } catch (error) {
-    el.innerHTML = `<div class="empty-msg">${escapeLocationText(error.message || 'Unable to load advance bookings')}</div>`;
-  }
+  if (advanceBookingsLoadInFlight) return advanceBookingsLoadInFlight;
+
+  setAdvanceBookingsLoading(true);
+  advanceBookingsLoadInFlight = (async () => {
+    try {
+      const bookings = await apiCall('/api/advance-bookings/my');
+      renderAdvanceBookings(bookings);
+      advanceBookingsHasLoaded = true;
+      if (userInitiated) showToast('Scheduled rides refreshed.', 'success');
+    } catch (error) {
+      if (!advanceBookingsHasLoaded) {
+        el.innerHTML = `<div class="empty-msg">${escapeLocationText(error.message || 'Unable to load scheduled rides')}</div>`;
+      }
+      if (userInitiated) {
+        showToast(error.message || 'Unable to refresh scheduled rides.', 'error');
+      }
+    } finally {
+      setAdvanceBookingsLoading(false);
+      advanceBookingsLoadInFlight = null;
+    }
+  })();
+
+  return advanceBookingsLoadInFlight;
 }
 
 async function cancelAdvanceBooking(id) {

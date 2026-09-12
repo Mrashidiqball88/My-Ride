@@ -6262,6 +6262,8 @@ app.post('/api/advance-bookings', authMiddleware, customerOnly, customerCanBook,
 
 app.get('/api/advance-bookings/my', authMiddleware, async (req, res) => {
   try {
+    res.set('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
+    res.set('Pragma', 'no-cache');
     const query = req.user.role === 'driver'
       ? { driver: req.user.id }
       : { passenger: req.user.id };
