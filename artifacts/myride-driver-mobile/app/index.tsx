@@ -510,6 +510,7 @@ function DriverAdvanceBookingsPanel({
   onAccept,
   onStart,
   onCounter,
+  onDecline,
   onCancel,
 }: {
   colors: DriverColors;
@@ -519,6 +520,7 @@ function DriverAdvanceBookingsPanel({
   onAccept: (id: string) => void;
   onStart: (id: string) => void;
   onCounter: (id: string, suggested: number) => void;
+  onDecline: (id: string) => void;
   onCancel: (id: string) => void;
 }) {
   const [counterPrices, setCounterPrices] = useState<Record<string, string>>({});
@@ -568,9 +570,12 @@ function DriverAdvanceBookingsPanel({
                     ? <Pressable onPress={() => onCancel(booking.id)} style={[styles.secondaryButton, { borderColor: colors.destructive }]}><Text style={{ color: colors.destructive }}>Cancel booking</Text></Pressable>
                     : <Text style={[styles.historyFare, { color: colors.mutedForeground }]}>Cancellation locks one hour before pickup</Text>}
                 </View>
-                : booking.myOffer
-                  ? <Text style={[styles.historyFare, { color: colors.primary }]}>Counter-offer sent · waiting for Customer</Text>
-                  : <Pressable disabled={blocked} onPress={() => onAccept(booking.id)} style={[styles.acceptButton, { backgroundColor: colors.primary, opacity: blocked ? .45 : 1 }]}><Text style={[styles.buttonText, { color: colors.primaryForeground }]}>{blocked ? 'Fee required' : 'Accept'}</Text></Pressable>}
+                : <View style={{ flex: 1, gap: 6 }}>
+                  {booking.myOffer
+                    ? <Text style={[styles.historyFare, { color: colors.primary }]}>Counter-offer sent · waiting for Customer</Text>
+                    : <Pressable disabled={blocked} onPress={() => onAccept(booking.id)} style={[styles.acceptButton, { backgroundColor: colors.primary, opacity: blocked ? .45 : 1 }]}><Text style={[styles.buttonText, { color: colors.primaryForeground }]}>{blocked ? 'Fee required' : 'Accept'}</Text></Pressable>}
+                  <Pressable onPress={() => onDecline(booking.id)} style={[styles.secondaryButton, { borderColor: colors.destructive }]}><Text style={{ color: colors.destructive }}>Decline</Text></Pressable>
+                </View>}
             </View>
             {booking.status !== 'assigned' && !booking.myOffer && <View style={{ flexDirection: 'row', gap: 8, marginTop: 8 }}>
               <TextInput
@@ -745,6 +750,9 @@ function DriverHome() {
     if (!Number.isFinite(price) || price < 1) return report('Enter a valid counter price.');
     void runtime.counterAdvanceBooking(bookingId, price).then(() => report('Counter-offer sent.')).catch(error => report(error instanceof Error ? error.message : 'Unable to send counter-offer'));
   };
+  const declineAdvance = (bookingId: string) => {
+    void runtime.declineAdvanceBooking(bookingId).then(() => report('Advance booking declined.')).catch(error => report(error instanceof Error ? error.message : 'Unable to decline advance booking'));
+  };
   if (!runtime.ready) return <View style={[styles.center, { backgroundColor: colors.background }]}><ActivityIndicator color={colors.primary} /></View>;
   if (!runtime.user) {
     return <View style={[styles.auth, { paddingTop: (isWeb ? 67 : insets.top) + 36, paddingBottom: isWeb ? 34 : insets.bottom, backgroundColor: colors.background }]}>
@@ -908,6 +916,7 @@ function DriverHome() {
           onAccept={id => void acceptAdvance(id)}
           onStart={id => void startAdvance(id)}
           onCounter={counterAdvance}
+          onDecline={declineAdvance}
           onCancel={id => void runtime.cancelAdvanceBooking(id)}
         />
         : <DriverPaymentsPanel

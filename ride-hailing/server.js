@@ -2356,6 +2356,7 @@ const advanceBookingSchema = new mongoose.Schema({
     timestamp: { type: Date, default: Date.now }
   }],
   notifiedDriverIds: [{ type: mongoose.Schema.Types.ObjectId, ref: 'Driver' }],
+  declinedDriverIds: [{ type: mongoose.Schema.Types.ObjectId, ref: 'Driver' }],
   broadcastExpiresAt: { type: Date, default: null },
   broadcastLastAttemptAt: { type: Date, default: null },
   ride: { type: mongoose.Schema.Types.ObjectId, ref: 'Ride', default: null },
@@ -3697,11 +3698,8 @@ async function findLongRangeBroadcastDrivers(
 // passed the daily-fee gate. Persisting this audience is what makes the booking
 // visible in /api/advance-bookings/available even if the Driver misses the
 // Socket.io event.
-async function findAdvanceBookingBroadcastDrivers(
-  vehicleType,
-  isLongRange,
-  { isStudentRide = false } = {}
-) {
+async function findAdvanceBookingBroadcastDrivers(vehicleType, { excludeDriverIds = [] } = {}) {
+  const excludedDriverIds = new Set(excludeDriverIds.map(id => String(id)));
   const drivers = await findDriverDocuments({
     isOnline: true,
     accountStatus: 'active',
@@ -3711,14 +3709,10 @@ async function findAdvanceBookingBroadcastDrivers(
     select: '_id name phone vehicleType ridePreference longRangeEnabled expoPushToken studentRideLastAssignedAt'
   });
 
-  const eligible = drivers.filter(driver => (
-    canDriverReceiveRideForPreference(driver.ridePreference, isLongRange)
-    && (!isLongRange || driver.longRangeEnabled === true)
-  ));
-
-  return isStudentRide
-    ? selectFairStudentRideDrivers(eligible)
-    : eligible;
+  // Advance bookings are future reservations. Broadcast to every currently
+  // online, active Driver in the requested vehicle category; do not apply
+  // proximity, ride-preference, student-fairness, or long-range gates here.
+  return drivers.filter(driver => !excludedDriverIds.has(String(driver._id)));
 }
 
 async function chargeLongRangeCommissionCore(ride, driverId, longRangeSettings, { session } = {}) {
@@ -5771,8 +5765,7 @@ async function broadcastAdvanceBooking(booking) {
   ]);
   const scheduledDrivers = await findAdvanceBookingBroadcastDrivers(
     booking.vehicleType,
-    !!booking.isLongRange,
-    { isStudentRide: booking.isStudentRide }
+    { excludeDriverIds: booking.declinedDriverIds || [] }
   );
   const broadcast = {
     drivers: scheduledDrivers,
@@ -5854,6 +5847,16 @@ async function broadcastAdvanceBooking(booking) {
     });
   }
   return { booking, drivers: broadcast.drivers, radiusKm: broadcast.radiusKm };
+}
+
+function emitAdvanceBookingAssignment(booking, payload) {
+  const driverIds = new Set([
+    ...(booking.notifiedDriverIds || []).map(id => String(id)),
+    booking.driver ? String(booking.driver?._id || booking.driver) : ''
+  ].filter(Boolean));
+  for (const driverId of driverIds) {
+    io.to(`user:${driverId}`).emit('advance-booking:assigned', payload);
+  }
 }
 
 async function runAdvanceBookingBroadcastRecovery() {
@@ -6287,6 +6290,7 @@ app.get('/api/advance-bookings/available', authMiddleware, driverOnly, async (re
         {
           status: 'pending',
           notifiedDriverIds: req.user.id,
+          declinedDriverIds: { $ne: req.user.id },
           vehicleType: { $in: storedVehicleTypesForFareCategory(driver.vehicleType) },
           scheduledFor: { $gt: new Date() }
         },
@@ -6296,9 +6300,7 @@ app.get('/api/advance-bookings/available', authMiddleware, driverOnly, async (re
         }
       ]
     }).populate('passenger', 'name phone').sort({ scheduledFor: 1 }).limit(50);
-    res.json(bookings
-      .filter(booking => canDriverReceiveRideForPreference(driver.ridePreference, booking.isLongRange))
-      .map(booking => ({
+    res.json(bookings.map(booking => ({
         ...advanceBookingDriverResponse(booking, req.user.id),
         acceptanceEligibility: { allowed: fee.allowed, reason: fee.reason, dailyFeeDue: !fee.allowed, dailyFeeRate: fee.rate }
       })));
@@ -6317,6 +6319,7 @@ app.patch('/api/advance-bookings/:id/accept', authMiddleware, driverOnly, async 
       _id: req.params.id,
       status: 'pending',
       notifiedDriverIds: req.user.id,
+      declinedDriverIds: { $ne: req.user.id },
       vehicleType: { $in: storedVehicleTypesForFareCategory(driver.vehicleType) },
       scheduledFor: { $gt: new Date() }
     });
@@ -6373,7 +6376,7 @@ app.patch('/api/advance-bookings/:id/accept', authMiddleware, driverOnly, async 
     }
 
     const response = advanceBookingResponse(assignedBooking);
-    io.to(`user:${req.user.id}`).emit('advance-booking:assigned', response);
+    emitAdvanceBookingAssignment(assignedBooking, response);
     io.to(`user:${assignedBooking.passenger?._id || booking.passenger}`).emit('advance-booking:assigned', response);
     io.to('admin-room').emit('advance-booking:assigned', response);
     res.json(response);
@@ -6459,6 +6462,7 @@ app.patch('/api/advance-bookings/:id/counter', authMiddleware, driverOnly, async
       _id: req.params.id,
       status: 'pending',
       notifiedDriverIds: req.user.id,
+      declinedDriverIds: { $ne: req.user.id },
       scheduledFor: { $gt: new Date() }
     });
     if (!booking) return res.status(404).json({ error: 'Advance booking is no longer available' });
@@ -6478,6 +6482,35 @@ app.patch('/api/advance-bookings/:id/counter', authMiddleware, driverOnly, async
     io.to(`user:${booking.passenger}`).emit('advance-booking:offer', response);
     io.to(`user:${req.user.id}`).emit('advance-booking:offer-submitted', response);
     res.json(response);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.patch('/api/advance-bookings/:id/decline', authMiddleware, driverOnly, async (req, res) => {
+  try {
+    const booking = await AdvanceBooking.findOneAndUpdate(
+      {
+        _id: req.params.id,
+        status: 'pending',
+        notifiedDriverIds: req.user.id,
+        declinedDriverIds: { $ne: req.user.id },
+        scheduledFor: { $gt: new Date() }
+      },
+      {
+        $addToSet: { declinedDriverIds: req.user.id },
+        $pull: { counterOffers: { driver: req.user.id } }
+      },
+      { new: true }
+    );
+    if (!booking) return res.status(409).json({ error: 'Advance booking is no longer available to decline' });
+
+    io.to(`user:${req.user.id}`).emit('advance-booking:declined', {
+      bookingId: String(booking._id),
+      advanceBookingId: String(booking._id),
+      declined: true
+    });
+    res.json({ ok: true, bookingId: String(booking._id), declined: true });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -6518,6 +6551,7 @@ app.patch('/api/advance-bookings/:id/accept-driver', authMiddleware, customerOnl
         passenger: req.user.id,
         status: 'pending',
         driver: null,
+        declinedDriverIds: { $ne: driverId },
         counterOffers: { $elemMatch: { driver: driverId, type: { $in: ['accept', 'counter'] } } }
       },
       {
@@ -6534,8 +6568,7 @@ app.patch('/api/advance-bookings/:id/accept-driver', authMiddleware, customerOnl
       .populate('driver', 'name phone vehicleType vehicleModel vehiclePlate rating profilePhoto');
     if (!assignedBooking) return res.status(409).json({ error: 'That Driver offer is no longer available' });
     const response = advanceBookingResponse(assignedBooking);
-    io.to(`user:${driverId}`).emit('advance-booking:assigned', response);
-    io.to(`user:${req.user.id}`).emit('advance-booking:assigned', response);
+    emitAdvanceBookingAssignment(assignedBooking, response);
     io.to('admin-room').emit('advance-booking:assigned', response);
     res.json(response);
   } catch (err) {
@@ -9709,7 +9742,7 @@ app.patch('/api/admin/advance-bookings/:id/assign', adminJwt, requirePerm('manag
       .populate('driver', 'name phone vehicleType vehicleModel vehiclePlate rating profilePhoto');
     if (!assignedBooking) return res.status(409).json({ error: 'Advance booking was already assigned to another Driver' });
     const response = advanceBookingResponse(assignedBooking);
-    io.to(`user:${driverId}`).emit('advance-booking:assigned', response);
+    emitAdvanceBookingAssignment(assignedBooking, response);
     io.to(`user:${assignedBooking.passenger?._id || booking.passenger}`).emit('advance-booking:assigned', response);
     io.to('admin-room').emit('advance-booking:assigned', response);
     res.json(response);

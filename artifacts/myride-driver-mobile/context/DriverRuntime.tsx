@@ -85,6 +85,7 @@ export type AdvanceBooking = Omit<RideRequest, 'status'> & {
   status?: 'pending' | 'assigned' | 'dispatching' | 'converted' | 'cancelled' | 'failed';
   passengerCount?: number;
   passenger?: { id?: string; name?: string; phone?: string };
+  driver?: string | { id?: string; _id?: string; name?: string; phone?: string } | null;
   counterOffers?: Array<{ driver?: string; driverName?: string; price?: number; type?: 'accept' | 'counter' }>;
   myOffer?: { driver?: string; driverName?: string; price?: number; type?: 'accept' | 'counter' } | null;
 };
@@ -166,6 +167,7 @@ type RuntimeContext = {
   acceptRide(): Promise<void>;
   acceptAdvanceBooking(bookingId: string): Promise<void>;
   counterAdvanceBooking(bookingId: string, price: number): Promise<void>;
+  declineAdvanceBooking(bookingId: string): Promise<void>;
   startAdvanceBooking(bookingId: string): Promise<void>;
   cancelAdvanceBooking(bookingId: string): Promise<void>;
   acceptingRide: boolean;
@@ -544,6 +546,8 @@ export function DriverRuntimeProvider({ children }: { children: ReactNode }) {
     advanceBookingId?: string;
     scheduledFor?: string | Date;
     status?: AdvanceBooking['status'];
+    declined?: boolean;
+    driver?: AdvanceBooking['driver'];
     booking?: Partial<AdvanceBooking> & { _id?: string; advanceBookingId?: string };
     ride?: Partial<AdvanceBooking> & { _id?: string; advanceBookingId?: string };
     [key: string]: unknown;
@@ -560,10 +564,21 @@ export function DriverRuntimeProvider({ children }: { children: ReactNode }) {
     ).trim();
     const scheduledFor = rawBooking.scheduledFor || payload.scheduledFor;
 
+    if (payload.declined) {
+      setAdvanceBookings(current => (current || []).filter(booking => booking.id !== bookingId));
+      return;
+    }
+
     // Some lifecycle events currently contain only bookingId/rideId. Keep the
     // authoritative read as a fallback for those events, but never make a
     // complete advance-booking event wait for REST before showing it.
-    if (!bookingId || !scheduledFor) {
+    if (
+      !bookingId
+      || !scheduledFor
+      || !rawBooking.pickupLocation
+      || !rawBooking.dropoffLocation
+      || rawBooking.fare == null
+    ) {
       void refreshAdvanceBookings();
       return;
     }
@@ -578,7 +593,17 @@ export function DriverRuntimeProvider({ children }: { children: ReactNode }) {
 
     setAdvanceBookings(current => {
       const existing = current || [];
-      if (terminalStatus.has(String(nextBooking.status || ''))) {
+      const assignedDriver = nextBooking.driver;
+      const assignedDriverId = typeof assignedDriver === 'string'
+        ? assignedDriver
+        : assignedDriver?.id || assignedDriver?._id || '';
+      if (
+        terminalStatus.has(String(nextBooking.status || ''))
+        || (nextBooking.status === 'assigned'
+          && assignedDriverId
+          && userRef.current?.id
+          && String(assignedDriverId) !== String(userRef.current?.id || ''))
+      ) {
         return existing.filter(booking => booking.id !== bookingId);
       }
 
@@ -647,6 +672,8 @@ export function DriverRuntimeProvider({ children }: { children: ReactNode }) {
       bookingId?: string;
       advanceBookingId?: string;
       scheduledFor?: string | Date;
+      declined?: boolean;
+      driver?: AdvanceBooking['driver'];
       booking?: Partial<AdvanceBooking> & { _id?: string; advanceBookingId?: string };
       ride?: Partial<AdvanceBooking> & { _id?: string; advanceBookingId?: string };
     }) => {
@@ -655,6 +682,7 @@ export function DriverRuntimeProvider({ children }: { children: ReactNode }) {
       void hydrateActiveRide();
     });
     nextSocket.on('advance-booking:cancelled', handleAdvanceBookingEvent);
+    nextSocket.on('advance-booking:declined', handleAdvanceBookingEvent);
     nextSocket.on('ride:new', handleRideOffer);
     nextSocket.on('ride:taken', ({ rideId }: { rideId: string }) => {
       clearRideAlert(rideId);
@@ -1412,6 +1440,15 @@ export function DriverRuntimeProvider({ children }: { children: ReactNode }) {
     await refreshAdvanceBookings();
   }, [refreshAdvanceBookings]);
 
+  const declineAdvanceBooking = useCallback(async (bookingId: string) => {
+    if (!tokenRef.current || !bookingId) return;
+    await api(`/api/advance-bookings/${encodeURIComponent(bookingId)}/decline`, tokenRef.current, sessionRef.current || undefined, {
+      method: 'PATCH',
+      body: JSON.stringify({}),
+    });
+    setAdvanceBookings(current => (current || []).filter(booking => booking.id !== bookingId));
+  }, []);
+
   const cancelAdvanceBooking = useCallback(async (bookingId: string) => {
     if (!tokenRef.current || !bookingId) return;
     await api(`/api/advance-bookings/${encodeURIComponent(bookingId)}/cancel`, tokenRef.current, sessionRef.current || undefined, {
@@ -1484,10 +1521,10 @@ export function DriverRuntimeProvider({ children }: { children: ReactNode }) {
     pendingRideBlockReason: pendingRideAcceptability.reason || null,
     sentOffer, activeRide, activeRideId, driverLocation, error, longRange, alertReadiness,
     rideHistory, rideHistoryLoading, walletSummary, paymentHistory, paymentsLoading,
-    acceptingRide, updateRideStatus, updatingRideStatus, requestPhoneOtp, signIn, signOut, setOnline: setOnlineState, prepareAlertReadiness, confirmLockScreenAlerts, openAlertSetting, setLongRange, refreshRideHistory, refreshAdvanceBookings, refreshPayments, acceptRide, acceptAdvanceBooking, counterAdvanceBooking, startAdvanceBooking, cancelAdvanceBooking,
+    acceptingRide, updateRideStatus, updatingRideStatus, requestPhoneOtp, signIn, signOut, setOnline: setOnlineState, prepareAlertReadiness, confirmLockScreenAlerts, openAlertSetting, setLongRange, refreshRideHistory, refreshAdvanceBookings, refreshPayments, acceptRide, acceptAdvanceBooking, counterAdvanceBooking, declineAdvanceBooking, startAdvanceBooking, cancelAdvanceBooking,
     advanceBookings, advanceBookingsLoading,
     dismissRide: () => setPendingRide(null), emergencyClearRide, clearError: () => setError(null),
-  }), [acceptAdvanceBooking, acceptRide, acceptingRide, activeRide, activeRideId, advanceBookings, advanceBookingsLoading, alertReadiness, cancelAdvanceBooking, confirmLockScreenAlerts, counterAdvanceBooking, driverLocation, emergencyClearRide, error, getRideAcceptability, hydrateActiveRide, isOnline, openAlertSetting, pendingRide, pendingRideAcceptability.allowed, pendingRideAcceptability.reason, paymentHistory, paymentsLoading, prepareAlertReadiness, ready, refreshAdvanceBookings, refreshPayments, refreshRideHistory, requestPhoneOtp, rideHistory, rideHistoryLoading, sentOffer, setOnlineState, setLongRange, signIn, signOut, startAdvanceBooking, updateRideStatus, updatingRideStatus, user, connection, longRange, walletSummary]);
+  }), [acceptAdvanceBooking, acceptRide, acceptingRide, activeRide, activeRideId, advanceBookings, advanceBookingsLoading, alertReadiness, cancelAdvanceBooking, confirmLockScreenAlerts, counterAdvanceBooking, declineAdvanceBooking, driverLocation, emergencyClearRide, error, getRideAcceptability, hydrateActiveRide, isOnline, openAlertSetting, pendingRide, pendingRideAcceptability.allowed, pendingRideAcceptability.reason, paymentHistory, paymentsLoading, prepareAlertReadiness, ready, refreshAdvanceBookings, refreshPayments, refreshRideHistory, requestPhoneOtp, rideHistory, rideHistoryLoading, sentOffer, setOnlineState, setLongRange, signIn, signOut, startAdvanceBooking, updateRideStatus, updatingRideStatus, user, connection, longRange, walletSummary]);
   return <DriverContext.Provider value={value}>{children}</DriverContext.Provider>;
 }
 
