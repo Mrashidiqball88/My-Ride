@@ -3430,6 +3430,24 @@ function rideResponseForUser(ride, role) {
 
 const CUSTOMER_ACTIVE_RIDE_STATUSES = ['requested', 'accepted', 'arrived', 'in-progress'];
 
+async function findRideContact(participantId) {
+  if (!participantId) return null;
+  const select = 'name phone vehicleType vehicleModel vehiclePlate rating profilePhoto';
+  const partitionedContact = await User.findById(participantId)
+    .select(select)
+    .lean()
+    .catch(() => null);
+  if (partitionedContact) return partitionedContact;
+
+  // Rides created before the Customer/Driver collection split can still point
+  // at the legacy users collection. Resolve that historical reference only
+  // after the current partitioned collections have been checked.
+  return LegacyUser.findById(participantId)
+    .select(select)
+    .lean()
+    .catch(() => null);
+}
+
 async function rideResponseForUserWithContact(ride, role) {
   const payload = rideResponseForUser(ride, role);
   const field = role === 'customer' ? 'driver' : 'passenger';
@@ -3441,10 +3459,7 @@ async function rideResponseForUserWithContact(ride, role) {
   }
   if (!participantId) return payload;
 
-  const contact = await User.findById(participantId)
-    .select('name phone vehicleType vehicleModel vehiclePlate rating profilePhoto')
-    .lean()
-    .catch(() => null);
+  const contact = await findRideContact(participantId);
   const participantSnapshot = participant && typeof participant === 'object' ? participant : {};
   const resolvedContact = contact || participantSnapshot;
   const contactPhone = String(resolvedContact.phone || '').trim();
@@ -5745,6 +5760,11 @@ function canCancelAdvanceBooking(booking, now = new Date()) {
 function advanceBookingResponse(booking) {
   const payload = typeof booking?.toObject === 'function' ? booking.toObject() : { ...booking };
   delete payload.__v;
+  const bookingId = String(payload.id || payload._id || '');
+  if (bookingId) {
+    payload.id = bookingId;
+    payload.advanceBookingId = bookingId;
+  }
   payload.passengerCount = Math.min(8, Math.max(1, Math.trunc(Number(payload.passengerCount) || 1)));
   return payload;
 }
@@ -6304,7 +6324,12 @@ app.get('/api/advance-bookings/available', authMiddleware, driverOnly, async (re
         }
       ]
     }).populate('passenger', 'name phone').sort({ scheduledFor: 1 }).limit(50);
-    res.json(bookings.map(booking => ({
+    const requestedCategory = normalizeFareVehicle(driver.vehicleType);
+    const categoryMatchedBookings = bookings.filter(booking =>
+      booking.status === 'assigned'
+      || normalizeFareVehicle(booking.vehicleType) === requestedCategory
+    );
+    res.json(categoryMatchedBookings.map(booking => ({
         ...advanceBookingDriverResponse(booking, req.user.id),
         acceptanceEligibility: { allowed: fee.allowed, reason: fee.reason, dailyFeeDue: !fee.allowed, dailyFeeRate: fee.rate }
       })));
@@ -7106,6 +7131,35 @@ app.get('/api/rides/:id', authMiddleware, async (req, res) => {
       return res.status(403).json({ error: 'You are not authorized to view this ride' });
     }
     res.json(await rideResponseForUserWithContact(ride, isPassenger ? 'customer' : 'driver'));
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get('/api/rides/:id/contact', authMiddleware, async (req, res) => {
+  try {
+    const ride = await Ride.findById(req.params.id).select('passenger driver').lean();
+    if (!ride) return res.status(404).json({ error: 'Ride not found' });
+    const isCustomer = String(ride.passenger) === String(req.user.id);
+    const isDriver = String(ride.driver) === String(req.user.id);
+    if (!isCustomer && !isDriver) {
+      return res.status(403).json({ error: 'You are not authorized to view this ride contact' });
+    }
+    const participantId = isCustomer ? ride.driver : ride.passenger;
+    const contact = await findRideContact(participantId);
+    if (!contact) return res.status(404).json({ error: 'Ride contact is unavailable' });
+    res.json({
+      contact: {
+        id: String(contact._id || participantId),
+        name: contact.name || '',
+        phone: String(contact.phone || '').trim(),
+        vehicleType: contact.vehicleType || '',
+        vehicleModel: contact.vehicleModel || '',
+        vehiclePlate: contact.vehiclePlate || '',
+        rating: contact.rating ?? null,
+        profilePhoto: contact.profilePhoto || ''
+      }
+    });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }

@@ -3627,8 +3627,31 @@ async function sendCounter() {
 }
 
 // ── Active Ride Panel ──────────────────────────────────────────────────────
-function openDriverRideContact(event, url) {
+function openDriverRideContact(event, anchor) {
   event?.preventDefault();
+  const url = typeof anchor === 'string' ? anchor : anchor?.getAttribute?.('href');
+  const action = typeof anchor === 'string' ? '' : anchor?.dataset?.contactAction;
+  if ((!url || url === '#') && action && activeRide?._id) {
+    void apiCall(`/api/rides/${encodeURIComponent(activeRide._id)}/contact`)
+      .then(result => {
+        const contact = result?.contact || {};
+        activeRide = {
+          ...activeRide,
+          passenger: { ...(activeRide.passenger || {}), ...contact },
+          contact,
+          contactPhone: contact.phone || ''
+        };
+        showActivePanel(activeRide);
+        const normalized = normalizeDriverContactPhone(contact.phone);
+        if (!normalized) throw new Error('Passenger contact is unavailable');
+        const nextUrl = action === 'whatsapp'
+          ? `https://wa.me/${normalized.whatsapp}`
+          : `tel:${normalized.tel}`;
+        window.location.href = nextUrl;
+      })
+      .catch(error => showToast(error.message || 'Passenger contact unavailable', 'error'));
+    return false;
+  }
   if (!url) return false;
   window.location.href = url;
   return false;
@@ -3673,12 +3696,10 @@ function showActivePanel(ride) {
   );
   const callEl = document.getElementById('ap-call-passenger');
   if (callEl) {
-    callEl.innerHTML = contact
-      ? `<div class="ap-dual-btns">
-           <a class="btn-call-pass" href="tel:${contact.tel}" onclick="return openDriverRideContact(event, this.href)">📞 Phone Call</a>
-           <a class="btn-wa-pass" href="https://wa.me/${contact.whatsapp}" onclick="return openDriverRideContact(event, this.href)">💬 WhatsApp</a>
-         </div>`
-      : '<div class="ap-contact-unavailable">Passenger contact unavailable</div>';
+    callEl.innerHTML = `<div class="ap-dual-btns">
+           <a class="btn-call-pass" href="${contact ? `tel:${contact.tel}` : '#'}" data-contact-action="call" onclick="return openDriverRideContact(event, this)">📞 Phone Call${contact ? '' : ' · load number'}</a>
+           <a class="btn-wa-pass" href="${contact ? `https://wa.me/${contact.whatsapp}` : '#'}" data-contact-action="whatsapp" onclick="return openDriverRideContact(event, this)">💬 WhatsApp${contact ? '' : ' · load number'}</a>
+         </div>`;
   }
   renderActiveButtons(ride.status || 'accepted');
   startActiveRideLocationSync();

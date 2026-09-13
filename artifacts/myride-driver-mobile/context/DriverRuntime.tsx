@@ -273,6 +273,15 @@ function normalizeRideRequest(ride: RideRequest & { _id?: string }): RideRequest
   return { ...ride, id: String(ride.id || ride._id || '') };
 }
 
+function normalizeAdvanceBooking(booking: AdvanceBooking & { _id?: string }): AdvanceBooking {
+  const id = String(booking.id || booking._id || booking.advanceBookingId || '');
+  return {
+    ...booking,
+    id,
+    ...(booking._id ? { _id: String(booking._id) } : {}),
+  };
+}
+
 function rideContactPhone(ride: RideRequest | null | undefined) {
   return String(
     ride?.passenger?.phone
@@ -533,7 +542,9 @@ export function DriverRuntimeProvider({ children }: { children: ReactNode }) {
     try {
       const result = await api('/api/advance-bookings/available', tokenRef.current, sessionRef.current || undefined);
       if (requestEventVersion !== advanceBookingsEventVersion.current) return;
-      setAdvanceBookings(Array.isArray(result) ? result as AdvanceBooking[] : []);
+      setAdvanceBookings(Array.isArray(result)
+        ? result.map(item => normalizeAdvanceBooking(item as AdvanceBooking & { _id?: string }))
+        : []);
     } finally {
       setAdvanceBookingsLoading(false);
     }
@@ -583,12 +594,12 @@ export function DriverRuntimeProvider({ children }: { children: ReactNode }) {
       return;
     }
 
-    const nextBooking = {
+    const nextBooking = normalizeAdvanceBooking({
       ...rawBooking,
       id: bookingId,
       scheduledFor,
       ...(lifecycleStatus ? { status: lifecycleStatus } : {}),
-    } as AdvanceBooking;
+    } as AdvanceBooking & { _id?: string });
     const terminalStatus = new Set(['converted', 'cancelled', 'failed']);
 
     setAdvanceBookings(current => {
