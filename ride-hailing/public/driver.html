@@ -4910,7 +4910,7 @@ async function doDeleteAccount() {
 <script>
 if ('serviceWorker' in navigator) {
   window.addEventListener('load', () => {
-    navigator.serviceWorker.register('/sw.js', { scope: '/' })
+    navigator.serviceWorker.register('/sw.js?v=36', { scope: '/' })
       .then(reg => {
         console.log('[SW] Driver registered, scope:', reg.scope);
         registerDriverBackgroundSync();

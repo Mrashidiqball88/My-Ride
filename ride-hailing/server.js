@@ -3700,10 +3700,11 @@ async function findLongRangeBroadcastDrivers(
 // Socket.io event.
 async function findAdvanceBookingBroadcastDrivers(vehicleType, { excludeDriverIds = [] } = {}) {
   const excludedDriverIds = new Set(excludeDriverIds.map(id => String(id)));
+  const requestedCategory = normalizeFareVehicle(vehicleType);
   const drivers = await findDriverDocuments({
     isOnline: true,
     accountStatus: 'active',
-    vehicleType: { $in: storedVehicleTypesForFareCategory(vehicleType) },
+    vehicleType: { $in: storedVehicleTypesForFareCategory(requestedCategory) },
     lastOnlineHeartbeat: { $gte: new Date(Date.now() - DRIVER_HEARTBEAT_MAX_AGE_MS) }
   }, {
     select: '_id name phone vehicleType ridePreference longRangeEnabled expoPushToken studentRideLastAssignedAt'
@@ -3712,7 +3713,10 @@ async function findAdvanceBookingBroadcastDrivers(vehicleType, { excludeDriverId
   // Advance bookings are future reservations. Broadcast to every currently
   // online, active Driver in the requested vehicle category; do not apply
   // proximity, ride-preference, student-fairness, or long-range gates here.
-  return drivers.filter(driver => !excludedDriverIds.has(String(driver._id)));
+  return drivers.filter(driver =>
+    !excludedDriverIds.has(String(driver._id))
+    && normalizeFareVehicle(driver.vehicleType) === requestedCategory
+  );
 }
 
 async function chargeLongRangeCommissionCore(ride, driverId, longRangeSettings, { session } = {}) {
@@ -11875,7 +11879,7 @@ function servePage(page) {
         console.error('[servePage] PAGES["' + page + '"] is empty — startup load failed silently');
         return res.status(500).json({ error: 'page not loaded' });
       }
-      if (page === 'admin' || page === 'customer') {
+      if (page === 'admin' || page === 'customer' || page === 'driver') {
         // These routes bypass express.static because pages are preloaded at
         // startup. Do not let a browser, service worker, or reverse proxy
         // retain an older shell after a deployment.
