@@ -3631,7 +3631,7 @@ function openDriverRideContact(event, anchor) {
   event?.preventDefault();
   const url = typeof anchor === 'string' ? anchor : anchor?.getAttribute?.('href');
   const action = typeof anchor === 'string' ? '' : anchor?.dataset?.contactAction;
-  if ((!url || url === '#') && action && activeRide?._id) {
+  if (action && activeRide?._id) {
     void apiCall(`/api/rides/${encodeURIComponent(activeRide._id)}/contact`)
       .then(result => {
         const contact = result?.contact || {};

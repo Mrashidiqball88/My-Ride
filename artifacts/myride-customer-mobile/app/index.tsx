@@ -50,6 +50,15 @@ export default function CustomerWebViewScreen() {
     try {
       await Linking.openURL(url);
     } catch {
+      const whatsappMatch = /^whatsapp:\/\/send\?phone=([0-9]+)$/i.exec(url);
+      if (whatsappMatch) {
+        try {
+          await Linking.openURL(`https://wa.me/${whatsappMatch[1]}`);
+          return;
+        } catch {
+          // Fall through to the visible native error below.
+        }
+      }
       setLoadError('This link could not be opened on your device.');
     }
   }, []);
@@ -58,7 +67,11 @@ export default function CustomerWebViewScreen() {
     try {
       const message = JSON.parse(event.nativeEvent.data);
       const url = String(message?.url || '');
-      if (/^tel:\+?[0-9]+$/i.test(url) || /^https:\/\/wa\.me\/[0-9]+$/i.test(url)) {
+      if (
+        /^tel:\+?[0-9]+$/i.test(url)
+        || /^whatsapp:\/\/send\?phone=[0-9]+$/i.test(url)
+        || /^https:\/\/wa\.me\/[0-9]+$/i.test(url)
+      ) {
         void openExternalUrl(url);
       }
     } catch {
@@ -68,7 +81,11 @@ export default function CustomerWebViewScreen() {
 
   const allowNavigation = useCallback((request: WebViewNavigation) => {
     if (!allowedOrigin) return false;
-    if (/^tel:/i.test(request.url) || /^https:\/\/wa\.me\//i.test(request.url)) {
+    if (
+      /^tel:/i.test(request.url)
+      || /^whatsapp:\/\/send\?phone=/i.test(request.url)
+      || /^https:\/\/wa\.me\//i.test(request.url)
+    ) {
       void openExternalUrl(request.url);
       return false;
     }
@@ -155,7 +172,8 @@ export default function CustomerWebViewScreen() {
             document.addEventListener('click', function(event) {
               var anchor = event.target && event.target.closest ? event.target.closest('a') : null;
               var url = anchor && anchor.href ? anchor.href : '';
-              if (/^tel:\\+?[0-9]+$/i.test(url) || /^https:\\/\\/wa\\.me\\/[0-9]+$/i.test(url)) {
+              if (anchor && anchor.dataset && anchor.dataset.contactAction) return;
+               if (/^tel:\\+?[0-9]+$/i.test(url) || /^whatsapp:\\/\\/send\\?phone=[0-9]+$/i.test(url) || /^https:\\/\\/wa\\.me\\/[0-9]+$/i.test(url)) {
                 event.preventDefault();
                 window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'contact', url: url }));
               }

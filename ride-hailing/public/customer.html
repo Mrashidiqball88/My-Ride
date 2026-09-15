@@ -4310,7 +4310,7 @@ function openCustomerRideContact(event, anchor) {
   event?.preventDefault();
   const url = typeof anchor === 'string' ? anchor : anchor?.getAttribute?.('href');
   const action = typeof anchor === 'string' ? '' : anchor?.dataset?.contactAction;
-  if ((!url || url === '#') && action && activeRide?._id) {
+  if (action && activeRide?._id) {
     void apiCall(`/api/rides/${encodeURIComponent(activeRide._id)}/contact`)
       .then(result => {
         const contact = result?.contact || {};
@@ -4324,10 +4324,13 @@ function openCustomerRideContact(event, anchor) {
         showMatchedPanel(activeRide.driver, activeRide.fare, activeRide.status);
         const normalized = normalizeCustomerContactPhone(contact.phone);
         if (!normalized) throw new Error('Driver contact is unavailable');
+        const nativeShell = Boolean(window.ReactNativeWebView?.postMessage);
         const nextUrl = action === 'whatsapp'
-          ? `https://wa.me/${normalized.whatsapp}`
+          ? (nativeShell
+            ? `whatsapp://send?phone=${normalized.whatsapp}`
+            : `https://wa.me/${normalized.whatsapp}`)
           : `tel:${normalized.tel}`;
-        if (window.ReactNativeWebView?.postMessage) {
+        if (nativeShell) {
           window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'contact', url: nextUrl }));
         } else {
           window.location.href = nextUrl;

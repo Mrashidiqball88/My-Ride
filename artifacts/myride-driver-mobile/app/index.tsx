@@ -58,30 +58,6 @@ function passengerContactUrls(phone?: string | null) {
   };
 }
 
-function passengerPhoneForRide(ride: RideRequest | null | undefined) {
-  return String(
-    ride?.passenger?.phone
-    || ride?.passengerPhone
-    || ride?.contactPhone
-    || ride?.contact?.phone
-    || ''
-  ).trim();
-}
-
-function openPassengerContact(phone: string | null | undefined, action: 'Phone Call' | 'WhatsApp') {
-  const contact = passengerContactUrls(phone);
-  if (!contact) {
-    Alert.alert(`${action} unavailable`, 'The passenger phone number is not available for this ride.');
-    return;
-  }
-  const url = action === 'Phone Call'
-    ? `tel:${contact.tel}`
-    : `https://wa.me/${contact.whatsapp}`;
-  void Linking.openURL(url).catch(() => {
-    Alert.alert(`${action} unavailable`, `Unable to open ${action.toLowerCase()} on this device.`);
-  });
-}
-
 function DriverNavigationMap({ ride, driverLocation, colors }: {
   ride: RideRequest | null;
   driverLocation: DriverLocation | null;
@@ -99,6 +75,7 @@ function ActiveRideSheet({
   colors,
   updating,
   onStatusChange,
+  onContactPress,
   onEmergencyClear,
 }: {
   ride: RideRequest;
@@ -106,6 +83,7 @@ function ActiveRideSheet({
   colors: ReturnType<typeof useColors>;
   updating: boolean;
   onStatusChange: (status: 'arrived' | 'in-progress' | 'completed', pin?: string) => void;
+  onContactPress: (action: 'Phone Call' | 'WhatsApp') => Promise<void>;
   onEmergencyClear: () => void;
 }) {
   const [stageHeight, setStageHeight] = useState(520);
@@ -123,8 +101,7 @@ function ActiveRideSheet({
     ? ride.status
     : 'accepted';
   const passengerName = ride.passenger?.name || 'Passenger';
-  const passengerPhone = passengerPhoneForRide(ride);
-  const passengerContact = passengerContactUrls(passengerPhone);
+  const [contactLoading, setContactLoading] = useState(false);
 
   const snapTo = (next: SheetState) => {
     const target = next === 'expanded' ? 0 : next === 'compact' ? compactOffset : collapsedOffset;
@@ -189,6 +166,16 @@ function ActiveRideSheet({
     onPanResponderTerminationRequest: () => false,
   }), [collapsedOffset, compactOffset, sheetOffset, sheetState]);
 
+  const handleContactPress = async (action: 'Phone Call' | 'WhatsApp') => {
+    if (contactLoading) return;
+    setContactLoading(true);
+    try {
+      await onContactPress(action);
+    } finally {
+      setContactLoading(false);
+    }
+  };
+
   return <View
     style={styles.activeRideStage}
     onLayout={event => setStageHeight(event.nativeEvent.layout.height)}
@@ -243,26 +230,28 @@ function ActiveRideSheet({
         nestedScrollEnabled
         showsVerticalScrollIndicator={false}
       >
-        {passengerContact && <View style={styles.contactActions}>
+        <View style={styles.contactActions}>
           <Pressable
+            disabled={contactLoading}
             accessibilityRole="button"
             accessibilityLabel={`Phone Call ${passengerName}`}
-            onPress={() => openPassengerContact(passengerPhone, 'Phone Call')}
-            style={({ pressed }) => [styles.contactButton, { backgroundColor: colors.primary, borderColor: colors.primary, opacity: pressed ? .75 : 1 }]}
+            onPress={() => void handleContactPress('Phone Call')}
+            style={({ pressed }) => [styles.contactButton, { backgroundColor: colors.primary, borderColor: colors.primary, opacity: pressed || contactLoading ? .55 : 1 }]}
           >
             <Ionicons name="call-outline" size={18} color={colors.primaryForeground} />
-            <Text style={[styles.contactButtonLabel, { color: colors.primaryForeground }]}>Phone Call</Text>
+            <Text style={[styles.contactButtonLabel, { color: colors.primaryForeground }]}>{contactLoading ? 'Opening…' : 'Phone Call'}</Text>
           </Pressable>
           <Pressable
+            disabled={contactLoading}
             accessibilityRole="button"
             accessibilityLabel={`WhatsApp ${passengerName}`}
-            onPress={() => openPassengerContact(passengerPhone, 'WhatsApp')}
-            style={({ pressed }) => [styles.contactButton, { backgroundColor: colors.secondary, borderColor: colors.border, opacity: pressed ? .75 : 1 }]}
+            onPress={() => void handleContactPress('WhatsApp')}
+            style={({ pressed }) => [styles.contactButton, { backgroundColor: colors.secondary, borderColor: colors.border, opacity: pressed || contactLoading ? .55 : 1 }]}
           >
             <Ionicons name="logo-whatsapp" size={18} color={colors.primary} />
             <Text style={[styles.contactButtonLabel, { color: colors.foreground }]}>WhatsApp</Text>
           </Pressable>
-        </View>}
+        </View>
         <View style={[styles.sheetRouteCard, { backgroundColor: colors.secondary, borderColor: colors.border }]}>
           <Text style={[styles.sheetLabel, { color: colors.primary }]}>PICKUP</Text>
           <Text style={[styles.sheetAddress, { color: colors.foreground }]} numberOfLines={2}>{ride.pickupLocation?.address || 'Pickup location shared'}</Text>
@@ -643,6 +632,35 @@ function DriverHome() {
   const [, setClock] = useState(Date.now());
   const isWeb = Platform.OS === 'web';
   const report = (message: string) => Alert.alert('My Ride Driver', message);
+  const openActiveRideContact = async (action: 'Phone Call' | 'WhatsApp') => {
+    const rideId = runtime.activeRide?.id || runtime.activeRide?._id;
+    if (!rideId) {
+      Alert.alert(`${action} unavailable`, 'The active ride is no longer available.');
+      return;
+    }
+
+    try {
+      const contact = await runtime.fetchRideContact(String(rideId));
+      const normalized = passengerContactUrls(contact.phone);
+      if (!normalized) throw new Error('Passenger contact is unavailable.');
+
+      const primaryUrl = action === 'Phone Call'
+        ? `tel:${normalized.tel}`
+        : `whatsapp://send?phone=${normalized.whatsapp}`;
+
+      try {
+        await Linking.openURL(primaryUrl);
+      } catch (error) {
+        if (action !== 'WhatsApp') throw error;
+        await Linking.openURL(`https://wa.me/${normalized.whatsapp}`);
+      }
+    } catch (error) {
+      Alert.alert(
+        `${action} unavailable`,
+        error instanceof Error ? error.message : `Unable to open ${action.toLowerCase()}.`
+      );
+    }
+  };
   const longRangeVehicle = runtime.longRange?.vehicleType || runtime.user?.vehicleType || 'Car Mini Non-AC';
   const longRangeMinimum = Number(runtime.longRange?.settings?.minimumWalletBalances?.[longRangeVehicle] || 0);
   const longRangeCommission = Number(runtime.longRange?.settings?.manualCommissionAmounts?.[longRangeVehicle] || 0);
@@ -881,6 +899,7 @@ function DriverHome() {
        colors={colors}
        updating={runtime.updatingRideStatus}
        onStatusChange={updateRideStatus}
+        onContactPress={openActiveRideContact}
        onEmergencyClear={runtime.emergencyClearRide}
      />}
      {!isWeb && !runtime.activeRide && runtime.pendingRide && <DriverNavigationMap

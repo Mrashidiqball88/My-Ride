@@ -80,6 +80,17 @@ export type RideRequest = {
   pickupLocation?: { address?: string; lat: number; lng: number };
   dropoffLocation?: { address?: string; lat: number; lng: number };
 };
+
+export type RideContact = {
+  id?: string;
+  name?: string;
+  phone?: string;
+  vehicleType?: string;
+  vehicleModel?: string;
+  vehiclePlate?: string;
+  rating?: number | null;
+  profilePhoto?: string;
+};
 export type AdvanceBooking = Omit<RideRequest, 'status'> & {
   scheduledFor: string | Date;
   status?: 'pending' | 'assigned' | 'dispatching' | 'converted' | 'cancelled' | 'failed';
@@ -164,6 +175,7 @@ type RuntimeContext = {
   refreshRideHistory(): Promise<void>;
   refreshAdvanceBookings(): Promise<void>;
   refreshPayments(): Promise<void>;
+  fetchRideContact(rideId: string): Promise<RideContact>;
   acceptRide(): Promise<void>;
   acceptAdvanceBooking(bookingId: string): Promise<void>;
   counterAdvanceBooking(bookingId: string, price: number): Promise<void>;
@@ -452,6 +464,35 @@ export function DriverRuntimeProvider({ children }: { children: ReactNode }) {
       // Socket reconnect and the next foreground refresh remain available.
       return false;
     }
+  }, []);
+
+  const fetchRideContact = useCallback(async (rideId: string) => {
+    if (!tokenRef.current) throw new Error('Sign in is required.');
+    const normalizedRideId = String(rideId || '').trim();
+    if (!normalizedRideId) throw new Error('Active ride is unavailable.');
+
+    const result = await api(
+      `/api/rides/${encodeURIComponent(normalizedRideId)}/contact`,
+      tokenRef.current,
+      sessionRef.current || undefined
+    );
+    const contact = result?.contact as RideContact | undefined;
+    if (!contact?.phone) throw new Error('Passenger contact is unavailable.');
+
+    setActiveRide(current => current?.id === normalizedRideId
+      ? mergeRideContact({
+          ...current,
+          passenger: {
+            ...(current.passenger || {}),
+            ...contact,
+            phone: contact.phone,
+          },
+          contact,
+          contactPhone: contact.phone,
+        }, current)
+      : current);
+
+    return contact;
   }, []);
 
   const handleRideOffer = useCallback((ride: RideRequest, { fromPush = false } = {}) => {
@@ -1532,10 +1573,10 @@ export function DriverRuntimeProvider({ children }: { children: ReactNode }) {
     pendingRideBlockReason: pendingRideAcceptability.reason || null,
     sentOffer, activeRide, activeRideId, driverLocation, error, longRange, alertReadiness,
     rideHistory, rideHistoryLoading, walletSummary, paymentHistory, paymentsLoading,
-    acceptingRide, updateRideStatus, updatingRideStatus, requestPhoneOtp, signIn, signOut, setOnline: setOnlineState, prepareAlertReadiness, confirmLockScreenAlerts, openAlertSetting, setLongRange, refreshRideHistory, refreshAdvanceBookings, refreshPayments, acceptRide, acceptAdvanceBooking, counterAdvanceBooking, declineAdvanceBooking, startAdvanceBooking, cancelAdvanceBooking,
+    acceptingRide, updateRideStatus, updatingRideStatus, requestPhoneOtp, signIn, signOut, setOnline: setOnlineState, prepareAlertReadiness, confirmLockScreenAlerts, openAlertSetting, setLongRange, refreshRideHistory, refreshAdvanceBookings, refreshPayments, fetchRideContact, acceptRide, acceptAdvanceBooking, counterAdvanceBooking, declineAdvanceBooking, startAdvanceBooking, cancelAdvanceBooking,
     advanceBookings, advanceBookingsLoading,
     dismissRide: () => setPendingRide(null), emergencyClearRide, clearError: () => setError(null),
-  }), [acceptAdvanceBooking, acceptRide, acceptingRide, activeRide, activeRideId, advanceBookings, advanceBookingsLoading, alertReadiness, cancelAdvanceBooking, confirmLockScreenAlerts, counterAdvanceBooking, declineAdvanceBooking, driverLocation, emergencyClearRide, error, getRideAcceptability, hydrateActiveRide, isOnline, openAlertSetting, pendingRide, pendingRideAcceptability.allowed, pendingRideAcceptability.reason, paymentHistory, paymentsLoading, prepareAlertReadiness, ready, refreshAdvanceBookings, refreshPayments, refreshRideHistory, requestPhoneOtp, rideHistory, rideHistoryLoading, sentOffer, setOnlineState, setLongRange, signIn, signOut, startAdvanceBooking, updateRideStatus, updatingRideStatus, user, connection, longRange, walletSummary]);
+  }), [acceptAdvanceBooking, acceptRide, acceptingRide, activeRide, activeRideId, advanceBookings, advanceBookingsLoading, alertReadiness, cancelAdvanceBooking, confirmLockScreenAlerts, counterAdvanceBooking, declineAdvanceBooking, driverLocation, emergencyClearRide, error, fetchRideContact, getRideAcceptability, hydrateActiveRide, isOnline, openAlertSetting, pendingRide, pendingRideAcceptability.allowed, pendingRideAcceptability.reason, paymentHistory, paymentsLoading, prepareAlertReadiness, ready, refreshAdvanceBookings, refreshPayments, refreshRideHistory, requestPhoneOtp, rideHistory, rideHistoryLoading, sentOffer, setOnlineState, setLongRange, signIn, signOut, startAdvanceBooking, updateRideStatus, updatingRideStatus, user, connection, longRange, walletSummary]);
   return <DriverContext.Provider value={value}>{children}</DriverContext.Provider>;
 }
 
