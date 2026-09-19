@@ -3642,14 +3642,21 @@ function openDriverRideContact(event, anchor) {
           contactPhone: contact.phone || ''
         };
         showActivePanel(activeRide);
-        const normalized = normalizeDriverContactPhone(contact.phone);
-        if (!normalized) throw new Error('Passenger contact is unavailable');
+        const normalized = extractDriverPassengerPhone(
+          contact.phone
+            || contact.contactPhone
+            || activeRide.passenger?.phone
+            || activeRide.passenger?.contactPhone
+            || activeRide.contactPhone
+            || activeRide.contact?.phone
+        );
+        if (!normalized) throw new Error('The customer phone number is unavailable.');
         const nextUrl = action === 'whatsapp'
           ? `https://wa.me/${normalized.whatsapp}`
           : `tel:${normalized.tel}`;
         window.location.href = nextUrl;
       })
-      .catch(error => showToast(error.message || 'Passenger contact unavailable', 'error'));
+      .catch(error => showToast(error.message || 'The customer phone number is unavailable.', 'error'));
     return false;
   }
   if (!url) return false;
@@ -3657,12 +3664,13 @@ function openDriverRideContact(event, anchor) {
   return false;
 }
 
-function normalizeDriverContactPhone(phone) {
-  let digits = String(phone || '').replace(/\D/g, '');
-  if (digits.startsWith('00')) digits = digits.slice(2);
-  if (digits.startsWith('92')) digits = digits.slice(2);
-  digits = digits.replace(/^0+/, '');
-  return digits ? { tel: `+92${digits}`, whatsapp: `92${digits}` } : null;
+function extractDriverPassengerPhone(phone) {
+  const phoneRegex = /^(?:\+?92|0092|0)?(3\d{9})$/;
+  const compactPhone = String(phone || '').replace(/[^\d+]/g, '');
+  const match = compactPhone.match(phoneRegex);
+  if (!match) return null;
+  const localDigits = match[1];
+  return { tel: `+92${localDigits}`, whatsapp: `92${localDigits}` };
 }
 
 function showActivePanel(ride) {
@@ -3688,7 +3696,7 @@ function showActivePanel(ride) {
   updateNavigationDetails();
 
   // Dual call buttons — Phone + WhatsApp
-  const contact = normalizeDriverContactPhone(
+  const contact = extractDriverPassengerPhone(
     ride.passenger?.phone
       || ride.passengerPhone
       || ride.contactPhone
@@ -3697,8 +3705,8 @@ function showActivePanel(ride) {
   const callEl = document.getElementById('ap-call-passenger');
   if (callEl) {
     callEl.innerHTML = `<div class="ap-dual-btns">
-           <a class="btn-call-pass" href="${contact ? `tel:${contact.tel}` : '#'}" data-contact-action="call" onclick="return openDriverRideContact(event, this)">📞 Phone Call${contact ? '' : ' · load number'}</a>
-           <a class="btn-wa-pass" href="${contact ? `https://wa.me/${contact.whatsapp}` : '#'}" data-contact-action="whatsapp" onclick="return openDriverRideContact(event, this)">💬 WhatsApp${contact ? '' : ' · load number'}</a>
+           <a id="call-btn" class="btn-call-pass" href="${contact ? `tel:${contact.tel}` : '#'}" data-contact-action="call" onclick="return openDriverRideContact(event, this)">📞 Phone Call${contact ? '' : ' · load number'}</a>
+           <a id="whatsapp-btn" class="btn-wa-pass" href="${contact ? `https://wa.me/${contact.whatsapp}` : '#'}" data-contact-action="whatsapp" onclick="return openDriverRideContact(event, this)">💬 WhatsApp${contact ? '' : ' · load number'}</a>
          </div>`;
   }
   renderActiveButtons(ride.status || 'accepted');
