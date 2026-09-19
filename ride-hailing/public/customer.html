@@ -4322,21 +4322,26 @@ function openCustomerRideContact(event, anchor) {
         };
         activeDriverInfo = activeRide.driver;
         showMatchedPanel(activeRide.driver, activeRide.fare, activeRide.status);
-        const normalized = normalizeCustomerContactPhone(contact.phone);
-        if (!normalized) throw new Error('Driver contact is unavailable');
-        const nativeShell = Boolean(window.ReactNativeWebView?.postMessage);
+        const normalized = extractCustomerDriverPhone(
+          contact.phone
+            || contact.contactPhone
+            || activeRide.driver?.phone
+            || activeRide.driver?.contactPhone
+            || activeRide.contactPhone
+            || activeRide.contact?.phone
+        );
+        if (!normalized) throw new Error('The driver phone number is unavailable.');
         const nextUrl = action === 'whatsapp'
-          ? (nativeShell
-            ? `whatsapp://send?phone=${normalized.whatsapp}`
-            : `https://wa.me/${normalized.whatsapp}`)
+          ? `https://wa.me/${normalized.whatsapp}`
           : `tel:${normalized.tel}`;
+        const nativeShell = Boolean(window.ReactNativeWebView?.postMessage);
         if (nativeShell) {
           window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'contact', url: nextUrl }));
         } else {
           window.location.href = nextUrl;
         }
       })
-      .catch(error => showToast(error.message || 'Driver contact unavailable', 'error'));
+      .catch(error => showToast(error.message || 'The driver phone number is unavailable.', 'error'));
     return false;
   }
   if (!url) return false;
@@ -4351,12 +4356,13 @@ function openCustomerRideContact(event, anchor) {
   return false;
 }
 
-function normalizeCustomerContactPhone(phone) {
-  let digits = String(phone || '').replace(/\D/g, '');
-  if (digits.startsWith('00')) digits = digits.slice(2);
-  if (digits.startsWith('92')) digits = digits.slice(2);
-  digits = digits.replace(/^0+/, '');
-  return digits ? { tel: `+92${digits}`, whatsapp: `92${digits}` } : null;
+function extractCustomerDriverPhone(phone) {
+  const phoneRegex = /^(?:\+?92|0092|0)?(3\d{9})$/;
+  const compactPhone = String(phone || '').replace(/[^\d+]/g, '');
+  const match = compactPhone.match(phoneRegex);
+  if (!match) return null;
+  const localDigits = match[1];
+  return { tel: `+92${localDigits}`, whatsapp: `92${localDigits}` };
 }
 
 function showMatchedPanel(driver = {}, agreedFare, rideStatus = activeRide?.status || 'accepted') {
@@ -4394,14 +4400,14 @@ function showMatchedPanel(driver = {}, agreedFare, rideStatus = activeRide?.stat
 
   // Keep contact actions visible for every assigned ride state, including
   // rides restored directly as arrived or in-progress.
-  const contact = normalizeCustomerContactPhone(
+  const contact = extractCustomerDriverPhone(
     driver.phone
       || driver.contactPhone
       || activeRide?.contactPhone
       || activeRide?.contact?.phone
   );
-  const contactHtml = `<a class="btn-call" href="${contact ? `tel:${contact.tel}` : '#'}" data-contact-action="call" onclick="return openCustomerRideContact(event, this)">📞 Phone Call${contact ? '' : ' · load number'}</a>
-        <a class="btn-whatsapp" href="${contact ? `https://wa.me/${contact.whatsapp}` : '#'}" data-contact-action="whatsapp" onclick="return openCustomerRideContact(event, this)">💬 WhatsApp${contact ? '' : ' · load number'}</a>`;
+  const contactHtml = `<a id="call-btn" class="btn-call" href="${contact ? `tel:${contact.tel}` : '#'}" data-contact-action="call" onclick="return openCustomerRideContact(event, this)">📞 Phone Call${contact ? '' : ' · load number'}</a>
+        <a id="whatsapp-btn" class="btn-whatsapp" href="${contact ? `https://wa.me/${contact.whatsapp}` : '#'}" data-contact-action="whatsapp" onclick="return openCustomerRideContact(event, this)">💬 WhatsApp${contact ? '' : ' · load number'}</a>`;
   document.getElementById('ar-contact-btns').innerHTML = contactHtml;
   document.getElementById('ar-contact-btns').style.display = 'flex';
   updateCustomerCancellationControl(rideStatus);
