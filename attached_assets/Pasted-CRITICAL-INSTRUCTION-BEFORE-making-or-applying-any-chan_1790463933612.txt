@@ -1,0 +1,18 @@
+CRITICAL INSTRUCTION: BEFORE making or applying any changes to the code, you MUST first show me the exact lines of code where the error exists and explain the logical breakdown of the bug (what is wrong, where it is located, and why the data is failing to exchange). Wait for my confirmation, or provide the explanation first before modifying any files. Do NOT touch, modify, or break any unrelated features.
+
+Fix a critical bug in my ride-healing application regarding the Calling and WhatsApp communication feature between the Driver and the Customer.
+
+CURRENT ISSUE:
+- When a driver accepts a ride, they try to call or WhatsApp the customer, but the customer's phone number is missing, blank, or not showing up.
+- Similarly, when the customer tries to call or WhatsApp the driver, the action fails. 
+- The physical Call and WhatsApp buttons are clickable (the press event triggers), but the actual phone numbers are NOT being exchanged behind the scenes between the two entities.
+
+REQUIRED STEP-BY-STEP ACTION FOR YOU:
+1. DIAGNOSE & EXPLAIN FIRST: Locate the file and the exact lines of code responsible for this. Explain to me logically where the breakdown is happening (Is it in the backend API response missing the user/driver profiles? Or is it a frontend state/props binding issue?).
+2. FIX THE DATA BRIDGE: Ensure that when a ride is active, the backend successfully delivers the driver's phone number to the customer's app state, and the customer's phone number to the driver's app state.
+3. FIX THE DEEP LINKING: Verify and correct the URL Schemes for both buttons:
+   - Calling protocol: `tel:${phoneNumber}`
+   - WhatsApp protocol: `https://wa.me{phoneNumber}` (Ensure the number format strictly includes the country code, without '+' or '00').
+4. ERROR HANDLING: Add console logs or error catch blocks precisely where the phone number variable is being passed, so if it returns undefined, we know exactly why.
+
+STRICT CONSTRAINT: Do not modify, refactor, or touch any other parts of the application. Only target this communication/data pipeline. Provide your logical explanation and the proposed fix now.
