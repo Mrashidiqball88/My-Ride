@@ -3631,32 +3631,37 @@ function openDriverRideContact(event, anchor) {
   event?.preventDefault();
   const url = typeof anchor === 'string' ? anchor : anchor?.getAttribute?.('href');
   const action = typeof anchor === 'string' ? '' : anchor?.dataset?.contactAction;
-  if (action && activeRide?._id) {
-    void apiCall(`/api/rides/${encodeURIComponent(activeRide._id)}/contact`)
+  const rideId = activeRide?._id || activeRide?.id;
+  if (action && rideId) {
+    void apiCall(`/api/rides/${encodeURIComponent(rideId)}/contact`)
       .then(result => {
+        if (String(activeRide?._id || activeRide?.id) !== String(rideId)) return;
         const contact = result?.contact || {};
-        activeRide = {
-          ...activeRide,
-          passenger: { ...(activeRide.passenger || {}), ...contact },
-          contact,
-          contactPhone: contact.phone || ''
-        };
-        showActivePanel(activeRide);
         const normalized = extractDriverPassengerPhone(
-          contact.phone
-            || contact.contactPhone
-            || activeRide.passenger?.phone
-            || activeRide.passenger?.contactPhone
-            || activeRide.contactPhone
-            || activeRide.contact?.phone
+          contact.phone, contact.contactPhone,
+          activeRide.passenger?.phone, activeRide.passenger?.contactPhone,
+          activeRide.passengerPhone, activeRide.contactPhone, activeRide.contact?.phone
         );
         if (!normalized) throw new Error('The customer phone number is unavailable.');
+        activeRide = {
+          ...activeRide,
+          passenger: { ...(activeRide.passenger || {}), ...contact, phone: normalized.tel },
+          contact: { ...(activeRide.contact || {}), ...contact, phone: normalized.tel },
+          contactPhone: normalized.tel
+        };
         const nextUrl = action === 'whatsapp'
           ? `https://wa.me/${normalized.whatsapp}`
           : `tel:${normalized.tel}`;
         window.location.href = nextUrl;
       })
-      .catch(error => showToast(error.message || 'The customer phone number is unavailable.', 'error'));
+      .catch(() => {
+        console.warn('[ride-contact] Driver contact lookup or phone validation failed');
+        showToast('Unable to get a valid customer phone number. Please try again.', 'error');
+      });
+    return false;
+  }
+  if (action) {
+    showToast('The active ride is unavailable. Please refresh and try again.', 'error');
     return false;
   }
   if (!url) return false;
@@ -3664,13 +3669,14 @@ function openDriverRideContact(event, anchor) {
   return false;
 }
 
-function extractDriverPassengerPhone(phone) {
+function extractDriverPassengerPhone(...phones) {
   const phoneRegex = /^(?:\+?92|0092|0)?(3\d{9})$/;
-  const compactPhone = String(phone || '').replace(/[^\d+]/g, '');
-  const match = compactPhone.match(phoneRegex);
-  if (!match) return null;
-  const localDigits = match[1];
-  return { tel: `+92${localDigits}`, whatsapp: `92${localDigits}` };
+  for (const phone of phones) {
+    if (typeof phone !== 'string' && typeof phone !== 'number') continue;
+    const match = phoneRegex.exec(String(phone).trim().replace(/[\s().-]/g, ''));
+    if (match) return { tel: `+92${match[1]}`, whatsapp: `92${match[1]}` };
+  }
+  return null;
 }
 
 function showActivePanel(ride) {
@@ -3697,10 +3703,10 @@ function showActivePanel(ride) {
 
   // Dual call buttons — Phone + WhatsApp
   const contact = extractDriverPassengerPhone(
-    ride.passenger?.phone
-      || ride.passengerPhone
-      || ride.contactPhone
-      || ride.contact?.phone
+    ride.passenger?.phone,
+    ride.passengerPhone,
+    ride.contactPhone,
+    ride.contact?.phone
   );
   const callEl = document.getElementById('ap-call-passenger');
   if (callEl) {

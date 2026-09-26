@@ -3430,22 +3430,32 @@ function rideResponseForUser(ride, role) {
 
 const CUSTOMER_ACTIVE_RIDE_STATUSES = ['requested', 'accepted', 'arrived', 'in-progress'];
 
-async function findRideContact(participantId) {
+function normalizeRideContactPhone(value) {
+  if (typeof value !== 'string' && typeof value !== 'number') return '';
+  const compact = String(value).trim().replace(/[\s().-]/g, '');
+  const match = /^(?:\+?92|0092|0)?(3\d{9})$/.exec(compact);
+  return match ? `+92${match[1]}` : '';
+}
+
+async function findRideContact(participantId, role) {
   if (!participantId) return null;
   const select = 'name phone vehicleType vehicleModel vehiclePlate rating profilePhoto';
-  const partitionedContact = await User.findById(participantId)
-    .select(select)
-    .lean()
-    .catch(() => null);
-  if (partitionedContact) return partitionedContact;
-
-  // Rides created before the Customer/Driver collection split can still point
-  // at the legacy users collection. Resolve that historical reference only
-  // after the current partitioned collections have been checked.
-  return LegacyUser.findById(participantId)
-    .select(select)
-    .lean()
-    .catch(() => null);
+  const primaryModels = role === 'driver' ? [Driver] : role === 'customer' ? [Customer] : [Customer, Driver];
+  let primaryContact = null;
+  for (const model of primaryModels) {
+    const contact = await model.findById(participantId).select(select).lean();
+    if (!contact) continue;
+    primaryContact = contact;
+    const phone = normalizeRideContactPhone(contact.phone);
+    if (phone) return { ...contact, phone };
+  }
+  const legacy = await LegacyUser.findById(participantId).select(`${select} role`).lean();
+  const phone = normalizeRideContactPhone(legacy?.phone);
+  if (phone && (!role || legacy.role === role)) {
+    return { ...legacy, ...(primaryContact || {}), phone };
+  }
+  console.warn('[ride-contact] No valid participant phone in primary or legacy collection', { role });
+  return null;
 }
 
 async function rideResponseForUserWithContact(ride, role) {
@@ -3459,7 +3469,7 @@ async function rideResponseForUserWithContact(ride, role) {
   }
   if (!participantId) return payload;
 
-  const contact = await findRideContact(participantId);
+  const contact = await findRideContact(participantId, role === 'customer' ? 'driver' : 'customer');
   const participantSnapshot = participant && typeof participant === 'object' ? participant : {};
   const resolvedContact = contact || participantSnapshot;
   const contactPhone = String(resolvedContact.phone || '').trim();
@@ -7146,8 +7156,10 @@ app.get('/api/rides/:id/contact', authMiddleware, async (req, res) => {
       return res.status(403).json({ error: 'You are not authorized to view this ride contact' });
     }
     const participantId = isCustomer ? ride.driver : ride.passenger;
-    const contact = await findRideContact(participantId);
-    if (!contact) return res.status(404).json({ error: 'Ride contact is unavailable' });
+    const contact = await findRideContact(participantId, isCustomer ? 'driver' : 'customer');
+    if (!contact || !normalizeRideContactPhone(contact.phone)) {
+      return res.status(422).json({ code: 'CONTACT_PHONE_UNAVAILABLE', error: 'A valid phone number is not available for this ride participant.' });
+    }
     res.json({
       contact: {
         id: String(contact._id || participantId),
