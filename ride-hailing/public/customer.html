@@ -2148,6 +2148,7 @@ function setCustomerRideRecoveryState(recovering) {
 
 function renderRestoredCustomerRide(ride) {
   if (!ride || !CUSTOMER_ACTIVE_RIDE_STATUSES.has(ride.status)) return false;
+  ride = mergeCustomerRideContact(ride);
   activeRide = ride;
   activeLiveFare = Number(ride.fare || 0);
   activeDriverInfo = ride.driver && typeof ride.driver === 'object'
@@ -4308,56 +4309,57 @@ function showWaitingPanel(ride) {
 // ── Matched Panel (after customer selects a driver) ────────────────────────
 function openCustomerRideContact(event, anchor) {
   event?.preventDefault();
-  const url = typeof anchor === 'string' ? anchor : anchor?.getAttribute?.('href');
-  const action = typeof anchor === 'string' ? '' : anchor?.dataset?.contactAction;
+  event?.stopPropagation?.();
+  const action = anchor?.dataset?.contactAction;
   const rideId = activeRide?._id || activeRide?.id;
-  if (action && rideId) {
+  if (!rideId || !['call', 'whatsapp'].includes(action)) {
+    showToast('The active ride contact is unavailable. Please refresh and try again.', 'error');
+    return false;
+  }
+  const participantId = customerRideParticipantId(activeRide.driver) || customerRideParticipantId(activeRide.contact);
+  const launch = normalized => {
+    const url = action === 'whatsapp' ? `https://wa.me/${normalized.whatsapp}` : `tel:${normalized.tel}`;
+    if (window.ReactNativeWebView?.postMessage) {
+      window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'contact', url }));
+    } else {
+      window.location.href = url;
+    }
+  };
+  // Launch known numbers in the tap's activation context, even when offline.
+  const cached = extractCustomerDriverPhone(
+    activeRide.driver?.phone, activeRide.driver?.contactPhone,
+    activeRide.contactPhone, activeRide.contact?.phone
+  );
+  if (cached) {
+    activeRide = mergeCustomerRideContact(activeRide);
+    activeDriverInfo = activeRide.driver;
+    launch(cached);
+  } else {
     void apiCall(`/api/rides/${encodeURIComponent(rideId)}/contact`)
       .then(result => {
-        if (String(activeRide?._id || activeRide?.id) !== String(rideId)) return;
+        if (String(activeRide?._id || activeRide?.id) !== String(rideId)
+            || (customerRideParticipantId(activeRide.driver) || customerRideParticipantId(activeRide.contact)) !== participantId) return;
         const contact = result?.contact || {};
-        const normalized = extractCustomerDriverPhone(
-          contact.phone, contact.contactPhone,
-          activeRide.driver?.phone, activeRide.driver?.contactPhone,
-          activeRide.contactPhone, activeRide.contact?.phone
-        );
+        if (participantId && customerRideParticipantId(contact) !== participantId) throw new Error('The ride driver changed. Please refresh.');
+        const normalized = extractCustomerDriverPhone(contact.phone, contact.contactPhone);
         if (!normalized) throw new Error('The driver phone number is unavailable.');
-        activeRide = {
+        activeRide = mergeCustomerRideContact({
           ...activeRide,
-          driver: { ...(activeRide.driver || {}), ...contact, phone: normalized.tel },
+          driver: { ...(activeRide.driver && typeof activeRide.driver === 'object' ? activeRide.driver : {}), ...contact, phone: normalized.tel },
           contact: { ...(activeRide.contact || {}), ...contact, phone: normalized.tel },
           contactPhone: normalized.tel
-        };
+        });
         activeDriverInfo = activeRide.driver;
-        const nextUrl = action === 'whatsapp'
-          ? `https://wa.me/${normalized.whatsapp}`
-          : `tel:${normalized.tel}`;
-        const nativeShell = Boolean(window.ReactNativeWebView?.postMessage);
-        if (nativeShell) {
-          window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'contact', url: nextUrl }));
-        } else {
-          window.location.href = nextUrl;
-        }
+        updateCustomerRideContactLinks(normalized);
+        launch(normalized);
       })
-      .catch(() => {
+      .catch(error => {
+        if (String(activeRide?._id || activeRide?.id) !== String(rideId)
+            || (customerRideParticipantId(activeRide.driver) || customerRideParticipantId(activeRide.contact)) !== participantId) return;
         console.warn('[ride-contact] Customer contact lookup or phone validation failed');
-        showToast('Unable to get a valid driver phone number. Please try again.', 'error');
+        showToast(error.message || 'Unable to get a valid driver phone number. Please try again.', 'error');
       });
-    return false;
   }
-  if (action) {
-    showToast('The active ride is unavailable. Please refresh and try again.', 'error');
-    return false;
-  }
-  if (!url) return false;
-  // The native Customer shell owns tel:/WhatsApp launches. Send the target
-  // directly instead of asking the WebView to navigate first; this prevents
-  // the inline handler and the WebView navigation interceptor from racing.
-  if (window.ReactNativeWebView?.postMessage) {
-    window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'contact', url }));
-    return false;
-  }
-  window.location.href = url;
   return false;
 }
 
@@ -4369,6 +4371,48 @@ function extractCustomerDriverPhone(...phones) {
     if (match) return { tel: `+92${match[1]}`, whatsapp: `92${match[1]}` };
   }
   return null;
+}
+
+function customerRideParticipantId(participant) {
+  return String((participant && typeof participant === 'object' ? participant._id || participant.id : participant) || '');
+}
+
+function updateCustomerRideContactLinks(phone) {
+  const call = document.getElementById('call-btn');
+  const whatsapp = document.getElementById('whatsapp-btn');
+  if (call) { call.href = `tel:${phone.tel}`; call.textContent = '📞 Phone Call'; }
+  if (whatsapp) { whatsapp.href = `https://wa.me/${phone.whatsapp}`; whatsapp.textContent = '💬 WhatsApp'; }
+}
+
+function mergeCustomerRideContact(ride, previousRide = activeRide) {
+  const sameRide = Boolean(ride?._id || ride?.id)
+    && String(ride._id || ride.id) === String(previousRide?._id || previousRide?.id);
+  const previousId = customerRideParticipantId(previousRide?.driver) || customerRideParticipantId(previousRide?.contact);
+  const nextId = customerRideParticipantId(ride.driver) || customerRideParticipantId(ride.contact);
+  const sameParticipant = sameRide && previousId && (nextId === previousId || (ride.driver === undefined && ride.contact === undefined));
+  const previous = sameParticipant ? previousRide : {};
+  const driver = {
+    ...(previous.driver && typeof previous.driver === 'object' ? previous.driver : {}),
+    ...(ride.contact && typeof ride.contact === 'object' && (!nextId || customerRideParticipantId(ride.contact) === nextId) ? ride.contact : {}),
+    ...(ride.driver && typeof ride.driver === 'object' ? ride.driver : {}),
+    ...((nextId || (sameParticipant && previousId)) ? { id: nextId || previousId } : {})
+  };
+  // Keep optional profile fields only for this same identified driver.
+  if (sameParticipant) {
+    ['name', 'vehicleType', 'vehicleModel', 'vehiclePlate', 'rating', 'profilePhoto'].forEach(field => {
+      if (!driver[field] && previous.driver?.[field]) driver[field] = previous.driver[field];
+    });
+  }
+  const phone = extractCustomerDriverPhone(
+    ride.driver?.phone, ride.driver?.contactPhone, ride.contactPhone, ride.contact?.phone,
+    previous.driver?.phone, previous.driver?.contactPhone, previous.contactPhone, previous.contact?.phone
+  );
+  return {
+    ...previousRide, ...ride,
+    driver: Object.keys(driver).length || phone ? { ...driver, phone: phone?.tel || '', contactPhone: phone?.tel || '' } : ride.driver,
+    contact: ride.contact || previous.contact || null,
+    contactPhone: phone?.tel || ''
+  };
 }
 
 function showMatchedPanel(driver = {}, agreedFare, rideStatus = activeRide?.status || 'accepted') {
@@ -4412,8 +4456,8 @@ function showMatchedPanel(driver = {}, agreedFare, rideStatus = activeRide?.stat
     activeRide?.contactPhone,
     activeRide?.contact?.phone
   );
-  const contactHtml = `<a id="call-btn" class="btn-call" href="${contact ? `tel:${contact.tel}` : '#'}" data-contact-action="call" onclick="return openCustomerRideContact(event, this)">📞 Phone Call${contact ? '' : ' · load number'}</a>
-        <a id="whatsapp-btn" class="btn-whatsapp" href="${contact ? `https://wa.me/${contact.whatsapp}` : '#'}" data-contact-action="whatsapp" onclick="return openCustomerRideContact(event, this)">💬 WhatsApp${contact ? '' : ' · load number'}</a>`;
+  const contactHtml = `<a id="call-btn" class="btn-call" ${contact ? `href="tel:${contact.tel}"` : 'role="button" tabindex="0"'} data-contact-action="call" onclick="return openCustomerRideContact(event, this)" onkeydown="if(event.key==='Enter'||event.key===' ') return openCustomerRideContact(event, this)">📞 Phone Call${contact ? '' : ' · load number'}</a>
+        <a id="whatsapp-btn" class="btn-whatsapp" ${contact ? `href="https://wa.me/${contact.whatsapp}"` : 'role="button" tabindex="0"'} data-contact-action="whatsapp" onclick="return openCustomerRideContact(event, this)" onkeydown="if(event.key==='Enter'||event.key===' ') return openCustomerRideContact(event, this)">💬 WhatsApp${contact ? '' : ' · load number'}</a>`;
   document.getElementById('ar-contact-btns').innerHTML = contactHtml;
   document.getElementById('ar-contact-btns').style.display = 'flex';
   updateCustomerCancellationControl(rideStatus);
@@ -4578,11 +4622,11 @@ async function acceptDriver(driverId, agreedFare) {
   if (!activeRide) return;
   try {
     const ride = await apiCall(`/api/rides/${activeRide._id}/accept-driver`, 'PATCH', { driverId });
-    activeRide = ride;
+    activeRide = mergeCustomerRideContact(ride);
     const offer = driverOffers.find(o => o.driverId === driverId);
-    if (ride.driver && typeof ride.driver === 'object') {
-      activeDriverInfo = ride.driver;
-      showMatchedPanel(ride.driver, ride.fare);
+    if (activeRide.driver && typeof activeRide.driver === 'object') {
+      activeDriverInfo = activeRide.driver;
+      showMatchedPanel(activeRide.driver, ride.fare);
     } else if (offer) {
       showMatchedPanel({
         name: offer.driverName, vehicleModel: offer.vehicleModel,
@@ -4676,31 +4720,7 @@ function customerOffersFromRide(ride) {
 function applyCustomerRideSnapshot(ride) {
   if (!ride || !activeRide || String(ride._id) !== String(activeRide._id)) return false;
   const previousRide = activeRide;
-  // Preserve locally-rendered profile data when a test/degraded response
-  // omits an optional populated reference, while taking status, offers, fare,
-  // and GPS from the server snapshot.
-  const mergedDriver = ride.driver && typeof ride.driver === 'object'
-    ? { ...(previousRide.driver || {}), ...ride.driver }
-    : (ride.driver || previousRide.driver || (ride.contact ? { ...ride.contact } : null));
-  if (previousRide.driver && mergedDriver) {
-    ['name', 'phone', 'vehicleType', 'vehicleModel', 'vehiclePlate', 'rating', 'profilePhoto']
-      .forEach(field => {
-        if (!mergedDriver[field] && previousRide.driver[field]) mergedDriver[field] = previousRide.driver[field];
-      });
-  }
-  activeRide = {
-    ...previousRide,
-    ...ride,
-    driver: mergedDriver
-  };
-  if (activeRide.driver && typeof activeRide.driver === 'object') {
-    activeRide.driver.phone = activeRide.driver.phone
-      || ride.contactPhone
-      || ride.contact?.phone
-      || previousRide.contactPhone
-      || previousRide.contact?.phone
-      || '';
-  }
+  activeRide = mergeCustomerRideContact(ride);
   activeLiveFare = ride.fare ?? previousRide.fare;
   if (ride.status === 'requested') {
     driverOffers = customerOffersFromRide(ride);
@@ -4872,16 +4892,14 @@ function connectToRideRoom(rideId) {
   // Customer selected a driver — full driver profile arrives here
   socket.on('ride:accepted', ({ driver, rideId: acceptedRideId }) => {
     if (activeRide && String(activeRide._id) === String(acceptedRideId)) {
-      activeDriverInfo = {
-        ...(activeRide.driver && typeof activeRide.driver === 'object' ? activeRide.driver : {}),
-        ...(driver && typeof driver === 'object' ? driver : {})
-      };
+      activeRide = mergeCustomerRideContact({ ...activeRide, driver, contact: null, contactPhone: '' });
+      activeDriverInfo = activeRide.driver;
       activeRide.status = 'accepted';
       activeRide.pickupReachedAt = null;
       pendingVerificationPin = null;
       hideRidePin();
-      showMatchedPanel(driver, activeRide.fare);
-      showToast(`${driver.name} is on the way!`, 'success');
+      showMatchedPanel(activeDriverInfo || {}, activeRide.fare);
+      showToast(`${activeDriverInfo?.name || 'Your driver'} is on the way!`, 'success');
     }
   });
 

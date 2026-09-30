@@ -1,7 +1,7 @@
-// MyRide Service Worker — v37
+// MyRide Service Worker — v38
 // Strategy: network-first for API/socket, cache-first for static assets.
 
-const CACHE_NAME = 'myride-v37';
+const CACHE_NAME = 'myride-v38';
 
 // Static assets worth caching for fast repeat loads
 const PRECACHE = [

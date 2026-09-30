@@ -7,18 +7,24 @@ test.describe('document upload source controls', () => {
   test('Customer exposes camera and gallery actions for both ID sides', async ({ page }) => {
     await page.goto('/customer');
 
-    const front = page.locator('#r-cnic-front');
-    const back = page.locator('#r-cnic-back');
+    const front = page.locator('#r-cnic-front-camera');
+    const back = page.locator('#r-cnic-back-camera');
     await expect(page.locator('#register-form .document-upload-actions').nth(0).locator('.document-source-btn', { hasText: 'Take Photo' })).toHaveCount(1);
     await expect(page.locator('#register-form .document-upload-actions').nth(1).locator('.document-source-btn', { hasText: 'Take Photo' })).toHaveCount(1);
     await expect(page.locator('#register-form .document-upload-actions').nth(0).locator('.document-source-btn', { hasText: 'Choose from Gallery' })).toHaveCount(1);
     await expect(page.locator('#register-form .document-upload-actions').nth(1).locator('.document-source-btn', { hasText: 'Choose from Gallery' })).toHaveCount(1);
     await expect(page.locator('#r-student-id-image')).toHaveCount(1);
 
-    await page.evaluate(() => openDocumentSource('r-cnic-front', 'camera'));
+    await page.evaluate(() => {
+      document.querySelectorAll('.document-file-input').forEach(input => {
+        input.showPicker = () => {};
+      });
+      openDocumentSource('r-cnic-front', 'camera');
+    });
     await expect(front).toHaveAttribute('capture', 'environment');
     await page.evaluate(() => openDocumentSource('r-cnic-front', 'gallery'));
-    await expect(front).not.toHaveAttribute('capture');
+    await expect(page.locator('#r-cnic-front-gallery')).not.toHaveAttribute('capture');
+    await expect(front).toHaveAttribute('capture', 'environment');
 
     await page.evaluate(() => openDocumentSource('r-cnic-back', 'camera'));
     await expect(back).toHaveAttribute('capture', 'environment');
@@ -35,7 +41,7 @@ test.describe('document upload source controls', () => {
     await expect(studentFields).toBeVisible();
     await expect(page.locator('#r-student-id')).toBeVisible();
     await expect(page.locator('#r-student-institution')).toBeVisible();
-    await expect(page.locator('#r-student-id-image')).toBeVisible();
+    await expect(page.locator('#student-registration-fields .document-upload-actions')).toBeVisible();
     await expect(page.locator('#student-fare-breakdown')).toHaveCount(1);
     await studentToggle.uncheck();
     await expect(studentFields).toBeHidden();
@@ -77,15 +83,21 @@ test.describe('document upload source controls', () => {
   test('Driver exposes camera and gallery actions for registration and replacement documents', async ({ page }) => {
     await page.goto('/driver');
 
-    const profile = page.locator('#r-profile-photo');
-    const vehicle = page.locator('#cv-vehicle-reg');
+    const profile = page.locator('#r-profile-photo-camera');
+    const vehicle = page.locator('#cv-vehicle-reg-camera');
     await expect(page.locator('.document-source-btn', { hasText: 'Take Photo' })).toHaveCount(6);
     await expect(page.locator('.document-source-btn', { hasText: 'Choose from Gallery' })).toHaveCount(6);
 
-    await page.evaluate(() => openDocumentSource('r-profile-photo', 'camera', 'user'));
+    await page.evaluate(() => {
+      document.querySelectorAll('.document-file-input').forEach(input => {
+        input.showPicker = () => {};
+      });
+      openDocumentSource('r-profile-photo', 'camera', 'user');
+    });
     await expect(profile).toHaveAttribute('capture', 'user');
     await page.evaluate(() => openDocumentSource('r-profile-photo', 'gallery'));
-    await expect(profile).not.toHaveAttribute('capture');
+    await expect(page.locator('#r-profile-photo-gallery')).not.toHaveAttribute('capture');
+    await expect(profile).toHaveAttribute('capture', 'user');
 
     await page.evaluate(() => openDocumentSource('cv-vehicle-reg', 'camera'));
     await expect(vehicle).toHaveAttribute('capture', 'environment');

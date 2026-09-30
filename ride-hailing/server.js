@@ -3472,7 +3472,7 @@ async function rideResponseForUserWithContact(ride, role) {
   const contact = await findRideContact(participantId, role === 'customer' ? 'driver' : 'customer');
   const participantSnapshot = participant && typeof participant === 'object' ? participant : {};
   const resolvedContact = contact || participantSnapshot;
-  const contactPhone = String(resolvedContact.phone || '').trim();
+  const contactPhone = normalizeRideContactPhone(resolvedContact.phone);
   if (!resolvedContact || (!participantSnapshot && !contact)) return payload;
 
   payload[field] = {
@@ -4331,13 +4331,39 @@ function emitRideLifecycle(ride, event, detail = {}, { notifyVehicleDrivers = fa
   return payload;
 }
 
-function emitRideAccepted(ride, verificationPin, driver) {
+async function emitRideAccepted(ride, verificationPin, driver) {
   // The PIN is deliberately not part of acceptance. It is released only by
   // emitRidePickupReached after the server verifies pickup proximity.
-  emitRideLifecycle(ride, 'ride:accepted', { driver });
+  // Population and the User facade can yield a blank primary phone while the
+  // contact resolver can still recover a valid legacy phone. Resolve both
+  // participants before emitting, including their IDs when population is null.
+  const [customerSnapshot, driverSnapshot] = await Promise.all([
+    rideResponseForUserWithContact(ride, 'customer'),
+    rideResponseForUserWithContact(ride, 'driver')
+  ]);
+  const resolvedDriver = {
+    ...driver,
+    ...(customerSnapshot.driver || {}),
+    id: String(customerSnapshot.driver?._id || customerSnapshot.driver?.id || driver.id),
+    phone: normalizeRideContactPhone(customerSnapshot.driver?.phone || driver.phone)
+  };
+  const participantRide = {
+    ...driverSnapshot,
+    driver: resolvedDriver,
+    passenger: driverSnapshot.passenger
+  };
+  // A shared event has two audiences: do not send a role-specific contact
+  // alias that would point one participant at their own phone.
+  delete participantRide.contact;
+  delete participantRide.contactPhone;
+  emitRideLifecycle(participantRide, 'ride:accepted', {
+    driver: resolvedDriver,
+    passenger: participantRide.passenger,
+    ride: participantRide
+  });
   // This intentionally reaches every eligible driver, including drivers who
   // never joined the ride room because they had only received ride:new.
-  emitRideLifecycle(ride, 'ride:taken', {}, {
+  emitRideLifecycle(participantRide, 'ride:taken', {}, {
     notifyVehicleDrivers: true,
     notifyDriverIds: ride.notifiedDriverIds || []
   });
@@ -6146,7 +6172,7 @@ async function dispatchAdvanceBooking(booking) {
     const driver = await User.findById(assignedDriverId)
       .select('name phone vehicleType vehicleModel vehiclePlate rating profilePhoto')
       .lean();
-    emitRideAccepted(ride, verificationPin, {
+    await emitRideAccepted(ride, verificationPin, {
       id: String(assignedDriverId),
       name: driver?.name || '',
       phone: driver?.phone || '',
@@ -7135,8 +7161,13 @@ app.get('/api/rides/:id', authMiddleware, async (req, res) => {
     const ride = await Ride.findById(req.params.id)
       .populate('passenger driver', 'name phone vehicleType rating currentLocation');
     if (!ride) return res.status(404).json({ error: 'Ride not found' });
-    const isPassenger = String(ride.passenger?._id || ride.passenger) === String(req.user.id);
-    const isDriver = String(ride.driver?._id || ride.driver) === String(req.user.id);
+    // A legacy-only participant may populate to null. Authorize against the
+    // stored references, not the missing populated account snapshot.
+    const rawParticipants = !ride.passenger || !ride.driver
+      ? await Ride.findById(ride._id).select('passenger driver').lean()
+      : null;
+    const isPassenger = String(ride.passenger?._id || ride.passenger || rawParticipants?.passenger) === String(req.user.id);
+    const isDriver = String(ride.driver?._id || ride.driver || rawParticipants?.driver) === String(req.user.id);
     if (!isPassenger && !isDriver) {
       return res.status(403).json({ error: 'You are not authorized to view this ride' });
     }
@@ -7229,7 +7260,7 @@ app.patch('/api/rides/:id/accept', authMiddleware, async (req, res) => {
     await ride.save();
 
     // Fetch full driver profile for the acceptance payload
-    emitRideAccepted(ride, verificationPin, {
+    await emitRideAccepted(ride, verificationPin, {
       id:           req.user.id,
       name:         driverUser.name,
       phone:        driverUser.phone || '',
@@ -7620,7 +7651,7 @@ app.patch('/api/rides/:id/accept-driver', authMiddleware, customerOnly, customer
       );
       return res.status(409).json({ error: 'Selected Driver is no longer available' });
     }
-    emitRideAccepted(ride, verificationPin, {
+    await emitRideAccepted(ride, verificationPin, {
       id:           String(driverId),
       name:         driverUser.name,
       phone:        driverUser.phone || '',

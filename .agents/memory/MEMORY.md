@@ -22,6 +22,7 @@
 - [Identity image preflight](identity-image-preflight.md) — validate image bytes before OCR so corrupt uploads return clean verification errors without late worker failures.
 - [Draggable sheet geometry](draggable-sheet-geometry.md) — collapsed panels need their scroll height measured before a drag starts to avoid a zero travel range.
 - [Android WebView APK builds](android-webview-apk-build.md) — use standard JDK 17 for Android SDK 35 Gradle builds; GraalVM can fail during jlink system-module transforms.
+- [Native camera chooser](native-camera-chooser.md) — capture intent routing and file-permission callbacks require native fixes, not HTML-only changes.
 - [Ride cancellation events](ride-cancellation-events.md) — fan out a dedicated cancellation event to pending and assigned Drivers; make client cleanup idempotent with the generic status event.
 - [Driver alert recovery race](driver-alert-recovery-race.md) — queue a second rehydration pass when reconnect status refresh overlaps the initial socket recovery read.
 - [Map rendering and GPS follow](map-rendering-and-gps-follow.md) — use Mapbox Streets; active Driver rides follow and rotate around the blue marker until a deliberate map gesture pauses follow.

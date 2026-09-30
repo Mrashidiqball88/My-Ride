@@ -5,6 +5,12 @@ description: Contact actions must survive realtime status changes and active-rid
 
 Customer and Driver contact actions must be rendered from the authoritative assigned ride snapshot for every non-terminal active status, including accepted, arrived, and in-progress.
 
+Assigned-ride recovery must not depend on new-ride availability or a successful Socket.IO connection.
+
+**Why:** A real browser showed no Driver contact controls after reload despite a successful active-ride API response, because boot waited for socket connectivity.
+
+**How to apply:** Recover assigned trips over authenticated HTTP during boot and reconnect even while offline for new requests. Scope cached phone retention to both ride and participant identity; never carry a previous participant's phone into a reassigned ride.
+
 **Why:** A client that only renders contacts during the initial acceptance event loses the controls after a refresh, reconnect, or direct restoration of an in-progress ride.
 
 **How to apply:** Populate the opposing party's phone on the active ride response, normalize it once for both `tel:` and `https://wa.me/` targets, and rebuild the visible contact controls whenever an active ride snapshot or lifecycle status arrives.

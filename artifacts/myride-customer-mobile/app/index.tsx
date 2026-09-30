@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
+  Alert,
   AppState,
   BackHandler,
   Linking,
@@ -14,6 +15,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { WebView, WebViewNavigation } from 'react-native-webview';
 import { Ionicons } from '@expo/vector-icons';
 import { useColors } from '@/hooks/useColors';
+import { contactBridgeScript, normalizeContactUrl } from '@/constants/contact-bridge';
 
 const CUSTOMER_PATH = '/customer';
 
@@ -37,6 +39,7 @@ export default function CustomerWebViewScreen() {
   const colors = useColors();
   const insets = useSafeAreaInsets();
   const webViewRef = useRef<WebView>(null);
+  const openingExternal = useRef(false);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [canGoBack, setCanGoBack] = useState(false);
@@ -47,10 +50,23 @@ export default function CustomerWebViewScreen() {
   const bottomInset = insets.bottom + (Platform.OS === 'web' ? 34 : 0);
 
   const openExternalUrl = useCallback(async (url: string) => {
+    const contactUrl = normalizeContactUrl(url);
+    // Never delegate arbitrary schemes, invalid phone strings, or JS to the OS.
+    if (!contactUrl && !/^https?:\/\//i.test(url)) {
+      Alert.alert('Link unavailable', 'A valid contact link is unavailable.');
+      return;
+    }
+    if (!contactUrl && /^https:\/\/wa\.me\//i.test(url)) {
+      Alert.alert('Contact unavailable', 'A valid driver phone number is unavailable.');
+      return;
+    }
+    if (openingExternal.current) return;
+    openingExternal.current = true;
+    const target = contactUrl || url;
     try {
-      await Linking.openURL(url);
+      await Linking.openURL(target);
     } catch {
-      const whatsappMatch = /^whatsapp:\/\/send\?phone=([0-9]+)$/i.exec(url);
+      const whatsappMatch = /^whatsapp:\/\/send\?phone=([0-9]+)$/i.exec(target);
       if (whatsappMatch) {
         try {
           await Linking.openURL(`https://wa.me/${whatsappMatch[1]}`);
@@ -59,7 +75,9 @@ export default function CustomerWebViewScreen() {
           // Fall through to the visible native error below.
         }
       }
-      setLoadError('This link could not be opened on your device.');
+      Alert.alert('Link unavailable', 'This link could not be opened on your device.');
+    } finally {
+      openingExternal.current = false;
     }
   }, []);
 
@@ -67,11 +85,11 @@ export default function CustomerWebViewScreen() {
     try {
       const message = JSON.parse(event.nativeEvent.data);
       const url = String(message?.url || '');
-      if (
-        /^tel:\+?[0-9]+$/i.test(url)
-        || /^whatsapp:\/\/send\?phone=[0-9]+$/i.test(url)
-        || /^https:\/\/wa\.me\/[0-9]+$/i.test(url)
-      ) {
+      if (message?.type === 'contact') {
+        if (!normalizeContactUrl(url)) {
+          Alert.alert('Contact unavailable', 'A valid driver phone number is unavailable.');
+          return;
+        }
         void openExternalUrl(url);
       }
     } catch {
@@ -96,7 +114,7 @@ export default function CustomerWebViewScreen() {
       return false;
     }
     if (requestedOrigin === allowedOrigin) return true;
-    if (request.url !== 'about:blank' && !request.url.startsWith('javascript:')) {
+    if (/^https?:\/\//i.test(request.url)) {
       void openExternalUrl(request.url);
     }
     return false;
@@ -158,29 +176,17 @@ export default function CustomerWebViewScreen() {
         ref={webViewRef}
         source={{ uri: customerUrl }}
         style={styles.webView}
-        originWhitelist={['https://*', 'http://*']}
+        // All schemes reach our validator instead of WebView automatically
+        // forwarding non-whitelisted schemes straight to the operating system.
+        originWhitelist={['*']}
         javaScriptEnabled
         domStorageEnabled
         sharedCookiesEnabled
         thirdPartyCookiesEnabled
         allowsBackForwardNavigationGestures
         setSupportMultipleWindows={false}
-        injectedJavaScript={`
-          (function() {
-            if (window.__myRideContactBridgeInstalled) return true;
-            window.__myRideContactBridgeInstalled = true;
-            document.addEventListener('click', function(event) {
-              var anchor = event.target && event.target.closest ? event.target.closest('a') : null;
-              var url = anchor && anchor.href ? anchor.href : '';
-              if (anchor && anchor.dataset && anchor.dataset.contactAction) return;
-               if (/^tel:\\+?[0-9]+$/i.test(url) || /^whatsapp:\\/\\/send\\?phone=[0-9]+$/i.test(url) || /^https:\\/\\/wa\\.me\\/[0-9]+$/i.test(url)) {
-                event.preventDefault();
-                window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'contact', url: url }));
-              }
-            }, true);
-          })();
-          true;
-        `}
+        injectedJavaScriptBeforeContentLoaded={contactBridgeScript}
+        injectedJavaScript={contactBridgeScript}
         onShouldStartLoadWithRequest={allowNavigation}
         onMessage={handleWebViewMessage}
         onNavigationStateChange={state => setCanGoBack(state.canGoBack)}

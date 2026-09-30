@@ -5,6 +5,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useColors } from '@/hooks/useColors';
 import { AdvanceBooking, DriverLocation, DriverPayment, DriverWalletSummary, RideRequest, useDriverRuntime } from '@/context/DriverRuntime';
 import { DriverMapboxWebView } from '@/components/DriverMapboxWebView';
+import { passengerContactUrls } from '@/lib/ride-contact';
 
 const RTL_TEXT_PATTERN = /[\u0590-\u08ff]/;
 
@@ -43,19 +44,6 @@ function smoothBearing(previous: number | null, next: number) {
   if (previous === null) return next;
   const delta = ((next - previous + 540) % 360) - 180;
   return (previous + delta * 0.35 + 360) % 360;
-}
-
-function passengerContactUrls(phone?: string | null) {
-  let digits = String(phone || '').replace(/\D/g, '');
-  if (digits.startsWith('00')) digits = digits.slice(2);
-  if (digits.startsWith('92')) digits = digits.slice(2);
-  digits = digits.replace(/^0+/, '');
-  if (!digits) return null;
-  const normalizedDigits = `92${digits}`;
-  return {
-    tel: `+${normalizedDigits}`,
-    whatsapp: normalizedDigits,
-  };
 }
 
 function DriverNavigationMap({ ride, driverLocation, colors }: {
@@ -100,7 +88,7 @@ function ActiveRideSheet({
   const status: ActiveRideStatus = ride.status === 'arrived' || ride.status === 'in-progress'
     ? ride.status
     : 'accepted';
-  const passengerName = ride.passenger?.name || 'Passenger';
+  const passengerName = (typeof ride.passenger === 'object' ? ride.passenger?.name : '') || 'Passenger';
   const [contactLoading, setContactLoading] = useState(false);
 
   const snapTo = (next: SheetState) => {
@@ -409,7 +397,7 @@ function DriverHistoryPanel({
               </View>
               <View style={styles.historyMeta}>
                 <Text style={[styles.historyStatus, { color: status === 'cancelled' ? colors.destructive : colors.primary, backgroundColor: colors.secondary }]}>{driverHistoryStatus(status)}</Text>
-                <Text numberOfLines={1} style={[styles.historyPassenger, { color: colors.mutedForeground }]}>{ride.passenger?.name || 'Customer'}</Text>
+                <Text numberOfLines={1} style={[styles.historyPassenger, { color: colors.mutedForeground }]}>{(typeof ride.passenger === 'object' ? ride.passenger?.name : '') || 'Customer'}</Text>
                 <Text style={[styles.historyDate, { color: colors.mutedForeground }]}>{formatDriverDateTime(ride.createdAt)}</Text>
                 <Text style={[styles.historyFare, { color: colors.primary }]}>Rs {fare.toLocaleString('en-PK', { maximumFractionDigits: 0 })}</Text>
               </View>
@@ -632,13 +620,16 @@ function DriverHome() {
   const [, setClock] = useState(Date.now());
   const isWeb = Platform.OS === 'web';
   const report = (message: string) => Alert.alert('My Ride Driver', message);
+  const contactOpening = useRef(false);
   const openActiveRideContact = async (action: 'Phone Call' | 'WhatsApp') => {
+    if (contactOpening.current) return;
     const rideId = runtime.activeRide?.id || runtime.activeRide?._id;
     if (!rideId) {
       Alert.alert(`${action} unavailable`, 'The active ride is no longer available.');
       return;
     }
 
+    contactOpening.current = true;
     try {
       const contact = await runtime.fetchRideContact(String(rideId));
       const normalized = passengerContactUrls(contact.phone);
@@ -659,6 +650,8 @@ function DriverHome() {
         `${action} unavailable`,
         error instanceof Error ? error.message : `Unable to open ${action.toLowerCase()}.`
       );
+    } finally {
+      contactOpening.current = false;
     }
   };
   const longRangeVehicle = runtime.longRange?.vehicleType || runtime.user?.vehicleType || 'Car Mini Non-AC';

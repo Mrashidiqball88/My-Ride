@@ -5,6 +5,7 @@ import * as Location from 'expo-location';
 import * as Notifications from 'expo-notifications';
 import * as SecureStore from 'expo-secure-store';
 import Constants from 'expo-constants';
+import { mergeRideContact, participantId, passengerContactUrls, rideContactPhone, ridePassengerId } from '@/lib/ride-contact';
 import { io, Socket } from 'socket.io-client';
 import {
   BACKGROUND_LOCATION_TASK,
@@ -69,10 +70,10 @@ export type RideRequest = {
   isLongRange?: boolean;
   acceptanceEligibility?: RideAcceptanceEligibility;
   status?: 'requested' | 'accepted' | 'arrived' | 'in-progress' | 'completed' | 'cancelled';
-  passenger?: { id?: string; name?: string; phone?: string };
+  passenger?: string | { id?: string; _id?: string; name?: string; phone?: string } | null;
   passengerPhone?: string;
   contactPhone?: string;
-  contact?: { id?: string; name?: string; phone?: string };
+  contact?: { id?: string; _id?: string; name?: string; phone?: string } | null;
   verificationPin?: string | null;
   broadcastDurationSeconds?: number;
   broadcastExpiresAt?: string | Date;
@@ -83,6 +84,7 @@ export type RideRequest = {
 
 export type RideContact = {
   id?: string;
+  _id?: string;
   name?: string;
   phone?: string;
   vehicleType?: string;
@@ -294,38 +296,6 @@ function normalizeAdvanceBooking(booking: AdvanceBooking & { _id?: string }): Ad
   };
 }
 
-function rideContactPhone(ride: RideRequest | null | undefined) {
-  return String(
-    ride?.passenger?.phone
-    || ride?.passengerPhone
-    || ride?.contactPhone
-    || ride?.contact?.phone
-    || ''
-  ).trim();
-}
-
-function mergeRideContact(ride: RideRequest, previousRide?: RideRequest | null): RideRequest {
-  const phone = rideContactPhone(ride) || rideContactPhone(previousRide);
-  const previousPassenger = previousRide?.passenger;
-  const ridePassenger = ride.passenger && typeof ride.passenger === 'object'
-    ? ride.passenger
-    : null;
-  const passenger = phone
-    ? {
-        ...(previousPassenger || {}),
-        ...(ridePassenger || {}),
-        phone,
-      }
-    : ridePassenger || previousPassenger || (ride.contact ? { ...ride.contact } : ride.passenger);
-
-  return {
-    ...(previousRide || {}),
-    ...ride,
-    ...(passenger ? { passenger } : {}),
-    ...(phone ? { contactPhone: phone } : {}),
-  };
-}
-
 function isRideOfferLive(ride: RideRequest | null | undefined) {
   const expiresAt = new Date(ride?.broadcastExpiresAt || ride?.offerExpiresAt || 0).getTime();
   return Boolean(ride?.id) && Number.isFinite(expiresAt) && expiresAt > Date.now();
@@ -340,7 +310,7 @@ export function DriverRuntimeProvider({ children }: { children: ReactNode }) {
   const [sentOffer, setSentOffer] = useState<RideRequest | null>(null);
   const [acceptingRide, setAcceptingRide] = useState(false);
   const [updatingRideStatus, setUpdatingRideStatus] = useState(false);
-  const [activeRide, setActiveRide] = useState<RideRequest | null>(null);
+  const [activeRide, setActiveRideState] = useState<RideRequest | null>(null);
   const [activeRideId, setActiveRideId] = useState<string | null>(null);
   const [driverLocation, setDriverLocation] = useState<DriverLocation | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -373,6 +343,8 @@ export function DriverRuntimeProvider({ children }: { children: ReactNode }) {
   const userRef = useRef<DriverUser | null>(null);
   const isOnlineRef = useRef(false);
   const activeRideIdRef = useRef<string | null>(null);
+  const activeRideRef = useRef<RideRequest | null>(null);
+  const activeRideParticipantVersionRef = useRef(0);
   const pendingRideRef = useRef<RideRequest | null>(null);
   const sentOfferRef = useRef<RideRequest | null>(null);
   const advanceBookingsEventVersion = useRef(0);
@@ -393,6 +365,17 @@ export function DriverRuntimeProvider({ children }: { children: ReactNode }) {
   useEffect(() => { pendingRideRef.current = pendingRide; }, [pendingRide]);
   useEffect(() => { sentOfferRef.current = sentOffer; }, [sentOffer]);
   useEffect(() => { activeRideIdRef.current = activeRideId; }, [activeRideId]);
+  // Update the ref before scheduling a render so a pending contact response
+  // cannot observe a removed/reassigned passenger until React runs an effect.
+  const setActiveRide = useCallback((next: RideRequest | null | ((current: RideRequest | null) => RideRequest | null)) => {
+    const resolved = typeof next === 'function' ? next(activeRideRef.current) : next;
+    if (resolved?.id !== activeRideRef.current?.id
+      || ridePassengerId(resolved) !== ridePassengerId(activeRideRef.current)) {
+      activeRideParticipantVersionRef.current++;
+    }
+    activeRideRef.current = resolved;
+    setActiveRideState(resolved);
+  }, []);
 
   const clearRideAlert = useCallback((rideId: string) => {
     alertedRideIds.current.delete(rideId);
@@ -442,17 +425,20 @@ export function DriverRuntimeProvider({ children }: { children: ReactNode }) {
         ? normalizeRideRequest(response.ride as RideRequest & { _id?: string })
         : null;
       if (!ride) {
+        activeRideIdRef.current = null;
         setActiveRide(null);
         setActiveRideId(null);
         await SecureStore.deleteItemAsync(ACTIVE_RIDE_KEY);
         return false;
       }
       if (ride?.id && locallyClearedRideIds.current.has(ride.id)) {
+        activeRideIdRef.current = null;
         setActiveRide(null);
         setActiveRideId(null);
         return false;
       }
-      setActiveRide(mergeRideContact(ride));
+      setActiveRide(current => mergeRideContact(ride, current));
+      activeRideIdRef.current = ride.id || null;
       setActiveRideId(ride.id || null);
       if (ride.id) {
         await SecureStore.setItemAsync(ACTIVE_RIDE_KEY, ride.id);
@@ -470,29 +456,52 @@ export function DriverRuntimeProvider({ children }: { children: ReactNode }) {
     if (!tokenRef.current) throw new Error('Sign in is required.');
     const normalizedRideId = String(rideId || '').trim();
     if (!normalizedRideId) throw new Error('Active ride is unavailable.');
+    if (activeRideIdRef.current !== normalizedRideId) throw new Error('Active ride is no longer available.');
+    const token = tokenRef.current;
+    const session = sessionRef.current;
+    const clearGeneration = emergencyClearGeneration.current;
+    const requestedPassengerId = ridePassengerId(activeRideRef.current);
+    const participantVersion = activeRideParticipantVersionRef.current;
+    if (activeRideRef.current?.id !== normalizedRideId || !requestedPassengerId) {
+      throw new Error('Passenger identity is unavailable.');
+    }
 
     const result = await api(
       `/api/rides/${encodeURIComponent(normalizedRideId)}/contact`,
       tokenRef.current,
       sessionRef.current || undefined
     );
+    if (activeRideIdRef.current !== normalizedRideId
+      || tokenRef.current !== token || sessionRef.current !== session
+      || emergencyClearGeneration.current !== clearGeneration) {
+      throw new Error('Active ride is no longer available.');
+    }
     const contact = result?.contact as RideContact | undefined;
-    if (!contact?.phone) throw new Error('Passenger contact is unavailable.');
+    const cachedRide = activeRideRef.current?.id === normalizedRideId ? activeRideRef.current : null;
+    if (ridePassengerId(cachedRide) !== requestedPassengerId
+      || activeRideParticipantVersionRef.current !== participantVersion) {
+      throw new Error('Ride passenger has changed. Please try again.');
+    }
+    if (participantId(contact) !== requestedPassengerId) {
+      throw new Error('Passenger contact identity does not match the active ride.');
+    }
+    const phone = passengerContactUrls(contact?.phone)?.tel || rideContactPhone(cachedRide);
+    if (!phone) throw new Error('Passenger contact is unavailable.');
+    const normalizedContact = { ...contact, phone };
 
-    setActiveRide(current => current?.id === normalizedRideId
+    setActiveRide(current => current?.id === normalizedRideId && ridePassengerId(current) === requestedPassengerId
       ? mergeRideContact({
           ...current,
           passenger: {
-            ...(current.passenger || {}),
-            ...contact,
-            phone: contact.phone,
+            ...(typeof current.passenger === 'object' ? current.passenger : {}),
+            ...normalizedContact,
           },
-          contact,
-          contactPhone: contact.phone,
+          contact: normalizedContact,
+          contactPhone: phone,
         }, current)
       : current);
 
-    return contact;
+    return normalizedContact;
   }, []);
 
   const handleRideOffer = useCallback((ride: RideRequest, { fromPush = false } = {}) => {
@@ -784,6 +793,7 @@ export function DriverRuntimeProvider({ children }: { children: ReactNode }) {
         return;
       }
       if (status === 'completed') {
+        if (activeRideIdRef.current === rideId) activeRideIdRef.current = null;
         setActiveRideId(current => {
           if (current === rideId) {
             void SecureStore.deleteItemAsync(ACTIVE_RIDE_KEY);
@@ -1454,7 +1464,8 @@ export function DriverRuntimeProvider({ children }: { children: ReactNode }) {
       sentOfferRef.current = null;
       setSentOffer(null);
       setPendingRide(null);
-      setActiveRide(ride);
+      setActiveRide(current => mergeRideContact(ride, current?.id === ride.id ? current : offer));
+      activeRideIdRef.current = ride.id;
       setActiveRideId(ride.id);
       await SecureStore.setItemAsync(ACTIVE_RIDE_KEY, ride.id);
     } catch (error) {
