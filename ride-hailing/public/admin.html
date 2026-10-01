@@ -1276,19 +1276,20 @@ button,input,select,textarea{
         <div class="sec-hdr">
           <div>
             <h2>🗓️ Advance / Scheduled Bookings</h2>
-            <p class="section-intro" style="margin:.35rem 0 0">Review future rides, assigned parties, and reminder delivery. Automatic reminders run once during the 45-minute pre-pickup window.</p>
+            <p class="section-intro" style="margin:.35rem 0 0">Manually assign future rides to available online Drivers matching the booking. Automatic reminders run once during the 45-minute pre-pickup window.</p>
           </div>
           <div class="sec-hdr-actions">
             <div class="filter-tabs">
-              <div class="ftab active" onclick="loadAdvanceBookings('all');setFTab(this)">All</div>
-              <div class="ftab" onclick="loadAdvanceBookings('pending');setFTab(this)">Scheduled</div>
-              <div class="ftab" onclick="loadAdvanceBookings('assigned');setFTab(this)">Assigned</div>
-              <div class="ftab" onclick="loadAdvanceBookings('converted');setFTab(this)">Converted</div>
-              <div class="ftab" onclick="loadAdvanceBookings('cancelled');setFTab(this)">Cancelled</div>
+              <div class="ftab active" data-advance-status="all" data-testid="filter-advance-all" onclick="loadAdvanceBookings('all');setFTab(this)">All</div>
+              <div class="ftab" data-advance-status="pending" data-testid="filter-advance-pending" onclick="loadAdvanceBookings('pending');setFTab(this)">Scheduled</div>
+              <div class="ftab" data-advance-status="assigned" data-testid="filter-advance-assigned" onclick="loadAdvanceBookings('assigned');setFTab(this)">Assigned</div>
+              <div class="ftab" data-advance-status="converted" data-testid="filter-advance-converted" onclick="loadAdvanceBookings('converted');setFTab(this)">Converted</div>
+              <div class="ftab" data-advance-status="cancelled" data-testid="filter-advance-cancelled" onclick="loadAdvanceBookings('cancelled');setFTab(this)">Cancelled</div>
             </div>
-            <button class="btn-refresh" type="button" onclick="loadAdvanceBookings(currentAdvanceBookingStatus)">↻ Refresh</button>
+            <button class="btn-refresh" type="button" data-testid="refresh-advance-bookings" onclick="loadAdvanceBookings(currentAdvanceBookingStatus)">↻ Refresh</button>
           </div>
         </div>
+        <div id="advance-bookings-feedback" data-testid="status-advance-bookings" role="status" aria-live="polite" style="font-size:.78rem;color:#94a3b8;margin-bottom:.5rem"></div>
         <div class="table-wrap">
           <table class="data-table" id="advance-bookings-table">
             <thead><tr><th>Customer</th><th>Driver</th><th>Pickup → Drop-off</th><th>Passengers</th><th>Scheduled Date / Time</th><th>Status</th><th>Reminder</th><th>Assignment</th></tr></thead>
@@ -2162,6 +2163,17 @@ let currentPassStatus   = 'all';
 let currentStudentStatus = 'pending';
 let currentRideStatus   = 'active';
 let currentAdvanceBookingStatus = 'all';
+let advanceBookingRequestId = 0;
+let advanceBookingSessionId = 0;
+let advanceBookingCountRequestId = 0;
+let advanceBookingRefreshTimer = null;
+let advanceBookingRows = [];
+let advanceBookingRenderedStatus = null;
+const advanceAssignmentPending = new Set();
+const advanceAssignmentErrors = new Map();
+const advanceDriverOptionErrors = new Map();
+const advanceDriverSelections = new Map();
+const advanceDriverOptionRequests = new Map();
 let currentSOSFilter    = 'false';
 let currentSupStatus    = 'open';
 let maxIncome = 0;
@@ -2326,6 +2338,7 @@ async function adminLogin() {
 function adminLogout() {
   // Disconnect live socket
   if (socket) { socket.disconnect(); socket = null; }
+  resetAdvanceBookingState();
   closeLiveLocationMap();
   if (adminCityWatchId !== null && navigator.geolocation) {
     navigator.geolocation.clearWatch(adminCityWatchId);
@@ -2477,6 +2490,7 @@ async function bootAdmin() {
   }
   document.getElementById('admin-email-lbl').textContent = adminEmail;
   applyPermissions();
+  refreshAdvanceBookingCount();
   ensureSectionControls();
   ensureModalBackControls();
   connectSocket();
@@ -2570,6 +2584,7 @@ function connectSocket() {
   if (socket) return;
   socket = io({ auth: { token: adminToken } });
   socket.on('connect_error', e => console.warn('Admin socket error:', e.message));
+  socket.on('connect', () => refreshAdvanceBookings());
 
   socket.on('sos:alert', (alert) => {
     // Flash overlay
@@ -2598,16 +2613,19 @@ function connectSocket() {
 
   socket.on('ride:new', () => { loadStats(); });
   socket.on('admin:stats:refresh', () => { loadStats(); });
+  socket.on('advance-booking:new', () => {
+    if (!adminToken || !hasPermission('viewAdvanceBookings')) return;
+    refreshAdvanceBookings();
+    showToast('New scheduled booking received.', 'info');
+  });
   socket.on('advance-booking:assigned', booking => {
-    if (document.getElementById('sec-advance-bookings')?.classList.contains('active')) {
-      loadAdvanceBookings(currentAdvanceBookingStatus);
-    }
+    if (!adminToken || !hasPermission('viewAdvanceBookings')) return;
+    refreshAdvanceBookings();
     showToast(`Advance booking assigned to ${booking?.driver?.name || 'a Driver'}.`, 'success');
   });
   socket.on('advance-booking:converted', () => {
-    if (document.getElementById('sec-advance-bookings')?.classList.contains('active')) {
-      loadAdvanceBookings(currentAdvanceBookingStatus);
-    }
+    if (!adminToken || !hasPermission('viewAdvanceBookings')) return;
+    refreshAdvanceBookings();
     showToast('Scheduled ride activated by the assigned Driver.', 'info');
   });
   socket.on('student-ride-log:updated', () => {
@@ -2771,6 +2789,7 @@ function showSection(name) {
   document.querySelectorAll('.sb-item').forEach(el => el.classList.toggle('active', el.dataset.sec === name));
   document.querySelectorAll('.section-panel').forEach(el => el.classList.remove('active'));
   document.getElementById(`sec-${name}`)?.classList.add('active');
+  setAdvanceBookingAutoRefresh();
   document.getElementById('section-title').textContent = SECTION_TITLES[name] || name;
   document.getElementById('global-back')?.classList.toggle('visible', name !== 'overview');
   ensureSectionControls();
@@ -3493,6 +3512,152 @@ async function loadRides(status = 'active') {
 }
 
 // ── 9. ADVANCE / SCHEDULED BOOKINGS ──────────────────────────────────────────
+function resetAdvanceBookingState() {
+  advanceBookingSessionId++;
+  advanceBookingRequestId++;
+  advanceBookingCountRequestId++;
+  if (advanceBookingRefreshTimer) clearInterval(advanceBookingRefreshTimer);
+  advanceBookingRefreshTimer = null;
+  advanceBookingRows = [];
+  advanceBookingRenderedStatus = null;
+  currentAdvanceBookingStatus = 'all';
+  advanceAssignmentPending.clear();
+  advanceAssignmentErrors.clear();
+  advanceDriverOptionErrors.clear();
+  advanceDriverSelections.clear();
+  advanceDriverOptionRequests.clear();
+}
+
+function setAdvanceBookingAutoRefresh() {
+  if (advanceBookingRefreshTimer) clearInterval(advanceBookingRefreshTimer);
+  advanceBookingRefreshTimer = null;
+  if (!adminToken || !hasPermission('viewAdvanceBookings')
+      || !document.getElementById('sec-advance-bookings')?.classList.contains('active')) return;
+  // Eligibility can change without a booking event (Driver offline/busy, fee expired).
+  advanceBookingRefreshTimer = setInterval(() => {
+    if (document.visibilityState !== 'hidden') refreshAdvanceBookings();
+  }, 20000);
+}
+
+function refreshAdvanceBookings() {
+  if (!adminToken || !hasPermission('viewAdvanceBookings')) return;
+  if (document.getElementById('sec-advance-bookings')?.classList.contains('active')) {
+    return loadAdvanceBookings(currentAdvanceBookingStatus, { background: true });
+  }
+  return refreshAdvanceBookingCount();
+}
+
+function updateAdvanceBookingCount(bookings) {
+  const countBadge = document.getElementById('advance-booking-cnt');
+  if (!countBadge) return;
+  const upcomingCount = bookings.filter(booking =>
+    ['pending', 'assigned'].includes(booking.status)
+    && new Date(booking.scheduledFor).getTime() > Date.now()
+  ).length;
+  countBadge.textContent = upcomingCount;
+  countBadge.style.display = upcomingCount ? 'inline' : 'none';
+  countBadge.title = 'Upcoming scheduled and assigned bookings';
+}
+
+async function refreshAdvanceBookingCount() {
+  if (!adminToken || !hasPermission('viewAdvanceBookings')) return;
+  const requestId = ++advanceBookingCountRequestId;
+  const token = adminToken;
+  try {
+    const bookings = await api('/api/admin/advance-bookings?status=all');
+    if (requestId !== advanceBookingCountRequestId || token !== adminToken) return;
+    if (!Array.isArray(bookings)) throw new Error('Invalid scheduled-bookings response');
+    updateAdvanceBookingCount(bookings);
+  } catch (error) {
+    if (requestId !== advanceBookingCountRequestId || token !== adminToken) return;
+    const badge = document.getElementById('advance-booking-cnt');
+    if (badge) {
+      badge.textContent = '!';
+      badge.style.display = 'inline';
+      badge.title = `Unable to refresh scheduled-booking count: ${error.message}`;
+    }
+  }
+}
+
+function setAdvanceBookingFeedback(message, isError = false) {
+  const feedback = document.getElementById('advance-bookings-feedback');
+  if (!feedback) return;
+  feedback.textContent = message;
+  feedback.style.color = isError ? '#ff9da7' : '#94a3b8';
+}
+
+function canAssignAdvanceBooking(booking) {
+  return hasPermission('manageAdvanceBookings') && booking.status === 'pending'
+    && !booking.driver?.id && new Date(booking.scheduledFor).getTime() > Date.now();
+}
+
+function updateAdvanceAssignmentControls(bookingId) {
+  const select = document.getElementById(`advance-driver-${bookingId}`);
+  const button = document.getElementById(`advance-assign-${bookingId}`);
+  const retry = document.getElementById(`advance-drivers-refresh-${bookingId}`);
+  const feedback = document.getElementById(`advance-assignment-feedback-${bookingId}`);
+  const pending = advanceAssignmentPending.has(bookingId);
+  if (select) select.disabled = pending || select.dataset.ready !== 'true';
+  if (button) {
+    button.disabled = !hasPermission('manageAdvanceBookings') || pending || !select?.value || select.disabled;
+    button.textContent = pending ? 'Assigning…' : 'Assign Driver';
+  }
+  if (retry) retry.disabled = pending || advanceDriverOptionRequests.has(bookingId);
+  if (feedback) feedback.textContent = advanceAssignmentErrors.get(bookingId) || advanceDriverOptionErrors.get(bookingId) || '';
+}
+
+function selectAdvanceBookingDriver(bookingId) {
+  const select = document.getElementById(`advance-driver-${bookingId}`);
+  if (!select || select.disabled) return;
+  advanceDriverSelections.set(bookingId, select.value);
+  advanceAssignmentErrors.delete(bookingId);
+  advanceDriverOptionErrors.delete(bookingId);
+  updateAdvanceAssignmentControls(bookingId);
+}
+
+async function refreshAdvanceBookingDrivers(bookingId, { background = false } = {}) {
+  if (!adminToken || !hasPermission('viewAdvanceBookings') || !hasPermission('manageAdvanceBookings')) return;
+  const select = document.getElementById(`advance-driver-${bookingId}`);
+  if (!select || !advanceBookingRows.some(booking => booking._id === bookingId && canAssignAdvanceBooking(booking))) return;
+  // One options request per DOM select; a rerender is allowed to replace an old request.
+  if (advanceDriverOptionRequests.get(bookingId)?.select === select) return;
+  const request = { select, token: adminToken };
+  advanceDriverOptionRequests.set(bookingId, request);
+  if (!background || select.dataset.ready !== 'true') {
+    select.dataset.ready = 'false';
+    select.innerHTML = '<option value="">Loading available online Drivers…</option>';
+  }
+  updateAdvanceAssignmentControls(bookingId);
+  const isCurrent = () => request.token === adminToken
+    && advanceDriverOptionRequests.get(bookingId) === request
+    && document.getElementById(`advance-driver-${bookingId}`) === select;
+  try {
+    const drivers = await api(`/api/admin/advance-bookings/${encodeURIComponent(bookingId)}/assignment-options`);
+    if (!isCurrent()) return;
+    if (!Array.isArray(drivers)) throw new Error('Invalid Driver-options response');
+    const previousDriver = advanceDriverSelections.get(bookingId) || select.value;
+    const options = drivers.length
+      ? `<option value="">Select available online Driver</option>${drivers.map(driver => `<option value="${escHtml(driver.id)}">${escHtml(driver.name)} · ${escHtml([driver.vehicleModel || driver.vehicleType, driver.vehiclePlate, driver.phone].filter(Boolean).join(' · '))}</option>`).join('')}`
+      : '<option value="">No available online Drivers</option>';
+    if (select.innerHTML !== options) select.innerHTML = options;
+    select.value = drivers.some(driver => driver.id === previousDriver) ? previousDriver : '';
+    advanceDriverSelections.set(bookingId, select.value);
+    select.dataset.ready = drivers.length ? 'true' : 'false';
+    advanceDriverOptionErrors.delete(bookingId);
+  } catch (error) {
+    if (!isCurrent()) return;
+    select.innerHTML = '<option value="">Unable to load available Drivers</option>';
+    select.dataset.ready = 'false';
+    advanceDriverOptionErrors.set(bookingId, error.message || 'Unable to load Drivers. Refresh Drivers to retry.');
+  } finally {
+    if (advanceDriverOptionRequests.get(bookingId) === request) {
+      const current = isCurrent();
+      advanceDriverOptionRequests.delete(bookingId);
+      if (current) updateAdvanceAssignmentControls(bookingId);
+    }
+  }
+}
+
 function advanceBookingBadge(status) {
   const map = {
     pending: ['badge-pending', 'Scheduled'],
@@ -3511,86 +3676,150 @@ function advanceBookingBadge(status) {
   return `<span class="badge ${className}">${escHtml(label)}</span>`;
 }
 
-async function loadAdvanceBookings(status = 'all') {
+async function loadAdvanceBookings(status = 'all', { background = false } = {}) {
+  if (!adminToken || !hasPermission('viewAdvanceBookings')) return false;
   currentAdvanceBookingStatus = status;
   const tbody = document.getElementById('advance-bookings-tbody');
-  if (!tbody) return;
-  tbody.innerHTML = '<tr><td colspan="8" class="loading-row">Loading scheduled bookings…</td></tr>';
+  if (!tbody) return false;
+  const requestId = ++advanceBookingRequestId;
+  const token = adminToken;
+  const countRequestId = status === 'all' ? ++advanceBookingCountRequestId : null;
+  const isCurrent = () => requestId === advanceBookingRequestId && token === adminToken;
+  document.querySelectorAll('[data-advance-status]').forEach(tab => {
+    tab.classList.toggle('active', tab.dataset.advanceStatus === status);
+  });
+  if (!background || advanceBookingRenderedStatus !== status) {
+    tbody.innerHTML = '<tr><td colspan="8" class="loading-row">Loading scheduled bookings…</td></tr>';
+  }
+  setAdvanceBookingFeedback('Refreshing scheduled bookings…');
+  if (status !== 'all') refreshAdvanceBookingCount();
   try {
     const bookings = await api(`/api/admin/advance-bookings?status=${encodeURIComponent(status)}`);
-    const upcomingCount = bookings.filter(booking =>
-      ['pending', 'assigned'].includes(booking.status)
-      && new Date(booking.scheduledFor).getTime() > Date.now()
-    ).length;
-    const countBadge = document.getElementById('advance-booking-cnt');
-    if (countBadge) {
-      countBadge.textContent = upcomingCount;
-      countBadge.style.display = upcomingCount ? 'inline' : 'none';
+    if (!isCurrent()) return false;
+    if (!Array.isArray(bookings)) throw new Error('Invalid scheduled-bookings response');
+    if (countRequestId === advanceBookingCountRequestId) updateAdvanceBookingCount(bookings);
+    const unchanged = background && advanceBookingRenderedStatus === status
+      && JSON.stringify(bookings) === JSON.stringify(advanceBookingRows)
+      && !bookings.some(booking => !canAssignAdvanceBooking(booking)
+        && document.getElementById(`advance-driver-${booking._id}`))
+      && !bookings.some(booking => new Date(booking.scheduledFor).getTime() <= Date.now()
+        && document.getElementById(`advance-reminder-${booking._id}`));
+    advanceBookingRows = bookings;
+    setAdvanceBookingFeedback('Bookings refresh automatically every 20 seconds while this section is open.');
+    if (unchanged) {
+      await Promise.all(bookings.filter(canAssignAdvanceBooking).map(booking =>
+        refreshAdvanceBookingDrivers(booking._id, { background: true })
+      ));
+    } else {
+      await renderAdvanceBookingRows();
     }
-    if (!bookings.length) {
-      tbody.innerHTML = '<tr><td colspan="8"><div class="empty-state"><span class="empty-icon">🗓️</span>No scheduled bookings found</div></td></tr>';
-      return;
+    return true;
+  } catch (error) {
+    if (!isCurrent()) return false;
+    const message = error.message || 'Unable to load scheduled bookings';
+    setAdvanceBookingFeedback(`Unable to refresh bookings: ${message}. Use Refresh to retry.`, true);
+    if (!background || advanceBookingRenderedStatus !== status) {
+      tbody.innerHTML = `<tr><td colspan="8" style="text-align:center;color:#ef4444;padding:1rem">${escHtml(message)}</td></tr>`;
     }
-    tbody.innerHTML = bookings.map(booking => {
-      const customer = booking.customer || {};
-      const driver = booking.driver || {};
-      const scheduledAt = new Date(booking.scheduledFor);
-      const canRemind = hasPermission('manageAdvanceBookingReminders')
-        && booking.status === 'assigned'
-        && driver.id
-        && scheduledAt.getTime() > Date.now();
-      const reminderLabel = booking.reminderLastSentAt
-        ? `Sent ${fmtDate(booking.reminderLastSentAt)}`
-        : booking.reminderLastError
-          ? 'Delivery failed'
-          : 'Not sent';
-      const reminderAction = canRemind
-        ? `<button class="btn btn-blue" type="button" onclick="sendAdvanceBookingReminder('${escHtml(booking._id)}')">${booking.reminderLastSentAt ? '↻ Send Again' : '🔔 Send Reminder'}</button>`
-        : `<span style="font-size:.72rem;color:${booking.reminderLastError ? '#ff9da7' : '#64748b'}">${escHtml(reminderLabel)}${!driver.id && ['pending', 'assigned'].includes(booking.status) ? '<br>Waiting for Driver' : ''}</span>`;
-      const canAssign = hasPermission('manageAdvanceBookings') && booking.status === 'pending' && !driver.id;
-      const assignmentAction = canAssign
-        ? `<div style="display:flex;flex-direction:column;gap:.35rem;min-width:170px"><select id="advance-driver-${escHtml(booking._id)}" class="admin-select"><option value="">Loading active Drivers…</option></select><button class="btn btn-green" type="button" onclick="assignAdvanceBooking('${escHtml(booking._id)}')">Assign Driver</button></div>`
-        : `<span style="font-size:.72rem;color:#64748b">${driver.id ? 'Assigned' : '—'}</span>`;
-      const dropoff = booking.dropoffLocation?.address || 'Drop-off';
-      return `<tr>
-        <td><div style="font-weight:700;color:#e2e8f0">${escHtml(customer.name || 'Unknown Customer')}</div><div style="font-size:.7rem;color:#64748b">${escHtml(customer.phone || customer.email || '—')}</div></td>
-        <td><div style="font-weight:600">${escHtml(driver.name || 'Not assigned')}</div><div style="font-size:.7rem;color:#64748b">${escHtml(driver.phone || driver.vehiclePlate || '—')}</div></td>
-        <td style="font-size:.75rem;max-width:220px"><div style="color:#94a3b8">${escHtml(booking.pickupLocation?.address || 'Pickup')}</div><div>→ ${escHtml(dropoff)}</div></td>
-        <td>${Number(booking.passengerCount || 1)}</td>
-        <td style="font-size:.75rem;color:#cbd5e1">${escHtml(fmtDate(booking.scheduledFor))}<div style="font-size:.68rem;color:#64748b">${escHtml(booking.vehicleType || '')}</div></td>
-        <td>${advanceBookingBadge(booking.status)}</td>
-        <td><div style="display:flex;flex-direction:column;align-items:flex-start;gap:.35rem">${reminderAction}${booking.reminderLastSentAt && canRemind ? `<span style="font-size:.68rem;color:#64748b">${escHtml(reminderLabel)}</span>` : ''}</div></td>
-        <td>${assignmentAction}</td>
-      </tr>`;
-    }).join('');
-    await Promise.all(bookings.filter(booking => hasPermission('manageAdvanceBookings') && booking.status === 'pending' && !booking.driver?.id).map(async booking => {
-      const select = document.getElementById(`advance-driver-${booking._id}`);
-      if (!select) return;
-      try {
-        const drivers = await api(`/api/admin/advance-bookings/${encodeURIComponent(booking._id)}/assignment-options`);
-        select.innerHTML = drivers.length
-          ? `<option value="">Select active Driver</option>${drivers.map(option => `<option value="${escHtml(option.id)}">${escHtml(option.name)} · ${escHtml(option.vehicleModel || option.vehicleType || option.vehiclePlate || '')}</option>`).join('')}`
-          : '<option value="">No eligible active Drivers</option>';
-      } catch (error) {
-        select.innerHTML = `<option value="">${escHtml(error.message || 'Unable to load Drivers')}</option>`;
-      }
-    }));
-  } catch (e) {
-    tbody.innerHTML = `<tr><td colspan="8" style="text-align:center;color:#ef4444;padding:1rem">${escHtml(e.message)}</td></tr>`;
+    return false;
   }
+}
+
+async function renderAdvanceBookingRows() {
+  const tbody = document.getElementById('advance-bookings-tbody');
+  if (!tbody) return;
+  const bookings = advanceBookingRows.filter(booking =>
+    currentAdvanceBookingStatus === 'all' || (booking.reservationStatus || booking.status) === currentAdvanceBookingStatus
+  );
+  advanceBookingRenderedStatus = currentAdvanceBookingStatus;
+  if (!bookings.length) {
+    tbody.innerHTML = '<tr><td colspan="8"><div class="empty-state"><span class="empty-icon">🗓️</span>No scheduled bookings found</div></td></tr>';
+    return;
+  }
+  tbody.innerHTML = bookings.map(booking => {
+    const customer = booking.customer || {};
+    const driver = booking.driver || {};
+    const scheduledAt = new Date(booking.scheduledFor);
+    const canRemind = hasPermission('manageAdvanceBookingReminders')
+      && booking.status === 'assigned'
+      && driver.id
+      && scheduledAt.getTime() > Date.now();
+    const reminderLabel = booking.reminderLastSentAt
+      ? `Sent ${fmtDate(booking.reminderLastSentAt)}`
+      : booking.reminderLastError
+        ? 'Delivery failed'
+        : 'Not sent';
+    const reminderAction = canRemind
+      ? `<button id="advance-reminder-${escHtml(booking._id)}" data-testid="remind-advance-${escHtml(booking._id)}" class="btn btn-blue" type="button" onclick="sendAdvanceBookingReminder('${escHtml(booking._id)}')">${booking.reminderLastSentAt ? '↻ Send Again' : '🔔 Send Reminder'}</button>`
+      : `<span style="font-size:.72rem;color:${booking.reminderLastError ? '#ff9da7' : '#64748b'}">${escHtml(reminderLabel)}${!driver.id && ['pending', 'assigned'].includes(booking.status) ? '<br>Waiting for Driver' : ''}</span>`;
+    const canAssign = canAssignAdvanceBooking(booking);
+    const assignmentAction = canAssign
+      ? `<div style="display:flex;flex-direction:column;gap:.35rem;min-width:200px">
+          <select id="advance-driver-${escHtml(booking._id)}" data-testid="select-advance-driver-${escHtml(booking._id)}" aria-label="Available online Driver for ${escHtml(customer.name || 'scheduled booking')}" class="admin-select" disabled onchange="selectAdvanceBookingDriver('${escHtml(booking._id)}')"><option value="">Loading available online Drivers…</option></select>
+          <button id="advance-assign-${escHtml(booking._id)}" data-testid="assign-advance-${escHtml(booking._id)}" class="btn btn-green" type="button" disabled onclick="assignAdvanceBooking('${escHtml(booking._id)}')">${advanceAssignmentPending.has(booking._id) ? 'Assigning…' : 'Assign Driver'}</button>
+          <button id="advance-drivers-refresh-${escHtml(booking._id)}" data-testid="refresh-advance-drivers-${escHtml(booking._id)}" class="btn btn-gray" type="button" onclick="refreshAdvanceBookingDrivers('${escHtml(booking._id)}')">↻ Refresh Drivers</button>
+          <span id="advance-assignment-feedback-${escHtml(booking._id)}" data-testid="status-advance-assignment-${escHtml(booking._id)}" role="status" aria-live="polite" style="font-size:.72rem;color:#ff9da7">${escHtml(advanceAssignmentErrors.get(booking._id) || advanceDriverOptionErrors.get(booking._id) || '')}</span>
+        </div>`
+      : `<span style="font-size:.72rem;color:#64748b">${driver.id ? 'Assigned' : booking.status === 'pending' && scheduledAt.getTime() <= Date.now() ? 'Pickup time passed' : '—'}</span>`;
+    const dropoff = booking.dropoffLocation?.address || 'Drop-off';
+    return `<tr data-testid="row-advance-booking-${escHtml(booking._id)}">
+      <td><div style="font-weight:700;color:#e2e8f0">${escHtml(customer.name || 'Unknown Customer')}</div><div style="font-size:.7rem;color:#64748b">${escHtml(customer.phone || customer.email || '—')}</div></td>
+      <td><div style="font-weight:600">${escHtml(driver.name || 'Not assigned')}</div><div style="font-size:.7rem;color:#64748b">${escHtml(driver.phone || driver.vehiclePlate || '—')}</div></td>
+      <td style="font-size:.75rem;max-width:220px"><div style="color:#94a3b8">${escHtml(booking.pickupLocation?.address || 'Pickup')}</div><div>→ ${escHtml(dropoff)}</div></td>
+      <td>${Number(booking.passengerCount || 1)}</td>
+      <td style="font-size:.75rem;color:#cbd5e1">${escHtml(fmtDate(booking.scheduledFor))}<div style="font-size:.68rem;color:#64748b">${escHtml(booking.vehicleType || '')}</div></td>
+      <td>${advanceBookingBadge(booking.status)}</td>
+      <td><div style="display:flex;flex-direction:column;align-items:flex-start;gap:.35rem">${reminderAction}${booking.reminderLastSentAt && canRemind ? `<span style="font-size:.68rem;color:#64748b">${escHtml(reminderLabel)}</span>` : ''}</div></td>
+      <td>${assignmentAction}</td>
+    </tr>`;
+  }).join('');
+  await Promise.all(bookings.filter(canAssignAdvanceBooking).map(booking =>
+    refreshAdvanceBookingDrivers(booking._id)
+  ));
 }
 
 async function assignAdvanceBooking(bookingId) {
   if (!hasPermission('manageAdvanceBookings')) return showToast('You do not have permission to assign scheduled bookings.', 'error');
+  if (!adminToken || !hasPermission('viewAdvanceBookings') || advanceAssignmentPending.has(bookingId)) return;
   const select = document.getElementById(`advance-driver-${bookingId}`);
   const driverId = select?.value || '';
-  if (!driverId) return showToast('Select an eligible Driver first.', 'error');
+  if (!driverId || select.disabled) return showToast('Select an available online Driver first.', 'error');
+  if (!advanceBookingRows.some(booking => booking._id === bookingId && canAssignAdvanceBooking(booking))) {
+    return showToast('This booking is no longer available for assignment. Refresh bookings.', 'error');
+  }
+  const token = adminToken;
+  const sessionId = advanceBookingSessionId;
+  advanceAssignmentPending.add(bookingId);
+  advanceAssignmentErrors.delete(bookingId);
+  updateAdvanceAssignmentControls(bookingId);
   try {
-    await api(`/api/admin/advance-bookings/${encodeURIComponent(bookingId)}/assign`, 'PATCH', { driverId });
+    const result = await api(`/api/admin/advance-bookings/${encodeURIComponent(bookingId)}/assign`, 'PATCH', { driverId });
+    if (token !== adminToken || sessionId !== advanceBookingSessionId) return;
+    advanceBookingRequestId++;
+    // The mutation returns a populated Driver (_id); the Admin list uses driver.id.
+    // Patch our own view immediately even if a follow-up GET fails or the socket drops.
+    advanceBookingRows = advanceBookingRows.map(booking => booking._id === bookingId ? {
+      ...booking,
+      status: result.status,
+      reservationStatus: result.status,
+      driver: { ...result.driver, id: String(result.driver?.id || result.driver?._id || driverId) }
+    } : booking);
+    advanceDriverSelections.delete(bookingId);
+    renderAdvanceBookingRows();
     showToast('Driver assigned to the scheduled booking.', 'success');
-    loadAdvanceBookings(currentAdvanceBookingStatus);
+    await loadAdvanceBookings(currentAdvanceBookingStatus, { background: true });
   } catch (error) {
-    showToast(error.message || 'Unable to assign Driver', 'error');
+    if (token !== adminToken || sessionId !== advanceBookingSessionId) return;
+    const message = error.message || 'Unable to assign Driver';
+    advanceAssignmentErrors.set(bookingId, message);
+    showToast(message, 'error');
+    // Recover from another Admin assigning the booking or a Driver going offline.
+    await loadAdvanceBookings(currentAdvanceBookingStatus, { background: true });
+  } finally {
+    if (token === adminToken && sessionId === advanceBookingSessionId) {
+      advanceAssignmentPending.delete(bookingId);
+      updateAdvanceAssignmentControls(bookingId);
+    }
   }
 }
 

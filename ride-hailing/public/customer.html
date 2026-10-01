@@ -1114,6 +1114,14 @@ body{font-family:'DM Sans','Segoe UI',sans-serif;background:var(--lr-paper);colo
 </div>
 
 <!-- ── Support Modal ── -->
+<div class="modal-overlay" id="advance-assignment-modal" role="dialog" aria-modal="true" aria-labelledby="advance-assignment-title" aria-hidden="true" style="display:none;align-items:center" onclick="if(event.target===this)closeAdvanceAssignmentModal()">
+  <div class="modal-card" style="max-width:420px;max-height:85vh;overflow-y:auto;background:#fff;color:var(--lr-ink)">
+    <h2 id="advance-assignment-title" style="font-size:1.05rem;margin:0 0 .65rem">Scheduled Driver assigned</h2>
+    <div id="advance-assignment-details" aria-live="polite"></div>
+    <button type="button" id="advance-assignment-close" class="btn-primary" style="width:100%;margin-top:1rem;min-height:44px" onclick="closeAdvanceAssignmentModal()">Got it</button>
+  </div>
+</div>
+
 <div class="modal-overlay" id="customer-terms-modal" style="display:none;align-items:center" onclick="if(event.target===this)closeTermsModal()">
   <div class="modal-card" style="max-width:520px;max-height:80vh;display:flex;flex-direction:column">
     <div style="font-size:1rem;font-weight:800;color:#e2e8f0;margin-bottom:.9rem">📜 Terms &amp; Conditions</div>
@@ -1259,6 +1267,13 @@ let liveTripRouteRequest = 0;
 let liveTripRouteInFlight = false;
 let advanceBookingsLoadInFlight = null;
 let advanceBookingsHasLoaded = false;
+let customerAdvanceBookings = new Map();
+let advanceBookingsRevision = 0;
+let advanceBookingEventRevisions = new Map();
+let advanceAssignmentNotified = new Set();
+let advanceAssignmentModalBookingId = null;
+let advanceAssignmentPreviousFocus = null;
+let advanceBookingsSession = 0;
 
 function syncLocationSheetViewport() {
   const sheet = document.getElementById('location-sheet');
@@ -1746,6 +1761,7 @@ function saveSession(res) {
 
 function doLogout() {
   closeDotsMenu();
+  resetCustomerAdvanceBookings();
 
   // 1. Wipe all auth state from memory and storage
   localStorage.clear();
@@ -2175,6 +2191,9 @@ function renderRestoredCustomerRide(ride) {
 
 async function restoreCustomerActiveRide({ reason = 'resume' } = {}) {
   if (!token || !user || user.role !== 'customer') return null;
+  // The native Customer shell also calls this entry point on AppState resume.
+  // Scheduled-only customers must recover assignments even without an active ride.
+  void loadAdvanceBookings();
   const now = Date.now();
   if (customerRideRecoveryInFlight) return customerRideRecoveryInFlight;
   if (reason !== 'launch' && now - customerRideRecoveryLastAt < 1200) return null;
@@ -4040,7 +4059,10 @@ async function scheduleRide() {
       passengerCount: Math.min(8, Math.max(1, Math.trunc(Number(document.getElementById('scheduled-passenger-count')?.value) || 1))),
       scheduledFor: new Date(scheduledForInput.value).toISOString()
     });
-    showToast('Advance booking created. We will assign a Driver before pickup.', 'success');
+    const latestBooking = applyCustomerAdvanceBooking(booking, { notify: true });
+    showToast(latestBooking?.status === 'pending'
+      ? 'Advance booking created. We will assign a Driver before pickup.'
+      : 'Scheduled booking saved.', 'success');
     document.getElementById('schedule-booking-toggle').checked = false;
     toggleAdvanceBookingControls();
     loadAdvanceBookings();
@@ -4061,61 +4083,259 @@ function formatAdvanceBookingStatus(status) {
   }[status] || status;
 }
 
-function renderAdvanceBookings(bookings = []) {
+function customerAdvanceBookingId(booking) {
+  return String(booking?._id || booking?.id || booking?.advanceBookingId || booking?.bookingId || '');
+}
+
+function normalizeCustomerAdvanceBooking(snapshot, previous = {}) {
+  const source = snapshot?.booking || snapshot;
+  if (!source || typeof source !== 'object') return null;
+  const id = customerAdvanceBookingId(source);
+  if (!id) return null;
+  const sameBooking = id === customerAdvanceBookingId(previous);
+  const prior = sameBooking ? previous : {};
+  // POST responses and offer broadcasts can arrive after assignment or
+  // conversion. A booking cannot return to the pre-assignment pending state,
+  // and terminal bookings cannot be resurrected by delayed lifecycle events.
+  const terminalStatuses = ['converted', 'cancelled', 'failed'];
+  const incomingStatus = source.status === 'accepted' ? 'assigned' : source.status;
+  if (sameBooking && incomingStatus
+      && ((terminalStatuses.includes(prior.status) && incomingStatus !== prior.status)
+        || (incomingStatus === 'pending' && ['assigned', 'dispatching'].includes(prior.status)))) {
+    return prior;
+  }
+  const hasDriver = source.driver !== undefined || source.assignedDriver !== undefined || source.driverId !== undefined;
+  const incomingDriver = source.driver !== undefined ? source.driver
+    : source.assignedDriver !== undefined ? source.assignedDriver : source.driverId;
+  const previousDriverId = customerRideParticipantId(prior.driver);
+  const nextDriverId = hasDriver ? customerRideParticipantId(incomingDriver) : previousDriverId;
+  const sameDriver = Boolean(nextDriverId && nextDriverId === previousDriverId);
+  const profile = incomingDriver && typeof incomingDriver === 'object' ? incomingDriver : {};
+  const contactId = customerRideParticipantId(source.contact);
+  const contact = source.contact && typeof source.contact === 'object'
+    && nextDriverId && contactId === nextDriverId ? source.contact : {};
+  let driver = null;
+  if (nextDriverId || (hasDriver && incomingDriver && typeof incomingDriver === 'object')) {
+    driver = {
+      ...(sameDriver ? prior.driver : {}),
+      ...contact, ...profile,
+      ...(nextDriverId ? { id: nextDriverId, _id: nextDriverId } : {})
+    };
+    // A sparse refresh must not erase this identified Driver's full assignment
+    // profile, but a reassignment must never inherit the former Driver's data.
+    if (sameDriver) {
+      ['name', 'vehicleType', 'vehicleModel', 'vehiclePlate', 'rating', 'profilePhoto'].forEach(field => {
+        if (!driver[field] && prior.driver?.[field]) driver[field] = prior.driver[field];
+      });
+    }
+    const phone = extractCustomerDriverPhone(
+      profile.phone, profile.contactPhone, contact.phone,
+      source.contactPhone,
+      ...(sameDriver ? [prior.driver?.phone, prior.driver?.contactPhone] : [])
+    );
+    driver.phone = phone?.tel || '';
+    driver.contactPhone = phone?.tel || '';
+  }
+  let status = source.status || prior.status || 'pending';
+  if (status === 'accepted' || (status === 'pending' && driver)) status = 'assigned';
+  return {
+    ...prior, ...source, _id: id, id, status, driver,
+    scheduledFor: source.scheduledFor || prior.scheduledFor || null,
+    contact: null,
+    contactPhone: driver?.phone || ''
+  };
+}
+
+function formatAdvancePickupTime(booking) {
+  const date = new Date(booking?.scheduledFor || '');
+  return Number.isFinite(date.getTime())
+    ? date.toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' })
+    : 'Pickup time unavailable';
+}
+
+function advanceAssignedDriverMarkup(booking) {
+  if (!['assigned', 'dispatching', 'converted'].includes(booking.status)) return '';
+  const driver = booking.driver || {};
+  const name = escapeLocationText(driver.name || 'Assigned Driver');
+  const photo = String(driver.profilePhoto || '');
+  const avatar = /^\/uploads\/driver_profiles\/[A-Za-z0-9._-]+$/.test(photo)
+    ? `<img src="${escapeLocationText(photo)}" alt="${name} profile photo" style="width:56px;height:56px;object-fit:cover;border-radius:50%" onerror="this.style.display='none';this.nextElementSibling.style.display='flex'"><span style="display:none">${escapeLocationText((driver.name || '?')[0].toUpperCase())}</span>`
+    : `<span>${escapeLocationText((driver.name || '?')[0].toUpperCase())}</span>`;
+  const phone = extractCustomerDriverPhone(driver.phone, driver.contactPhone);
+  const rating = Number(driver.rating);
+  const bookingId = escapeLocationText(encodeURIComponent(booking._id).replace(/'/g, '%27'));
+  return `<section data-testid="scheduled-assigned-driver" style="margin-top:.55rem;padding-top:.65rem;border-top:1px solid var(--lr-line);font-size:.76rem">
+    <strong>Assigned Driver</strong>
+    <div style="display:flex;align-items:center;gap:.7rem;margin-top:.5rem">
+      <div style="width:56px;height:56px;flex-shrink:0;border-radius:50%;background:var(--lr-sand);display:flex;align-items:center;justify-content:center;font-size:1.4rem;font-weight:800">${avatar}</div>
+      <div><strong dir="auto">${name}</strong>
+        <div style="margin-top:.2rem" dir="auto">${escapeLocationText([driver.vehicleType, driver.vehicleModel].filter(Boolean).join(' · ') || 'Vehicle details unavailable')}</div>
+        <div style="color:var(--lr-muted);margin-top:.2rem">${escapeLocationText(driver.vehiclePlate || 'Plate unavailable')}${Number.isFinite(rating) && rating > 0 ? ` · ⭐ ${rating.toFixed(1)}` : ''}</div>
+      </div>
+    </div>
+    <div style="margin-top:.6rem"><strong>Pickup time:</strong> ${escapeLocationText(formatAdvancePickupTime(booking))}</div>
+    <div style="margin-top:.35rem">☎ ${escapeLocationText(phone?.tel || 'Contact unavailable')}</div>
+    ${phone ? `<div style="display:flex;gap:.5rem;flex-wrap:wrap;margin-top:.55rem">
+      <a class="btn-call" href="tel:${phone.tel}" data-advance-booking-id="${bookingId}" data-contact-action="call" onclick="return openCustomerAdvanceContact(event, this)">📞 Phone Call</a>
+      <a class="btn-whatsapp" href="https://wa.me/${phone.whatsapp}" data-advance-booking-id="${bookingId}" data-contact-action="whatsapp" onclick="return openCustomerAdvanceContact(event, this)">💬 WhatsApp</a>
+    </div>` : '<div style="font-size:.7rem;color:var(--lr-muted);margin-top:.35rem">Refresh scheduled rides to retry Driver contact details.</div>'}
+  </section>`;
+}
+
+function openCustomerAdvanceContact(event, anchor) {
+  event?.preventDefault();
+  event?.stopPropagation();
+  const booking = customerAdvanceBookings.get(decodeURIComponent(anchor?.dataset?.advanceBookingId || ''));
+  const phone = ['assigned', 'dispatching', 'converted'].includes(booking?.status)
+    ? extractCustomerDriverPhone(booking?.driver?.phone, booking?.driver?.contactPhone) : null;
+  if (!phone) {
+    showToast('Driver contact is unavailable. Refresh scheduled rides and try again.', 'error');
+    void loadAdvanceBookings();
+    return false;
+  }
+  const url = anchor.dataset.contactAction === 'whatsapp'
+    ? `https://wa.me/${phone.whatsapp}` : `tel:${phone.tel}`;
+  if (window.ReactNativeWebView?.postMessage) {
+    window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'contact', url }));
+  } else {
+    window.location.href = url;
+  }
+  return false;
+}
+
+function refreshAdvanceAssignmentModal() {
+  if (!advanceAssignmentModalBookingId) return;
+  const booking = customerAdvanceBookings.get(advanceAssignmentModalBookingId);
+  if (!booking || !['assigned', 'dispatching'].includes(booking.status)) {
+    closeAdvanceAssignmentModal();
+    return;
+  }
+  const details = document.getElementById('advance-assignment-details');
+  if (details) details.innerHTML = `<p style="font-size:.8rem;margin:0">Your scheduled ride is confirmed. No further Driver selection is needed.</p>
+    ${advanceAssignedDriverMarkup(booking)}
+    <div style="font-size:.75rem;margin-top:.65rem" dir="auto">${escapeLocationText(booking.pickupLocation?.address || 'Pickup')} → ${escapeLocationText(booking.dropoffLocation?.address || 'Dropoff')}</div>
+    <div style="font-size:.75rem;margin-top:.4rem">Rs ${Number(booking.fare || 0).toLocaleString()}</div>`;
+}
+
+function openAdvanceAssignmentModal(bookingId) {
+  const id = String(bookingId || '');
+  if (!customerAdvanceBookings.has(id)) return;
+  if (!advanceAssignmentModalBookingId) advanceAssignmentPreviousFocus = document.activeElement;
+  advanceAssignmentModalBookingId = id;
+  const modal = document.getElementById('advance-assignment-modal');
+  if (!modal) return;
+  modal.style.display = 'flex';
+  modal.classList.add('open');
+  modal.setAttribute('aria-hidden', 'false');
+  refreshAdvanceAssignmentModal();
+  document.getElementById('advance-assignment-close')?.focus();
+}
+
+function closeAdvanceAssignmentModal() {
+  const modal = document.getElementById('advance-assignment-modal');
+  modal?.classList.remove('open');
+  modal?.setAttribute('aria-hidden', 'true');
+  if (modal) modal.style.display = 'none';
+  advanceAssignmentModalBookingId = null;
+  advanceAssignmentPreviousFocus?.focus?.();
+  advanceAssignmentPreviousFocus = null;
+}
+
+function resetCustomerAdvanceBookings() {
+  advanceBookingsSession++;
+  advanceBookingsLoadInFlight = null;
+  advanceBookingsHasLoaded = false;
+  customerAdvanceBookings.clear();
+  advanceBookingEventRevisions.clear();
+  advanceAssignmentNotified.clear();
+  closeAdvanceAssignmentModal();
+  setAdvanceBookingsLoading(false);
+  renderAdvanceBookings();
+}
+
+function notifyAdvanceAssignment(booking) {
+  if (!booking || !['assigned', 'dispatching'].includes(booking.status)) return;
+  const key = `${booking._id}:${customerRideParticipantId(booking.driver)}`;
+  if (advanceAssignmentNotified.has(key) || advanceAssignmentNotified.has(`${booking._id}:`)) {
+    advanceAssignmentNotified.add(key);
+    return;
+  }
+  advanceAssignmentNotified.add(key);
+  showToast(`${booking.driver?.name || 'Your Driver'} is assigned. Pickup: ${formatAdvancePickupTime(booking)}.`, 'success');
+  openAdvanceAssignmentModal(booking._id);
+}
+
+function applyCustomerAdvanceBooking(snapshot, { assigned = false, notify = false } = {}) {
+  const source = snapshot?.booking || snapshot;
+  const id = customerAdvanceBookingId(source);
+  if (!id) return null;
+  const booking = normalizeCustomerAdvanceBooking(
+    assigned ? { ...source, status: 'assigned' } : source,
+    customerAdvanceBookings.get(id)
+  );
+  if (!booking) return null;
+  customerAdvanceBookings.set(id, booking);
+  advanceBookingEventRevisions.set(id, ++advanceBookingsRevision);
+  renderAdvanceBookings();
+  if (notify) notifyAdvanceAssignment(booking);
+  return booking;
+}
+
+function renderAdvanceBookings(bookings = Array.from(customerAdvanceBookings.values())) {
   const el = document.getElementById('advance-booking-list');
   if (!el) return;
   if (!bookings.length) {
     el.innerHTML = '<div class="empty-msg">No advance bookings yet.</div>';
+    refreshAdvanceAssignmentModal();
     return;
   }
-  el.innerHTML = bookings.map(booking => {
+  el.innerHTML = bookings.map(snapshot => {
+    const booking = normalizeCustomerAdvanceBooking(snapshot, customerAdvanceBookings.get(customerAdvanceBookingId(snapshot)));
+    if (!booking) return '';
     const status = escapeLocationText(formatAdvanceBookingStatus(booking.status));
-    const when = new Date(booking.scheduledFor).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' });
+    const when = formatAdvancePickupTime(booking);
+    const bookingId = escapeLocationText(encodeURIComponent(booking._id).replace(/'/g, '%27'));
     const scheduledAt = new Date(booking.scheduledFor).getTime();
     const canCancel = ['pending', 'assigned'].includes(booking.status)
       && Number.isFinite(scheduledAt)
       && scheduledAt - Date.now() >= 60 * 60 * 1000;
     const cancellationLocked = ['pending', 'assigned'].includes(booking.status) && !canCancel;
     const offers = Array.isArray(booking.counterOffers)
-      ? booking.counterOffers.filter(offer => offer?.type === 'counter' || offer?.type === 'accept')
+      ? booking.counterOffers.filter(offer => offer?.type === 'counter')
       : [];
     const offerMarkup = booking.status === 'pending' && offers.length
-      ? `<div style="margin-top:.55rem;padding-top:.55rem;border-top:1px solid var(--lr-line);font-size:.7rem"><strong>Driver offers</strong>${offers.map(offer => `
+      ? `<div style="margin-top:.55rem;padding-top:.55rem;border-top:1px solid var(--lr-line);font-size:.7rem"><strong>Optional Driver counter-offers</strong>${offers.map(offer => `
         <div style="display:flex;align-items:center;justify-content:space-between;gap:.5rem;margin-top:.35rem">
           <span>${escapeLocationText(offer.driverName || 'Driver')} · ${escapeLocationText(offer.vehicleModel || offer.vehiclePlate || '')} · Rs ${Number(offer.price || 0).toLocaleString()}</span>
-          <button type="button" class="btn-primary" style="padding:.35rem .55rem;font-size:.68rem" onclick="acceptAdvanceDriver('${String(booking._id)}','${String(offer.driver || '')}')">Choose</button>
+          <button type="button" class="btn-primary" style="padding:.35rem .55rem;font-size:.68rem" onclick="acceptAdvanceDriver(decodeURIComponent('${bookingId}'),decodeURIComponent('${escapeLocationText(encodeURIComponent(customerRideParticipantId(offer.driver)).replace(/'/g, '%27'))}'))">Choose counter-offer</button>
         </div>`).join('')}</div>`
       : '';
-    const assignedDriverMarkup = booking.driver?.name
-      ? `<div style="margin-top:.55rem;padding-top:.55rem;border-top:1px solid var(--lr-line);font-size:.72rem">
-          <strong>Assigned Driver</strong>
-          <div style="margin-top:.25rem">${escapeLocationText(booking.driver.name)} · ${escapeLocationText(booking.driver.vehicleModel || booking.driver.vehicleType || '')}</div>
-          <div style="color:var(--lr-muted);margin-top:.15rem">☎ ${escapeLocationText(booking.driver.phone || 'Contact unavailable')} · ${escapeLocationText(when)}</div>
-        </div>`
-      : '';
-    return `<article style="border:1px solid var(--lr-line);border-radius:13px;padding:.75rem;margin-bottom:.55rem;background:#fff">
+    const assignedDriverMarkup = advanceAssignedDriverMarkup(booking);
+    return `<article data-testid="scheduled-booking" data-booking-id="${escapeLocationText(booking._id)}" style="border:1px solid var(--lr-line);border-radius:13px;padding:.75rem;margin-bottom:.55rem;background:#fff">
       <div style="display:flex;justify-content:space-between;gap:.6rem;font-size:.75rem;font-weight:800">
         <span>📅 ${escapeLocationText(when)}</span><span style="color:var(--lr-coral-dark)">${status}</span>
       </div>
       <div style="font-size:.76rem;margin-top:.45rem" dir="auto">${escapeLocationText(booking.pickupLocation?.address || 'Pickup')} → ${escapeLocationText(booking.dropoffLocation?.address || 'Dropoff')}</div>
        <div style="font-size:.7rem;color:var(--lr-muted);margin-top:.35rem">Rs ${Number(booking.fare || 0).toLocaleString()} · ${Number(booking.passengerCount || 1)} passenger${Number(booking.passengerCount || 1) === 1 ? '' : 's'} · ${escapeLocationText(booking.vehicleType || '')}</div>
        ${assignedDriverMarkup}
+       ${['assigned', 'dispatching'].includes(booking.status) ? `<button type="button" class="btn-primary" style="margin-top:.55rem;padding:.45rem .65rem;font-size:.7rem" onclick="openAdvanceAssignmentModal(decodeURIComponent('${bookingId}'))">View Driver profile</button>` : ''}
       ${offerMarkup}
       ${canCancel
-        ? `<button type="button" class="btn-danger" style="margin-top:.55rem;padding:.45rem .65rem;font-size:.7rem" onclick="cancelAdvanceBooking('${String(booking._id)}')">Cancel booking</button>`
+        ? `<button type="button" class="btn-danger" style="margin-top:.55rem;padding:.45rem .65rem;font-size:.7rem" onclick="cancelAdvanceBooking(decodeURIComponent('${bookingId}'))">Cancel booking</button>`
         : cancellationLocked
           ? '<div style="margin-top:.55rem;font-size:.68rem;color:var(--lr-muted)">Cancellation is locked within one hour of pickup.</div>'
           : ''}
     </article>`;
   }).join('');
+  refreshAdvanceAssignmentModal();
 }
 
 async function acceptAdvanceDriver(bookingId, driverId) {
   if (!driverId) return showToast('Driver offer is missing its identity', 'error');
   try {
-    await apiCall(`/api/advance-bookings/${encodeURIComponent(bookingId)}/accept-driver`, 'PATCH', { driverId });
-    showToast('Driver assigned to your advance booking.', 'success');
-    loadAdvanceBookings();
+    const booking = await apiCall(`/api/advance-bookings/${encodeURIComponent(bookingId)}/accept-driver`, 'PATCH', { driverId });
+    applyCustomerAdvanceBooking(booking, { assigned: true, notify: true });
+    void loadAdvanceBookings();
   } catch (error) { showToast(error.message || 'Unable to choose Driver', 'error'); }
 }
 
@@ -4141,22 +4361,41 @@ async function loadAdvanceBookings({ userInitiated = false } = {}) {
   if (advanceBookingsLoadInFlight) return advanceBookingsLoadInFlight;
 
   setAdvanceBookingsLoading(true);
+  const requestRevision = advanceBookingsRevision;
+  const requestSession = advanceBookingsSession;
   advanceBookingsLoadInFlight = (async () => {
     try {
       const bookings = await apiCall('/api/advance-bookings/my');
-      renderAdvanceBookings(bookings);
+      if (requestSession !== advanceBookingsSession) return;
+      if (!Array.isArray(bookings)) throw new Error('Invalid scheduled rides response. Please refresh again.');
+      const next = new Map();
+      bookings.forEach(snapshot => {
+        const id = customerAdvanceBookingId(snapshot);
+        if (!id) return;
+        const previous = customerAdvanceBookings.get(id);
+        const booking = (advanceBookingEventRevisions.get(id) || 0) > requestRevision
+          ? previous : normalizeCustomerAdvanceBooking(snapshot, previous);
+        if (booking) next.set(id, booking);
+      });
+      customerAdvanceBookings.forEach((booking, id) => {
+        if ((advanceBookingEventRevisions.get(id) || 0) > requestRevision) next.set(id, booking);
+      });
+      customerAdvanceBookings = next;
+      renderAdvanceBookings();
+      customerAdvanceBookings.forEach(notifyAdvanceAssignment);
       advanceBookingsHasLoaded = true;
       if (userInitiated) showToast('Scheduled rides refreshed.', 'success');
     } catch (error) {
-      if (!advanceBookingsHasLoaded) {
+      if (requestSession !== advanceBookingsSession) return;
+      if (!advanceBookingsHasLoaded && !customerAdvanceBookings.size) {
         el.innerHTML = `<div class="empty-msg">${escapeLocationText(error.message || 'Unable to load scheduled rides')}</div>`;
       }
-      if (userInitiated) {
-        showToast(error.message || 'Unable to refresh scheduled rides.', 'error');
-      }
+      showToast(error.message || 'Unable to refresh scheduled rides.', 'error');
     } finally {
-      setAdvanceBookingsLoading(false);
-      advanceBookingsLoadInFlight = null;
+      if (requestSession === advanceBookingsSession) {
+        setAdvanceBookingsLoading(false);
+        advanceBookingsLoadInFlight = null;
+      }
     }
   })();
 
@@ -4166,7 +4405,8 @@ async function loadAdvanceBookings({ userInitiated = false } = {}) {
 async function cancelAdvanceBooking(id) {
   if (!confirm('Cancel this advance booking?')) return;
   try {
-    await apiCall(`/api/advance-bookings/${encodeURIComponent(id)}/cancel`, 'PATCH');
+    const booking = await apiCall(`/api/advance-bookings/${encodeURIComponent(id)}/cancel`, 'PATCH');
+    applyCustomerAdvanceBooking({ ...(booking?.booking || booking), _id: id, status: 'cancelled', driver: null });
     showToast('Advance booking cancelled', 'success');
     loadAdvanceBookings();
   } catch (error) { showToast(error.message || 'Unable to cancel booking', 'error'); }
@@ -4753,6 +4993,7 @@ function connectSocket() {
   // from the persisted driverLocation field so the map is never blank after
   // a brief server restart or network blip.
   socket.on('connect', () => {
+    void loadAdvanceBookings();
     if (!activeRide) return;
     socket.emit('ride:join', activeRide._id);
     // Rehydrate current status and persisted Driver GPS after every reconnect.
@@ -4831,26 +5072,37 @@ function connectSocket() {
   });
   socket.on('advance-booking:converted', ({ bookingId, rideId }) => {
     showToast('Your assigned Driver has started the scheduled ride.', 'success');
+    if (bookingId) applyCustomerAdvanceBooking({ _id: bookingId, status: 'converted', ride: rideId });
     loadAdvanceBookings();
     if (rideId) {
-      apiCall(`/api/rides/${rideId}`).then(ride => {
-        activeRide = ride;
-        activeLiveFare = ride.fare;
-        driverOffers = [];
-        connectToRideRoom(rideId);
-        showWaitingPanel(ride);
-      }).catch(() => undefined);
+      apiCall(`/api/rides/${encodeURIComponent(rideId)}`).then(ride => {
+        if (!renderRestoredCustomerRide(ride)) {
+          showToast('The scheduled ride is not active yet. Refresh to retry.', 'error');
+        }
+      }).catch(error => showToast(error.message || 'Unable to restore your scheduled ride. Refresh to retry.', 'error'));
     }
   });
-  socket.on('advance-booking:offer', () => {
-    showToast('A Driver responded to your advance booking.', 'info');
+  socket.on('advance-booking:offer', snapshot => {
+    const source = snapshot?.booking || snapshot;
+    const id = customerAdvanceBookingId(source);
+    const previous = customerAdvanceBookings.get(id);
+    const isLatePendingOffer = previous && previous.status !== 'pending'
+      && (!source?.status || source.status === 'pending');
+    if (id && !isLatePendingOffer) {
+      applyCustomerAdvanceBooking(source, { notify: ['assigned', 'dispatching'].includes(source.status) });
+    }
+    if (!isLatePendingOffer && !['assigned', 'dispatching'].includes(source?.status)) showToast('A Driver responded to your advance booking.', 'info');
     loadAdvanceBookings();
   });
   socket.on('advance-booking:assigned', booking => {
-    showToast(`Advance booking assigned to ${booking?.driver?.name || 'your Driver'}.`, 'success');
-    loadAdvanceBookings();
+    // Render the complete assignment immediately; an HTTP refresh may still
+    // contain a pre-assignment snapshot or fail while this notification is open.
+    applyCustomerAdvanceBooking(booking, { assigned: true, notify: true });
+    void loadAdvanceBookings();
   });
-  socket.on('advance-booking:cancelled', () => {
+  socket.on('advance-booking:cancelled', booking => {
+    const source = booking?.booking || booking;
+    if (customerAdvanceBookingId(source)) applyCustomerAdvanceBooking({ ...source, status: 'cancelled', driver: null });
     showToast('Advance booking cancelled.', 'info');
     loadAdvanceBookings();
   });
@@ -5449,6 +5701,7 @@ async function doDeleteAccount() {
 <script>
 // Keep every customer detail surface one tap away from the booking map.
 const CUSTOMER_SURFACE_CLOSE = {
+  'advance-assignment-modal': 'closeAdvanceAssignmentModal',
   'rating-modal': 'skipRating',
   'support-modal': 'closeSupportModal',
   'ec-modal': 'closeEcModal',
@@ -5474,6 +5727,16 @@ function installCustomerBackControls() {
 }
 if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', installCustomerBackControls);
 else installCustomerBackControls();
+document.addEventListener('keydown', event => {
+  if (!advanceAssignmentModalBookingId) return;
+  if (event.key === 'Escape') closeAdvanceAssignmentModal();
+  if (event.key !== 'Tab') return;
+  const modal = document.getElementById('advance-assignment-modal');
+  const controls = Array.from(modal?.querySelectorAll('button, a[href]') || []);
+  const first = controls[0], last = controls[controls.length - 1];
+  if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last?.focus(); }
+  else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first?.focus(); }
+});
 </script>
 </body>
 </html>

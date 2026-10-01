@@ -489,6 +489,7 @@ function DriverAdvanceBookingsPanel({
   onCounter,
   onDecline,
   onCancel,
+  acceptingId,
 }: {
   colors: DriverColors;
   bookings: AdvanceBooking[] | null;
@@ -499,6 +500,7 @@ function DriverAdvanceBookingsPanel({
   onCounter: (id: string, suggested: number) => void;
   onDecline: (id: string) => void;
   onCancel: (id: string) => void;
+  acceptingId?: string | null;
 }) {
   const [counterPrices, setCounterPrices] = useState<Record<string, string>>({});
   const [now, setNow] = useState(() => Date.now());
@@ -510,7 +512,7 @@ function DriverAdvanceBookingsPanel({
     <View style={styles.destinationHeader}>
       <View style={{ flex: 1 }}>
         <Text style={[styles.destinationTitle, { color: colors.foreground }]}>Advance Bookings</Text>
-        <Text style={[styles.destinationSubtitle, { color: colors.mutedForeground }]}>Agree future trips before pickup</Text>
+        <Text style={[styles.destinationSubtitle, { color: colors.mutedForeground }]}>Accept to reserve immediately · counter-offers are optional</Text>
       </View>
       <Pressable accessibilityLabel="Refresh advance bookings" disabled={loading} onPress={onRefresh} style={[styles.refreshButton, { backgroundColor: colors.secondary, borderColor: colors.border, opacity: loading ? .6 : 1 }]}>
         <Ionicons name="refresh-outline" size={17} color={colors.primary} />
@@ -523,18 +525,19 @@ function DriverAdvanceBookingsPanel({
         : <View style={styles.historyList}>{bookings.map(booking => {
           const fare = Number(booking.fare || 0);
           const blocked = booking.acceptanceEligibility?.allowed === false;
+          const accepting = acceptingId === booking.id;
           const scheduledAt = new Date(booking.scheduledFor).getTime();
           const canStart = booking.status === 'assigned'
             && Number.isFinite(scheduledAt)
             && scheduledAt <= now;
           return <View key={booking.id} style={[styles.historyItem, { backgroundColor: colors.card, borderColor: colors.border, borderLeftColor: colors.primary }]}>
-            <Text style={{ color: colors.primary, fontSize: 11, fontWeight: '900', letterSpacing: 1 }}>ADVANCE BOOKING</Text>
+            <Text testID={`scheduled-ride-label-${booking.id}`} style={{ color: colors.primary, fontSize: 16, fontWeight: '900' }}>Scheduled Ride · Advance Booking</Text>
             <View style={styles.historyRoute}>
               <Text numberOfLines={2} style={[styles.historyLocation, { color: colors.foreground }]}>{booking.pickupLocation?.address || 'Pickup'}</Text>
               <Ionicons name="arrow-forward" size={15} color={colors.primary} />
               <Text numberOfLines={2} style={[styles.historyLocation, styles.historyDropoff, { color: colors.foreground }]}>{booking.dropoffLocation?.address || 'Drop-off'}</Text>
             </View>
-            <Text style={[styles.historyDate, { color: colors.mutedForeground, marginTop: 8 }]}>{formatDriverDateTime(booking.scheduledFor)}</Text>
+            <Text testID={`scheduled-ride-pickup-${booking.id}`} style={[styles.historyDate, { color: colors.primary, fontSize: 15, fontWeight: '700', marginTop: 8 }]}>Pickup: {formatDriverDateTime(booking.scheduledFor)}</Text>
              <Text style={[styles.historyPassenger, { color: colors.mutedForeground, marginTop: 4 }]}>{booking.passenger?.name || 'Customer'} · {booking.passenger?.phone || ''} · {Number(booking.passengerCount || 1)} passenger{Number(booking.passengerCount || 1) === 1 ? '' : 's'} · {Number(booking.distance || 0).toFixed(1)} km</Text>
             <View style={[styles.historyMeta, { marginTop: 8 }]}>
               <Text style={[styles.historyFare, { color: colors.primary }]}>Rs {fare.toLocaleString('en-PK', { maximumFractionDigits: 0 })}</Text>
@@ -548,14 +551,14 @@ function DriverAdvanceBookingsPanel({
                     : <Text style={[styles.historyFare, { color: colors.mutedForeground }]}>Cancellation locks one hour before pickup</Text>}
                 </View>
                 : <View style={{ flex: 1, gap: 6 }}>
-                  {booking.myOffer
-                    ? <Text style={[styles.historyFare, { color: colors.primary }]}>Counter-offer sent · waiting for Customer</Text>
-                    : <Pressable disabled={blocked} onPress={() => onAccept(booking.id)} style={[styles.acceptButton, { backgroundColor: colors.primary, opacity: blocked ? .45 : 1 }]}><Text style={[styles.buttonText, { color: colors.primaryForeground }]}>{blocked ? 'Fee required' : 'Accept'}</Text></Pressable>}
-                  <Pressable onPress={() => onDecline(booking.id)} style={[styles.secondaryButton, { borderColor: colors.destructive }]}><Text style={{ color: colors.destructive }}>Decline</Text></Pressable>
+                  {booking.myOffer?.type === 'counter' && <Text style={[styles.historyFare, { color: colors.primary }]}>Optional counter-offer sent · waiting for Customer</Text>}
+                  <Pressable testID={`scheduled-ride-accept-${booking.id}`} disabled={blocked || accepting} onPress={() => onAccept(booking.id)} style={[styles.acceptButton, { backgroundColor: colors.primary, opacity: blocked || accepting ? .45 : 1 }]}><Text style={[styles.buttonText, { color: colors.primaryForeground }]}>{accepting ? 'Assigning…' : blocked ? 'Fee required' : 'Accept'}</Text></Pressable>
+                  <Pressable testID={`scheduled-ride-ignore-${booking.id}`} disabled={accepting} onPress={() => onDecline(booking.id)} style={[styles.secondaryButton, { borderColor: colors.destructive }]}><Text style={{ color: colors.destructive }}>Ignore</Text></Pressable>
                 </View>}
             </View>
             {booking.status !== 'assigned' && !booking.myOffer && <View style={{ flexDirection: 'row', gap: 8, marginTop: 8 }}>
               <TextInput
+                editable={!accepting}
                 value={counterPrices[booking.id] ?? String(Math.round(fare))}
                 onChangeText={value => setCounterPrices(current => ({ ...current, [booking.id]: value }))}
                 keyboardType="number-pad"
@@ -563,7 +566,7 @@ function DriverAdvanceBookingsPanel({
                 placeholderTextColor={colors.mutedForeground}
                 style={[styles.input, { flex: 1, minHeight: 44, color: colors.foreground, borderColor: colors.input }]}
               />
-              <Pressable onPress={() => onCounter(booking.id, Number(counterPrices[booking.id] || fare))} style={[styles.secondaryButton, { borderColor: colors.border }]}><Text style={{ color: colors.foreground }}>Counter</Text></Pressable>
+              <Pressable disabled={accepting} onPress={() => onCounter(booking.id, Number(counterPrices[booking.id] || fare))} style={[styles.secondaryButton, { borderColor: colors.border }]}><Text style={{ color: colors.foreground }}>Optional counter</Text></Pressable>
             </View>}
           </View>;
         })}</View>}
@@ -616,6 +619,8 @@ function DriverHome() {
   const [otpMessage, setOtpMessage] = useState('');
   const [busy, setBusy] = useState(false);
   const [activeTab, setActiveTab] = useState<DriverTab>('home');
+  const [advanceAcceptingId, setAdvanceAcceptingId] = useState<string | null>(null);
+  const advanceAcceptingRef = useRef<string | null>(null);
   const [menuOpen, setMenuOpen] = useState(false);
   const [, setClock] = useState(Date.now());
   const isWeb = Platform.OS === 'web';
@@ -750,8 +755,12 @@ function DriverHome() {
   };
 
   const acceptAdvance = async (bookingId: string) => {
-    try { await runtime.acceptAdvanceBooking(bookingId); report('Advance booking accepted.'); }
+    if (advanceAcceptingRef.current) return;
+    advanceAcceptingRef.current = bookingId;
+    setAdvanceAcceptingId(bookingId);
+    try { await runtime.acceptAdvanceBooking(bookingId); report('Scheduled ride assigned to you. Start Ride unlocks at pickup time.'); }
     catch (error) { report(error instanceof Error ? error.message : 'Unable to accept advance booking'); }
+    finally { advanceAcceptingRef.current = null; setAdvanceAcceptingId(null); }
   };
   const startAdvance = async (bookingId: string) => {
     try { await runtime.startAdvanceBooking(bookingId); report('Scheduled ride activated.'); }
@@ -762,7 +771,8 @@ function DriverHome() {
     void runtime.counterAdvanceBooking(bookingId, price).then(() => report('Counter-offer sent.')).catch(error => report(error instanceof Error ? error.message : 'Unable to send counter-offer'));
   };
   const declineAdvance = (bookingId: string) => {
-    void runtime.declineAdvanceBooking(bookingId).then(() => report('Advance booking declined.')).catch(error => report(error instanceof Error ? error.message : 'Unable to decline advance booking'));
+    if (advanceAcceptingRef.current === bookingId) return;
+    void runtime.declineAdvanceBooking(bookingId).catch(error => report(error instanceof Error ? error.message : 'Unable to ignore advance booking'));
   };
   if (!runtime.ready) return <View style={[styles.center, { backgroundColor: colors.background }]}><ActivityIndicator color={colors.primary} /></View>;
   if (!runtime.user) {
@@ -882,6 +892,18 @@ function DriverHome() {
       <Ionicons name="car-sport-outline" size={19} color={colors.primary} />
        <View style={{ flex: 1 }}><Text style={[styles.vehicleLabel, { color: colors.mutedForeground }]}>YOUR VEHICLE CATEGORY</Text><Text style={[styles.vehicleName, { color: colors.foreground }, isRtlText(runtime.user.vehicleType) && styles.rtlText]}>{runtime.user.vehicleType || 'Vehicle category not set'}</Text></View>
     </View>
+    {!!runtime.advanceBookings?.length && <DriverAdvanceBookingsPanel
+      colors={colors}
+      bookings={runtime.advanceBookings}
+      loading={runtime.advanceBookingsLoading}
+      acceptingId={advanceAcceptingId}
+      onRefresh={() => void runtime.refreshAdvanceBookings().catch(error => report(error instanceof Error ? error.message : 'Unable to refresh scheduled rides'))}
+      onAccept={id => void acceptAdvance(id)}
+      onStart={id => void startAdvance(id)}
+      onCounter={counterAdvance}
+      onDecline={declineAdvance}
+      onCancel={id => void runtime.cancelAdvanceBooking(id).catch(error => report(error instanceof Error ? error.message : 'Unable to cancel booking'))}
+    />}
     {runtime.longRange && <View style={[styles.longRangeCard, { backgroundColor: colors.card, borderColor: runtime.longRange.settings?.enabled ? colors.border : colors.input, borderRadius: colors.radius + 12 }]}>
        <View style={styles.statusRow}><Ionicons name="map-outline" size={20} color={colors.primary} /><View style={{ flex: 1 }}><Text style={[styles.longRangeTitle, { color: colors.foreground }]}>Long Range Rides</Text><Text style={[styles.statusCopy, { color: colors.mutedForeground }]}>{runtime.longRange.settings?.enabled ? `Receive trips from ${Number(runtime.longRange.settings.distanceCutoffKm || 0).toLocaleString()} km+ · ${longRangeVehicle} charge Rs ${longRangeCommission.toLocaleString()} · wallet minimum Rs ${longRangeMinimum.toLocaleString()}` : 'Long Range rides are currently disabled by Admin.'}</Text></View><Switch testID="driver-long-range-toggle" value={runtime.longRange.enabled} onValueChange={toggleLongRange} disabled={busy || !runtime.longRange.settings?.enabled} trackColor={{ false: colors.muted, true: colors.primary }} thumbColor={colors.primaryForeground} /></View>
        {runtime.longRange.enabled && <View testID="long-range-responsibility-banner" style={[styles.longRangeReminder, { backgroundColor: colors.secondary, borderColor: colors.border }]}><Ionicons name="warning-outline" size={16} color={colors.primary} /><Text style={[styles.longRangeReminderText, { color: colors.secondaryForeground }]}>Reminder: Tolls, taxes, and challans are driver responsibility.</Text></View>}
@@ -924,12 +946,13 @@ function DriverHome() {
           colors={colors}
           bookings={runtime.advanceBookings}
           loading={runtime.advanceBookingsLoading}
-          onRefresh={() => void runtime.refreshAdvanceBookings().catch(() => undefined)}
+          acceptingId={advanceAcceptingId}
+          onRefresh={() => void runtime.refreshAdvanceBookings().catch(error => report(error instanceof Error ? error.message : 'Unable to refresh scheduled rides'))}
           onAccept={id => void acceptAdvance(id)}
           onStart={id => void startAdvance(id)}
           onCounter={counterAdvance}
           onDecline={declineAdvance}
-          onCancel={id => void runtime.cancelAdvanceBooking(id)}
+          onCancel={id => void runtime.cancelAdvanceBooking(id).catch(error => report(error instanceof Error ? error.message : 'Unable to cancel booking'))}
         />
         : <DriverPaymentsPanel
         colors={colors}

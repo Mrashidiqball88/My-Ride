@@ -296,6 +296,37 @@ function normalizeAdvanceBooking(booking: AdvanceBooking & { _id?: string }): Ad
   };
 }
 
+function advanceBookingLifecycleRank(status?: AdvanceBooking['status']) {
+  if (status === 'converted' || status === 'cancelled' || status === 'failed') return 3;
+  return status === 'dispatching' ? 2 : status === 'assigned' ? 1 : 0;
+}
+
+function reconcileAdvanceBookingFeed(bookings: AdvanceBooking[], lifecycle: Map<string, Partial<AdvanceBooking> | 'ignored' | null>, driverId: string) {
+  return bookings.flatMap(item => {
+    const booking = normalizeAdvanceBooking(item);
+    let known = lifecycle.get(booking.id);
+    if (known === null) return [];
+    if (advanceBookingLifecycleRank(booking.status) === 3) {
+      lifecycle.set(booking.id, null);
+      return [];
+    }
+    if (known === 'ignored') {
+      // Ignore hides broadcasts, not a later explicit Admin assignment.
+      if (booking.status !== 'assigned' || participantId(booking.driver) !== driverId) {
+        if (booking.status === 'assigned') lifecycle.set(booking.id, null);
+        return [];
+      }
+      lifecycle.delete(booking.id);
+      known = undefined;
+    }
+    const next = known && advanceBookingLifecycleRank(booking.status) < advanceBookingLifecycleRank(known.status)
+      ? normalizeAdvanceBooking({ ...booking, ...known } as AdvanceBooking)
+      : booking;
+    if (advanceBookingLifecycleRank(next.status) > 0) lifecycle.set(next.id, next);
+    return [next];
+  });
+}
+
 function isRideOfferLive(ride: RideRequest | null | undefined) {
   const expiresAt = new Date(ride?.broadcastExpiresAt || ride?.offerExpiresAt || 0).getTime();
   return Boolean(ride?.id) && Number.isFinite(expiresAt) && expiresAt > Date.now();
@@ -348,6 +379,9 @@ export function DriverRuntimeProvider({ children }: { children: ReactNode }) {
   const pendingRideRef = useRef<RideRequest | null>(null);
   const sentOfferRef = useRef<RideRequest | null>(null);
   const advanceBookingsEventVersion = useRef(0);
+  // null is an immutable terminal/taken tombstone; Ignore is reversible only
+  // by an authoritative assignment to this Driver, never by pending pushes.
+  const advanceBookingLifecycle = useRef(new Map<string, Partial<AdvanceBooking> | 'ignored' | null>());
   const alertedRideIds = useRef(new Set<string>());
   const localRideNotificationIds = useRef(new Map<string, string>());
   const receivedRideEvents = useRef(new Map<string, number>());
@@ -587,14 +621,14 @@ export function DriverRuntimeProvider({ children }: { children: ReactNode }) {
 
   const refreshAdvanceBookings = useCallback(async () => {
     if (!tokenRef.current) return;
+    const requestedToken = tokenRef.current;
     const requestEventVersion = advanceBookingsEventVersion.current;
     setAdvanceBookingsLoading(true);
     try {
       const result = await api('/api/advance-bookings/available', tokenRef.current, sessionRef.current || undefined);
-      if (requestEventVersion !== advanceBookingsEventVersion.current) return;
-      setAdvanceBookings(Array.isArray(result)
-        ? result.map(item => normalizeAdvanceBooking(item as AdvanceBooking & { _id?: string }))
-        : []);
+      if (requestedToken !== tokenRef.current || requestEventVersion !== advanceBookingsEventVersion.current) return;
+      if (!Array.isArray(result)) throw new Error('The scheduled ride feed returned an invalid response. Please refresh.');
+      setAdvanceBookings(reconcileAdvanceBookingFeed(result as AdvanceBooking[], advanceBookingLifecycle.current, String(userRef.current?.id || '')));
     } finally {
       setAdvanceBookingsLoading(false);
     }
@@ -610,11 +644,12 @@ export function DriverRuntimeProvider({ children }: { children: ReactNode }) {
     declined?: boolean;
     driver?: AdvanceBooking['driver'];
     booking?: Partial<AdvanceBooking> & { _id?: string; advanceBookingId?: string };
+    advanceBooking?: Partial<AdvanceBooking> & { _id?: string; advanceBookingId?: string };
     ride?: Partial<AdvanceBooking> & { _id?: string; advanceBookingId?: string };
     [key: string]: unknown;
   } = {}, lifecycleStatus?: AdvanceBooking['status']) => {
     advanceBookingsEventVersion.current += 1;
-    const rawBooking = payload.booking || payload.ride || payload;
+    const rawBooking = payload.booking || payload.advanceBooking || payload.ride || payload;
     const bookingId = String(
       rawBooking.id
       || rawBooking._id
@@ -625,9 +660,35 @@ export function DriverRuntimeProvider({ children }: { children: ReactNode }) {
     ).trim();
     const scheduledFor = rawBooking.scheduledFor || payload.scheduledFor;
 
-    if (payload.declined) {
+    const status = lifecycleStatus || rawBooking.status;
+    let known = advanceBookingLifecycle.current.get(bookingId);
+    const assignedDriverId = participantId(rawBooking.driver || payload.driver);
+    if (known === null) {
       setAdvanceBookings(current => (current || []).filter(booking => booking.id !== bookingId));
       return;
+    }
+    if (known === 'ignored') {
+      if (status !== 'assigned' || assignedDriverId !== String(userRef.current?.id || '')) {
+        if (status === 'assigned' || ['converted', 'cancelled', 'failed'].includes(String(status || ''))) {
+          advanceBookingLifecycle.current.set(bookingId, null);
+        }
+        setAdvanceBookings(current => (current || []).filter(booking => booking.id !== bookingId));
+        return;
+      }
+      advanceBookingLifecycle.current.delete(bookingId);
+      known = undefined;
+    }
+    if (known && advanceBookingLifecycleRank(status as AdvanceBooking['status']) < advanceBookingLifecycleRank(known.status)) return;
+    // Losing Drivers deliberately receive only an ID/status, without contacts.
+    // Remove that request synchronously rather than waiting for a REST read.
+    if (payload.declined || ['converted', 'cancelled', 'failed'].includes(String(status || ''))
+      || (status === 'assigned' && (!assignedDriverId || assignedDriverId !== String(userRef.current?.id || '')))) {
+      if (bookingId) advanceBookingLifecycle.current.set(bookingId, payload.declined ? 'ignored' : null);
+      setAdvanceBookings(current => (current || []).filter(booking => booking.id !== bookingId));
+      return;
+    }
+    if (bookingId && advanceBookingLifecycleRank(status as AdvanceBooking['status']) > 0) {
+      advanceBookingLifecycle.current.set(bookingId, { ...known, ...rawBooking, id: bookingId, status } as Partial<AdvanceBooking>);
     }
 
     // Some lifecycle events currently contain only bookingId/rideId. Keep the
@@ -640,7 +701,19 @@ export function DriverRuntimeProvider({ children }: { children: ReactNode }) {
       || !rawBooking.dropoffLocation
       || rawBooking.fare == null
     ) {
-      void refreshAdvanceBookings();
+      if (bookingId && status === 'assigned' && assignedDriverId === String(userRef.current?.id || '')) {
+        setAdvanceBookings(current => {
+          const latest = advanceBookingLifecycle.current.get(bookingId);
+          if (latest === null || latest === 'ignored') return (current || []).filter(booking => booking.id !== bookingId);
+          return (current || []).map(booking => {
+            if (booking.id !== bookingId) return booking;
+            const assigned = { ...booking, ...latest } as AdvanceBooking;
+            advanceBookingLifecycle.current.set(bookingId, assigned);
+            return assigned;
+          });
+        });
+      }
+      void refreshAdvanceBookings().catch(error => setError(error instanceof Error ? error.message : 'Unable to refresh scheduled rides.'));
       return;
     }
 
@@ -648,31 +721,22 @@ export function DriverRuntimeProvider({ children }: { children: ReactNode }) {
       ...rawBooking,
       id: bookingId,
       scheduledFor,
-      ...(lifecycleStatus ? { status: lifecycleStatus } : {}),
+      ...(status ? { status } : {}),
     } as AdvanceBooking & { _id?: string });
-    const terminalStatus = new Set(['converted', 'cancelled', 'failed']);
+    const myOffer = nextBooking.counterOffers?.find(offer => participantId(offer.driver) === String(userRef.current?.id || ''));
+    if (myOffer) nextBooking.myOffer = myOffer;
 
     setAdvanceBookings(current => {
       const existing = current || [];
-      const assignedDriver = nextBooking.driver;
-      const assignedDriverId = typeof assignedDriver === 'string'
-        ? assignedDriver
-        : assignedDriver?.id || assignedDriver?._id || '';
-      if (
-        terminalStatus.has(String(nextBooking.status || ''))
-        || (nextBooking.status === 'assigned'
-          && assignedDriverId
-          && userRef.current?.id
-          && String(assignedDriverId) !== String(userRef.current?.id || ''))
-      ) {
-        return existing.filter(booking => booking.id !== bookingId);
-      }
-
+      const latest = advanceBookingLifecycle.current.get(bookingId);
+      if (latest === null || latest === 'ignored') return existing.filter(booking => booking.id !== bookingId);
+      const guardedBooking = latest ? { ...nextBooking, ...latest } as AdvanceBooking : nextBooking;
       const index = existing.findIndex(booking => booking.id === bookingId);
-      if (index === -1) return [nextBooking, ...existing];
+      if (index === -1) return [guardedBooking, ...existing];
 
       const merged = [...existing];
-      merged[index] = { ...existing[index], ...nextBooking, id: bookingId };
+      merged[index] = { ...existing[index], ...guardedBooking, id: bookingId };
+      if (advanceBookingLifecycleRank(merged[index].status) > 0) advanceBookingLifecycle.current.set(bookingId, merged[index]);
       return merged;
     });
   }, [refreshAdvanceBookings]);
@@ -711,6 +775,7 @@ export function DriverRuntimeProvider({ children }: { children: ReactNode }) {
         if (rideIsActive && activeRideIdRef.current) nextSocket.emit('ride:join', activeRideIdRef.current);
       });
       void hydrateAvailableRides();
+      void refreshAdvanceBookings().catch(error => setError(error instanceof Error ? error.message : 'Unable to refresh scheduled rides.'));
     });
     nextSocket.on('disconnect', () => {
       lastHeartbeatAckAt.current = 0;
@@ -724,11 +789,11 @@ export function DriverRuntimeProvider({ children }: { children: ReactNode }) {
     });
     nextSocket.on('driver:rehydrate', () => {
       void hydrateAvailableRides();
-      void refreshAdvanceBookings();
+      void refreshAdvanceBookings().catch(error => setError(error instanceof Error ? error.message : 'Unable to refresh scheduled rides.'));
     });
     nextSocket.on('advance-booking:new', handleAdvanceBookingEvent);
     nextSocket.on('advance-booking:offer-submitted', handleAdvanceBookingEvent);
-    nextSocket.on('advance-booking:assigned', handleAdvanceBookingEvent);
+    nextSocket.on('advance-booking:assigned', payload => handleAdvanceBookingEvent(payload, 'assigned'));
     nextSocket.on('advance-booking:converted', (payload: {
       bookingId?: string;
       advanceBookingId?: string;
@@ -739,11 +804,11 @@ export function DriverRuntimeProvider({ children }: { children: ReactNode }) {
       ride?: Partial<AdvanceBooking> & { _id?: string; advanceBookingId?: string };
     }) => {
       handleAdvanceBookingEvent(payload, 'converted');
-      void refreshAdvanceBookings();
+      void refreshAdvanceBookings().catch(error => setError(error instanceof Error ? error.message : 'Unable to refresh scheduled rides.'));
       void hydrateActiveRide();
     });
-    nextSocket.on('advance-booking:cancelled', handleAdvanceBookingEvent);
-    nextSocket.on('advance-booking:declined', handleAdvanceBookingEvent);
+    nextSocket.on('advance-booking:cancelled', payload => handleAdvanceBookingEvent(payload, 'cancelled'));
+    nextSocket.on('advance-booking:declined', payload => handleAdvanceBookingEvent({ ...payload, declined: true }));
     nextSocket.on('ride:new', handleRideOffer);
     nextSocket.on('ride:taken', ({ rideId }: { rideId: string }) => {
       clearRideAlert(rideId);
@@ -905,6 +970,8 @@ export function DriverRuntimeProvider({ children }: { children: ReactNode }) {
     socket.current = null;
     tokenRef.current = null;
     sessionRef.current = null;
+    advanceBookingsEventVersion.current++;
+    advanceBookingLifecycle.current.clear();
     clearAllRideAlerts();
     void stopLocationService();
     void Promise.all([TOKEN_KEY, SESSION_KEY, USER_KEY, ONLINE_KEY, ACTIVE_RIDE_KEY, LOCK_SCREEN_ACK_KEY, PUSH_TOKEN_KEY]
@@ -1096,7 +1163,13 @@ export function DriverRuntimeProvider({ children }: { children: ReactNode }) {
   const recoverNotificationRide = useCallback((response: Notifications.NotificationResponse | null) => {
     const data = response?.notification.request.content.data as {
       type?: string; ride?: RideRequest & { _id?: string }; rideId?: string;
+      booking?: AdvanceBooking; bookingId?: string; advanceBookingId?: string;
     } | undefined;
+    if (data?.type === 'advance-booking:new') {
+      handleAdvanceBookingEvent({ booking: data.booking, bookingId: data.bookingId, advanceBookingId: data.advanceBookingId });
+      if (tokenRef.current) void refreshAdvanceBookings().catch(error => setError(error instanceof Error ? error.message : 'Unable to refresh scheduled rides.'));
+      return;
+    }
     if (data?.type !== 'ride:new') return;
     const rideId = String(data.rideId || data.ride?.id || data.ride?._id || '');
     if (!rideId) return;
@@ -1110,7 +1183,7 @@ export function DriverRuntimeProvider({ children }: { children: ReactNode }) {
       pendingNotificationRideId.current = null;
       void hydrateAvailableRides(rideId);
     }
-  }, [clearRideAlert, hydrateAvailableRides]);
+  }, [clearRideAlert, handleAdvanceBookingEvent, hydrateAvailableRides, refreshAdvanceBookings]);
 
   const setOnlineState = useCallback(async (next: boolean) => {
     const token = tokenRef.current;
@@ -1272,7 +1345,12 @@ export function DriverRuntimeProvider({ children }: { children: ReactNode }) {
   }, [loadLongRange, ready, user]);
 
   useEffect(() => {
-    if (ready && user && tokenRef.current) void refreshAdvanceBookings().catch(() => undefined);
+    if (!ready || !user || !tokenRef.current) return;
+    const refresh = () => void refreshAdvanceBookings().catch(error => setError(error instanceof Error ? error.message : 'Unable to refresh scheduled rides.'));
+    refresh();
+    const interval = setInterval(() => { if (AppState.currentState === 'active') refresh(); }, 25_000);
+    const subscription = AppState.addEventListener('change', state => { if (state === 'active') refresh(); });
+    return () => { clearInterval(interval); subscription.remove(); };
   }, [ready, refreshAdvanceBookings, user]);
 
   useEffect(() => {
@@ -1399,9 +1477,12 @@ export function DriverRuntimeProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const signOut = useCallback(async () => {
+    advanceBookingsEventVersion.current++;
     await setOnlineState(false).catch(() => undefined);
     socket.current?.disconnect(); socket.current = null;
     tokenRef.current = null; sessionRef.current = null;
+    advanceBookingsEventVersion.current++;
+    advanceBookingLifecycle.current.clear();
     await Promise.all([TOKEN_KEY, SESSION_KEY, USER_KEY, ONLINE_KEY, ACTIVE_RIDE_KEY, LOCK_SCREEN_ACK_KEY, PUSH_TOKEN_KEY].map(key => SecureStore.deleteItemAsync(key)));
     setUser(null); setPendingRide(null); setSentOffer(null); sentOfferRef.current = null; setActiveRide(null); setActiveRideId(null); setDriverLocation(null); setRideHistory(null); setAdvanceBookings(null); setWalletSummary(null); setPaymentHistory([]); setConnection('offline');
     setAlertReadiness(current => ({ ...current, ready: false, lockScreenConfirmed: false, foregroundServiceReady: false }));
@@ -1485,32 +1566,63 @@ export function DriverRuntimeProvider({ children }: { children: ReactNode }) {
   }, [acceptingRide, clearRideAlert, getRideAcceptability, hydrateActiveRide, hydrateAvailableRides, pendingRide]);
 
   const acceptAdvanceBooking = useCallback(async (bookingId: string) => {
-    if (!tokenRef.current || !bookingId) return;
-    await api(`/api/advance-bookings/${encodeURIComponent(bookingId)}/accept`, tokenRef.current, sessionRef.current || undefined, {
-      method: 'PATCH',
-      body: JSON.stringify({}),
-    });
-    await refreshAdvanceBookings();
-  }, [refreshAdvanceBookings]);
+    if (!tokenRef.current || !bookingId) throw new Error('Sign in is required.');
+    const requestedToken = tokenRef.current;
+    try {
+      const result = await apiWithTimeout(`/api/advance-bookings/${encodeURIComponent(bookingId)}/accept`, tokenRef.current, sessionRef.current || undefined, {
+        method: 'PATCH',
+        body: JSON.stringify({}),
+      });
+      if (requestedToken !== tokenRef.current) throw new Error('Driver session changed. Sign in to check your scheduled rides.');
+      if (result?.status !== 'assigned' || participantId(result.driver) !== String(userRef.current?.id || '')) {
+        throw new Error('Scheduled ride assignment was not confirmed. Refresh to check its status.');
+      }
+      if (advanceBookingLifecycle.current.get(bookingId) === null) throw new Error('This scheduled ride is no longer available.');
+      handleAdvanceBookingEvent(result, 'assigned');
+      // The mutation snapshot is authoritative. A failing refresh must not
+      // turn a committed assignment into an apparent failed acceptance.
+      void refreshAdvanceBookings().catch(error => setError(error instanceof Error ? error.message : 'Unable to refresh scheduled rides.'));
+    } catch (error) {
+      if (requestedToken !== tokenRef.current) throw error;
+      if (advanceBookingLifecycle.current.get(bookingId) === null) throw error;
+      // A lost response may follow a committed assignment. Recover from the
+      // authoritative feed before presenting failure or allowing another try.
+      try {
+        const bookings = await apiWithTimeout('/api/advance-bookings/available', requestedToken, sessionRef.current || undefined);
+        if (requestedToken !== tokenRef.current) throw error;
+        if (advanceBookingLifecycle.current.get(bookingId) === null) throw error;
+        const assigned = Array.isArray(bookings) && bookings.find(booking =>
+          String(booking.id || booking._id) === bookingId && booking.status === 'assigned');
+        if (assigned) { handleAdvanceBookingEvent(assigned, 'assigned'); return; }
+        await refreshAdvanceBookings();
+      } catch { /* Keep the original acceptance error visible. */ }
+      throw error;
+    }
+  }, [handleAdvanceBookingEvent, refreshAdvanceBookings]);
 
   const counterAdvanceBooking = useCallback(async (bookingId: string, price: number) => {
     if (!tokenRef.current || !bookingId) return;
+    const requestedToken = tokenRef.current;
     if (!Number.isFinite(price) || price < 1) throw new Error('Enter a valid counter price.');
-    await api(`/api/advance-bookings/${encodeURIComponent(bookingId)}/counter`, tokenRef.current, sessionRef.current || undefined, {
+    const result = await api(`/api/advance-bookings/${encodeURIComponent(bookingId)}/counter`, tokenRef.current, sessionRef.current || undefined, {
       method: 'PATCH',
       body: JSON.stringify({ price, type: 'counter' }),
     });
-    await refreshAdvanceBookings();
-  }, [refreshAdvanceBookings]);
+    if (requestedToken !== tokenRef.current) throw new Error('Driver session changed. Sign in to check your scheduled rides.');
+    handleAdvanceBookingEvent(result);
+    void refreshAdvanceBookings().catch(error => setError(error instanceof Error ? error.message : 'Unable to refresh scheduled rides.'));
+  }, [handleAdvanceBookingEvent, refreshAdvanceBookings]);
 
   const declineAdvanceBooking = useCallback(async (bookingId: string) => {
     if (!tokenRef.current || !bookingId) return;
+    const requestedToken = tokenRef.current;
     await api(`/api/advance-bookings/${encodeURIComponent(bookingId)}/decline`, tokenRef.current, sessionRef.current || undefined, {
       method: 'PATCH',
       body: JSON.stringify({}),
     });
-    setAdvanceBookings(current => (current || []).filter(booking => booking.id !== bookingId));
-  }, []);
+    if (requestedToken !== tokenRef.current) return;
+    handleAdvanceBookingEvent({ bookingId, declined: true });
+  }, [handleAdvanceBookingEvent]);
 
   const cancelAdvanceBooking = useCallback(async (bookingId: string) => {
     if (!tokenRef.current || !bookingId) return;

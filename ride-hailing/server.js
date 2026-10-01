@@ -2557,6 +2557,17 @@ const Driver   = mongoose.model('Driver', driverSchema, 'drivers');
 const Admin    = mongoose.model('Admin', adminSchema, 'admins');
 const Ride     = mongoose.model('Ride',     rideSchema);
 const AdvanceBooking = mongoose.model('AdvanceBooking', advanceBookingSchema, 'advance_bookings');
+// One durable serialization point per Driver, independent of user collection
+// migration. Assignment transactions write this document before checking any
+// overlapping bookings, so concurrent requests on different API processes
+// cannot both reserve the same Driver/time window.
+const scheduledDriverAssignmentLockSchema = new mongoose.Schema({
+  _id: { type: mongoose.Schema.Types.ObjectId, required: true },
+  revision: { type: Number, default: 0 }
+}, { versionKey: false });
+const ScheduledDriverAssignmentLock = mongoose.model(
+  'ScheduledDriverAssignmentLock', scheduledDriverAssignmentLockSchema, 'scheduled_driver_assignment_locks'
+);
 const Wallet   = mongoose.model('Wallet',   walletSchema);
 const SOS      = mongoose.model('SOS',      sosSchema);
 const Payment  = mongoose.model('Payment',  paymentSchema);
@@ -5816,6 +5827,102 @@ function advanceBookingDriverResponse(booking, driverId) {
   };
 }
 
+async function advanceBookingResponseWithContacts(booking) {
+  const payload = advanceBookingResponse(booking);
+  // Population can be null for a partially migrated participant. Recover only
+  // the stored references, then reuse the primary/legacy contact resolver.
+  const references = await AdvanceBooking.findById(booking._id).select('passenger driver').lean();
+  for (const [field, role] of [['passenger', 'customer'], ['driver', 'driver']]) {
+    const participant = payload[field];
+    const participantId = participant?._id || participant?.id || references?.[field];
+    if (!participantId) continue;
+    const contact = await findRideContact(participantId, role);
+    const snapshot = participant && typeof participant === 'object' && participant.name !== undefined
+      ? participant : {};
+    const profile = await User.findById(participantId)
+      .select('name phone vehicleType vehicleModel vehiclePlate rating profilePhoto').lean();
+    payload[field] = {
+      ...snapshot,
+      ...(contact || {}),
+      ...(profile || {}),
+      _id: participantId,
+      id: String(participantId),
+      phone: normalizeRideContactPhone(contact?.phone || profile?.phone || snapshot.phone)
+    };
+  }
+  return payload;
+}
+
+function advanceBookingConflictWindow(booking) {
+  const scheduledTime = new Date(booking.scheduledFor).getTime();
+  return {
+    $gte: new Date(scheduledTime - 90 * 60 * 1000),
+    $lte: new Date(scheduledTime + 90 * 60 * 1000)
+  };
+}
+
+async function advanceBookingUnavailableDriverIds(booking, driverIds, { session = null } = {}) {
+  if (!driverIds.length) return new Set();
+  const overlapQuery = AdvanceBooking.find({
+      _id: { $ne: booking._id },
+      driver: { $in: driverIds },
+      status: { $in: ['assigned', 'dispatching'] },
+      scheduledFor: advanceBookingConflictWindow(booking)
+    }).select('driver').lean();
+  const activeRideQuery = Ride.find({
+      driver: { $in: driverIds },
+      status: { $in: ['accepted', 'arrived', 'in-progress'] }
+    }).select('driver').lean();
+  // MongoDB transactions must not run parallel operations on one session.
+  const [overlaps, activeRides] = session
+    ? [await overlapQuery.session(session), await activeRideQuery.session(session)]
+    : await Promise.all([overlapQuery, activeRideQuery]);
+  return new Set([...overlaps, ...activeRides].map(item => String(item.driver)));
+}
+
+async function assignAdvanceBookingAtomically(driverId, filter, update) {
+  try {
+    // Create the canonical lock before the transaction. Concurrent first-use
+    // upserts can race on the unique _id; an existing lock is the same result.
+    await ScheduledDriverAssignmentLock.updateOne(
+      { _id: driverId }, { $setOnInsert: { revision: 0 } }, { upsert: true }
+    );
+  } catch (error) {
+    if (error.code !== 11000) throw error;
+  }
+  let assigned;
+  try {
+    assigned = await runFinancialTransaction(async session => {
+      await ScheduledDriverAssignmentLock.updateOne(
+        { _id: driverId }, { $inc: { revision: 1 } }, { session }
+      );
+      const current = await AdvanceBooking.findOne(filter).session(session);
+      if (!current) return null;
+      const unavailableIds = await advanceBookingUnavailableDriverIds(current, [driverId], { session });
+      if (unavailableIds.has(String(driverId))) {
+        const error = new Error('That Driver has an active ride or an advance booking near this time.');
+        error.statusCode = 409;
+        throw error;
+      }
+      return AdvanceBooking.findOneAndUpdate(
+        filter, typeof update === 'function' ? update(current) : update, { new: true, session }
+      );
+    });
+  } catch (error) {
+    if (error instanceof FinancialTransactionRequiredError) {
+      error.message = 'Scheduled booking assignment requires a transaction-capable MongoDB connection.';
+    }
+    throw error;
+  }
+  if (assigned) {
+    await assigned.populate([
+      { path: 'passenger', select: 'name phone' },
+      { path: 'driver', select: 'name phone vehicleType vehicleModel vehiclePlate rating profilePhoto' }
+    ]);
+  }
+  return assigned;
+}
+
 async function broadcastAdvanceBooking(booking) {
   const [rideBroadcastSettings, vehicleCategoryDoc, longRangeSettings, customer] = await Promise.all([
     getRideBroadcastSettings(),
@@ -5910,13 +6017,27 @@ async function broadcastAdvanceBooking(booking) {
 }
 
 function emitAdvanceBookingAssignment(booking, payload) {
+  const assignedDriverId = String(payload.driver?._id || payload.driver?.id || booking.driver?._id || booking.driver || '');
   const driverIds = new Set([
     ...(booking.notifiedDriverIds || []).map(id => String(id)),
-    booking.driver ? String(booking.driver?._id || booking.driver) : ''
+    assignedDriverId
   ].filter(Boolean));
   for (const driverId of driverIds) {
-    io.to(`user:${driverId}`).emit('advance-booking:assigned', payload);
+    // Other alerted Drivers need to remove the request, not receive the
+    // selected Driver's or Customer's private contact/profile details.
+    io.to(`user:${driverId}`).emit('advance-booking:assigned', driverId === assignedDriverId
+      ? payload
+      : {
+          id: payload.id,
+          _id: payload._id,
+          advanceBookingId: payload.advanceBookingId,
+          status: payload.status,
+          scheduledFor: payload.scheduledFor
+        });
   }
+  const passengerId = payload.passenger?._id || payload.passenger?.id || booking.passenger?._id || booking.passenger;
+  io.to(`user:${passengerId}`).emit('advance-booking:assigned', payload);
+  io.to('admin-room').emit('advance-booking:assigned', payload);
 }
 
 async function runAdvanceBookingBroadcastRecovery() {
@@ -6317,7 +6438,14 @@ app.post('/api/advance-bookings', authMiddleware, customerOnly, customerCanBook,
         && studentProfile?.studentVerificationStatus === 'approved'
     });
     await broadcastAdvanceBooking(booking);
-    res.status(201).json(advanceBookingResponse(booking));
+    // A Driver can accept immediately while broadcasting. Do not return or
+    // publish the stale pending creation document over a newer assignment.
+    const currentBooking = await AdvanceBooking.findById(booking._id);
+    const response = currentBooking?.status === 'assigned'
+      ? await advanceBookingResponseWithContacts(currentBooking)
+      : advanceBookingResponse(currentBooking || booking);
+    io.to('admin-room').emit('advance-booking:new', response);
+    res.status(201).json(response);
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -6325,16 +6453,28 @@ app.post('/api/advance-bookings', authMiddleware, customerOnly, customerCanBook,
 
 app.get('/api/advance-bookings/my', authMiddleware, async (req, res) => {
   try {
+    if (!['customer', 'driver'].includes(req.user.role)) {
+      return res.status(403).json({ error: 'Only Customers and Drivers can view their advance bookings' });
+    }
     res.set('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
     res.set('Pragma', 'no-cache');
     const query = req.user.role === 'driver'
       ? { driver: req.user.id }
       : { passenger: req.user.id };
-    const bookings = await AdvanceBooking.find(query)
-      .populate('passenger driver', 'name phone vehicleType vehicleModel vehiclePlate rating')
-      .sort({ scheduledFor: 1, createdAt: -1 })
-      .limit(50);
-    res.json(bookings.map(advanceBookingResponse));
+    const upcomingFilter = {
+      status: { $in: ['pending', 'assigned', 'dispatching'] },
+      scheduledFor: { $gte: new Date() }
+    };
+    const upcoming = await AdvanceBooking.find({ $and: [query, upcomingFilter] })
+      .sort({ scheduledFor: 1, createdAt: -1 }).limit(50);
+    const recent = upcoming.length < 50
+      ? await AdvanceBooking.find({
+          $and: [query, { $nor: [upcomingFilter] }],
+          _id: { $nin: upcoming.map(booking => booking._id) }
+        }).sort({ scheduledFor: -1, createdAt: -1 }).limit(50 - upcoming.length)
+      : [];
+    const bookings = [...upcoming, ...recent];
+    res.json(await Promise.all(bookings.map(advanceBookingResponseWithContacts)));
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -6365,10 +6505,22 @@ app.get('/api/advance-bookings/available', authMiddleware, driverOnly, async (re
       booking.status === 'assigned'
       || normalizeFareVehicle(booking.vehicleType) === requestedCategory
     );
-    res.json(categoryMatchedBookings.map(booking => ({
-        ...advanceBookingDriverResponse(booking, req.user.id),
+    res.json(await Promise.all(categoryMatchedBookings.map(async booking => {
+      const payload = booking.status === 'assigned'
+        ? await advanceBookingResponseWithContacts(booking)
+        : advanceBookingResponse(booking);
+      if (booking.status !== 'assigned' && payload.passenger) {
+        payload.passenger = {
+          _id: payload.passenger._id,
+          id: String(payload.passenger._id || booking.passenger),
+          name: payload.passenger.name || 'Customer'
+        };
+      }
+      return {
+        ...advanceBookingDriverResponse(payload, req.user.id),
         acceptanceEligibility: { allowed: fee.allowed, reason: fee.reason, dailyFeeDue: !fee.allowed, dailyFeeRate: fee.rate }
-      })));
+      };
+    })));
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -6376,8 +6528,11 @@ app.get('/api/advance-bookings/available', authMiddleware, driverOnly, async (re
 
 app.patch('/api/advance-bookings/:id/accept', authMiddleware, driverOnly, async (req, res) => {
   try {
-    const driver = await User.findById(req.user.id).select('name phone vehicleType vehicleModel vehiclePlate rating accountStatus ridePreference longRangeEnabled paidUntilDate lastDailyFeePaidAt isOnline').lean();
-    if (!driver || driver.accountStatus !== 'active' || !driver.isOnline) return res.status(403).json({ error: 'Only active online Drivers can submit advance-booking offers' });
+    const driver = await User.findById(req.user.id).select('name phone vehicleType vehicleModel vehiclePlate rating accountStatus ridePreference longRangeEnabled paidUntilDate lastDailyFeePaidAt isOnline lastOnlineHeartbeat').lean();
+    if (!driver || driver.accountStatus !== 'active' || !driver.isOnline
+        || !(new Date(driver.lastOnlineHeartbeat).getTime() >= Date.now() - DRIVER_HEARTBEAT_MAX_AGE_MS)) {
+      return res.status(403).json({ error: 'Only active online Drivers can accept advance bookings' });
+    }
     const fee = await getDriverDailyFeeEligibility(driver);
     if (!fee.allowed) return res.status(403).json({ error: fee.reason, code: 'DAILY_FEE_REQUIRED' });
     const booking = await AdvanceBooking.findOne({
@@ -6389,19 +6544,11 @@ app.patch('/api/advance-bookings/:id/accept', authMiddleware, driverOnly, async 
       scheduledFor: { $gt: new Date() }
     });
     if (!booking) return res.status(409).json({ error: 'Advance booking is no longer available' });
-    const overlap = await AdvanceBooking.exists({
-      driver: req.user.id,
-      status: 'assigned',
-      scheduledFor: {
-        $gte: new Date(booking.scheduledFor.getTime() - 90 * 60 * 1000),
-        $lte: new Date(booking.scheduledFor.getTime() + 90 * 60 * 1000)
-      }
-    });
-    if (overlap) return res.status(409).json({ error: 'You already have an advance booking near this time.' });
+    const unavailableIds = await advanceBookingUnavailableDriverIds(booking, [req.user.id]);
+    if (unavailableIds.has(String(req.user.id))) {
+      return res.status(409).json({ error: 'You already have an active ride or an advance booking near this time.' });
+    }
 
-    const existingOffer = booking.counterOffers.find(
-      offer => String(offer.driver) === String(req.user.id)
-    );
     const acceptOffer = {
       driver: req.user.id,
       driverName: driver.name,
@@ -6411,42 +6558,42 @@ app.patch('/api/advance-bookings/:id/accept', authMiddleware, driverOnly, async 
       price: booking.fare,
       type: 'accept'
     };
-    const assignmentUpdate = {
+    const assignmentUpdate = current => ({
       $set: {
         driver: req.user.id,
         status: 'assigned',
         assignedAt: new Date(),
-        fare: existingOffer?.type === 'counter' && Number(existingOffer.price) > 0
-          ? Number(existingOffer.price)
-          : booking.fare
+        // Direct acceptance always accepts the Customer's fare. Counteroffers
+        // remain a separate Customer-selection flow.
+        fare: current.fare,
+        counterOffers: [
+          ...current.counterOffers.filter(offer => String(offer.driver) !== String(req.user.id)),
+          { ...acceptOffer, price: current.fare }
+        ]
       }
-    };
-    if (!existingOffer) assignmentUpdate.$push = { counterOffers: acceptOffer };
+    });
 
-    const assignedBooking = await AdvanceBooking.findOneAndUpdate(
+    const assignedBooking = await assignAdvanceBookingAtomically(
+      req.user.id,
       {
         _id: booking._id,
         status: 'pending',
         driver: null,
         notifiedDriverIds: req.user.id,
+        declinedDriverIds: { $ne: req.user.id },
         scheduledFor: { $gt: new Date() }
       },
-      assignmentUpdate,
-      { new: true }
-    )
-      .populate('passenger', 'name phone')
-      .populate('driver', 'name phone vehicleType vehicleModel vehiclePlate rating profilePhoto');
+      assignmentUpdate
+    );
     if (!assignedBooking) {
       return res.status(409).json({ error: 'Advance booking was already assigned to another Driver' });
     }
 
-    const response = advanceBookingResponse(assignedBooking);
+    const response = await advanceBookingResponseWithContacts(assignedBooking);
     emitAdvanceBookingAssignment(assignedBooking, response);
-    io.to(`user:${assignedBooking.passenger?._id || booking.passenger}`).emit('advance-booking:assigned', response);
-    io.to('admin-room').emit('advance-booking:assigned', response);
     res.json(response);
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    res.status(err.statusCode || 500).json({ error: err.message });
   }
 });
 
@@ -6535,16 +6682,33 @@ app.patch('/api/advance-bookings/:id/counter', authMiddleware, driverOnly, async
     if (!driver || driver.accountStatus !== 'active' || !driver.isOnline || !storedVehicleTypesForFareCategory(booking.vehicleType).includes(driver.vehicleType)) {
       return res.status(403).json({ error: 'This booking is not available for your vehicle category' });
     }
-    if (booking.counterOffers.some(offer => String(offer.driver) === String(req.user.id))) {
-      return res.json({ ...advanceBookingDriverResponse(booking, req.user.id), ok: true, alreadySent: true });
+    const submitted = await AdvanceBooking.findOneAndUpdate(
+      {
+        _id: booking._id, status: 'pending', driver: null,
+        notifiedDriverIds: req.user.id, declinedDriverIds: { $ne: req.user.id },
+        scheduledFor: { $gt: new Date() },
+        'counterOffers.driver': { $ne: req.user.id }
+      },
+      { $push: { counterOffers: {
+        driver: req.user.id, driverName: driver.name, vehicleModel: driver.vehicleModel || '',
+        vehiclePlate: driver.vehiclePlate || '', rating: driver.rating || 5, price, type: 'counter'
+      } } },
+      { new: true }
+    );
+    // Do not publish the pending snapshot read before an assignment/cancel.
+    // The conditional write protects persistence; this reread protects the
+    // offer response/event when assignment won immediately after submission.
+    const current = await AdvanceBooking.findById(booking._id);
+    if (!current || current.status !== 'pending' || current.driver
+        || new Date(current.scheduledFor).getTime() <= Date.now()
+        || current.declinedDriverIds.some(id => String(id) === String(req.user.id))) {
+      return res.status(409).json({ error: 'Advance booking is no longer available' });
     }
-    booking.counterOffers.push({
-      driver: req.user.id, driverName: driver.name, vehicleModel: driver.vehicleModel || '',
-      vehiclePlate: driver.vehiclePlate || '', rating: driver.rating || 5, price, type: 'counter'
-    });
-    await booking.save();
-    const response = advanceBookingDriverResponse(booking, req.user.id);
-    io.to(`user:${booking.passenger}`).emit('advance-booking:offer', response);
+    const ownOffer = current.counterOffers.find(offer => String(offer.driver) === String(req.user.id));
+    if (!ownOffer) return res.status(409).json({ error: 'Advance booking is no longer available' });
+    const response = advanceBookingDriverResponse(current, req.user.id);
+    if (!submitted) return res.json({ ...response, ok: true, alreadySent: true });
+    io.to(`user:${current.passenger}`).emit('advance-booking:offer', response);
     io.to(`user:${req.user.id}`).emit('advance-booking:offer-submitted', response);
     res.json(response);
   } catch (err) {
@@ -6587,35 +6751,37 @@ app.patch('/api/advance-bookings/:id/accept-driver', authMiddleware, customerOnl
     if (!mongoose.isValidObjectId(driverId)) return res.status(400).json({ error: 'Valid driverId required' });
     const booking = await AdvanceBooking.findOne({
       _id: req.params.id, passenger: req.user.id, status: 'pending',
+      scheduledFor: { $gt: new Date() },
       counterOffers: { $elemMatch: { driver: driverId, type: { $in: ['accept', 'counter'] } } }
     });
     if (!booking) return res.status(409).json({ error: 'That Driver offer is no longer available' });
     const driver = await User.findOne({ _id: driverId, role: 'driver', accountStatus: 'active' })
-      .select('name phone vehicleType vehicleModel vehiclePlate rating profilePhoto ridePreference longRangeEnabled paidUntilDate lastDailyFeePaidAt isOnline')
+      .select('name phone vehicleType vehicleModel vehiclePlate rating profilePhoto ridePreference longRangeEnabled paidUntilDate lastDailyFeePaidAt isOnline lastOnlineHeartbeat')
       .lean();
-    if (!driver) return res.status(409).json({ error: 'Selected Driver is no longer available' });
+    if (!driver || !driver.isOnline
+        || !(new Date(driver.lastOnlineHeartbeat).getTime() >= Date.now() - DRIVER_HEARTBEAT_MAX_AGE_MS)
+        || !storedVehicleTypesForFareCategory(booking.vehicleType).includes(driver.vehicleType)) {
+      return res.status(409).json({ error: 'Selected Driver is no longer available' });
+    }
     const dailyFee = await getDriverDailyFeeEligibility(driver);
     if (!dailyFee.allowed) {
       return res.status(403).json({ error: dailyFee.reason, code: 'DAILY_FEE_REQUIRED', dailyFee });
     }
-    const overlap = await AdvanceBooking.exists({
-      driver: driverId,
-      status: 'assigned',
-      scheduledFor: {
-        $gte: new Date(booking.scheduledFor.getTime() - 90 * 60 * 1000),
-        $lte: new Date(booking.scheduledFor.getTime() + 90 * 60 * 1000)
-      }
-    });
-    if (overlap) return res.status(409).json({ error: 'That Driver already has an advance booking near this time.' });
+    const unavailableIds = await advanceBookingUnavailableDriverIds(booking, [driverId]);
+    if (unavailableIds.has(driverId)) {
+      return res.status(409).json({ error: 'That Driver has an active ride or an advance booking near this time.' });
+    }
     const offer = booking.counterOffers.find(item => String(item.driver) === driverId);
     if (!offer) return res.status(409).json({ error: 'That Driver has not offered this booking' });
     const assignedAt = new Date();
-    const assignedBooking = await AdvanceBooking.findOneAndUpdate(
+    const assignedBooking = await assignAdvanceBookingAtomically(
+      driverId,
       {
         _id: booking._id,
         passenger: req.user.id,
         status: 'pending',
         driver: null,
+        scheduledFor: { $gt: new Date() },
         declinedDriverIds: { $ne: driverId },
         counterOffers: { $elemMatch: { driver: driverId, type: { $in: ['accept', 'counter'] } } }
       },
@@ -6626,18 +6792,14 @@ app.patch('/api/advance-bookings/:id/accept-driver', authMiddleware, customerOnl
           assignedAt,
           ...(offer.price ? { fare: offer.price } : {})
         }
-      },
-      { new: true }
-    )
-      .populate('passenger', 'name phone')
-      .populate('driver', 'name phone vehicleType vehicleModel vehiclePlate rating profilePhoto');
+      }
+    );
     if (!assignedBooking) return res.status(409).json({ error: 'That Driver offer is no longer available' });
-    const response = advanceBookingResponse(assignedBooking);
+    const response = await advanceBookingResponseWithContacts(assignedBooking);
     emitAdvanceBookingAssignment(assignedBooking, response);
-    io.to('admin-room').emit('advance-booking:assigned', response);
     res.json(response);
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    res.status(err.statusCode || 500).json({ error: err.message });
   }
 });
 
@@ -9707,10 +9869,34 @@ app.get('/api/admin/advance-bookings', adminJwt, requirePerm('viewAdvanceBooking
       }
     }
 
-    const bookings = await AdvanceBooking.find(query)
-      .sort({ scheduledFor: 1, createdAt: -1 })
-      .limit(500)
-      .lean();
+    let bookings;
+    if (requestedStatus === 'all') {
+      // A lifetime of old reservations must not fill the bounded response
+      // before Admin can see a new, actionable upcoming request. Keep the
+      // existing array contract: upcoming open bookings first, then recent
+      // history within the remaining capacity. Explicit status/date filters
+      // remain authoritative in both queries.
+      const upcomingFilter = {
+        status: { $in: ['pending', 'assigned', 'dispatching'] },
+        scheduledFor: { $gte: new Date() }
+      };
+      const upcoming = await AdvanceBooking.find({ $and: [query, upcomingFilter] })
+        .sort({ scheduledFor: 1, createdAt: -1 })
+        .limit(500)
+        .lean();
+      const recent = upcoming.length < 500
+        ? await AdvanceBooking.find({
+            $and: [query, { $nor: [upcomingFilter] }],
+            _id: { $nin: upcoming.map(booking => booking._id) }
+          }).sort({ scheduledFor: -1, createdAt: -1 }).limit(500 - upcoming.length).lean()
+        : [];
+      bookings = [...upcoming, ...recent];
+    } else {
+      bookings = await AdvanceBooking.find(query)
+        .sort({ scheduledFor: 1, createdAt: -1 })
+        .limit(500)
+        .lean();
+    }
     const customerIds = bookings.map(booking => booking.passenger).filter(id => mongoose.isValidObjectId(id));
     const rideIds = bookings.map(booking => booking.ride).filter(id => mongoose.isValidObjectId(id));
     const [customers, rides] = await Promise.all([
@@ -9744,7 +9930,8 @@ app.get('/api/admin/advance-bookings/:id/assignment-options', adminJwt, requireP
     const booking = await AdvanceBooking.findOne({
       _id: req.params.id,
       status: 'pending',
-      driver: null
+      driver: null,
+      scheduledFor: { $gt: new Date() }
     }).lean();
     if (!booking) return res.status(409).json({ error: 'Only unassigned pending bookings can be assigned' });
     const vehicleTypes = storedVehicleTypesForFareCategory(booking.vehicleType);
@@ -9756,8 +9943,10 @@ app.get('/api/admin/advance-bookings/:id/assignment-options', adminJwt, requireP
     }, {
       select: '_id name phone vehicleType vehicleModel vehiclePlate rating ridePreference longRangeEnabled paidUntilDate lastDailyFeePaidAt isOnline lastOnlineHeartbeat'
     });
+    const unavailableIds = await advanceBookingUnavailableDriverIds(booking, drivers.map(driver => driver._id));
     const feeEligibleDrivers = [];
     for (const driver of drivers) {
+      if (unavailableIds.has(String(driver._id))) continue;
       if (!canDriverReceiveRideForPreference(driver.ridePreference, booking.isLongRange)) continue;
       const fee = await getDriverDailyFeeEligibility(driver);
       if (fee.allowed) {
@@ -9807,21 +9996,12 @@ app.patch('/api/admin/advance-bookings/:id/assign', adminJwt, requirePerm('manag
     }
     const fee = await getDriverDailyFeeEligibility(driver);
     if (!fee.allowed) return res.status(403).json({ error: fee.reason, code: 'DAILY_FEE_REQUIRED' });
-    const overlap = await AdvanceBooking.exists({
-      driver: driverId,
-      status: 'assigned',
-      scheduledFor: {
-        $gte: new Date(booking.scheduledFor.getTime() - 90 * 60 * 1000),
-        $lte: new Date(booking.scheduledFor.getTime() + 90 * 60 * 1000)
-      }
-    });
-    if (overlap) return res.status(409).json({ error: 'That Driver already has an advance booking near this time.' });
-    const activeRide = await Ride.exists({
-      driver: driverId,
-      status: { $in: ADMIN_ACTIVE_RIDE_STATUSES }
-    });
-    if (activeRide) return res.status(409).json({ error: 'That Driver is currently on an active ride.' });
-    const assignedBooking = await AdvanceBooking.findOneAndUpdate(
+    const unavailableIds = await advanceBookingUnavailableDriverIds(booking, [driverId]);
+    if (unavailableIds.has(driverId)) {
+      return res.status(409).json({ error: 'That Driver has an active ride or an advance booking near this time.' });
+    }
+    const assignedBooking = await assignAdvanceBookingAtomically(
+      driverId,
       {
         _id: booking._id,
         status: 'pending',
@@ -9836,19 +10016,14 @@ app.patch('/api/admin/advance-bookings/:id/assign', adminJwt, requirePerm('manag
           fare: booking.fare,
           counterOffers: []
         }
-      },
-      { new: true }
-    )
-      .populate('passenger', 'name phone')
-      .populate('driver', 'name phone vehicleType vehicleModel vehiclePlate rating profilePhoto');
+      }
+    );
     if (!assignedBooking) return res.status(409).json({ error: 'Advance booking was already assigned to another Driver' });
-    const response = advanceBookingResponse(assignedBooking);
+    const response = await advanceBookingResponseWithContacts(assignedBooking);
     emitAdvanceBookingAssignment(assignedBooking, response);
-    io.to(`user:${assignedBooking.passenger?._id || booking.passenger}`).emit('advance-booking:assigned', response);
-    io.to('admin-room').emit('advance-booking:assigned', response);
     res.json(response);
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    res.status(err.statusCode || 500).json({ error: err.message });
   }
 });
 
@@ -12972,7 +13147,7 @@ module.exports = {
   seedDemoAccounts,
   seedTestAccounts,
   models: {
-    User, LegacyUser, Customer, Driver, Admin, Ride, AdvanceBooking, Wallet, Payment, Settings,
+    User, LegacyUser, Customer, Driver, Admin, Ride, AdvanceBooking, ScheduledDriverAssignmentLock, Wallet, Payment, Settings,
     SOS, Ticket, PushSub, SubAdmin, StudentRideResponseLog, AccountDeletionTombstone,
     FinancialOperation
   }

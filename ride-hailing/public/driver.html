@@ -634,6 +634,10 @@ body{font-family:'DM Sans','Segoe UI',sans-serif;background:var(--dc-night);colo
   pointer-events:none;
 }
 #app.history-active #ride-history-panel{z-index:100}
+#advance-booking-panel,#scheduled-ride-home-panel{position:absolute;left:10px;right:10px;bottom:143px;z-index:80;border:1px solid var(--dc-line);border-radius:20px;background:rgba(24,32,34,.98);padding:15px;max-height:calc(100dvh - 280px);overflow-y:auto;box-shadow:0 12px 32px rgba(0,0,0,.3)}
+#app.history-active #scheduled-ride-home-panel,#app.advance-active #scheduled-ride-home-panel,#app.payments-active #scheduled-ride-home-panel,#app.navigation-active #scheduled-ride-home-panel{display:none!important}
+#app.advance-active .driver-ops-control,#app.advance-active .stats-strip{opacity:0;pointer-events:none}
+@media(min-width:700px){#advance-booking-panel,#scheduled-ride-home-panel{left:50%;right:auto;transform:translateX(-50%);width:min(560px,calc(100% - 32px))}}
 @media (min-width:800px){
   #ride-history-panel{
     left:50%;
@@ -971,6 +975,9 @@ body{font-family:'DM Sans','Segoe UI',sans-serif;background:var(--dc-night);colo
     </div>
   </div>
 
+  <div id="scheduled-ride-home-panel" aria-live="polite" style="display:none">
+    <div class="driver-history-list" id="driver-scheduled-ride-list"></div>
+  </div>
   <div id="advance-booking-panel" aria-hidden="true" style="display:none;padding:1rem">
     <div class="driver-history-header">
       <div><h2 class="driver-history-title">Advance Bookings</h2><p class="driver-history-subtitle">Reserve future trips and agree the fare before pickup</p></div>
@@ -1182,6 +1189,9 @@ let pendingRide   = null;   // current popup ride
 let sentOffer     = null;   // { rideId } after driver sends an offer, before customer chooses
 let driverAdvanceBookings = [];
 let driverAdvanceBookingEventVersion = 0;
+const driverAdvanceBookingLifecycle = new Map();
+const driverAdvanceAcceptingIds = new Set();
+let driverAdvanceRefreshTimer = null;
 let acceptRideInFlight = false;
 let activeRide    = null;   // accepted ride
 const DRIVER_ACTIVE_RIDE_STORAGE_KEY = 'rh_active_ride';
@@ -1277,6 +1287,7 @@ function startDriverHeartbeat() {
 
 function recoverDriverConnection() {
   if (!token) return;
+  void loadDriverAdvanceBookings();
   if (!socket) connectSocket();
   // An assigned ride is independent of availability for new requests.
   void reconcileActiveRideAfterReconnect();
@@ -1947,6 +1958,13 @@ function doLogout() {
   localStorage.setItem(DRIVER_DEVICE_ID_KEY, deviceId);
   sessionStorage.clear();
   token = null; sessionToken = null; user = null;
+  driverAdvanceBookingEventVersion++;
+  driverAdvanceBookingLifecycle.clear();
+  driverAdvanceBookings = [];
+  driverAdvanceAcceptingIds.clear();
+  clearInterval(driverAdvanceRefreshTimer);
+  driverAdvanceRefreshTimer = null;
+  renderDriverAdvanceBookings([]);
 
   // 3. Clear every login / register field so nothing persists visually
   ['l-email', 'l-pass',
@@ -2817,6 +2835,7 @@ function connectSocket() {
     // request state from the server after every reconnect instead of
     // trusting the in-memory popup state.
     reconcileRideRequestsAfterReconnect();
+    void loadDriverAdvanceBookings();
   });
 
   socket.on('driver:rehydrate', ({ isOnline: restoredOnline, onlineStartedAt, onlineTimeDate, onlineTimeTodaySeconds }) => {
@@ -2841,59 +2860,8 @@ function connectSocket() {
       driverHeartbeatTimer = null;
     }
   });
-  function handleDriverAdvanceBookingEvent(payload = {}, lifecycleStatus = '') {
-    const rawBooking = payload.booking || payload.advanceBooking || payload.ride || payload;
-    const bookingId = String(
-      rawBooking.id
-      || rawBooking._id
-      || rawBooking.advanceBookingId
-      || payload.bookingId
-      || payload.advanceBookingId
-      || ''
-    ).trim();
-    if (!bookingId) {
-      void loadDriverAdvanceBookings();
-      return;
-    }
-
-    driverAdvanceBookingEventVersion++;
-    if (payload.declined || lifecycleStatus === 'converted' || lifecycleStatus === 'cancelled'
-      || ['converted', 'cancelled', 'failed'].includes(String(rawBooking.status || ''))) {
-      driverAdvanceBookings = driverAdvanceBookings.filter(booking => String(booking._id || booking.id) !== bookingId);
-      renderDriverAdvanceBookings(driverAdvanceBookings);
-      return;
-    }
-
-    const scheduledFor = rawBooking.scheduledFor || payload.scheduledFor;
-    if (!scheduledFor || !rawBooking.pickupLocation || !rawBooking.dropoffLocation || rawBooking.fare == null) {
-      void loadDriverAdvanceBookings();
-      return;
-    }
-
-    const assignedDriver = rawBooking.driver;
-    const assignedDriverId = typeof assignedDriver === 'string'
-      ? assignedDriver
-      : assignedDriver?.id || assignedDriver?._id || '';
-    if (
-      (lifecycleStatus === 'assigned' || rawBooking.status === 'assigned')
-      && assignedDriverId
-      && user?.id
-      && String(assignedDriverId) !== String(user.id)
-    ) {
-      driverAdvanceBookings = driverAdvanceBookings.filter(booking => String(booking._id || booking.id) !== bookingId);
-      renderDriverAdvanceBookings(driverAdvanceBookings);
-      return;
-    }
-
-    const nextBooking = { ...rawBooking, id: bookingId, _id: rawBooking._id || bookingId, scheduledFor };
-    const index = driverAdvanceBookings.findIndex(booking => String(booking._id || booking.id) === bookingId);
-    if (index === -1) driverAdvanceBookings = [nextBooking, ...driverAdvanceBookings];
-    else driverAdvanceBookings[index] = { ...driverAdvanceBookings[index], ...nextBooking, id: bookingId };
-    renderDriverAdvanceBookings(driverAdvanceBookings);
-  }
-
   socket.on('advance-booking:assigned', booking => {
-    handleDriverAdvanceBookingEvent(booking);
+    handleDriverAdvanceBookingEvent(booking, 'assigned');
     showToast(
       booking?.driver && String(booking.driver.id || booking.driver._id || booking.driver) === String(user?.id || '')
         ? 'You have been assigned an advance booking.'
@@ -2917,7 +2885,7 @@ function connectSocket() {
     showToast('An advance booking was cancelled by the Customer.', 'info');
   });
   socket.on('advance-booking:declined', booking => {
-    handleDriverAdvanceBookingEvent(booking);
+    handleDriverAdvanceBookingEvent({ ...booking, declined: true });
   });
 
   // Account approved by Admin (was pending)
@@ -3941,11 +3909,100 @@ function switchBottomTab(tab) {
   setTimeout(() => map?.resize(), 150);
 }
 
+// Global: socket, Web Push and button callers share the same reducer.
+function handleDriverAdvanceBookingEvent(payload = {}, lifecycleStatus = '') {
+  driverAdvanceBookingEventVersion++;
+  const rawBooking = payload.booking || payload.advanceBooking || payload.ride || payload;
+  const bookingId = String(rawBooking.id || rawBooking._id || rawBooking.advanceBookingId || payload.bookingId || payload.advanceBookingId || '').trim();
+  if (!bookingId) { void loadDriverAdvanceBookings(); return; }
+  const status = lifecycleStatus || rawBooking.status;
+  let known = driverAdvanceBookingLifecycle.get(bookingId);
+  const assignedDriver = rawBooking.driver || payload.driver;
+  const assignedDriverId = typeof assignedDriver === 'string' ? assignedDriver : assignedDriver?.id || assignedDriver?._id || '';
+  if (known === null) {
+    driverAdvanceBookings = driverAdvanceBookings.filter(booking => String(booking.id || booking._id) !== bookingId);
+    renderDriverAdvanceBookings(driverAdvanceBookings);
+    return;
+  }
+  if (known === 'ignored') {
+    if (status !== 'assigned' || String(assignedDriverId) !== String(user?.id || '')) {
+      if (status === 'assigned' || ['converted', 'cancelled', 'failed'].includes(status)) driverAdvanceBookingLifecycle.set(bookingId, null);
+      driverAdvanceBookings = driverAdvanceBookings.filter(booking => String(booking.id || booking._id) !== bookingId);
+      renderDriverAdvanceBookings(driverAdvanceBookings);
+      return;
+    }
+    driverAdvanceBookingLifecycle.delete(bookingId);
+    known = undefined;
+  }
+  if (known && driverAdvanceBookingLifecycleRank(status) < driverAdvanceBookingLifecycleRank(known.status)) return;
+  // Assignment notices to losers are intentionally ID-only for privacy.
+  if (payload.declined || ['converted', 'cancelled', 'failed'].includes(String(status || ''))
+    || (status === 'assigned' && (!assignedDriverId || String(assignedDriverId) !== String(user?.id || '')))) {
+    driverAdvanceBookingLifecycle.set(bookingId, payload.declined ? 'ignored' : null);
+    driverAdvanceBookings = driverAdvanceBookings.filter(booking => String(booking._id || booking.id) !== bookingId);
+    renderDriverAdvanceBookings(driverAdvanceBookings);
+    return;
+  }
+  const index = driverAdvanceBookings.findIndex(booking => String(booking._id || booking.id) === bookingId);
+  const nextBooking = {
+    ...(index >= 0 ? driverAdvanceBookings[index] : {}),
+    ...known,
+    ...rawBooking, id: bookingId, _id: rawBooking._id || bookingId,
+    ...(status ? { status } : {}),
+  };
+  if (driverAdvanceBookingLifecycleRank(nextBooking.status) > 0) driverAdvanceBookingLifecycle.set(bookingId, nextBooking);
+  const myOffer = nextBooking.counterOffers?.find(offer => String(offer.driver?.id || offer.driver?._id || offer.driver || '') === String(user?.id || ''));
+  if (myOffer) nextBooking.myOffer = myOffer;
+  if (!nextBooking.scheduledFor || !nextBooking.pickupLocation || !nextBooking.dropoffLocation || nextBooking.fare == null) {
+    void loadDriverAdvanceBookings();
+    return;
+  }
+  if (index === -1) driverAdvanceBookings = [nextBooking, ...driverAdvanceBookings];
+  else driverAdvanceBookings[index] = nextBooking;
+  renderDriverAdvanceBookings(driverAdvanceBookings);
+}
+
+function driverAdvanceBookingLifecycleRank(status) {
+  if (['converted', 'cancelled', 'failed'].includes(status)) return 3;
+  return status === 'dispatching' ? 2 : status === 'assigned' ? 1 : 0;
+}
+
+function reconcileDriverAdvanceBookingFeed(bookings) {
+  return bookings.flatMap(booking => {
+    const id = String(booking.id || booking._id || booking.advanceBookingId || '');
+    let known = driverAdvanceBookingLifecycle.get(id);
+    if (known === null) return [];
+    if (driverAdvanceBookingLifecycleRank(booking.status) === 3) {
+      driverAdvanceBookingLifecycle.set(id, null);
+      return [];
+    }
+    if (known === 'ignored') {
+      const assignedDriverId = String(booking.driver?.id || booking.driver?._id || booking.driver || '');
+      // Only an authoritative assignment to us can override Ignore.
+      if (booking.status !== 'assigned' || assignedDriverId !== String(user?.id || '')) {
+        if (booking.status === 'assigned') driverAdvanceBookingLifecycle.set(id, null);
+        return [];
+      }
+      driverAdvanceBookingLifecycle.delete(id);
+      known = undefined;
+    }
+    const next = known && driverAdvanceBookingLifecycleRank(booking.status) < driverAdvanceBookingLifecycleRank(known.status)
+      ? { ...booking, ...known }
+      : booking;
+    if (driverAdvanceBookingLifecycleRank(next.status) > 0) driverAdvanceBookingLifecycle.set(id, next);
+    return [next];
+  });
+}
+
 function renderDriverAdvanceBookings(bookings = []) {
   const el = document.getElementById('driver-advance-booking-list');
   if (!el) return;
+  const homePanel = document.getElementById('scheduled-ride-home-panel');
+  const homeList = document.getElementById('driver-scheduled-ride-list');
+  if (homePanel) homePanel.style.display = bookings.length ? 'block' : 'none';
   if (!bookings.length) {
     el.innerHTML = '<div class="driver-history-empty">No open advance bookings match your vehicle.</div>';
+    if (homeList) homeList.innerHTML = '';
     return;
   }
   el.innerHTML = bookings.map(booking => {
@@ -3953,15 +4010,16 @@ function renderDriverAdvanceBookings(bookings = []) {
     const when = new Date(booking.scheduledFor).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' });
     const offer = Number(booking.fare || 0);
     const blocked = booking.acceptanceEligibility?.allowed === false;
+    const accepting = driverAdvanceAcceptingIds.has(id);
     const assigned = booking.status === 'assigned';
     const scheduledAt = new Date(booking.scheduledFor).getTime();
     const canStart = assigned && Number.isFinite(scheduledAt) && scheduledAt <= Date.now();
     const canCancel = assigned
       && Number.isFinite(scheduledAt)
       && scheduledAt - Date.now() >= 60 * 60 * 1000;
-    const hasOffer = Boolean(booking.myOffer);
     return `<article class="driver-history-item requested">
-      <div style="font-size:.7rem;letter-spacing:.08em;text-transform:uppercase;color:#66aaff;font-weight:900;margin-bottom:.4rem">ADVANCE BOOKING</div>
+      <div style="font-size:1rem;color:#66aaff;font-weight:900;margin-bottom:.4rem">Scheduled Ride · Advance Booking</div>
+      <div style="font-size:.95rem;color:#fff;font-weight:800;margin-bottom:.6rem">Pickup: ${escapeDriverText(when)}</div>
       <div class="driver-history-route"><span class="driver-history-location" dir="auto">${formatStopAddr(booking.pickupLocation)}</span><span class="driver-history-arrow">→</span><span class="driver-history-location" dir="auto">${formatStopAddr(booking.dropoffLocation)}</span></div>
        <div class="driver-history-meta"><span>📅 ${escapeDriverText(when)}</span><span>👥 ${Number(booking.passengerCount || 1)} passenger${Number(booking.passengerCount || 1) === 1 ? '' : 's'}</span><span>📏 ${Number(booking.distance || 0).toFixed(1)} km</span><span>${escapeDriverText(booking.vehicleType || '')}</span><span class="driver-history-fare">Rs ${offer.toLocaleString()}</span></div>
        <div style="font-size:.72rem;color:#94a3b8;margin-top:.45rem">Customer: ${escapeDriverText(booking.passenger?.name || 'Customer')} · ${escapeDriverText(booking.passenger?.phone || '')}</div>
@@ -3969,37 +4027,74 @@ function renderDriverAdvanceBookings(bookings = []) {
          ? canStart
            ? `<div style="display:flex;gap:.45rem;margin-top:.65rem"><button class="btn-accept" style="flex:1" onclick="startAdvanceBooking('${id}')">▶ Start Ride</button>${canCancel ? `<button class="btn-danger" style="flex:1" onclick="cancelAdvanceBooking('${id}')">Cancel</button>` : ''}</div>`
            : `<div style="margin-top:.65rem;color:#36d399;font-size:.78rem;font-weight:800">✓ Assigned to you. Start Ride will unlock at the scheduled time.</div>${canCancel ? `<button class="btn-danger" style="width:100%;margin-top:.45rem" onclick="cancelAdvanceBooking('${id}')">Cancel booking</button>` : '<div style="margin-top:.45rem;color:#94a3b8;font-size:.72rem">Cancellation is locked within one hour of pickup.</div>'}`
-       : hasOffer
-          ? `<div style="margin-top:.65rem;color:#66aaff;font-size:.78rem;font-weight:800">⇄ Counter-offer sent · Rs ${Number(booking.myOffer.price || offer).toLocaleString()} · waiting for Customer</div>
-             <button class="btn-danger" style="width:100%;margin-top:.45rem" onclick="declineAdvanceBooking('${id}')">Decline</button>`
-         : `<div style="display:flex;gap:.45rem;margin-top:.65rem">
-            <button class="btn-accept" style="flex:1" ${blocked ? 'disabled title="Daily Fee required"' : ''} onclick="acceptAdvanceBooking('${id}')">${blocked ? 'Daily Fee required' : 'Accept · Rs ' + offer.toLocaleString()}</button>
-            <button class="btn-counter" style="flex:1" onclick="counterAdvanceBooking('${id}', ${offer})">Counter</button>
-             <button class="btn-danger" style="flex:1" onclick="declineAdvanceBooking('${id}')">Decline</button>
-          </div>`}
+        : `${booking.myOffer?.type === 'counter' ? `<div style="margin-top:.65rem;color:#66aaff;font-size:.78rem;font-weight:800">Optional counter-offer sent · Rs ${Number(booking.myOffer.price || offer).toLocaleString()} · waiting for Customer</div>` : ''}
+           <div style="display:flex;gap:.45rem;margin-top:.65rem">
+             <button class="btn-accept" style="flex:1" ${blocked || accepting ? 'disabled' : ''} onclick="acceptAdvanceBooking('${id}')">${accepting ? 'Assigning…' : blocked ? 'Daily Fee required' : 'Accept · Rs ' + offer.toLocaleString()}</button>
+             <button class="btn-danger" style="flex:1" ${accepting ? 'disabled' : ''} onclick="declineAdvanceBooking('${id}')">Ignore</button>
+           </div>
+           ${!booking.myOffer ? `<button class="btn-counter" style="width:100%;margin-top:.45rem" ${accepting ? 'disabled' : ''} onclick="counterAdvanceBooking('${id}', ${offer})">Optional counter-offer</button>` : ''}`}
     </article>`;
   }).join('');
+  if (homeList) homeList.innerHTML = el.innerHTML;
 }
 
 async function loadDriverAdvanceBookings() {
   const el = document.getElementById('driver-advance-booking-list');
   if (!el || !token) return;
+  if (!driverAdvanceRefreshTimer) {
+    driverAdvanceRefreshTimer = setInterval(() => {
+      if (token && document.visibilityState === 'visible') void loadDriverAdvanceBookings();
+    }, 25_000);
+  }
+  const requestedToken = token;
   const requestEventVersion = driverAdvanceBookingEventVersion;
   try {
     const bookings = await apiCall('/api/advance-bookings/available');
-    if (requestEventVersion !== driverAdvanceBookingEventVersion) return;
-    driverAdvanceBookings = Array.isArray(bookings) ? bookings : [];
+    if (requestedToken !== token || requestEventVersion !== driverAdvanceBookingEventVersion) return;
+    if (!Array.isArray(bookings)) throw new Error('The scheduled ride feed returned an invalid response. Please refresh.');
+    driverAdvanceBookings = reconcileDriverAdvanceBookingFeed(bookings);
     renderDriverAdvanceBookings(driverAdvanceBookings);
   }
-  catch (error) { el.innerHTML = `<div class="driver-history-error">${escapeDriverText(error.message || 'Unable to load advance bookings')}</div>`; }
+  catch (error) {
+    if (requestedToken !== token || requestEventVersion !== driverAdvanceBookingEventVersion) return;
+    // Keep committed assignments visible when a background refresh fails.
+    renderDriverAdvanceBookings(driverAdvanceBookings);
+    el.insertAdjacentHTML('afterbegin', `<div class="driver-history-error">${escapeDriverText(error.message || 'Unable to load advance bookings')}</div>`);
+  }
 }
 
 async function acceptAdvanceBooking(id) {
+  if (driverAdvanceAcceptingIds.has(id)) return;
+  const requestedToken = token;
+  driverAdvanceAcceptingIds.add(id);
+  renderDriverAdvanceBookings(driverAdvanceBookings);
   try {
-    await apiCall(`/api/advance-bookings/${encodeURIComponent(id)}/accept`, 'PATCH');
-    showToast('Advance booking accepted.', 'success');
-    loadDriverAdvanceBookings();
-  } catch (error) { showToast(error.message || 'Unable to accept booking', 'error'); }
+    const result = await apiCall(`/api/advance-bookings/${encodeURIComponent(id)}/accept`, 'PATCH', null, 12_000);
+    if (requestedToken !== token) return;
+    const assignedDriverId = String(result?.driver?.id || result?.driver?._id || result?.driver || '');
+    if (result?.status !== 'assigned' || assignedDriverId !== String(user?.id || '')) {
+      throw new Error('Scheduled ride assignment was not confirmed. Refresh to check its status.');
+    }
+    if (driverAdvanceBookingLifecycle.get(id) === null) throw new Error('This scheduled ride is no longer available.');
+    handleDriverAdvanceBookingEvent(result, 'assigned');
+    showToast('Scheduled ride assigned to you. Start Ride unlocks at pickup time.', 'success');
+    void loadDriverAdvanceBookings();
+  } catch (error) {
+    if (requestedToken !== token) return;
+    if (driverAdvanceBookingLifecycle.get(id) === null) {
+      showToast(error.message || 'This scheduled ride is no longer available.', 'error');
+      return;
+    }
+    await loadDriverAdvanceBookings();
+    if (driverAdvanceBookings.some(booking => String(booking.id || booking._id) === id && booking.status === 'assigned')) {
+      showToast('Scheduled ride assigned to you. Start Ride unlocks at pickup time.', 'success');
+      return;
+    }
+    showToast(error.message || 'Unable to accept booking', 'error');
+  } finally {
+    driverAdvanceAcceptingIds.delete(id);
+    renderDriverAdvanceBookings(driverAdvanceBookings);
+  }
 }
 
 async function startAdvanceBooking(id) {
@@ -4015,23 +4110,28 @@ async function startAdvanceBooking(id) {
 }
 
 async function counterAdvanceBooking(id, suggested) {
+  const requestedToken = token;
   const value = prompt('Enter your counter-offer in Rs', String(Math.round(suggested)));
   if (value === null) return;
   const price = Number(value);
   if (!Number.isFinite(price) || price < 1) return showToast('Enter a valid counter price', 'error');
   try {
-    await apiCall(`/api/advance-bookings/${encodeURIComponent(id)}/counter`, 'PATCH', { price, type: 'counter' });
+    const result = await apiCall(`/api/advance-bookings/${encodeURIComponent(id)}/counter`, 'PATCH', { price, type: 'counter' });
+    if (requestedToken !== token) return;
+    handleDriverAdvanceBookingEvent(result);
     showToast('Counter-offer sent to the Customer.', 'success');
     loadDriverAdvanceBookings();
   } catch (error) { showToast(error.message || 'Unable to send counter-offer', 'error'); }
 }
 
 async function declineAdvanceBooking(id) {
-  if (!confirm('Decline this advance booking?')) return;
+  if (driverAdvanceAcceptingIds.has(id)) return;
+  const requestedToken = token;
   try {
     await apiCall(`/api/advance-bookings/${encodeURIComponent(id)}/decline`, 'PATCH');
+    if (requestedToken !== token) return;
     handleDriverAdvanceBookingEvent({ bookingId: id, declined: true });
-    showToast('Advance booking declined.', 'info');
+    showToast('Scheduled ride ignored.', 'info');
   } catch (error) { showToast(error.message || 'Unable to decline booking', 'error'); }
 }
 
